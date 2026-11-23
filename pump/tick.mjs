@@ -5,13 +5,20 @@
 //      shards per workflow (shard_size each, at most slots_max open per
 //      workflow), highest priority first.
 //   3. For each shard, while a slot is free: take the slot, take a lease per
-//      run_key (held by the shard's attempt id), record the dispatch in state,
-//      then send the workflow_dispatch and record the run it created. If the
-//      send fails, the dispatch is marked failed and its leases and slot are
-//      freed, so the work is due again on the next tick.
+//      run_key (held by the shard's attempt id) and record the dispatch in
+//      state as pending.
+//   4. beforeSend(): the pump saves the state, so every dispatch about to be
+//      sent is already in the saved copy. If that fails, nothing is sent and
+//      the pending dispatches are withdrawn (marked failed, leases and slots
+//      freed).
+//   5. Send each workflow_dispatch and record the run it created. If a send
+//      fails, the dispatch is marked failed and its leases and slot are freed,
+//      so the work is due again on the next tick.
 //
-// The dispatch is written to state before it is sent. A pump that dies after
-// sending leaves a pending dispatch whose lease simply expires.
+// A pump that dies after sending therefore leaves, in the saved state, a
+// pending dispatch that holds its slot and leases until its lease expires;
+// ingest finds its run by name. It never leaves a worker run the state does
+// not know about (R-ING-10).
 
 import { randomUUID } from 'node:crypto';
 
@@ -62,8 +69,13 @@ function stopReason(err) {
  *   dispatcher: { dispatch: (req: object) => Promise<object> }, log?: (line: string) => void,
  *   newId?: () => string, hooks?: object, deadline?: number }} args
  *   deadline: no new shard is started at or after this time (ms).
+ *   beforeSend: optional async () => boolean, called once after the tick's
+ *   dispatches are recorded as pending and before any is sent; the pump saves
+ *   the state there. false (or a throw) withdraws them all unsent.
  */
-export async function runTick({ db, now = Date.now, config, workerSlots, dispatcher, log = () => {}, newId = randomUUID, hooks = NO_HOOKS, deadline }) {
+export async function runTick({
+  db, now = Date.now, config, workerSlots, dispatcher, log = () => {}, newId = randomUUID, hooks = NO_HOOKS, deadline, beforeSend,
+}) {
   const t0 = now();
   const reaped = reapExpired(db, { now: t0 });
   const summary = {
@@ -75,6 +87,7 @@ export async function runTick({ db, now = Date.now, config, workerSlots, dispatc
     planned: 0,
     dispatched: 0,
     failed: 0,
+    withdrawn: 0,
     skippedWorkflows: [],
     stopped: null,
   };
@@ -90,9 +103,10 @@ export async function runTick({ db, now = Date.now, config, workerSlots, dispatc
   const shards = planShards(due, config.workflows, { openByWorkflow });
   summary.planned = shards.length;
 
-  const skip = new Set();
+  // 1. Reserve: for each shard, while a slot is free, take the slot and the
+  // leases and record the dispatch as pending. Nothing is sent yet.
+  const reserved = [];
   for (const shard of shards) {
-    if (skip.has(shard.workflow)) continue;
     const wf = config.workflows[shard.workflow];
     const t = now();
     if (deadline !== undefined && t >= deadline) {
@@ -124,7 +138,51 @@ export async function runTick({ db, now = Date.now, config, workerSlots, dispatc
     } catch (err) {
       for (const l of leased) db.releaseLease(l.run_key, attemptId, l.fence, { now: t });
       db.releaseSlotForAttempt(attemptId, 'failed', { now: t });
+      for (const r of reserved) db.failDispatch(r.attemptId, { error: 'not sent: the tick failed before sending', now: now() });
       throw err;
+    }
+    reserved.push({ shard, wf, attemptId, shardId, leased });
+  }
+  if (reserved.length === 0) return summary;
+
+  // 2. Make the reservations durable before anything is sent (R-ING-10): a
+  // worker run the saved state does not know about would run outside the slot
+  // ledger, and its fences would be handed out again. If the save fails,
+  // nothing is sent and the reservations are withdrawn.
+  const withdraw = (list, why) => {
+    for (const r of list) {
+      db.failDispatch(r.attemptId, { error: `not sent: ${why}`, now: now() });
+      summary.withdrawn += 1;
+    }
+  };
+  if (beforeSend) {
+    let saved = false;
+    try {
+      saved = (await beforeSend()) !== false;
+    } catch (err) {
+      log(`saving the state before sending failed: ${err?.message ?? err}`);
+    }
+    if (!saved) {
+      withdraw(reserved, 'the state could not be saved first');
+      summary.stopped = 'state_push_failed';
+      log(`nothing dispatched: the state could not be saved before sending ${reserved.length} shard(s)`);
+      return summary;
+    }
+  }
+
+  // 3. Send, in order. A dispatch that fails is marked failed and its leases
+  // and slot freed, so the work is due again on the next tick.
+  const skip = new Set();
+  for (let i = 0; i < reserved.length; i++) {
+    const { shard, wf, attemptId, shardId, leased } = reserved[i];
+    if (skip.has(shard.workflow)) {
+      withdraw([reserved[i]], `an earlier ${shard.workflow} dispatch failed this tick`);
+      continue;
+    }
+    if (deadline !== undefined && now() >= deadline) {
+      summary.stopped = 'deadline';
+      withdraw(reserved.slice(i), 'the run deadline passed');
+      break;
     }
     try {
       const inputs = workerInputs({ shardId, attemptId, items: leased });
@@ -142,6 +200,7 @@ export async function runTick({ db, now = Date.now, config, workerSlots, dispatc
       const stop = stopReason(err);
       if (stop) {
         summary.stopped = stop;
+        withdraw(reserved.slice(i + 1), `dispatching stopped (${stop})`);
         break;
       }
       skip.add(shard.workflow);

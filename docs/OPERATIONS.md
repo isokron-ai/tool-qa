@@ -193,7 +193,10 @@ normal.
 
 Each tick, in this order:
 
-1. **Ingest.** For every dispatch still waiting for a result, the pump checks
+1. **Reap.** Close dispatches whose lease expired and free their slots, so a
+   dispatch that cannot be judged stops being an open one when its lease
+   ends.
+2. **Ingest.** For every dispatch still waiting for a result, the pump checks
    whether its worker run has finished. For a finished run it judges each
    item's result artifact on its own (the checks in
    [`ingest/README.md`](../ingest/README.md)), records each decision in the
@@ -201,12 +204,21 @@ Each tick, in this order:
    once every item has a decision, closes the dispatch, which frees its slot.
    One log line per judged item: `ingest: <workflow> shard <shard id>
    (<attempt id>) item <index>: <outcome> (<reason>), recorded, outputs
-   sealed`. Ingest stops
-   taking new results about two minutes before the run ends (about minute 9),
-   so everything it judged is in the final push.
-2. **Reap and dispatch.** Close dispatches whose lease expired, then send due
-   work into free slots.
-3. **Push** the state if anything changed.
+   sealed`. Judging one item is limited to a minute (`ingest_timeout`), and
+   an item the pump fails to judge three times is recorded as `ingest_error`.
+   Ingest stops taking new results about two minutes before the run ends
+   (about minute 9), so everything it judged is in the final push.
+3. **Dispatch.** Record due work for the free slots as pending dispatches,
+   **push the state**, and only then send them. If that push fails, nothing is
+   sent and the pending dispatches are withdrawn.
+4. **Push** the state if anything changed.
+
+If any push fails, the run dispatches nothing more, does one housekeeping
+tick (reap and ingest), tries a final push and fails (red). Look at the
+`pump: state push (...) failed` line; the next run starts from the last state
+that was pushed. Work sent before the failure is in that state (it was pushed
+before it was sent) and holds its slots until it reports or its lease
+expires.
 
 At the end of the job, `pump.yml` uploads the sealed ingest outputs as one
 artifact (see "Reading ingest outputs" below).
@@ -241,7 +253,7 @@ To stop it:
 | Do this | Effect |
 |---|---|
 | `LOOP_SLOTS=0` | The pump only does housekeeping on its schedule (one tick: ingest finished worker runs, reap expired leases and slots). No new work, no successor run. Workers already running finish and are still judged. |
-| `LANE_PUMP_ENABLED=false` | The pump does nothing at all, ingest included. Leases and slots are not reaped until it is back; they expire on their own. Results of workers that finish meanwhile are judged in the first tick once the pump is back (ingest runs before the reap); a result whose lease has expired by then is stored as rejected. The health issue shows the pump as off. |
+| `LANE_PUMP_ENABLED=false` | The pump does nothing at all, ingest included. Leases and slots are not reaped until it is back; they expire on their own. Results of workers that finish meanwhile are judged once the pump is back; a result whose lease has expired by then is judged as a late result and stored as rejected. The health issue shows the pump as off. |
 | `LOOP_ENABLED=false` | Everything stops, the watchdog too. |
 
 A running pump run notices none of these until its next start; cancel it from

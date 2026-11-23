@@ -21,6 +21,13 @@
 //   4. push     the state, if the tick recorded, dispatched, failed or reaped
 //               anything, so a run that dies loses little.
 //
+// Dispatches are saved before they are sent: the tick records them as
+// pending, the pump pushes the state, and only then are they sent (R-ING-10).
+// A run killed after sending leaves pending dispatches that hold their slots
+// until their leases expire, never worker runs the state does not know. The
+// cost is one more push in a tick that dispatches. After any failed push the
+// run dispatches nothing more and ends after one housekeeping tick (R-ING-09).
+//
 // The pump is the state's only writer: ingest runs inside it, never as a
 // separate job. Before it dispatches anything, the run checks that ingest can
 // judge the results (worker-kit/ingest.pub holds the real key and AGE_IDENTITY
@@ -154,12 +161,18 @@ export async function runPump({
   let ticks = 0;
   let dispatched = 0;
   let failed = 0;
+  // After any failed push nothing more is dispatched: work sent now could be
+  // missing from the saved state. The run ends after one housekeeping tick.
+  let pushFailed = false;
   const save = async (why) => {
     try {
       await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now() });
+      return true;
     } catch (err) {
       ok = false;
-      say(`pump: state push (${why}) failed: ${err?.message ?? err}`);
+      pushFailed = true;
+      say(`pump: state push (${why}) failed: ${err?.message ?? err}; nothing more is dispatched this run`);
+      return false;
     }
   };
   try {
@@ -188,9 +201,11 @@ export async function runPump({
           say(`pump: ingest: checked ${ingested.checked}, judged ${ingested.judged}${outcomes ? ` (${outcomes})` : ''}, waiting ${ingested.waiting}, errors ${ingested.errors}${ingested.stopped ? `, stopped (${ingested.stopped})` : ''}`);
         }
       }
-      const slots = blocked ? 0 : workerSlots;
+      const slots = blocked || pushFailed ? 0 : workerSlots;
       const summary = await runTick({
         db, now, config: cfg, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline,
+        // The pending dispatches are saved before any is sent (R-ING-10).
+        beforeSend: () => save(`tick ${ticks}, before dispatching`),
       });
       summary.reaped += early.dispatches.length;
       summary.reapedSlots += early.slots;
@@ -201,8 +216,9 @@ export async function runPump({
         : null;
       db.setKv('pump.last_tick', { ...summary, loopBudget, requested, ingest: ingestNote, blocked }, { now: now() });
       say(`pump: tick ${ticks}: due ${summary.due ?? '-'}, dispatched ${summary.dispatched}, failed ${summary.failed}, reaped ${summary.reaped}${summary.stopped ? `, stopped (${summary.stopped})` : ''}`);
-      if (summary.dispatched || summary.failed || summary.reaped || summary.reapedSlots || ingested?.changed) await save(`tick ${ticks}`);
+      if (summary.dispatched || summary.failed || summary.withdrawn || summary.reaped || summary.reapedSlots || ingested?.changed) await save(`tick ${ticks}`);
       if (slots === 0 || summary.stopped === 'unauthorized') break;
+      // A failed push: one housekeeping tick (ingest, reap, no dispatch), then stop.
       const next = tickStart + tickIntervalMs;
       if (next >= deadline) break;
       await sleep(Math.max(0, next - now()));

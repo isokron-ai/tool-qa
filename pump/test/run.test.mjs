@@ -57,6 +57,8 @@ function harness({ slots = '3', subjects = 4, successor, ingest = null } = {}) {
         at: c.t,
         dispatches: db.raw.prepare('SELECT COUNT(*) AS n FROM dispatches').get().n,
         results: db.raw.prepare('SELECT COUNT(*) AS n FROM results').get().n,
+        pending: db.raw.prepare("SELECT COUNT(*) AS n FROM dispatches WHERE status = 'pending'").get().n,
+        sent: calls.dispatch.length,
       });
       db.close();
       return { status: 'pushed' };
@@ -132,13 +134,25 @@ test('ingest runs at the start of each tick until two minutes before the end; it
   h.cleanup();
 });
 
-test('a failed push makes the run fail, after the remaining ticks', async () => {
+test('R-ING-09: a failed push makes the run fail; nothing is sent and the run ends after one housekeeping tick', async () => {
   const h = harness({ slots: '1' });
+  let pushes = 0;
   h.opts.push = async () => {
+    pushes += 1;
     throw new Error(`release changed under us (token ${TOKEN})`);
   };
   const out = await runPump(h.opts);
   assert.equal(out.ok, false);
+  assert.equal(h.calls.dispatch.length, 0, 'the save before sending failed, so nothing was sent');
+  assert.equal(out.dispatched, 0);
+  assert.equal(out.ticks, 2, 'the failing tick, then one housekeeping tick');
+  assert.equal(pushes, 3, 'before sending, end of tick 1, and the final save (tick 2 changed nothing)');
+  assert.ok(h.lines.some((l) => /nothing more is dispatched this run/.test(l)), h.lines.join('\n'));
+  const db = openState(h.stateFile);
+  const rows = db.raw.prepare('SELECT status, error FROM dispatches').all();
+  assert.ok(rows.length > 0 && rows.every((r) => r.status === 'failed' && /^not sent: the state could not be saved first$/.test(r.error)), JSON.stringify(rows));
+  assert.deepEqual(db.openSlots(), [], 'the withdrawn dispatches hold no slot');
+  db.close();
   assert.ok(h.lines.every((l) => !l.includes(TOKEN)), 'the token is never logged');
   h.cleanup();
 });
@@ -339,5 +353,38 @@ test('R-ING-06: expired dispatches are reaped before ingest looks at them', asyn
   assert.equal(after.getKv('pump.last_tick').reaped, 1);
   after.close();
   assert.equal(out.ok, true);
+  h.cleanup();
+});
+
+test('R-ING-09: a push that fails after dispatching stops dispatching for the rest of the run', async () => {
+  const h = harness({ slots: '3', subjects: 6 });
+  const push = h.opts.push;
+  let n = 0;
+  h.opts.push = async (args) => {
+    n += 1;
+    if (n === 2) throw new Error('HTTP 502'); // the save at the end of tick 1
+    return push(args);
+  };
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, false);
+  assert.equal(h.calls.dispatch.length, 3, 'tick 1 sent its shards (saved before sending)');
+  assert.equal(out.ticks, 2, 'then one housekeeping tick, and the run ends');
+  assert.ok(h.lines.some((l) => /state push \(tick 1\) failed: HTTP 502; nothing more is dispatched this run/.test(l)), h.lines.join('\n'));
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('pump.last_tick').workerSlots, 0, 'the last tick dispatched nothing');
+  db.close();
+  h.cleanup();
+});
+
+test('R-ING-10: dispatches are in the saved state before they are sent', async () => {
+  const h = harness({ slots: '3', subjects: 4 });
+  const out = await runPump(h.opts);
+  assert.equal(out.dispatched, 2);
+  const before = h.calls.push[0];
+  assert.equal(before.sent, 0, 'the first push happens before anything is sent');
+  assert.equal(before.pending, 2, 'and holds both dispatches as pending');
+  const after = h.calls.push[1];
+  assert.equal(after.sent, 2);
+  assert.equal(after.pending, 0, 'the next push has them as dispatched');
   h.cleanup();
 });

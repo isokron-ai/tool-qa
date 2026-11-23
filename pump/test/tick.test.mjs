@@ -132,10 +132,12 @@ test('a refused dispatch frees its leases and slot and skips that workflow for t
   assert.equal(d.calls.filter((r) => r.workflowFile === 'live-probe.yml').length, 1, 'tried once, then skipped');
   assert.equal(s.failed, 1);
   assert.equal(s.dispatched, 2);
-  const failed = db.raw.prepare("SELECT * FROM dispatches WHERE status = 'failed'").all();
-  assert.equal(failed.length, 1);
+  assert.equal(s.withdrawn, 1, 'the second live-probe shard was reserved but not sent');
+  const failed = db.raw.prepare("SELECT * FROM dispatches WHERE status = 'failed' ORDER BY attempt_id").all();
+  assert.equal(failed.length, 2);
   assert.match(failed[0].error, /422/);
-  for (const it of db.getDispatch(failed[0].attempt_id).items) assert.equal(db.getLease(it.run_key).holder, null);
+  assert.match(failed[1].error, /^not sent: an earlier live-probe dispatch failed this tick$/);
+  for (const f of failed) for (const it of db.getDispatch(f.attempt_id).items) assert.equal(db.getLease(it.run_key).holder, null);
   assert.equal(db.openSlots().length, 2);
   db.close();
 });
