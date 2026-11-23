@@ -134,6 +134,8 @@ def main():
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     cache_path = os.path.join(here, "github-cache.json")
+    def save_cache():  # --offline only reads the cache, so a rebuild never rewrites a tracked file
+        if not a.offline: json.dump(cache, open(cache_path, "w"), indent=0, sort_keys=True)
     cache = json.load(open(cache_path)) if os.path.exists(cache_path) else {}
     rng = random.Random(SEED)
     repos, fstats = frame(a.registry)
@@ -177,15 +179,15 @@ def main():
     fixed_rows, missing, fail = [], [], []
     for k, tier in fixed.items():
         row, g = mk(k, tier)
-        if row: fixed_rows.append(row); json.dump(cache, open(cache_path, "w"), indent=0, sort_keys=True)
+        if row: fixed_rows.append(row); save_cache()
         else: missing.append((k, g))
     cand = []
     for n, k in enumerate(pool):
         row, g = mk(k, "sample")
         if row: cand.append(row)
         else: fail.append((k, g))
-        if n % 100 == 0: json.dump(cache, open(cache_path, "w"), indent=0, sort_keys=True); print(n, file=sys.stderr)
-    json.dump(cache, open(cache_path, "w"), indent=0, sort_keys=True)
+        if n % 100 == 0: save_cache(); print(n, file=sys.stderr)
+    save_cache()
 
     # renamed repositories can resolve to the same GitHub name: keep one row per canonical name
     taken = {r["id"].lower() for r in fixed_rows}; uniq = []

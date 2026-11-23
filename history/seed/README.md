@@ -7,6 +7,8 @@ open-source MCP servers whose popularity (H3) and daily tool lists (H4) we track
 ```
 python3 -I history/seed/build_seed.py --registry <mcp-registry-snapshot-2026-11-21.jsonl.gz> --offline
 ```
+
+The snapshot is not in this repository. Its sha256 is `003a4d59cf36b271d802d17f563322eef460c0024019f77e9e9c29a4a5bba218`. It is kept in IsoKron's archive, and the H1 registry captures (`history-registry`) hold the same data. `--offline` reads only `github-cache.json` and never rewrites it.
 Standard library only. `--offline` reads GitHub answers from `github-cache.json` (one `repos/{owner}/{repo}`
 answer per candidate, taken 2026-11-23). Without it, missing repos are fetched with `gh api`.
 

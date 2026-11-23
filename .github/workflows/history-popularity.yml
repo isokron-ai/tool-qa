@@ -71,7 +71,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           # crates counts come from the H2 dump subset, written by history-packages on days the dump changed.
-          # Take the newest crates-*.ndjson.gz from its last 10 successful runs. None found = crates errors in the manifest.
+          # Take the newest crates-*.ndjson.gz from its last 10 successful runs. None found = a warning; crates are skipped.
           mkdir -p .crates
           for id in $(gh run list -R "${REPO}" -w history-packages -s success -L 10 --json databaseId -q '.[].databaseId'); do
             rm -rf .crates/dl
@@ -79,6 +79,7 @@ jobs:
             f=$(find .crates/dl -name 'crates-*.ndjson.gz' | sort | tail -n 1)
             if [ -n "${f}" ]; then cp "${f}" .crates/subset.ndjson.gz; echo "path=.crates/subset.ndjson.gz" >> "$GITHUB_OUTPUT"; echo "crates subset from run ${id}: ${f##*/}"; break; fi
           done
+          if [ ! -f .crates/subset.ndjson.gz ]; then echo "::warning title=history-popularity::No crates subset found in the last 10 successful history-packages runs; crates are not counted this run."; fi
       - name: Capture popularity
         if: steps.guard.outputs.proceed == 'true'
         env:

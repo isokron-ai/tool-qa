@@ -149,12 +149,18 @@ export async function processDump(raw, { seedNames = new Set() } = {}) {
   return { rows, dump: { sha256: hash.digest('hex'), bytes, timestamp: meta.timestamp ?? null, commit: meta.crates_io_commit ?? null }, totals: { crates: crates.size } };
 }
 
-export async function runCrates({ http, state = {}, seedNames }) {
+/** A short key for the seeded crate set, so a seed change re-reads an unchanged dump. */
+export function seedKey(seedNames = new Set()) {
+  return createHash('sha256').update([...seedNames].sort().join('\n')).digest('hex').slice(0, 16);
+}
+
+export async function runCrates({ http, state = {}, seedNames = new Set() }) {
   const head = await http.request(DUMP_URL, { method: 'HEAD' });
   const etag = head.headers.get('etag');
-  if (etag && etag === state.etag) return { rows: [], state, errors: [], skipped: true, note: 'dump unchanged (same ETag)' };
+  const seed_key = seedKey(seedNames);
+  if (etag && etag === state.etag && seed_key === (state.seed_key ?? seedKey())) return { rows: [], state, errors: [], skipped: true, note: 'dump unchanged (same ETag) and seed unchanged' };
   const res = await http.request(DUMP_URL);
   if (!res.ok) throw new Error(`GET ${DUMP_URL} -> HTTP ${res.status}`);
   const { rows, dump, totals } = await processDump(res.body, { seedNames });
-  return { rows, state: { ...state, etag: res.headers.get('etag') ?? etag, dump_sha256: dump.sha256 }, errors: [], dump, totals };
+  return { rows, state: { ...state, etag: res.headers.get('etag') ?? etag, dump_sha256: dump.sha256, seed_key }, errors: [], dump, totals };
 }

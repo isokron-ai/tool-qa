@@ -49,7 +49,7 @@ The dump is about 2.3 GB. `crates.mjs` streams it once, hashes the whole archive
 `metadata.json`, and discards the rest. Nothing is written to disk. A HEAD request first: if the ETag
 matches the last run, the dump is skipped. Output rows have counts and dates, plus `description_len`;
 the description text itself is not stored. Crates named in `history/seed.txt` are kept too, with match
-reason `seed`, even when the matcher misses them, because H3 counts seeded crates from this subset. If a runner cannot spare the download time, run it weekly
+reason `seed`, even when the matcher misses them, because H3 counts seeded crates from this subset. A change to the seeded crates re-reads the dump even when its ETag is unchanged. If a runner cannot spare the download time, run it weekly
 instead: the logic is the same, only `--source` changes. The crates.io data-access page asks users to
 use the dump instead of crawling the API, which is why no API calls are made.
 

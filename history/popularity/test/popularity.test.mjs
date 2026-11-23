@@ -39,12 +39,22 @@ test('pypistats and per-item errors', async () => {
   const r = await pypiPopularity(http, ['Good', 'bad'], { now: 0, sleep: noSleep });
   assert.equal(r.rows.length, 1);
   assert.equal(r.rows[0].last_week, 7);
-  assert.equal(r.errors.length, 1);
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(r.missing, ['pypi:bad']);
+  const boom = mk(() => ({ status: 500, body: {} }));
+  const e = await pypiPopularity(createHttp({ fetch: boom.f, sleep: noSleep, retries: 0 }), ['x'], { now: 0, sleep: noSleep });
+  assert.equal(e.errors.length, 1, 'a server error is still an error');
+});
+test('npm: a gone package is missing, not an error', async () => {
+  const { http } = mk(() => ({ status: 404, body: {} }));
+  const r = await npmPopularity(http, ['gone'], { now: 0, sleep: noSleep });
+  assert.deepEqual([r.rows.length, r.errors, r.missing], [0, [], ['npm:gone']]);
 });
 test('crates projection', () => {
   const r = cratesPopularity([{ id: 'a', downloads_total: 3, versions: 2, latest_version_at: 'x' }], ['a', 'b'], { now: 0 });
   assert.equal(r.rows.length, 1);
-  assert.equal(r.errors.length, 1);
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(r.missing, ['crates:b']);
 });
 
 test('github: ETag sent, 304 reuses cache and still emits a row, token used', async () => {
@@ -71,8 +81,24 @@ test('github: 404 release is null, rate limit stops the loop', async () => {
   const lim = mk(() => ({ status: 403, body: {} }));
   const b = await githubPopularity(lim.http, ['o/a', 'o/b'], { now: 0 });
   assert.equal(b.rows.length, 0);
-  assert.equal(b.stats.skipped_rate_limit, 1);
+  assert.equal(b.stats.skipped_rate_limit, 2);
   assert.equal(lim.f.calls.length, 1);
+  assert.equal(b.errors.length, 1, 'a stop before any repo was read is an error (broken token)');
+});
+test('github: a stop after some rows is a warning, a gone repo is missing', async () => {
+  let n = 0;
+  const { http } = mk((u) => {
+    if (u.includes('/o/gone')) return { status: 404, body: {}, headers: { 'x-ratelimit-remaining': '900' } };
+    n++; if (n > 2) return { status: 403, body: {} };
+    return u.endsWith('/releases/latest') ? { status: 404, body: {}, headers: { 'x-ratelimit-remaining': '900' } } : { body: { stargazers_count: 1, forks_count: 0 }, headers: {} };
+  });
+  const r = await githubPopularity(http, ['o/gone', 'o/a', 'o/b', 'o/c'], { now: 0 });
+  assert.deepEqual(r.rows.map((x) => x.id), ['o/a']);
+  assert.deepEqual(r.missing, ['github:o/gone']);
+  assert.deepEqual(r.errors, []);
+  assert.equal(r.stats.rate_limited, true);
+  assert.equal(r.stats.skipped_rate_limit, 2);
+  assert.match(r.warnings[0], /2 of 4 repos not read/);
 });
 
 test('runPopularity: empty seed makes no network calls and writes a clean manifest', async () => {

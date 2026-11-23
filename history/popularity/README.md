@@ -33,5 +33,10 @@ Tests (no network): `node --test 'history/popularity/test/*.test.mjs'`.
 - Rows have `observed_at`; npm rows also have the window start and end the API reported.
 - On `all` and `downloads` runs the workflow downloads the newest `crates-*.ndjson.gz` from the last 10 successful
   `history-packages` runs and passes it as `--crates-subset`. H2 keeps every seeded crate in that subset (match reason
-  `seed`). If no subset is found, or a seeded crate has left crates.io, the manifest lists a crates error and the run fails.
+  `seed`). If no subset is found, the run warns and skips crates.
+- A run fails (`ok: false`, exit 1) only when it is broken: a network or server error that survives the retries, or
+  a GitHub stop before any repo was read. A package or repo that is gone (404, or a crate absent from the subset) goes in
+  the manifest's `missing` list. A stop at the GitHub rate limit goes in `warnings`, with `github.skipped_rate_limit`.
+  The first runs on a large seed stop at GITHUB_TOKEN's 1,000 requests per hour. The ETag cache fills over a few days
+  and 304 answers are free, so later runs cover the whole seed. Each run writes these counts to the job summary.
 - Shares `history/packages/lib/` for HTTP and manifests.

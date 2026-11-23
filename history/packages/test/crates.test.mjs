@@ -61,6 +61,17 @@ test('runCrates skips when ETag unchanged', async () => {
   assert.equal(f.calls[0].init.method, 'HEAD');
 });
 
+test('runCrates re-reads an unchanged dump when the seeded crates change', async () => {
+  const gz = makeTarGz(files);
+  const f = mockFetch((u, init) => ({ headers: { etag: '"e1"' }, body: '', stream: init.method === 'HEAD' ? null : Readable.from([gz]) }));
+  const http = createHttp({ fetch: f, sleep: noSleep });
+  const r = await runCrates({ http, state: { etag: '"e1"' }, seedNames: new Set(['serde']) });
+  assert.ok(!r.skipped);
+  assert.ok(r.rows.some((x) => x.id === 'serde'));
+  const again = await runCrates({ http, state: r.state, seedNames: new Set(['serde']) });
+  assert.equal(again.skipped, true);
+});
+
 test('runCrates downloads when ETag changed', async () => {
   const gz = makeTarGz(files);
   const f = mockFetch((u, init) => ({ headers: { etag: '"e2"' }, body: '', stream: init.method === 'HEAD' ? null : Readable.from([gz]) }));
