@@ -14,11 +14,18 @@ const RECIPIENT_RE = /^age1[02-9ac-hj-np-z]{58}$/;
 const IDENTITY_RE = /^AGE-SECRET-KEY-1[02-9AC-HJ-NP-Z]{58}$/;
 const KEYISH_RE = /AGE-SECRET-KEY-1[0-9A-Z]*/gi;
 const DEFAULT_MAX = 2 * 1024 ** 3;
+/**
+ * age is linear in its input, and the input is capped (worker-kit/contract.mjs),
+ * so a minute is far more than it needs; past that the process is killed and
+ * the call fails as 'timeout' instead of holding the pump.
+ */
+export const AGE_TIMEOUT_MS = 60_000;
 
 /**
  * code: 'input' (bad key text), 'placeholder' (the public-key file has no key
- * yet), 'spawn' (age could not run), 'too_large' (output over the cap) or
- * 'failed' (age ran and refused, e.g. wrong key or damaged ciphertext).
+ * yet), 'spawn' (age could not run), 'too_large' (output over the cap),
+ * 'timeout' (age ran past its time limit and was killed) or 'failed' (age ran
+ * and refused, e.g. wrong key or damaged ciphertext).
  */
 export class AgeError extends Error {
   constructor(message, code = 'failed') {
@@ -88,10 +95,13 @@ function childEnv() {
   return { PATH: process.env.PATH ?? '/usr/bin:/bin' };
 }
 
-function run(ageBin, args, input, maxBytes) {
-  const r = spawnSync(ageBin, args, { input, maxBuffer: maxBytes, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv() });
+function run(ageBin, args, input, maxBytes, timeoutMs) {
+  const r = spawnSync(ageBin, args, {
+    input, maxBuffer: maxBytes, stdio: ['pipe', 'pipe', 'pipe'], env: childEnv(), timeout: timeoutMs, killSignal: 'SIGKILL',
+  });
   if (r.error) {
     if (r.error.code === 'ENOBUFS') throw new AgeError(`age output is larger than ${maxBytes} bytes`, 'too_large');
+    if (r.error.code === 'ETIMEDOUT') throw new AgeError(`age ran longer than ${Math.round(timeoutMs / 1000)} s and was stopped`, 'timeout');
     throw new AgeError(`could not run age (${ageBin}): ${r.error.code ?? 'error'}`, 'spawn');
   }
   return r;
@@ -99,16 +109,16 @@ function run(ageBin, args, input, maxBytes) {
 
 /**
  * Decrypt age ciphertext (binary format) with one X25519 identity.
- * @param {{ciphertext: Buffer, identity: string, ageBin?: string, tmpDir?: string, maxBytes?: number}} p
+ * @param {{ciphertext: Buffer, identity: string, ageBin?: string, tmpDir?: string, maxBytes?: number, timeoutMs?: number}} p
  * @returns {Buffer}
  */
-export function ageDecrypt({ ciphertext, identity, ageBin = 'age', tmpDir = tmpdir(), maxBytes = DEFAULT_MAX }) {
+export function ageDecrypt({ ciphertext, identity, ageBin = 'age', tmpDir = tmpdir(), maxBytes = DEFAULT_MAX, timeoutMs = AGE_TIMEOUT_MS }) {
   const key = parseIdentity(identity);
   const dir = mkdtempSync(join(tmpDir, 'ingest-id-'));
   try {
     const file = join(dir, 'identity.txt');
     writeFileSync(file, `${key}\n`, { mode: 0o600, flag: 'wx' });
-    const r = run(ageBin, ['--decrypt', '--identity', file], ciphertext, maxBytes);
+    const r = run(ageBin, ['--decrypt', '--identity', file], ciphertext, maxBytes, timeoutMs);
     if (r.status !== 0) throw new AgeError(`age could not decrypt the bundle: ${scrub(r.stderr, key) || `exit ${r.status}`}`);
     return r.stdout;
   } finally {
@@ -135,13 +145,13 @@ export function agePublicKey({ identity, keygenBin = 'age-keygen' }) {
  * @param {{plaintext: Buffer, recipients: string[], ageBin?: string, maxBytes?: number}} p
  * @returns {Buffer}
  */
-export function ageEncrypt({ plaintext, recipients, ageBin = 'age', maxBytes = DEFAULT_MAX }) {
+export function ageEncrypt({ plaintext, recipients, ageBin = 'age', maxBytes = DEFAULT_MAX, timeoutMs = AGE_TIMEOUT_MS }) {
   if (!Array.isArray(recipients) || recipients.length === 0) throw new AgeError('encrypt: no recipients', 'input');
   for (const r of recipients) {
     if (!RECIPIENT_RE.test(r)) throw new AgeError('encrypt: a recipient is not an age X25519 public key', 'input');
   }
   const args = ['--encrypt', ...recipients.flatMap((r) => ['--recipient', r])];
-  const r = run(ageBin, args, plaintext, maxBytes + 1024 * 1024); // ciphertext is a little larger
+  const r = run(ageBin, args, plaintext, maxBytes + 1024 * 1024, timeoutMs); // ciphertext is a little larger
   if (r.status !== 0) throw new AgeError(`age could not encrypt: ${scrub(r.stderr) || `exit ${r.status}`}`);
   return r.stdout;
 }

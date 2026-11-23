@@ -479,3 +479,50 @@ function zipOne(name, data) {
   eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(30 + n.length + data.length, 16);
   return Buffer.concat([lh, n, data, cd, eocd]);
 }
+
+// ---- R-ING-04: judging runs in a worker thread with a time limit ----
+
+test('R-ING-04: a judge that hangs is stopped at its time limit and the item is recorded as ingest_timeout', async () => {
+  const { runAnalysis } = await import('../analyze.mjs');
+  const hang = new URL('data:text/javascript,for (;;) {}');
+  const analyze = (plaintext, ctx, opts) => runAnalysis(plaintext, ctx, { ...opts, workerUrl: hang });
+  const t0 = performance.now();
+  const { r, ledger } = await run({ analyze, judgeTimeoutMs: 300 });
+  const ms = performance.now() - t0;
+  assert.ok(ms < 5000, `took ${ms.toFixed(0)} ms`);
+  assert.equal(r.outcome, 'rejected');
+  assert.equal(r.reason, 'ingest_timeout');
+  assert.equal(r.recorded, true);
+  assert.deepEqual(ledger.records.map((x) => x.reason), ['ingest_timeout']);
+  const report = json(r.outputs.get('rejected/att-1/0/ingest.json'));
+  assert.match(report.problems[0].detail, /longer than 0.3 s and was stopped/);
+  assert.ok(r.outputs.has('rejected/att-1/0/result.tar.age'), 'the ciphertext is kept');
+});
+
+test('R-ING-04: a judge that throws, or dies, records ingest_error instead of failing the tick', async () => {
+  const { runAnalysis } = await import('../analyze.mjs');
+  // analyzeBundle throws (no registry to check against): the thread reports the error.
+  const broken = await run({ registry: null });
+  assert.equal(broken.r.outcome, 'rejected');
+  assert.equal(broken.r.reason, 'ingest_error');
+  assert.match(json(broken.r.outputs.get('rejected/att-1/0/ingest.json')).problems[0].detail, /^judging failed: TypeError/);
+
+  // The thread itself fails to load.
+  const dies = new URL('data:text/javascript,throw new Error("boom")');
+  const died = await run({ analyze: (p, c, o) => runAnalysis(p, c, { ...o, workerUrl: dies }) });
+  assert.equal(died.r.reason, 'ingest_error');
+  assert.match(json(died.r.outputs.get('rejected/att-1/0/ingest.json')).problems[0].detail, /boom/);
+
+  // The thread runs out of memory.
+  const hog = new URL('data:text/javascript,const a = []; for (;;) a.push(new Array(1e6).fill(1));');
+  const oom = await run({ analyze: (p, c, o) => runAnalysis(p, c, { ...o, workerUrl: hog, maxMemoryMb: 32 }) });
+  assert.equal(oom.r.reason, 'ingest_error');
+  assert.match(json(oom.r.outputs.get('rejected/att-1/0/ingest.json')).problems[0].detail, /ERR_WORKER_OUT_OF_MEMORY/);
+});
+
+test('R-ING-04: the judge thread gets no environment', async () => {
+  const { runAnalysis } = await import('../analyze.mjs');
+  const peek = new URL('data:text/javascript,import { parentPort } from "node:worker_threads"; parentPort.postMessage({ error: JSON.stringify(Object.keys(process.env)) });');
+  const out = await runAnalysis(Buffer.alloc(0), {}, { workerUrl: peek });
+  assert.equal(out.error, '[]');
+});

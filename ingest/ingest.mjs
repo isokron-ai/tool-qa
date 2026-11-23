@@ -33,6 +33,12 @@
 //                every file outside raw/; any hit quarantines; raw/ hits are
 //                only counted
 //
+// Steps 5 to 8 run in a worker thread with a time and memory limit
+// (analyze.mjs): past the limit the item is rejected as ingest_timeout, a
+// judge that fails is rejected as ingest_error. Once the artifact is
+// downloaded, anything its contents cause is a recorded decision; only our own
+// failures (age cannot run, the ledger) are thrown for the caller to retry.
+//
 // Each item's decision is then recorded through the ledger, which does its own
 // fence check and may refuse an acceptance (the outcome becomes rejected).
 // Outputs, per item:
@@ -58,15 +64,16 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { artifactName, legacyArtifactName, MANIFEST_NAME, sha256Hex, validateManifest } from '../worker-kit/contract.mjs';
-import { isSafeRelativePath, readTar, TarError, writeTar } from '../worker-kit/tar.mjs';
+import { artifactName, legacyArtifactName, MANIFEST_NAME, sha256Hex } from '../worker-kit/contract.mjs';
+import { isSafeRelativePath, writeTar } from '../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from './age.mjs';
+import { JUDGE_TIMEOUT_MS, readBundle, runAnalysis } from './analyze.mjs';
 import { ContainerError, unwrapArtifact } from './container.mjs';
-import { checkBundle } from './forgery.mjs';
 import { GithubError, makeGithub } from './github.mjs';
+import { cleanProblem, makeLabeler, MAX_LISTED, textOrNull } from './hygiene.mjs';
 import { normalizeAttempt, openLedger } from './ledger.mjs';
-import { maskText, scanFiles, scanText } from './redact.mjs';
-import { loadRegistry, validateObservations } from './registry.mjs';
+import { maskText, scanText } from './redact.mjs';
+import { loadRegistry } from './registry.mjs';
 
 export const REPORT_SCHEMA_VERSION = 1;
 export const MAX_ARTIFACT_BYTES = 512 * 1024 ** 2;
@@ -77,20 +84,6 @@ const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const ATTEMPT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 const REASON_RE = /^[a-z][a-z0-9_]{0,63}$/;
-const MAX_LISTED = 50;
-const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
-
-// When a bundle has several forgery problems, the most specific one names the
-// rejection: identity first, then the file list, then the controls (a forged
-// envelope in a control output also shows up as a foreign claim).
-const PROBLEM_ORDER = [
-  'attempt_mismatch', 'fence_mismatch', 'run_key_mismatch', 'workflow_repo_mismatch', 'workflow_file_mismatch',
-  'workflow_sha_mismatch', 'run_id_mismatch', 'run_attempt_mismatch',
-  'unlisted_file', 'missing_file', 'size_mismatch', 'digest_mismatch',
-  'forgery_control_injected', 'forgery_marker_leaked', 'foreign_identity_claim',
-  'control_output_in_raw', 'control_failed', 'control_missing', 'forgery_control_unverified',
-];
-const PROBLEM_KEYS = ['reason', 'field', 'path', 'line', 'json_path', 'key', 'index', 'kind', 'how', 'expected', 'got', 'detail'];
 
 export class InputError extends Error {
   constructor(message) {
@@ -112,11 +105,6 @@ function checkInput({ repo, runId, attemptId } = {}) {
 }
 
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
-
-function rank(reason) {
-  const i = PROBLEM_ORDER.indexOf(reason);
-  return i === -1 ? PROBLEM_ORDER.length : i;
-}
 
 /**
  * Open one attempt for judging: read the ledger, check the run once and list its
@@ -144,6 +132,7 @@ export async function openAttempt(input, deps) {
   const {
     ledger, github, decrypt, registry, now = () => new Date(), allowNoControls = false,
     maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES,
+    analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS,
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
 
@@ -231,8 +220,10 @@ export async function openAttempt(input, deps) {
     let manifestBytes = null;
     let files = null;
 
-    async function finish(outcome, reason, problems = []) {
+    // `total` is the number of problems before `problems` was capped.
+    async function finish(outcome, reason, problems = [], total = problems.length) {
       const listed = problems.map((p) => cleanProblem(p, label));
+      const extra = total - problems.length;
       const wantedRecord = {
         run_key: item.run_key, attempt_id: row.attempt_id, fence: item.fence, outcome, accepted: outcome === 'accepted', reason,
       };
@@ -254,7 +245,7 @@ export async function openAttempt(input, deps) {
         ingested_at: now().toISOString(),
         ...report,
         problems: listed.slice(0, MAX_LISTED),
-        problems_total: listed.length,
+        problems_total: listed.length + extra,
         recorded,
       };
       const outputs = new Map();
@@ -317,6 +308,10 @@ export async function openAttempt(input, deps) {
     }
     report.artifact.download_sha256 = sha256Hex(blob);
     report.artifact.download_bytes = blob.length;
+
+    // From here on the artifact is downloaded: whatever goes wrong because of
+    // its contents is a decision (a rejection), never an error to retry.
+    // Only our own failures (age cannot run, the ledger) are thrown.
     // A zipped artifact holds one file named like the artifact, with .tar.age.
     const innerName = art.name.endsWith('.tar.age') ? art.name : `${art.name}.tar.age`;
     try {
@@ -325,7 +320,7 @@ export async function openAttempt(input, deps) {
       report.artifact.container = unwrapped.container;
     } catch (err) {
       if (err instanceof ContainerError) return reject('bad_container', [{ reason: 'bad_container', detail: err.message }]);
-      throw err;
+      return reject('ingest_error', [{ reason: 'ingest_error', detail: `reading the artifact failed: ${errorText(err)}` }]);
     }
     report.artifact.sha256 = sha256Hex(ciphertext);
     report.artifact.bytes = ciphertext.length;
@@ -337,40 +332,12 @@ export async function openAttempt(input, deps) {
     } catch (err) {
       if (err instanceof AgeError && err.code === 'failed') return reject('decrypt_failed', [{ reason: 'decrypt_failed', detail: err.message }]);
       if (err instanceof AgeError && err.code === 'too_large') return reject('bundle_too_large', [{ reason: 'bundle_too_large', detail: err.message }]);
+      if (err instanceof AgeError && err.code === 'timeout') return reject('ingest_timeout', [{ reason: 'ingest_timeout', detail: err.message }]);
       throw err;
     }
 
-    // 5. bundle
-    let entries;
-    try {
-      entries = readTar(plaintext, { maxBytes: maxBundleBytes });
-    } catch (err) {
-      if (err instanceof TarError) return reject('bad_bundle', [{ reason: 'bad_bundle', detail: err.message }]);
-      throw err;
-    }
-    const manifestEntry = entries.find((e) => e.path === MANIFEST_NAME);
-    if (!manifestEntry) return reject('no_manifest');
-    manifestBytes = manifestEntry.data;
-    let manifest;
-    try {
-      manifest = JSON.parse(strictUtf8.decode(manifestBytes));
-    } catch {
-      return reject('manifest_not_json');
-    }
-    const valid = validateManifest(manifest);
-    if (!valid.ok) {
-      return reject('manifest_invalid', valid.errors.map((e) => ({ reason: 'manifest_invalid', json_path: e.path, detail: e.message })));
-    }
-    files = new Map(entries.filter((e) => e.path !== MANIFEST_NAME).map((e) => [e.path, e.data]));
-    report.bundle = {
-      manifest_sha256: sha256Hex(manifestBytes),
-      files: files.size,
-      bytes: [...files.values()].reduce((n, d) => n + d.length, 0),
-      controls: manifest.controls.length,
-      skips: manifest.skips.length,
-    };
-
-    // 6. forgery: the bundle must name this item's run_key and fence
+    // 5 to 8: bundle, forgery, registry and secrets, in a worker thread with
+    // a time limit (analyze.mjs).
     const exp = {
       attempt_id: row.attempt_id,
       fence: item.fence,
@@ -381,35 +348,30 @@ export async function openAttempt(input, deps) {
       run_id: runId,
       run_attempt: base.run.run_attempt,
     };
-    const forged = checkBundle(manifest, files, exp, { requireControl: !allowNoControls })
-      .map((p, i) => [p, i])
-      .sort((a, b) => rank(a[0].reason) - rank(b[0].reason) || a[1] - b[1])
-      .map(([p]) => p);
-    if (forged.length > 0) return reject(forged[0].reason, forged);
-
-    // 7. registry
-    const obs = validateObservations(files, registry);
-    report.registry = { source: registry.source ?? null, version: registry.version, sha256: registry.sha256 };
-    report.observations = { records: obs.records, errors: obs.errors.length, ...(obs.truncated ? { truncated: true } : {}) };
-    if (!obs.ok) return reject(obs.errors[0]?.reason ?? 'observation_format', obs.errors);
-
-    // 8. secrets
-    const scanned = [[MANIFEST_NAME, manifestBytes], ...[...files].filter(([p]) => !p.startsWith('raw/'))];
-    const hits = scanFiles(scanned, { canaries: row.canaries });
-    const rawHits = scanFiles([...files].filter(([p]) => p.startsWith('raw/')), { canaries: row.canaries });
-    const byRule = {};
-    for (const h of rawHits) byRule[h.rule] = (byRule[h.rule] ?? 0) + 1;
-    report.secret_scan = {
-      hits: hits.slice(0, MAX_LISTED).map((h) => cleanHit(h, label)),
-      hits_total: hits.length,
-      raw_hits_by_rule: byRule,
-    };
-    if (hits.length > 0) return finish('quarantined', 'secret_scan');
-
+    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes };
+    const verdict = await analyze(plaintext, ctx, { timeoutMs: judgeTimeoutMs });
+    if (verdict?.timedOut) {
+      return reject('ingest_timeout', [{ reason: 'ingest_timeout', detail: `judging took longer than ${judgeTimeoutMs / 1000} s and was stopped` }]);
+    }
+    if (!verdict?.result) {
+      return reject('ingest_error', [{ reason: 'ingest_error', detail: `judging failed: ${String(verdict?.error ?? 'no decision')}` }]);
+    }
+    const a = verdict.result;
+    Object.assign(report, a.report);
+    if (a.outcome !== 'accepted') return finish(a.outcome, a.reason, a.problems, a.problemsTotal);
+    try {
+      ({ manifestBytes, files } = readBundle(plaintext, { maxBundleBytes }));
+    } catch (err) {
+      return reject('ingest_error', [{ reason: 'ingest_error', detail: `reading the accepted bundle failed: ${errorText(err)}` }]);
+    }
     return finish('accepted', null);
   }
 
   return { done: null, attempt: row, items: pending.slice(), judge };
+}
+
+function errorText(err) {
+  return `${err?.name ?? 'Error'}: ${err?.message ?? err}`;
 }
 
 /** The run-level checks every item shares; {reason, problems} or null. */
@@ -477,42 +439,6 @@ export function combineResults(results) {
     outputs,
     items: results,
   };
-}
-
-// ---- report hygiene ----
-
-/** Printable ASCII only, secret and canary spans masked, length capped. */
-function makeLabeler(canaries) {
-  return (value, max = 200) => {
-    let s = String(value).replace(/[^\x20-\x7e]/g, '?');
-    const hits = scanText(s, { canaries });
-    if (hits.length > 0) s = maskText(s, hits);
-    return s.length > max ? `${s.slice(0, max)}...` : s;
-  };
-}
-
-function textOrNull(v, label) {
-  return typeof v === 'string' ? label(v) : null;
-}
-
-function cleanProblem(p, label) {
-  const out = {};
-  for (const k of PROBLEM_KEYS) {
-    const v = p[k];
-    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
-    else if (typeof v === 'string') out[k] = label(v);
-  }
-  return out;
-}
-
-function cleanHit(h, label) {
-  const out = { path: label(h.path), rule: h.rule, class: h.class };
-  if (Number.isInteger(h.line)) out.line = h.line;
-  if (typeof h.json_path === 'string') out.json_path = label(h.json_path);
-  if (h.in_key) out.in_key = true;
-  out.start = h.start;
-  out.length = h.length;
-  return out;
 }
 
 // ---- command line ----

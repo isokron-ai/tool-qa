@@ -10,6 +10,12 @@
 // passes straight through, unretried.
 
 const API_VERSION = '2022-11-28';
+/**
+ * One artifact download, retries and redirects included, ends within this
+ * time: about 0.5 MB/s for the largest artifact allowed, so a stalled storage
+ * host cannot hold a pump tick past its end.
+ */
+export const DOWNLOAD_TIMEOUT_MS = 120_000;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const ID_RE = /^[1-9]\d{0,19}$/;
 const WORKFLOW_FILE_RE = /^(?:\.github\/workflows\/)?([A-Za-z0-9_.-]{1,100}\.ya?ml)$/;
@@ -61,10 +67,12 @@ async function readCapped(res, max) {
  * @param {(ms: number) => Promise<void>} [p.sleep]
  * @param {number} [p.retries]           extra attempts after the first (default 3)
  * @param {number} [p.maxDownloadBytes]  default 512 MiB
+ * @param {number} [p.downloadTimeoutMs]  one artifact download, all of it (DOWNLOAD_TIMEOUT_MS)
  */
 export function makeGithub({
   token, fetch = globalThis.fetch, apiUrl = 'https://api.github.com',
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retries = 3, maxDownloadBytes = 512 * 1024 * 1024,
+  downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS,
 } = {}) {
   if (!token) throw new GithubError('a GitHub token is required');
   const api = new URL(apiUrl);
@@ -159,6 +167,7 @@ export function makeGithub({
     /** The artifact's bytes (a zip, or the file itself for archive: false uploads). */
     async downloadArtifact(repo, artifactId) {
       const path = `/repos/${checkRepo(repo)}/actions/artifacts/${checkId('artifact id', artifactId)}/zip`;
+      const signal = AbortSignal.timeout(downloadTimeoutMs); // the whole download, blob body included
       let res = await apiGet(path);
       for (let hops = 0; res.status >= 300 && res.status < 400; hops++) {
         const location = res.headers.get('location');
@@ -169,14 +178,20 @@ export function makeGithub({
         if (next.protocol !== 'https:') throw new GithubError(`GET ${path}: redirect must be https`);
         // No Authorization header past the API host.
         res = await withRetries('GET artifact blob', () => fetch(next, {
-          headers: { 'User-Agent': 'tool-qa-ingest' }, redirect: 'manual', signal: AbortSignal.timeout(300_000),
+          headers: { 'User-Agent': 'tool-qa-ingest' }, redirect: 'manual', signal,
         }));
       }
       if (!res.ok) {
         await res.body?.cancel().catch(() => {});
         throw new GithubError(`GET ${path}: HTTP ${res.status}`, { status: res.status });
       }
-      return readCapped(res, maxDownloadBytes);
+      try {
+        return await readCapped(res, maxDownloadBytes);
+      } catch (err) {
+        if (err instanceof GithubError) throw err;
+        // The body stalled past the time limit, or the connection dropped.
+        throw new GithubError(`GET ${path}: download failed (${err?.name ?? 'error'})`, { transient: true });
+      }
     },
   };
 }

@@ -70,6 +70,16 @@ that item only.
    ledger holds for the attempt. Any hit quarantines the bundle. Hits in `raw/`
    are only counted.
 
+Steps 5 to 8 read untrusted bytes, so they run in a worker thread
+([`analyze.mjs`](analyze.mjs)) with no environment, a 1 GiB heap limit and a
+60 second wall-clock limit. A judge that runs past the limit is stopped and
+the item is rejected as `ingest_timeout`; one that fails in any other way
+(an exception, out of memory) is rejected as `ingest_error`. Every pattern
+and walk in these steps runs in linear time, and JSON nested deeper than 64
+levels is read as text (see [REGRESSIONS.md](../REGRESSIONS.md)). Once an
+artifact is downloaded, a failure caused by its contents is always a recorded
+rejection, never an error that is tried again.
+
 Each item's decision is then recorded with `recordResult`, one call per item.
 The ledger does its own fence check; if it refuses an acceptance, the outcome
 becomes `rejected` with the ledger's reason.
@@ -134,6 +144,7 @@ Recorded rejections and quarantine:
 | controls and claims | `forgery_control_injected`, `forgery_marker_leaked`, `foreign_identity_claim`, `control_output_in_raw`, `control_failed`, `control_missing`, `forgery_control_unverified` |
 | registry | `observation_format`, `undeclared_field`, `deprecated_field`, `field_type` |
 | secrets (quarantined) | `secret_scan` |
+| judging | `ingest_timeout` (judging or decrypting ran past its time limit), `ingest_error` (judging failed on this bundle) |
 
 When a bundle has several problems, all are listed and the most specific names
 the rejection, in the order of the table (identity first).

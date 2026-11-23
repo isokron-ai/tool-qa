@@ -135,3 +135,19 @@ test('agePublicKey derives the recipient of an identity', { skip }, () => {
   assert.equal(agePublicKey({ identity, keygenBin: KEYGEN }), recipient);
   assert.throws(() => agePublicKey({ identity: 'nonsense', keygenBin: KEYGEN }), AgeError);
 });
+
+test('R-ING-04: age is killed at its time limit and fails as timeout', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'age-slow-'));
+  try {
+    const slow = join(dir, 'age');
+    writeFileSync(slow, '#!/bin/sh\nexec sleep 10\n', { mode: 0o755 });
+    const t0 = Date.now();
+    assert.throws(
+      () => ageEncrypt({ plaintext: Buffer.from('x'), recipients: [fakeRecipient('q')], ageBin: slow, timeoutMs: 300 }),
+      (err) => err instanceof AgeError && err.code === 'timeout',
+    );
+    assert.ok(Date.now() - t0 < 5000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
