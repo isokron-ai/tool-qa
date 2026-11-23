@@ -160,3 +160,23 @@ test('R-ING-01: the bounded patterns still find what they found before', () => {
   // A local part longer than RFC 5321 allows is not an address.
   assert.deepEqual(hit(j('a'.repeat(65), '@', 'some-company.io')), []);
 });
+
+test('R-ING-07: a JSON document nested 200,000 deep is scanned as text, not walked into a stack overflow', () => {
+  const n = 200_000;
+  const deep = `${'['.repeat(n)}{"m":"${FAKE.email}"}${']'.repeat(n)}`;
+  const files = new Map([
+    ['results/deep.json', Buffer.from(deep)],
+    ['results/deep.ndjson', Buffer.from(`${JSON.stringify({ ok: 1 })}\n${deep}\n`)],
+  ]);
+  const hits = scanFiles(files);
+  assert.deepEqual(hits.map((h) => [h.path, h.rule, h.line]), [['results/deep.json', 'email', undefined], ['results/deep.ndjson', 'email', 2]]);
+  assert.ok(hits.every((h) => h.json_path === undefined), 'text hits carry no JSON path');
+
+  assert.throws(() => scanValue(JSON.parse(deep)), (err) => err.name === 'JsonDepthError');
+  assert.throws(() => redactValue(JSON.parse(deep)), (err) => err.name === 'JsonDepthError');
+  // Up to 64 levels are walked as JSON, with paths, a key before its value.
+  const ok = JSON.parse(`${'['.repeat(63)}{"${FAKE.email}":"${FAKE.email}"}${']'.repeat(63)}`);
+  const walked = scanValue(ok);
+  assert.deepEqual(walked.map((h) => [h.rule, h.in_key === true]), [['email', true], ['email', false]]);
+  assert.equal(walked[1].json_path, `$${'[0]'.repeat(63)}[${JSON.stringify(FAKE.email)}]`);
+});

@@ -132,46 +132,84 @@ export function maskText(text, hits) {
 }
 
 function childPath(path, key) {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`;
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key.slice(0, 64))}]`;
 }
 
-/** Scan every string (and object key) in a JSON value. Hits carry `json_path`. */
-export function scanValue(value, opts = {}, path = '$', out = []) {
-  if (typeof value === 'string') {
-    for (const h of scanText(value, opts)) out.push({ ...h, json_path: path });
-  } else if (Array.isArray(value)) {
-    value.forEach((v, i) => scanValue(v, opts, `${path}[${i}]`, out));
-  } else if (value && typeof value === 'object') {
-    for (const [k, v] of Object.entries(value)) {
-      for (const h of scanText(k, opts)) out.push({ ...h, json_path: path, in_key: true });
-      scanValue(v, opts, childPath(path, k), out);
+/**
+ * How deep a JSON document may nest before it is scanned as plain text
+ * instead (R-ING-07). Bundle formats nest a few levels; 64 leaves room.
+ */
+export const MAX_JSON_DEPTH = 64;
+
+/** A JSON value nests deeper than MAX_JSON_DEPTH. */
+export class JsonDepthError extends Error {
+  constructor(depth) {
+    super(`JSON nests deeper than ${depth} levels`);
+    this.name = 'JsonDepthError';
+    this.depth = depth;
+  }
+}
+
+/**
+ * Scan every string (and object key) in a JSON value. Hits carry `json_path`.
+ * Walks with an explicit stack (a deep document cannot overflow the call
+ * stack) and throws JsonDepthError past `maxDepth`.
+ */
+export function scanValue(value, opts = {}, path = '$', out = [], { maxDepth = MAX_JSON_DEPTH } = {}) {
+  // Frames are visited in document order: a key's hits come before its value's.
+  const stack = [{ v: value, path, depth: 0 }];
+  while (stack.length > 0) {
+    const f = stack.pop();
+    if (f.key !== undefined) {
+      for (const h of scanText(f.key, opts)) out.push({ ...h, json_path: f.parent, in_key: true });
+    }
+    const v = f.v;
+    if (typeof v === 'string') {
+      for (const h of scanText(v, opts)) out.push({ ...h, json_path: f.path });
+      continue;
+    }
+    if (!v || typeof v !== 'object') continue;
+    if (f.depth >= maxDepth) throw new JsonDepthError(maxDepth);
+    const depth = f.depth + 1;
+    if (Array.isArray(v)) {
+      for (let i = v.length - 1; i >= 0; i--) stack.push({ v: v[i], path: `${f.path}[${i}]`, depth });
+    } else {
+      const entries = Object.entries(v);
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const [k, x] = entries[i];
+        stack.push({ v: x, path: childPath(f.path, k), depth, key: k, parent: f.path });
+      }
     }
   }
   return out;
 }
 
-/** A masked deep copy of a JSON value, plus the hits. The input is not changed. */
-export function redactValue(value, opts = {}) {
+/**
+ * A masked deep copy of a JSON value, plus the hits. The input is not changed.
+ * Throws JsonDepthError past `maxDepth` (so the recursion stays shallow).
+ */
+export function redactValue(value, opts = {}, { maxDepth = MAX_JSON_DEPTH } = {}) {
   const hits = [];
-  const walk = (v, path) => {
+  const walk = (v, path, depth) => {
     if (typeof v === 'string') {
       const h = scanText(v, opts);
       h.forEach((x) => hits.push({ ...x, json_path: path }));
       return h.length ? maskText(v, h) : v;
     }
-    if (Array.isArray(v)) return v.map((x, i) => walk(x, `${path}[${i}]`));
+    if (v && typeof v === 'object' && depth >= maxDepth) throw new JsonDepthError(maxDepth);
+    if (Array.isArray(v)) return v.map((x, i) => walk(x, `${path}[${i}]`, depth + 1));
     if (v && typeof v === 'object') {
       const o = {};
       for (const [k, x] of Object.entries(v)) {
         const kh = scanText(k, opts);
         kh.forEach((y) => hits.push({ ...y, json_path: path, in_key: true }));
-        o[kh.length ? maskText(k, kh) : k] = walk(x, childPath(path, k));
+        o[kh.length ? maskText(k, kh) : k] = walk(x, childPath(path, k), depth + 1);
       }
       return o;
     }
     return v;
   };
-  return { value: walk(value, '$'), hits };
+  return { value: walk(value, '$', 0), hits };
 }
 
 /** R2: what public data may keep of a secret-bearing value. */
@@ -187,32 +225,44 @@ export function stripDisplayUnsafe(text) {
 
 /**
  * Scan bundle files. .json files are scanned by JSON path, .ndjson per line,
- * anything else (or JSON that does not parse) as Latin-1 text, so offsets are
- * byte offsets.
+ * anything else (or JSON that does not parse, or nests deeper than
+ * MAX_JSON_DEPTH) as text: Latin-1 for whole files, so offsets are byte
+ * offsets.
  * @param {Map<string, Buffer>|Iterable<[string, Buffer]>} files
  * @returns {object[]} hits with `path` and, where known, `json_path` and `line`
  */
 export function scanFiles(files, opts = {}) {
   const out = [];
+  // Hits of one JSON document, or null when it must be scanned as text.
+  const docHits = (doc) => {
+    try {
+      return scanValue(doc, opts);
+    } catch (err) {
+      if (err instanceof JsonDepthError) return null;
+      throw err;
+    }
+  };
   for (const [path, data] of files) {
     if (path.endsWith('.json')) {
       let doc;
       let parsed = true;
       try { doc = JSON.parse(data.toString('utf8')); } catch { parsed = false; }
-      if (parsed) {
-        for (const h of scanValue(doc, opts)) out.push({ path, ...h });
+      const hits = parsed ? docHits(doc) : null;
+      if (hits) {
+        for (const h of hits) out.push({ path, ...h });
         continue;
       }
     } else if (path.endsWith('.ndjson')) {
       const lines = data.toString('utf8').split('\n');
       lines.forEach((line, i) => {
         if (line.trim() === '') return;
-        let doc;
-        try { doc = JSON.parse(line); } catch {
+        let hits = null;
+        try { hits = docHits(JSON.parse(line)); } catch { /* not JSON: scanned as text */ }
+        if (hits === null) {
           for (const h of scanText(line, opts)) out.push({ path, line: i + 1, ...h });
           return;
         }
-        for (const h of scanValue(doc, opts)) out.push({ path, line: i + 1, ...h });
+        for (const h of hits) out.push({ path, line: i + 1, ...h });
       });
       continue;
     }

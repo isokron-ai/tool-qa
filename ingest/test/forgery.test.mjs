@@ -153,3 +153,21 @@ test('R-ING-02: identity claims in a 1 MiB text file are found in linear time', 
   const at = lineIndex('a\nbb\n\nccc');
   assert.deepEqual([0, 1, 2, 4, 5, 6, 8].map(at), [1, 1, 2, 2, 3, 4, 4]);
 });
+
+test('R-ING-07: identity claims inside JSON nested 200,000 deep are still found, from the text', () => {
+  const n = 200_000;
+  const deep = `${'['.repeat(n)}{"attempt_id":"att-999"}${']'.repeat(n)}`;
+  const files = new Map([
+    ['results/deep.json', Buffer.from(deep)],
+    ['results/deep.ndjson', Buffer.from(`{}\n${deep}\n`)],
+  ]);
+  const found = findIdentityClaims(files, expected());
+  assert.deepEqual(found.map((p) => [p.path, p.line, p.key]), [['results/deep.json', 1, 'attempt_id'], ['results/deep.ndjson', 2, 'attempt_id']]);
+
+  // A forgery control output nested too deep to walk still shows an injected envelope.
+  const b = makeBundle();
+  const files2 = new Map(b.files);
+  files2.set('controls/forgery.json', Buffer.from(deep));
+  const problems = checkControls(b.manifest, files2);
+  assert.ok(problems.some((p) => p.reason === 'forgery_control_injected' && p.how === 'envelope'), JSON.stringify(problems));
+});

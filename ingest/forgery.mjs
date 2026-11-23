@@ -19,6 +19,7 @@
 // file's content.
 
 import { sha256Hex } from '../worker-kit/contract.mjs';
+import { JsonDepthError, MAX_JSON_DEPTH } from './redact.mjs';
 
 const MAX_PROBLEMS = 50;
 
@@ -103,17 +104,41 @@ export function checkFiles(manifest, files) {
   return out;
 }
 
+/**
+ * Visit every object (not array) of a JSON value in document order, with its
+ * JSON path. An explicit stack, so a deep document cannot overflow the call
+ * stack; throws JsonDepthError past MAX_JSON_DEPTH (R-ING-07).
+ */
 function walkJson(value, path, visit) {
-  if (Array.isArray(value)) {
-    value.forEach((v, i) => walkJson(v, `${path}[${i}]`, visit));
-  } else if (value && typeof value === 'object') {
-    visit(value, path);
-    for (const [k, v] of Object.entries(value)) walkJson(v, childPath(path, k), visit);
+  const stack = [{ v: value, path, depth: 0 }];
+  while (stack.length > 0) {
+    const { v, path: at, depth } = stack.pop();
+    if (!v || typeof v !== 'object') continue;
+    if (depth >= MAX_JSON_DEPTH) throw new JsonDepthError(MAX_JSON_DEPTH);
+    if (Array.isArray(v)) {
+      for (let i = v.length - 1; i >= 0; i--) stack.push({ v: v[i], path: `${at}[${i}]`, depth: depth + 1 });
+      continue;
+    }
+    visit(v, at);
+    const entries = Object.entries(v);
+    for (let i = entries.length - 1; i >= 0; i--) stack.push({ v: entries[i][1], path: childPath(at, entries[i][0]), depth: depth + 1 });
+  }
+}
+
+/** walkJson, or false when the value nests too deep (the caller then reads it as text). */
+function walkOrText(value, visit) {
+  try {
+    walkJson(value, '$', visit);
+    return true;
+  } catch (err) {
+    if (err instanceof JsonDepthError) return false;
+    throw err;
   }
 }
 
 function jsonDocs(path, data) {
-  // [{doc, line?}] for JSON/NDJSON that parses; null means "scan as text".
+  // [{doc, line?}] for JSON/NDJSON that parses (a line that does not parse is
+  // {text, line}); null means "scan the whole file as text".
   if (path.endsWith('.json')) {
     try { return [{ doc: JSON.parse(data.toString('utf8')) }]; } catch { return null; }
   }
@@ -122,7 +147,7 @@ function jsonDocs(path, data) {
     const lines = data.toString('utf8').split('\n');
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].trim() === '') continue;
-      try { docs.push({ doc: JSON.parse(lines[i]), line: i + 1 }); } catch { docs.push({ text: lines[i], line: i + 1 }); }
+      try { docs.push({ doc: JSON.parse(lines[i]), line: i + 1, text: lines[i] }); } catch { docs.push({ text: lines[i], line: i + 1, unparsed: true }); }
     }
     return docs;
   }
@@ -165,18 +190,30 @@ export function lineIndex(text) {
 export function findIdentityClaims(files, exp) {
   const out = [];
   const add = (p) => { if (out.length < MAX_PROBLEMS) out.push({ reason: 'foreign_identity_claim', ...p }); };
+  const fromText = (path, text, line) => {
+    let lineAt = null;
+    for (const c of textClaims(text)) {
+      if (out.length >= MAX_PROBLEMS) break;
+      if (claimMatches(c.canon, c.value, exp) === false) {
+        if (line !== undefined) {
+          add({ path, line, key: c.key });
+        } else {
+          lineAt ??= lineIndex(text);
+          add({ path, line: lineAt(c.offset), key: c.key });
+        }
+      }
+    }
+  };
   for (const [path, data] of files) {
     if (path.startsWith('raw/')) continue;
     const docs = jsonDocs(path, data);
     if (docs) {
       for (const d of docs) {
-        if (d.text !== undefined) {
-          for (const c of textClaims(d.text)) {
-            if (claimMatches(c.canon, c.value, exp) === false) add({ path, line: d.line, key: c.key });
-          }
+        if (d.unparsed) {
+          fromText(path, d.text, d.line);
           continue;
         }
-        walkJson(d.doc, '$', (obj, jp) => {
+        const walked = walkOrText(d.doc, (obj, jp) => {
           for (const [k, v] of Object.entries(obj)) {
             const canon = canonicalKey(k);
             if (!canon) continue;
@@ -185,18 +222,12 @@ export function findIdentityClaims(files, exp) {
             }
           }
         });
+        // Too deep to walk: the same claims, read from its text.
+        if (!walked) fromText(path, d.text ?? data.toString('latin1'), d.line);
       }
       continue;
     }
-    const text = data.toString('latin1');
-    let lineAt = null;
-    for (const c of textClaims(text)) {
-      if (out.length >= MAX_PROBLEMS) break;
-      if (claimMatches(c.canon, c.value, exp) === false) {
-        lineAt ??= lineIndex(text);
-        add({ path, line: lineAt(c.offset), key: c.key });
-      }
-    }
+    fromText(path, data.toString('latin1'));
   }
   return out;
 }
@@ -204,18 +235,20 @@ export function findIdentityClaims(files, exp) {
 /** True if a control output holds something shaped like a result envelope. */
 function hasEnvelope(path, data) {
   const docs = jsonDocs(path, data);
-  if (!docs) return textClaims(data.toString('latin1')).some((c) => c.canon !== 'fence' || /^\d+$/.test(c.value));
+  const textHasClaim = (text) => textClaims(text).some((c) => c.canon !== 'fence' || /^\d+$/.test(c.value));
+  if (!docs) return textHasClaim(data.toString('latin1'));
   let found = false;
   for (const d of docs) {
-    if (d.text !== undefined) {
+    if (d.unparsed) {
       if (textClaims(d.text).length > 0) found = true;
       continue;
     }
-    walkJson(d.doc, '$', (obj) => {
+    const walked = walkOrText(d.doc, (obj) => {
       const keys = Object.keys(obj);
       if (keys.some((k) => canonicalKey(k))) found = true;
       if (keys.includes('schema_version') && keys.includes('files')) found = true;
     });
+    if (!walked && textHasClaim(d.text ?? data.toString('latin1'))) found = true;
   }
   return found;
 }
