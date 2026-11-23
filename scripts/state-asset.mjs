@@ -165,8 +165,8 @@ function makeClient({ repo, token, fetch, apiUrl, sleep, log }) {
   };
 }
 
-function pickAsset(release) {
-  const assets = Array.isArray(release?.assets) ? release.assets : [];
+function pickAsset(release, ignoreId = null) {
+  const assets = (Array.isArray(release?.assets) ? release.assets : []).filter((a) => a.id !== ignoreId);
   const main = assets.find((a) => a.name === ASSET_NAME);
   if (main) return main;
   const partial = assets.filter((a) => String(a.name).startsWith(UPLOAD_PREFIX)).sort((a, b) => b.id - a.id);
@@ -184,8 +184,9 @@ function readRecord(file) {
 }
 
 /** Throw if the remote state asset is not the one described by `expected`. */
-function assertUnchanged(release, expected) {
-  const cur = release && pickAsset(release);
+// `ignoreId` is our own upload in flight, which must not count as a rival asset.
+function assertUnchanged(release, expected, ignoreId = null) {
+  const cur = release && pickAsset(release, ignoreId);
   const fail = (why) => {
     throw new Error(`remote state changed since it was pulled (${why}); refusing to overwrite it. Pull again and redo the run.`);
   };
@@ -258,7 +259,7 @@ export async function pushState({ repo, token, file = DEFAULT_FILE, fetch = glob
   if (expected) {
     // Re-check just before the old copy is deleted; drop our upload if we lost the race.
     try {
-      assertUnchanged(await gh.getRelease(), expected);
+      assertUnchanged(await gh.getRelease(), expected, uploaded.id);
     } catch (err) {
       await gh.deleteAsset(uploaded.id).catch(() => {});
       throw err;
@@ -271,7 +272,10 @@ export async function pushState({ repo, token, file = DEFAULT_FILE, fetch = glob
   for (const a of assets) {
     if (a.id !== uploaded.id && String(a.name).startsWith(UPLOAD_PREFIX)) await gh.deleteAsset(a.id);
   }
-  writeFileSync(recordPath(file), JSON.stringify({ id: uploaded.id, name: ASSET_NAME, sha256: digest, updated_at: null }));
+  // Record what is now on the release (including updated_at), so the next push checks against it.
+  const after = await gh.getRelease();
+  const mine = after && (after.assets || []).find((a) => a.id === uploaded.id);
+  writeFileSync(recordPath(file), JSON.stringify({ id: uploaded.id, name: ASSET_NAME, sha256: digest, updated_at: mine?.updated_at ?? null }));
   log(`pushed ${ASSET_NAME} (${data.length} bytes, sha256 ${digest})`);
   return { status: 'pushed', bytes: data.length, sha256: digest, assetId: uploaded.id };
 }

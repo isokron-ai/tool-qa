@@ -388,3 +388,17 @@ test('CLI: push without a pull record exits 1 with a clear message', () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /pull record/);
 });
+
+test('pull from an empty release then push succeeds (first-ever push)', async () => {
+  const dir = tmp();
+  const api = fakeGitHub();
+  const file = join(dir, 'state.sqlite');
+  const r1 = await pullState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  assert.equal(r1.status, 'absent');
+  makeDb(dir, 'state.sqlite', 'first');
+  const r2 = await pushState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  assert.equal(r2.status, 'pushed');
+  assert.deepEqual(api.state.release.assets.map((a) => a.name), [ASSET_NAME]);
+  const r3 = await pushState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  assert.equal(r3.status, 'pushed');
+});

@@ -153,3 +153,7 @@ last good copy. `pull` checks the sha256 in the asset label and that the file
 is a healthy SQLite database before it replaces the local file. To reset state,
 delete `state.sqlite` and any `state.sqlite.upload-*` assets; the next run
 starts empty.
+
+## State store: one writer at a time
+
+`scripts/state-asset.mjs push` refuses to overwrite the state asset if it changed since this run pulled it, and re-checks just before replacing it. There is still a short window between that re-check and the swap, so the check is a safety net, not a lock: every workflow that pushes state must run in the same `concurrency` group (one writer at a time). Pull again before every push.
