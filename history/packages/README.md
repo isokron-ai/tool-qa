@@ -5,7 +5,7 @@ Records which MCP-related packages changed, by ecosystem, once a day. Output is 
 `history-packages.yml` runs it at 04:07 UTC and attests the manifests.
 
 Run locally: `node history/packages/run.mjs --out out --state .state [--source npm,pypi,crates,go]`.
-Tests (no network): `node --test history/packages/test/`.
+Tests (no network): `node --test 'history/packages/test/*.test.mjs'`.
 
 ## What counts as MCP
 
@@ -65,3 +65,7 @@ position and the run exits 1, after still writing the manifest for every source.
 Positions are JSON files in `--state`. The workflow keeps them in the Actions cache (new key per run,
 newest restored). If the cache is evicted (unused for 7 days), npm, PyPI and Go start again from now and
 leave a gap that the manifest's `since_before` / `since_after` fields make visible.
+
+Each manifest records `state_restored` (was a saved position found?) and `gap_possible` (true when it
+was not, for npm, PyPI and Go). In that case the runner also prints a `::warning` annotation, because
+the first run after an eviction cannot tell a fresh start from a lost cache.

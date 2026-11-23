@@ -55,8 +55,8 @@ test('every uses must be pinned to a full commit SHA', () => {
 test('same-repository uses forms are exempt', () => {
   const src = [
     'on: push', 'permissions: {}', 'jobs:', '  a:', '    runs-on: x', '    timeout-minutes: 1',
-    '    permissions: {}', '    steps:', '      - uses: ./.github/actions/x', '      - uses: $/.github/actions/y',
-    '  b:', '    permissions: {}', '    uses: $/.github/workflows/z.yml',
+    '    permissions: {}', '    steps:', '      - uses: ./.github/actions/x', '      - uses: ./.github/actions/y',
+    '  b:', '    permissions: {}', '    uses: ./.github/workflows/z.yml',
   ].join('\n');
   assert.deepEqual(checkWorkflowText(src, 'x.yml'), []);
 });
@@ -144,4 +144,42 @@ test('CLI: a missing path is a usage error', () => {
 test("this repository's own workflows pass", () => {
   const r = spawnSync(process.execPath, [SCRIPT, join(ROOT, '.github/workflows')], { encoding: 'utf8', env: { PATH: process.env.PATH } });
   assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+
+test('inputs.* in run is flagged, including bracket form inside a function', () => {
+  const v = check('bad/inputs-in-run.yml');
+  assert.deepEqual(rules(v), ['no-untrusted-in-run', 'no-untrusted-in-run']);
+  assert.deepEqual(v.map((x) => x.line), [10, 12]);
+});
+
+test('github.head_ref in run is flagged at the line inside a block', () => {
+  const v = check('bad/head-ref-in-run.yml');
+  assert.deepEqual(rules(v), ['no-untrusted-in-run']);
+  assert.equal(v[0].line, 12);
+});
+
+test('step and job outputs in run are flagged, but not in job outputs or env', () => {
+  const v = check('bad/outputs-in-run.yml');
+  assert.deepEqual(rules(v), ['no-untrusted-in-run', 'no-untrusted-in-run']);
+  assert.deepEqual(v.map((x) => x.line), [14, 22]);
+});
+
+test('secrets: inherit is flagged', () => {
+  const v = check('bad/secrets-inherit.yml');
+  assert.deepEqual(rules(v), ['no-secrets-inherit']);
+  assert.equal(v[0].line, 7);
+});
+
+test('job-level permissions: write-all is flagged; top-level write-all stays a top-permissions finding', () => {
+  const v = check('bad/job-write-all.yml');
+  assert.deepEqual(rules(v), ['no-write-all']);
+  assert.equal(v[0].line, 7);
+  const top = checkWorkflowText('on: push\npermissions: write-all\njobs: {}\n', 'x.yml');
+  assert.deepEqual(rules(top), ['top-permissions']);
+});
+
+test('local-looking uses outside ./ or escaping the repo are flagged', () => {
+  const v = check('bad/local-uses.yml');
+  assert.deepEqual(rules(v), ['pinned-uses', 'pinned-uses', 'pinned-uses']);
+  assert.deepEqual(v.map((x) => x.line), [9, 10, 11]);
 });

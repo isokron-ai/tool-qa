@@ -1,0 +1,19 @@
+on: workflow_dispatch
+permissions: {}
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - id: one
+        run: echo "v=1" >> "$GITHUB_OUTPUT"
+      - name: values go through env
+        env:
+          NAME: ${{ inputs.name }}
+          REF: ${{ github.head_ref }}
+          OUT: ${{ steps.one.outputs.v }}
+          TITLE: ${{ github.event.issue.title }}
+        run: echo "$NAME $REF $OUT $TITLE"
+      - name: mentions in plain text are fine
+        run: echo "see inputs and steps outputs docs"

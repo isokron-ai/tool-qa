@@ -58,7 +58,14 @@ export async function runNpm({ http, state = {}, now = Date.now(), limit = 10000
       if (!nameMatches(c.id) && !known.has(c.id)) continue;
       if (c.deleted) { rows.push({ seq: c.seq, id: c.id, deleted: true, versions_changed: [], modified: null, match: [] }); continue; }
       try {
-        const doc = await http.json(`${REGISTRY}/${enc(c.id)}`);
+        const res = await http.request(`${REGISTRY}/${enc(c.id)}`);
+        if (res.status === 404 || res.status === 410) {
+          // Unpublished after its feed entry: record it as deleted and move on, or the feed would stall here.
+          rows.push({ seq: c.seq, id: c.id, deleted: true, versions_changed: [], modified: null, match: [] });
+          continue;
+        }
+        if (!res.ok) throw new Error(`GET ${REGISTRY}/${enc(c.id)} -> HTTP ${res.status}`);
+        const doc = await res.json();
         const reasons = matchReasons({ name: doc.name ?? c.id, keywords: doc.keywords, description: doc.description });
         if (!reasons.length) continue;
         if (!nameMatches(c.id)) known.add(c.id);

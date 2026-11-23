@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { openState, StaleFenceError, SCHEMA_VERSION } from '../state/db.mjs';
+import { openState, StateDb, StaleFenceError, SCHEMA_VERSION } from '../state/db.mjs';
 
 const T0 = Date.parse('2026-11-23T12:00:00Z');
 const MIN = 60_000;
@@ -206,18 +206,63 @@ test('recordRun inserts then updates a run', () => {
 
 test('slot ledger hands out at most the budget and reuses released slots', () => {
   const db = fresh();
-  assert.equal(db.acquireSlot('run-1', { budget: 2, now: T0 }), 0);
-  assert.equal(db.acquireSlot('run-2', { budget: 2, now: T0 }), 1);
-  assert.equal(db.acquireSlot('run-3', { budget: 2, now: T0 }), null);
+  assert.equal(db.acquireSlot('run-1', { budget: 2, ttlMs: MIN * 60, now: T0 }), 0);
+  assert.equal(db.acquireSlot('run-2', { budget: 2, ttlMs: MIN * 60, now: T0 }), 1);
+  assert.equal(db.acquireSlot('run-3', { budget: 2, ttlMs: MIN * 60, now: T0 }), null);
   assert.equal(db.releaseSlot(0, 'run-2', { now: T0 }), false);
   assert.equal(db.releaseSlot(0, 'run-1', { now: T0 }), true);
-  assert.equal(db.acquireSlot('run-3', { budget: 2, now: T0 }), 0);
+  assert.equal(db.acquireSlot('run-3', { budget: 2, ttlMs: MIN * 60, now: T0 }), 0);
   assert.equal(db.openSlots().length, 2);
   // Budget is clamped to 15.
   const big = fresh();
-  for (let i = 0; i < 15; i++) assert.equal(big.acquireSlot(`r${i}`, { budget: 40, now: T0 }), i);
-  assert.equal(big.acquireSlot('r15', { budget: 40, now: T0 }), null);
-  assert.equal(big.acquireSlot('r', { budget: 0, now: T0 }), null);
+  for (let i = 0; i < 15; i++) assert.equal(big.acquireSlot(`r${i}`, { budget: 40, ttlMs: MIN * 60, now: T0 }), i);
+  assert.equal(big.acquireSlot('r15', { budget: 40, ttlMs: MIN * 60, now: T0 }), null);
+  assert.equal(big.acquireSlot('r', { budget: 0, ttlMs: MIN * 60, now: T0 }), null);
   db.close();
   big.close();
+});
+
+test('slot ledger: acquire needs a positive ttl', () => {
+  const db = fresh();
+  assert.throws(() => db.acquireSlot('r', { budget: 1, now: T0 }), /ttlMs/);
+  db.close();
+});
+
+test('slot ledger: an expired slot is reaped on acquire and can be taken again', () => {
+  const db = fresh();
+  assert.equal(db.acquireSlot('crashed', { budget: 1, ttlMs: 10 * MIN, now: T0 }), 0);
+  // Still held just before expiry.
+  assert.equal(db.acquireSlot('next', { budget: 1, ttlMs: 10 * MIN, now: T0 + 10 * MIN - 1 }), null);
+  assert.equal(db.acquireSlot('next', { budget: 1, ttlMs: 10 * MIN, now: T0 + 10 * MIN }), 0);
+  const open = db.openSlots();
+  assert.equal(open.length, 1);
+  assert.equal(open[0].holder_run, 'next');
+  // The crashed run can no longer release the slot it lost.
+  assert.equal(db.releaseSlot(0, 'crashed', { now: T0 + 11 * MIN }), false);
+  db.close();
+});
+
+test('reapExpired closes only expired rows and returns the count', () => {
+  const db = fresh();
+  db.acquireSlot('a', { budget: 3, ttlMs: MIN, now: T0 });
+  db.acquireSlot('b', { budget: 3, ttlMs: 5 * MIN, now: T0 });
+  db.acquireSlot('c', { budget: 3, ttlMs: MIN, now: T0 });
+  assert.equal(db.reapExpired({ now: T0 + 2 * MIN }), 2);
+  assert.deepEqual(db.openSlots().map((r) => r.holder_run), ['b']);
+  assert.equal(db.reapExpired({ now: T0 + 2 * MIN }), 0);
+  db.close();
+});
+
+test('migration from schema version 1 gives old open slots an expiry that reaps them', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { readFileSync } = await import('node:fs');
+  const raw = new DatabaseSync(':memory:');
+  raw.exec(readFileSync(new URL('../state/schema.sql', import.meta.url), 'utf8'));
+  raw.exec("INSERT INTO counters (name, value) VALUES ('fence', 0); PRAGMA user_version = 1");
+  raw.prepare('INSERT INTO slot_ledger (slot, holder_run, acquired) VALUES (0, ?, ?)').run('old', new Date(T0).toISOString());
+  const db = new StateDb(':memory:');
+  db.raw = raw;
+  assert.equal(db.migrate(), SCHEMA_VERSION);
+  assert.equal(db.acquireSlot('new', { budget: 1, ttlMs: MIN, now: T0 + MIN }), 0);
+  db.close();
 });

@@ -50,7 +50,10 @@ test('filters feed, fetches packuments, reports changed versions', async () => {
 });
 
 test('a failed packument fetch does not advance since', async () => {
-  const { http } = setup([{ seq: 101, id: 'a-mcp' }], {});
+  const f = mockFetch((url) => (url.startsWith('https://replicate.npmjs.com/_changes')
+    ? { body: { results: [{ seq: 101, id: 'a-mcp' }], last_seq: 101 } }
+    : { status: 403, body: {} }));
+  const http = createHttp({ fetch: f, sleep: noSleep });
   const r = await runNpm({ http, now: NOW, state: { since: 100 }, refresh: false });
   assert.equal(r.state.since, 100);
   assert.equal(r.errors.length, 1);
@@ -63,3 +66,19 @@ test('retries on 429 honouring Retry-After', async () => {
   assert.deepEqual(await http.json('https://x/'), { ok: 1 });
   assert.deepEqual(sleeps, [2000, 2000]);
 });
+
+for (const status of [404, 410]) {
+  test(`a packument that returns ${status} is recorded as deleted and the feed advances`, async () => {
+    const feed = [{ seq: 101, id: 'gone-mcp' }, { seq: 102, id: 'ok-mcp' }];
+    const f = mockFetch((url) => {
+      if (url.startsWith('https://replicate.npmjs.com/_changes')) return { body: { results: feed, last_seq: 102 } };
+      if (url.endsWith('/gone-mcp')) return { status, body: {} };
+      return { body: { name: 'ok-mcp', time: { modified: '2026-11-23T01:00:00Z' }, versions: {} } };
+    });
+    const http = createHttp({ fetch: f, sleep: noSleep });
+    const r = await runNpm({ http, now: NOW, state: { since: 100 }, refresh: false });
+    assert.deepEqual(r.errors, []);
+    assert.deepEqual(r.rows.map((x) => [x.id, x.deleted]), [['gone-mcp', true], ['ok-mcp', false]]);
+    assert.equal(r.state.since, 102);
+  });
+}

@@ -27,7 +27,10 @@ Set `LOOP_SLOTS` to 5 or less:
 gh variable set LOOP_SLOTS --body 5 --repo isokron-ai/tool-qa
 ```
 
-`LOOP_SLOTS` is the loop's ceiling on concurrent jobs across all repos.
+`LOOP_SLOTS` is the loop's ceiling on concurrent jobs across all repos. In the
+state store, each slot row carries an expiry (set when it is taken); expired
+rows are reaped the next time a slot is acquired, so a crashed run can't hold a
+slot for good.
 It is read as a whole number and clamped to 0..15: unset or 0 means slot-based
 jobs do nothing, values above 15 count as 15, and a value that isn't a whole
 number counts as 0.
@@ -42,6 +45,19 @@ gh variable set LOOP_PAUSE_UNTIL --body 2026-12-01T09:00:00Z --repo isokron-ai/t
 date such as `2026-12-01` (midnight UTC). Until then every loop job skips. After
 it passes, the value is ignored; delete it when convenient. A value the guard
 can't read (no zone, a typo) keeps the loop paused, so a mistake fails safe.
+
+## Which variable affects which workflow
+
+| Variable | `history-registry` | `history-packages` | `history-popularity` | Workers and pump (later) |
+|---|---|---|---|---|
+| `LOOP_ENABLED` | yes | yes | yes | yes |
+| `LOOP_PAUSE_UNTIL` | yes | yes | yes | yes |
+| `LANE_<JOB>_ENABLED` | `LANE_HISTORY_REGISTRY_ENABLED` | `LANE_HISTORY_PACKAGES_ENABLED` | `LANE_HISTORY_POPULARITY_ENABLED` | their own lane |
+| `LOOP_SLOTS` | no | no | no | yes |
+
+The three history workflows capture public data and don't work in slots, so
+they run the guard with `--no-slots`: `LOOP_SLOTS=0` does not stop them. Use
+`LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` or the lane switch for those.
 
 ## Stop one job
 
@@ -66,7 +82,8 @@ same name takes precedence over the organisation one.
 
 `scripts/guard.mjs` is the first thing every scheduled or dispatched loop job
 runs. It checks, in order: `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL`, the job's
-`LANE_<JOB>_ENABLED`, then `LOOP_SLOTS` (with `--slots`). It prints one notice
+`LANE_<JOB>_ENABLED`, then `LOOP_SLOTS` (with `--slots`; `--no-slots` skips this
+check and ignores `LOOP_SLOTS`). It prints one notice
 line and writes `proceed`, `slots` and `reason` to `$GITHUB_OUTPUT`. It exits 0
 whenever it has decided, so a stopped loop is never a red run; it exits 2 only
 on a usage error.
@@ -122,6 +139,13 @@ file. Between runs it lives as the asset `state.sqlite` on the release tagged
 GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs pull   # -> state/state.sqlite
 GITHUB_TOKEN=... GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs push
 ```
+
+`pull` also writes `state.sqlite.pulled.json` next to the file: the id, sha256
+and `updated_at` of the asset it read. `push` re-reads the remote asset before
+it uploads and again before it deletes the old copy, and exits 1 with "remote
+state changed" if it is no longer the pulled one, so a stale writer can't
+overwrite newer state. A push with no pull record is refused unless you pass
+`--force`.
 
 `push` needs a token with `contents: write`. It uploads under a temporary name,
 then deletes the old asset and renames the new one, so a failed push keeps the

@@ -5,7 +5,7 @@ Snapshots popularity for the packages and repositories listed in `history/seed.t
 The seed ships empty, so a run with no seed makes no requests and writes empty files plus a manifest.
 
 Run locally: `node history/popularity/run.mjs --out out --state .state --mode downloads|stars|all`.
-Tests (no network): `node --test history/popularity/test/`.
+Tests (no network): `node --test 'history/popularity/test/*.test.mjs'`.
 
 ## Cadence
 `history-popularity.yml`: Mondays 05:11 UTC runs `all` (downloads and stars); the other days at

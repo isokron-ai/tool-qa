@@ -7,12 +7,21 @@
 //   top-permissions        top-level `permissions: {}` is present and empty
 //   job-permissions        every job declares `permissions`
 //   pinned-uses            every `uses:` is pinned to a full 40-hex commit SHA
-//                          (same-repository ./ and $/ paths are exempt;
+//                          (same-repository `./` paths are exempt, but not
+//                          `./../` escapes; any other local-looking path such as
+//                          `../x` or `.github/x` is not a valid local action and
+//                          fails here;
 //                          docker:// needs @sha256:<digest>)
 //   job-timeout            every job sets `timeout-minutes` (jobs that call a
 //                          reusable workflow are exempt: GitHub doesn't allow it there)
 //   no-pull-request-target the workflow is not triggered by pull_request_target
 //   no-event-in-run        no `${{ ... github.event ... }}` expression inside `run:`
+//   no-untrusted-in-run    no `${{ }}` in `run:` that reads `inputs.*`, `github.head_ref`,
+//                          `steps.<id>.outputs.*` or `needs.<id>.outputs.*`
+//                          (pass them through `env:` and use the shell variable)
+//   no-secrets-inherit     no job passes `secrets: inherit`
+//   no-write-all           no job-level `permissions: write-all` (top level is
+//                          reported by top-permissions)
 //   schedule-concurrency   scheduled workflows set `concurrency` (top level or every job)
 //   yaml                   the file can't be read by the strict reader
 //
@@ -28,6 +37,9 @@ import { parseYaml, lineOf, YamlError } from './lib/yaml-lite.mjs';
 const SHA_USES = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[^@\s]+)?@[0-9a-f]{40}$/;
 const DOCKER_USES = /^docker:\/\/[^@\s]+@sha256:[0-9a-f]{64}$/;
 const EXPR = /\$\{\{([\s\S]*?)\}\}/g;
+const HEAD_REF = /\bgithub\s*(?:\.\s*head_ref\b|\[\s*['"]head_ref['"]\s*\])/;
+const INPUTS_REF = /(?<![.\w-])inputs\s*(?:\.|\[)/;
+const OUTPUTS_REF = /(?<![.\w-])(?:steps|needs)\s*(?:\.\s*[\w-]+|\[\s*['"][^'"]+['"]\s*\])\s*(?:\.\s*outputs\b|\[\s*['"]outputs['"]\s*\])/;
 const EVENT_REF = /\bgithub\s*(?:\.\s*event\b|\[\s*['"]event['"]\s*\])/;
 
 const isMap = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -100,7 +112,10 @@ export function checkWorkflowText(text, file = '<workflow>') {
       return;
     }
     const uses = value.trim();
-    if (uses.startsWith('./') || uses.startsWith('$/')) return;
+    if (uses.startsWith('./')) {
+      if (uses.split('/').includes('..')) add(line, 'pinned-uses', `"${uses}" must not leave the repository`);
+      return;
+    }
     if (uses.startsWith('docker://')) {
       if (!DOCKER_USES.test(uses)) add(line, 'pinned-uses', `"${uses}" must be pinned by digest (docker://image@sha256:<64 hex>)`);
       return;
@@ -115,6 +130,8 @@ export function checkWorkflowText(text, file = '<workflow>') {
       continue;
     }
     if (!has(job, 'permissions')) add(jobLine, 'job-permissions', `job "${id}" has no explicit \`permissions\``);
+    else if (job.permissions === 'write-all') add(lineOf(job, 'permissions'), 'no-write-all', `job "${id}" sets \`permissions: write-all\`; list the scopes it needs`);
+    if (job.secrets === 'inherit') add(lineOf(job, 'secrets'), 'no-secrets-inherit', `job "${id}" passes \`secrets: inherit\`; pass only the secrets the called workflow needs`);
     const callsWorkflow = has(job, 'uses');
     if (callsWorkflow) checkUses(job.uses, lineOf(job, 'uses'));
     else if (!has(job, 'timeout-minutes')) add(jobLine, 'job-timeout', `job "${id}" has no \`timeout-minutes\``);
@@ -127,9 +144,17 @@ export function checkWorkflowText(text, file = '<workflow>') {
         const runLine = lineOf(step, 'run');
         const isBlock = step.run.includes('\n');
         for (const m of step.run.matchAll(EXPR)) {
+          const where = exprLine(step.run, m.index, runLine, isBlock);
           if (EVENT_REF.test(m[1])) {
-            add(exprLine(step.run, m.index, runLine, isBlock), 'no-event-in-run',
+            add(where, 'no-event-in-run',
               `step ${i + 1} of job "${id}" interpolates github.event into \`run\`; pass it through \`env\``);
+          }
+          const other = HEAD_REF.test(m[1]) ? 'github.head_ref'
+            : INPUTS_REF.test(m[1]) ? 'inputs'
+            : OUTPUTS_REF.test(m[1]) ? 'step or job outputs' : null;
+          if (other) {
+            add(where, 'no-untrusted-in-run',
+              `step ${i + 1} of job "${id}" interpolates ${other} into \`run\`; pass it through \`env\``);
           }
         }
       }

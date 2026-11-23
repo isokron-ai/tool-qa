@@ -1,0 +1,22 @@
+on: push
+permissions: {}
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      v: ${{ steps.one.outputs.v }}
+    steps:
+      - id: one
+        run: echo "v=1" >> "$GITHUB_OUTPUT"
+      - name: bad step output
+        run: echo "${{ steps.one.outputs.v }}"
+  b:
+    needs: a
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: bad needs output
+        run: echo "${{ needs.a.outputs.v }}"

@@ -12,11 +12,17 @@ import { runPypi } from './pypi.mjs';
 import { runCrates } from './crates.mjs';
 import { runGo } from './go.mjs';
 
+// Sources that follow a feed from a stored position. If that position is lost
+// (for example the Actions cache was evicted), they restart at the feed head and
+// anything published in between is missed.
+const FEED_SOURCES = new Set(['npm', 'pypi', 'go']);
+
 const RUNNERS = { npm: runNpm, pypi: runPypi, crates: runCrates, go: runGo };
 
 export async function runSource(name, { http, out, stateDir, now = Date.now() }) {
   const statePath = join(stateDir, `${name}.json`);
-  const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
+  const stateRestored = existsSync(statePath);
+  const state = stateRestored ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
   const startedAt = Date.now();
   const day = new Date(now).toISOString().slice(0, 10);
   let result; const errors = [];
@@ -26,6 +32,8 @@ export async function runSource(name, { http, out, stateDir, now = Date.now() })
   if (!result.skipped) files.push({ name: writeNdjsonGz(out, `${name}-${day}.ndjson.gz`, result.rows), rows: result.rows.length });
   const { dump, totals, note, skipped } = result;
   const extra = { since_before: state.since ?? state.serial ?? null, since_after: result.state.since ?? result.state.serial ?? null };
+  extra.state_restored = stateRestored;
+  extra.gap_possible = !stateRestored && FEED_SOURCES.has(name);
   if (dump) extra.dump = dump;
   if (totals) extra.totals = totals;
   if (note) extra.note = note;
@@ -44,6 +52,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   for (const s of values.source.split(',')) {
     if (!RUNNERS[s]) { console.error(`unknown source ${s}`); process.exit(2); }
     const m = await runSource(s, { http, out: values.out, stateDir: values.state });
+    if (m.gap_possible) {
+      console.log(`::warning title=history-packages ${s}::No saved feed position for ${s} (first run, or the cache was evicted). It restarted at the feed head, so changes in the gap may be missing.`);
+    }
     console.log(`${s}: ${m.files.map((f) => `${f.name} rows=${f.rows}`).join(', ') || 'no files'}${m.ok ? '' : ' ERRORS ' + m.errors.join('; ')}`);
     if (!m.ok) failed++;
   }

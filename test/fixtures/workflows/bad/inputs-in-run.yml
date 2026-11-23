@@ -1,0 +1,12 @@
+on: workflow_dispatch
+permissions: {}
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: bad
+        run: echo "${{ inputs.name }}"
+      - name: bad bracket
+        run: echo "${{ format('{0}', inputs['name']) }}"

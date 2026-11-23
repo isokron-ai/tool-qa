@@ -203,3 +203,32 @@ test('CLI: unknown argument is a usage error', () => {
   const r = cli(['--bogus'], { LOOP_ENABLED: 'true' });
   assert.equal(r.status, 2);
 });
+
+test('noSlots ignores LOOP_SLOTS (unset, zero, invalid) and still honours the other switches', () => {
+  for (const v of [undefined, '0', 'abc', '7']) {
+    const r = run({ LOOP_ENABLED: 'true', LOOP_SLOTS: v }, { noSlots: true });
+    assert.equal(r.proceed, true, `LOOP_SLOTS=${v}`);
+    assert.equal(r.slots, 0);
+    assert.equal(r.reason, 'ok');
+    assert.doesNotMatch(r.notice, /whole number/);
+  }
+  assert.equal(run({}, { noSlots: true }).reason, 'disabled');
+  assert.equal(run({ LOOP_ENABLED: 'true', LOOP_PAUSE_UNTIL: '2026-11-24T00:00:00Z' }, { noSlots: true }).reason, 'paused');
+  assert.equal(run({ LOOP_ENABLED: 'true', LANE_PUMP_ENABLED: 'false' }, { noSlots: true }).reason, 'lane_disabled');
+});
+
+test('noSlots and needsSlots together are an error', () => {
+  assert.throws(() => run({ LOOP_ENABLED: 'true' }, { noSlots: true, needsSlots: true }), /cannot be used together/);
+});
+
+test('CLI: --no-slots proceeds with LOOP_SLOTS unset', () => {
+  const r = spawnSync(process.execPath, [GUARD, '--job', 'history-packages', '--no-slots'], {
+    env: { PATH: process.env.PATH, LOOP_ENABLED: 'true' }, encoding: 'utf8',
+  });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /proceed=true/);
+  const lane = spawnSync(process.execPath, [GUARD, '--job', 'history-packages', '--no-slots'], {
+    env: { PATH: process.env.PATH, LOOP_ENABLED: 'true', LANE_HISTORY_PACKAGES_ENABLED: 'false' }, encoding: 'utf8',
+  });
+  assert.match(lane.stdout, /reason=lane_disabled/);
+});

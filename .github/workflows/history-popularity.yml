@@ -26,61 +26,61 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-    env:
-      LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
-      EVENT_SCHEDULE: ${{ github.event.schedule }}
-      INPUT_MODE: ${{ inputs.mode }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Kill switch
         id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_HISTORY_POPULARITY_ENABLED: ${{ vars.LANE_HISTORY_POPULARITY_ENABLED }}
+        run: node scripts/guard.mjs --job history-popularity --no-slots
+      - name: Pick mode
+        id: mode
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_MODE: ${{ inputs.mode }}
         run: |
-          if [ "${LOOP_ENABLED}" != "true" ]; then
-            echo "go=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::LOOP_ENABLED is not 'true'; history-popularity did nothing."
-            exit 0
-          fi
-          echo "go=true" >> "$GITHUB_OUTPUT"
           if [ -n "${INPUT_MODE}" ]; then mode="${INPUT_MODE}"
           elif [ "${EVENT_SCHEDULE}" = "11 5 * * 1" ]; then mode=all
           else mode=stars; fi
           echo "mode=${mode}" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        if: steps.guard.outputs.go == 'true'
-        with:
-          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: steps.guard.outputs.go == 'true'
+        if: steps.guard.outputs.proceed == 'true'
         with:
           node-version: '22'
       - name: Restore ETag cache
-        if: steps.guard.outputs.go == 'true'
+        if: steps.guard.outputs.proceed == 'true'
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .state/popularity
           key: h3-state-none
           restore-keys: h3-state-
       - name: Unit tests
-        if: steps.guard.outputs.go == 'true'
-        run: node --test history/popularity/test/
+        if: steps.guard.outputs.proceed == 'true'
+        run: node --test 'history/popularity/test/*.test.mjs'
       - name: Capture popularity
-        if: steps.guard.outputs.go == 'true'
+        if: steps.guard.outputs.proceed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MODE: ${{ steps.guard.outputs.mode }}
+          MODE: ${{ steps.mode.outputs.mode }}
         run: node history/popularity/run.mjs --out out/popularity --state .state/popularity --seed history/seed.txt --mode "${MODE}"
       - name: Save ETag cache
-        if: steps.guard.outputs.go == 'true' && always()
+        if: steps.guard.outputs.proceed == 'true' && always()
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .state/popularity
           key: h3-state-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Attest manifests
-        if: steps.guard.outputs.go == 'true' && always()
+        if: steps.guard.outputs.proceed == 'true' && always()
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: out/popularity/manifest-*.json
       - name: Upload
-        if: steps.guard.outputs.go == 'true' && always()
+        if: steps.guard.outputs.proceed == 'true' && always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: history-popularity-${{ github.run_id }}

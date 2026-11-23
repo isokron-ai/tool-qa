@@ -23,13 +23,18 @@ backoff (up to 5 times), and sends the User-Agent
 Workflow `.github/workflows/history-registry.yml`:
 
 - Full capture daily at 03:17 UTC.
-- Delta capture every 15 minutes, using `updated_since` set to 30 minutes
-  before the run (the overlap is deliberate, so a late run does not leave a gap;
-  de-duplicate downstream).
+- Delta capture every 15 minutes, using `updated_since` set to 90 minutes
+  before the run. Scheduled runs on GitHub are often late by more than 15
+  minutes, so consecutive windows overlap on purpose and a late or skipped run
+  leaves no gap. The archive de-duplicates by (name, version, updated_at), so
+  the repeated rows do no harm.
 - Manual runs from the Actions tab, with a mode input.
 
 Nothing runs unless the repository variable `LOOP_ENABLED` is exactly `true`.
-When it is not, the workflow ends green with a one-line notice.
+When it is not, the workflow ends green with a one-line notice. The guard
+(`scripts/guard.mjs --no-slots`) also honours `LOOP_PAUSE_UNTIL` and
+`LANE_HISTORY_REGISTRY_ENABLED`, and ignores `LOOP_SLOTS`.
+See [docs/OPERATIONS.md](../docs/OPERATIONS.md).
 
 ## Where the data goes
 
@@ -53,5 +58,5 @@ node history/registry.mjs --mode delta --state history-out/state.json --out hist
 Tests (no network):
 
 ```sh
-node --test history/test/
+node --test 'history/test/*.test.mjs'
 ```

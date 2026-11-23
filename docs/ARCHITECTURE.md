@@ -90,7 +90,8 @@ Every workflow is checked on each push and pull request by actionlint, zizmor
 and [`scripts/check-workflows.mjs`](../scripts/check-workflows.mjs): top-level
 `permissions: {}`, explicit permissions and `timeout-minutes` on every job,
 actions pinned to full commit SHAs, no `pull_request_target`, no event data
-interpolated into `run:`, and `concurrency` on every scheduled workflow.
+interpolated into `run:` (that covers `inputs`, `github.head_ref` and step or job
+outputs too), no `secrets: inherit` or `write-all`, and `concurrency` on every scheduled workflow.
 
 ## Not done yet
 

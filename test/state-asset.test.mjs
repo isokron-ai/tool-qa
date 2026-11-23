@@ -44,7 +44,7 @@ function fakeGitHub({ release = null, failFirst = {} } = {}) {
     const r = state.release;
     return {
       id: r.id, tag_name: TAG, upload_url: `${UPLOADS}/repos/${REPO}/releases/${r.id}/assets{?name,label}`,
-      assets: r.assets.map((a) => ({ id: a.id, name: a.name, label: a.label, size: a.data.length, url: `${API}/repos/${REPO}/releases/assets/${a.id}` })),
+      assets: r.assets.map((a) => ({ id: a.id, name: a.name, label: a.label, updated_at: a.updated_at, size: a.data.length, url: `${API}/repos/${REPO}/releases/assets/${a.id}` })),
     };
   }
 
@@ -213,7 +213,7 @@ test('pull retries a transient server error', async () => {
 test('push creates the state release when missing and uploads state.sqlite', async () => {
   const file = makeDb(tmp());
   const gh = fakeGitHub();
-  const r = await pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z') });
+  const r = await pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z'), force: true });
   assert.equal(r.status, 'pushed');
   assert.equal(gh.state.created.tag_name, TAG);
   assert.equal(gh.state.created.make_latest, 'false');
@@ -233,7 +233,7 @@ test('push replaces the existing asset and removes leftover uploads', async () =
     asset(1, ASSET_NAME, oldData),
     asset(2, `${ASSET_NAME}.upload-20260101T000000Z`, 'stale'),
   ] } });
-  await pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z') });
+  await pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z'), force: true });
   assert.deepEqual(gh.state.release.assets.map((a) => a.name), [ASSET_NAME]);
   assert.deepEqual(gh.state.release.assets[0].data, readFileSync(file));
   // Order: upload under a temporary name first, then delete the old asset, then rename.
@@ -267,7 +267,7 @@ test('push refuses a file that is not SQLite before any request', async () => {
   writeFileSync(file, 'hello');
   const gh = fakeGitHub();
   await assert.rejects(
-    pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep }),
+    pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, force: true }),
     /not a SQLite/,
   );
   assert.equal(gh.state.calls.length, 0);
@@ -278,7 +278,7 @@ test('API errors name the status but never the token', async () => {
   const { log, lines } = collectLog();
   let err;
   try {
-    await pushState({ repo: REPO, token: TOKEN, file: makeDb(tmp()), fetch: leaky, apiUrl: API, log, sleep: noSleep });
+    await pushState({ repo: REPO, token: TOKEN, file: makeDb(tmp()), fetch: leaky, apiUrl: API, log, sleep: noSleep, force: true });
   } catch (e) {
     err = e;
   }
@@ -300,4 +300,91 @@ test('CLI: unknown command and missing repository are usage errors', () => {
   const b = spawnSync(process.execPath, [SCRIPT, 'pull'], { env, encoding: 'utf8' });
   assert.equal(b.status, 2);
   assert.match(b.stderr, /GITHUB_REPOSITORY/);
+});
+
+const push = (api, file, extra = {}) =>
+  pushState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep, ...extra });
+const pull = (api, file) =>
+  pullState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+
+test('push without a pull record is refused unless forced', async () => {
+  const api = fakeGitHub();
+  await assert.rejects(push(api, makeDb(tmp())), /pull record/);
+  assert.equal(api.state.calls.length, 0);
+});
+
+test('pull then push succeeds when the remote is unchanged, and a second push works', async () => {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir, 'seed.sqlite'));
+  const api = fakeGitHub({ release: { id: 7, assets: [{ ...asset(1, ASSET_NAME, data), updated_at: '2026-11-23T10:00:00Z' }] } });
+  const file = join(dir, 'state.sqlite');
+  await pull(api, file);
+  const db = openState(file);
+  db.upsertSubject({ id: 'more', kind: 'repo', source: 't', now: 1 });
+  db.close();
+  assert.equal((await push(api, file)).status, 'pushed');
+  assert.equal((await push(api, file)).status, 'pushed');
+});
+
+test('push refuses when the remote asset changed after the pull, and changes nothing', async () => {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir, 'seed.sqlite'));
+  const api = fakeGitHub({ release: { id: 7, assets: [{ ...asset(1, ASSET_NAME, data), updated_at: '2026-11-23T10:00:00Z' }] } });
+  const file = join(dir, 'state.sqlite');
+  await pull(api, file);
+  const newer = readFileSync(makeDb(dir, 'newer.sqlite', 'newer'));
+  api.state.release.assets = [{ ...asset(5, ASSET_NAME, newer), updated_at: '2026-11-23T11:00:00Z' }];
+  await assert.rejects(push(api, file), /remote state changed/);
+  assert.equal(api.state.release.assets.length, 1);
+  assert.deepEqual(api.state.release.assets[0].data, newer);
+  assert.equal(api.state.calls.some((c) => c.method === 'POST' || c.method === 'DELETE'), false);
+});
+
+test('push refuses when only updated_at changed', async () => {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir));
+  const api = fakeGitHub({ release: { id: 7, assets: [{ ...asset(1, ASSET_NAME, data), updated_at: '2026-11-23T10:00:00Z' }] } });
+  const file = join(dir, 's.sqlite');
+  await pull(api, file);
+  api.state.release.assets[0].updated_at = '2026-11-23T10:05:00Z';
+  await assert.rejects(push(api, file), /updated_at/);
+});
+
+test('push refuses when state appeared after the pull found none', async () => {
+  const dir = tmp();
+  const api = fakeGitHub();
+  const file = join(dir, 'state.sqlite');
+  await pull(api, file); // absent: writes a record
+  const db = openState(file);
+  db.upsertSubject({ id: 'a', kind: 'repo', source: 't', now: 1 });
+  db.close();
+  api.state.release = { id: 7, assets: [asset(3, ASSET_NAME, readFileSync(makeDb(dir, 'x.sqlite', 'x')))] };
+  await assert.rejects(push(api, file), /now exists/);
+});
+
+test('push drops its upload and refuses if the remote changes during the push', async () => {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir, 'seed.sqlite'));
+  const api = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, data)] } });
+  const file = join(dir, 'state.sqlite');
+  await pull(api, file);
+  const racing = async (input, init = {}) => {
+    const res = await api.fetch(input, init);
+    if ((init.method || 'GET') === 'POST' && String(input).includes('/assets')) {
+      api.state.release.assets = api.state.release.assets.filter((a) => a.id !== 1);
+      api.state.release.assets.push(asset(9, ASSET_NAME, 'newer writer'));
+    }
+    return res;
+  };
+  await assert.rejects(push({ fetch: racing }, file), /remote state changed/);
+  assert.deepEqual(api.state.release.assets.map((a) => a.id), [9]);
+});
+
+test('CLI: push without a pull record exits 1 with a clear message', () => {
+  const file = makeDb(tmp());
+  const r = spawnSync(process.execPath, [SCRIPT, 'push', '--file', file, '--repo', REPO], {
+    env: { PATH: process.env.PATH, GITHUB_TOKEN: TOKEN, GITHUB_API_URL: 'http://127.0.0.1:9' }, encoding: 'utf8',
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /pull record/);
 });

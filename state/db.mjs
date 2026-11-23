@@ -13,11 +13,12 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const MAX_SLOTS = 15;
 
 const MIGRATIONS = [
   { version: 1, sql: () => readFileSync(new URL('./schema.sql', import.meta.url), 'utf8') },
+  { version: 2, sql: () => readFileSync(new URL('./schema-v2.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -253,19 +254,34 @@ export class StateDb {
 
   // ---- slot ledger ----
 
-  /** Take the lowest free slot below min(budget, 15). Returns the slot number or null. */
-  acquireSlot(holderRun, { budget, now } = {}) {
+  /**
+   * Take the lowest free slot below min(budget, 15) for `ttlMs`. Open rows past their
+   * expiry are reaped first, so a crashed run does not keep its slot.
+   * Returns the slot number or null.
+   */
+  acquireSlot(holderRun, { budget, ttlMs, now } = {}) {
+    checkTtl(ttlMs);
     const limit = Math.max(0, Math.min(MAX_SLOTS, Math.trunc(Number(budget) || 0)));
     const t = iso(now);
+    const expires = iso(toMs(now) + ttlMs);
     return this.tx(() => {
+      this.reapExpired({ now });
       const used = new Set(this.raw.prepare('SELECT slot FROM slot_ledger WHERE released IS NULL').all().map((r) => r.slot));
       for (let slot = 0; slot < limit; slot++) {
         if (used.has(slot)) continue;
-        this.raw.prepare('INSERT INTO slot_ledger (slot, holder_run, acquired) VALUES (?, ?, ?)').run(slot, String(holderRun), t);
+        this.raw.prepare('INSERT INTO slot_ledger (slot, holder_run, acquired, expires) VALUES (?, ?, ?, ?)').run(slot, String(holderRun), t, expires);
         return slot;
       }
       return null;
     });
+  }
+
+  /** Close every open slot row whose expiry has passed. Returns the number reaped. */
+  reapExpired({ now } = {}) {
+    const t = iso(now);
+    return Number(this.raw.prepare(
+      'UPDATE slot_ledger SET released = ? WHERE released IS NULL AND expires <= ?',
+    ).run(t, t).changes);
   }
 
   releaseSlot(slot, holderRun, { now } = {}) {

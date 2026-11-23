@@ -14,6 +14,12 @@
 // The asset label carries `sha256:<hex>`; pull checks it and checks that the
 // file is a SQLite database before it replaces the local file.
 //
+// pull also writes `<file>.pulled.json`: the id, label digest and updated_at of the
+// asset it read (or `absent`). push re-reads the remote asset before it uploads and
+// again before it deletes the old copy, and refuses (exit 1) if the remote is no
+// longer what was pulled, so a stale writer cannot roll newer state back. A push
+// with no pull record is refused unless --force is given.
+//
 // Only one writer may push at a time (the pump runs in a single concurrency
 // group). The token is only ever sent to the API host, never logged, and is
 // scrubbed from any error text.
@@ -167,6 +173,33 @@ function pickAsset(release) {
   return partial[0] || null;
 }
 
+const recordPath = (file) => `${file}.pulled.json`;
+
+function describe(asset, digest) {
+  return { id: asset.id, name: asset.name, sha256: digest, updated_at: asset.updated_at ?? null };
+}
+
+function readRecord(file) {
+  try { return JSON.parse(readFileSync(recordPath(file), 'utf8')); } catch { return null; }
+}
+
+/** Throw if the remote state asset is not the one described by `expected`. */
+function assertUnchanged(release, expected) {
+  const cur = release && pickAsset(release);
+  const fail = (why) => {
+    throw new Error(`remote state changed since it was pulled (${why}); refusing to overwrite it. Pull again and redo the run.`);
+  };
+  if (expected.absent) {
+    if (cur) fail(`${cur.name} now exists`);
+    return;
+  }
+  if (!cur) fail('the asset is gone');
+  if (cur.id !== expected.id) fail(`asset id ${expected.id} is now ${cur.id}`);
+  const m = /^sha256:([0-9a-f]{64})$/.exec(cur.label || '');
+  if (m && expected.sha256 && m[1] !== expected.sha256) fail('the checksum differs');
+  if (cur.updated_at && expected.updated_at && cur.updated_at !== expected.updated_at) fail('updated_at differs');
+}
+
 /** Download the state asset to `file`. Returns { status: 'absent' } if there is none yet. */
 export async function pullState({ repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep } = {}) {
   const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log });
@@ -174,6 +207,8 @@ export async function pullState({ repo, token, file = DEFAULT_FILE, fetch = glob
   const asset = release && pickAsset(release);
   if (!asset) {
     log(`no ${ASSET_NAME} on release "${TAG}" in ${repo}; starting from an empty state`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(recordPath(file), JSON.stringify({ absent: true }));
     return { status: 'absent' };
   }
   if (asset.name !== ASSET_NAME) log(`${ASSET_NAME} is missing; using interrupted upload ${asset.name}`);
@@ -193,25 +228,42 @@ export async function pullState({ repo, token, file = DEFAULT_FILE, fetch = glob
     rmSync(partial, { force: true });
     throw err;
   }
+  writeFileSync(recordPath(file), JSON.stringify(describe(asset, digest)));
   log(`pulled ${asset.name} (${data.length} bytes, sha256 ${digest})`);
   return { status: 'pulled', bytes: data.length, sha256: digest, asset: asset.name };
 }
 
 /** Upload `file` as the state asset, replacing the previous one. */
-export async function pushState({ repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, now = Date.now() } = {}) {
+export async function pushState({ repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, now = Date.now(), expected, force = false } = {}) {
   if (!token) throw new Error('GITHUB_TOKEN is required to push the state asset');
   const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log });
-  const data = readFileSync(file);
-  assertSqlite(data, file);
+  expected = expected ?? readRecord(file);
+  if (!expected && !force) {
+    throw new Error(`no pull record for ${file}; pull first, or pass --force to overwrite whatever is on the release`);
+  }
+  // quickCheck opens and closes its own handle, so no connection is open while we read and hash the file.
+  assertSqlite(readFileSync(file), file);
   quickCheck(file);
+  const data = readFileSync(file);
   const digest = sha256(data);
   const label = `sha256:${digest}`;
 
-  const release = (await gh.getRelease()) || (await gh.createRelease());
+  let release = await gh.getRelease();
+  if (expected) assertUnchanged(release, expected);
+  release = release || (await gh.createRelease());
   const stamp = new Date(now).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
   const tempName = `${UPLOAD_PREFIX}${stamp}`;
   const uploaded = await gh.upload(release, tempName, data, label);
 
+  if (expected) {
+    // Re-check just before the old copy is deleted; drop our upload if we lost the race.
+    try {
+      assertUnchanged(await gh.getRelease(), expected);
+    } catch (err) {
+      await gh.deleteAsset(uploaded.id).catch(() => {});
+      throw err;
+    }
+  }
   const assets = Array.isArray(release.assets) ? release.assets : [];
   const old = assets.find((a) => a.name === ASSET_NAME);
   if (old) await gh.deleteAsset(old.id);
@@ -219,17 +271,19 @@ export async function pushState({ repo, token, file = DEFAULT_FILE, fetch = glob
   for (const a of assets) {
     if (a.id !== uploaded.id && String(a.name).startsWith(UPLOAD_PREFIX)) await gh.deleteAsset(a.id);
   }
+  writeFileSync(recordPath(file), JSON.stringify({ id: uploaded.id, name: ASSET_NAME, sha256: digest, updated_at: null }));
   log(`pushed ${ASSET_NAME} (${data.length} bytes, sha256 ${digest})`);
   return { status: 'pushed', bytes: data.length, sha256: digest, assetId: uploaded.id };
 }
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
-  const opts = { command, file: DEFAULT_FILE, repo: undefined };
+  const opts = { command, file: DEFAULT_FILE, repo: undefined, force: false };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === '--file') opts.file = rest[++i];
     else if (a.startsWith('--file=')) opts.file = a.slice(7);
+    else if (a === '--force') opts.force = true;
     else if (a === '--repo') opts.repo = rest[++i];
     else if (a.startsWith('--repo=')) opts.repo = a.slice(7);
     else throw new Error(`unknown argument ${JSON.stringify(a)}`);
@@ -246,13 +300,14 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     opts.repo = opts.repo || env.GITHUB_REPOSITORY;
     if (!opts.repo) throw new Error('set GITHUB_REPOSITORY or pass --repo owner/name');
   } catch (err) {
-    process.stderr.write(`state-asset: ${err.message}\nusage: node scripts/state-asset.mjs pull|push [--file path] [--repo owner/name]\n`);
+    process.stderr.write(`state-asset: ${err.message}\nusage: node scripts/state-asset.mjs pull|push [--file path] [--repo owner/name] [--force]\n`);
     return 2;
   }
   const args = {
     repo: opts.repo,
     token: env.GITHUB_TOKEN || undefined,
     file: opts.file,
+    force: opts.force,
     apiUrl: env.GITHUB_API_URL,
     log: (m) => process.stderr.write(`${m}\n`),
   };

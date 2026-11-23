@@ -2,7 +2,7 @@
 // Loop kill-switch guard. Run it as the first step of every scheduled or
 // dispatched loop job:
 //
-//   node scripts/guard.mjs --job <name> [--slots]
+//   node scripts/guard.mjs --job <name> [--slots | --no-slots]
 //
 // Inputs (environment; map repository variables in with `vars.*`):
 //   LOOP_ENABLED          must be exactly "true", or the job does nothing.
@@ -12,6 +12,8 @@
 //                         does nothing. Unset or empty leaves the job on.
 //   LOOP_SLOTS            whole number of worker slots, default 0, clamped to 0..15.
 //                         With --slots, 0 slots means the job does nothing.
+//                         With --no-slots (jobs that don't work in slots, such as
+//                         history capture) LOOP_SLOTS is ignored: slots is always 0.
 //
 // Outputs (appended to $GITHUB_OUTPUT, or printed if it is not set):
 //   proceed=true|false, slots=<n>, reason=<code>
@@ -70,7 +72,8 @@ function oneLine(text) {
  * @param {{ job: string, needsSlots?: boolean, now?: number }} opts
  * @returns {{ proceed: boolean, slots: number, reason: string, notice: string }}
  */
-export function evaluateGuard(env, { job, needsSlots = false, now = Date.now() } = {}) {
+export function evaluateGuard(env, { job, needsSlots = false, noSlots = false, now = Date.now() } = {}) {
+  if (needsSlots && noSlots) throw new Error('guard: --slots and --no-slots cannot be used together');
   if (!job || !String(job).trim()) throw new Error('guard: a job name is required (--job, LOOP_JOB or GITHUB_JOB)');
   const name = oneLine(job).trim();
   const stop = (reason, why) => ({ proceed: false, slots: 0, reason, notice: `${name}: ${why}; skipping.` });
@@ -96,6 +99,9 @@ export function evaluateGuard(env, { job, needsSlots = false, now = Date.now() }
     return stop('lane_disabled', `this lane is off (${lane} is not "true")`);
   }
 
+  if (noSlots) {
+    return { proceed: true, slots: 0, reason: 'ok', notice: `${name}: loop is on; proceeding (this job does not use slots).` };
+  }
   const { slots, valid } = parseSlots(env.LOOP_SLOTS);
   const slotNote = valid ? '' : ' (LOOP_SLOTS is not a whole number, using 0)';
   if (needsSlots && slots === 0) {
@@ -114,10 +120,11 @@ function escapeCommand(text) {
 }
 
 function parseArgs(argv) {
-  const opts = { job: undefined, needsSlots: false };
+  const opts = { job: undefined, needsSlots: false, noSlots: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--slots') opts.needsSlots = true;
+    else if (a === '--no-slots') opts.noSlots = true;
     else if (a === '--job') opts.job = argv[++i];
     else if (a.startsWith('--job=')) opts.job = a.slice('--job='.length);
     else throw new Error(`guard: unknown argument ${JSON.stringify(a)}`);
@@ -130,9 +137,9 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   try {
     const opts = parseArgs(argv);
     const job = opts.job || env.LOOP_JOB || env.GITHUB_JOB;
-    result = evaluateGuard(env, { job, needsSlots: opts.needsSlots });
+    result = evaluateGuard(env, { job, needsSlots: opts.needsSlots, noSlots: opts.noSlots });
   } catch (err) {
-    process.stderr.write(`${err.message}\nusage: node scripts/guard.mjs --job <name> [--slots]\n`);
+    process.stderr.write(`${err.message}\nusage: node scripts/guard.mjs --job <name> [--slots | --no-slots]\n`);
     return 2;
   }
   const line = env.GITHUB_ACTIONS === 'true'
