@@ -129,3 +129,34 @@ test('scanFiles falls back to text when a .json file does not parse', () => {
   const hits = scanFiles(new Map([['results/bad.json', Buffer.from(`{not json ${FAKE['aws-access-key-id']}`)]]));
   assert.deepEqual(hits.map((h) => h.rule), ['aws-access-key-id']);
 });
+
+// R-ING-01: the patterns ran in quadratic time on crafted text (the email rule
+// took 3.2 s on 80 KB of "a." and about 8 minutes on 1 MB), which let one
+// bundle stall the pump. Each input below is 1 MiB and built to make one rule
+// backtrack; the bound is far above the linear time (tens of milliseconds) and
+// far below the old quadratic one.
+const PATHOLOGICAL = [
+  'a.', 'a-', 'a@', 'a@b.', '.@a.', 'eyJ-', 'eyJa.', 'sk-', 'glpat-', 'x://u:', '-----BEGIN A ', 'token="', 'token= ', 'a1',
+];
+test('R-ING-01: every redaction rule scans 1 MiB of crafted text in linear time', () => {
+  const MIB = 1024 ** 2;
+  for (const unit of PATHOLOGICAL) {
+    const text = unit.repeat(Math.ceil(MIB / unit.length));
+    const t0 = performance.now();
+    scanText(text);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 2000, `${JSON.stringify(unit)} x 1 MiB took ${ms.toFixed(0)} ms`);
+  }
+});
+
+test('R-ING-01: the bounded patterns still find what they found before', () => {
+  const j = (...p) => p.join('');
+  const hit = (text) => scanText(text).map((h) => h.rule);
+  assert.deepEqual(hit(j('mail me: first.last+tag', '@', 'mail.some-company.co.uk.')), ['email']);
+  assert.deepEqual(hit(j('Bearer ', FAKE.jwt)), ['jwt']);
+  assert.deepEqual(hit(j('"', FAKE.jwt, '"')), ['jwt']);
+  assert.deepEqual(hit(j('-----BEGIN ', 'ENCRYPTED RSA PRIVATE KEY-----')), ['private-key-block']);
+  assert.deepEqual(hit(j('secret', ' = ', '"Zx9Qw8Er7Ty6Ui5Op4As3"')), ['generic-secret-assignment']);
+  // A local part longer than RFC 5321 allows is not an address.
+  assert.deepEqual(hit(j('a'.repeat(65), '@', 'some-company.io')), []);
+});

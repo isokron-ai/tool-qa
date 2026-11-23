@@ -13,6 +13,14 @@
 //
 // The secret patterns are a small subset in the style of common secret
 // scanners (verification off: found values are never tried anywhere).
+//
+// Every pattern runs in linear time on any input, because ingest scans
+// untrusted bundles (R-ING-01 in REGRESSIONS.md). A pattern whose leading run
+// is unbounded starts only where that run starts (a lookbehind), so the regex
+// engine never rescans one long run from each of its positions; repeated
+// groups and long runs that must be followed by something specific are
+// bounded. test/redact.test.mjs times each rule on inputs built to make it
+// backtrack.
 
 import { createHash } from 'node:crypto';
 
@@ -35,7 +43,7 @@ const SSH_HOSTS = new Set(['github.com', 'gitlab.com', 'bitbucket.org', 'ssh.dev
  * that capture group) and optional `check(match)` to drop obvious placeholders.
  */
 export const RULES = Object.freeze([
-  { id: 'private-key-block', class: 'R1', re: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g },
+  { id: 'private-key-block', class: 'R1', re: /-----BEGIN (?:[A-Z0-9]{1,32} ){0,8}PRIVATE KEY(?: BLOCK)?-----/g },
   { id: 'age-secret-key', class: 'R1', re: /AGE-SECRET-KEY-1[02-9AC-HJ-NP-Z]{58}/g },
   { id: 'aws-access-key-id', class: 'R1', re: /\b(?:AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16}\b/g },
   { id: 'github-token', class: 'R1', re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,255}\b/g },
@@ -45,23 +53,28 @@ export const RULES = Object.freeze([
   { id: 'stripe-secret-key', class: 'R1', re: /\b[sr]k_live_[A-Za-z0-9]{20,}\b/g },
   { id: 'google-api-key', class: 'R1', re: /\bAIza[0-9A-Za-z_-]{35}/g },
   { id: 'npm-token', class: 'R1', re: /\bnpm_[A-Za-z0-9]{36}\b/g },
-  { id: 'jwt', class: 'R1', re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
+  // A JWT starts where a run of base64url characters starts.
+  { id: 'jwt', class: 'R1', re: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
   {
     id: 'generic-sk-key', class: 'R1', re: /\bsk-[A-Za-z0-9_-]{32,}/g,
     check: (m) => /\d/.test(m[0]) && /[A-Za-z]/.test(m[0].slice(3)),
   },
   {
     id: 'url-credentials', class: 'R1',
-    re: /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:@/?#"'<>]+:([^\s@/?#"'<>]+)@[A-Za-z0-9.-]+/g,
+    re: /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:@/?#"'<>]{1,256}:([^\s@/?#"'<>]{1,256})@[A-Za-z0-9.-]+/g,
     check: (m) => !/^[$%{<[]/.test(m[1]) && m[1].length >= 6,
   },
   {
     id: 'generic-secret-assignment', class: 'R1', group: 1,
-    re: /\b(?:api[_-]?key|secret[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|secret|token|passw(?:or)?d)["']?\s*[:=]\s*["']([^"'\s]{16,})["']/dgi,
+    re: /\b(?:api[_-]?key|secret[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|secret|token|passw(?:or)?d)["']?\s{0,16}[:=]\s{0,16}["']([^"'\s]{16,1024})["']/dgi,
     check: (m) => /\d/.test(m[1]) && entropy(m[1]) >= 3.5 && !/^(?:your|example|sample|dummy|xxx|changeme)/i.test(m[1]),
   },
   {
-    id: 'email', class: 'R3', re: /\b([A-Za-z0-9._%+-]+)@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})\b/g,
+    // The local part starts where a run of local-part characters starts, and
+    // is at most 64 characters (RFC 5321); labels are at most 63, and there
+    // are at most 16 of them.
+    id: 'email', class: 'R3',
+    re: /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]{1,64})@((?:[A-Za-z0-9-]{1,63}\.){1,16}[A-Za-z]{2,63})\b/g,
     check: (m) => !RESERVED_EMAIL_DOMAIN.test(m[2]) && !(m[1] === 'git' && SSH_HOSTS.has(m[2].toLowerCase())),
   },
   { id: 'canary', class: 'R4', re: /ISOKRON_CANARY_[A-Za-z0-9]{8,}/g },

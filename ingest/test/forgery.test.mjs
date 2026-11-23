@@ -137,3 +137,19 @@ test('checkBundle reports forged manifests and files together, first problem fir
   // Problems never carry file contents.
   assert.ok(errs.every((e) => !JSON.stringify(e).includes('att-2')));
 });
+
+test('R-ING-02: identity claims in a 1 MiB text file are found in linear time', async () => {
+  const { lineIndex } = await import('../forgery.mjs');
+  // Every line is a foreign claim. lineAt() used to count newlines from the
+  // start of the file for each claim: 66 s on this input.
+  const text = 'attempt_id=x\n'.repeat(Math.ceil(1024 ** 2 / 13));
+  const t0 = performance.now();
+  const out = findIdentityClaims(new Map([['results/claims.txt', Buffer.from(text)]]), expected());
+  const ms = performance.now() - t0;
+  assert.ok(ms < 2000, `took ${ms.toFixed(0)} ms`);
+  assert.equal(out.length, 50, 'problems stay capped');
+  assert.deepEqual(out.slice(0, 3).map((p) => p.line), [1, 2, 3]);
+
+  const at = lineIndex('a\nbb\n\nccc');
+  assert.deepEqual([0, 1, 2, 4, 5, 6, 8].map(at), [1, 1, 2, 2, 3, 4, 4]);
+});

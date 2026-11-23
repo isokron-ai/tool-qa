@@ -28,7 +28,7 @@ const IDENTITY_ALIASES = new Map([
   ['run_key', 'run_key'], ['runkey', 'run_key'],
   ['fence', 'fence'], ['fencing_no', 'fence'], ['fencing_number', 'fence'], ['fencingno', 'fence'], ['fence_token', 'fence'],
 ]);
-const TEXT_CLAIM_RE = /["']?\b(attempt[_-]?id|run[_-]?key|fencing[_-]?(?:no|number)|fence)\b["']?\s*[:=]\s*["']?([A-Za-z0-9._-]{1,128})/gi;
+export const TEXT_CLAIM_RE = /["']?\b(attempt[_-]?id|run[_-]?key|fencing[_-]?(?:no|number)|fence)\b["']?\s*[:=]\s*["']?([A-Za-z0-9._-]{1,128})/gi;
 
 function canonicalKey(k) {
   return IDENTITY_ALIASES.get(String(k).toLowerCase().replace(/[-\s]/g, '_'));
@@ -138,10 +138,24 @@ function textClaims(text) {
   return out;
 }
 
-function lineAt(text, offset) {
-  let n = 1;
-  for (let i = 0; i < offset; i++) if (text.charCodeAt(i) === 10) n++;
-  return n;
+/**
+ * Line numbers by offset, from one pass over the text (R-ING-02): building the
+ * index is linear and each lookup is a binary search, so a file with many
+ * claims costs n log n, not one scan from the start per claim.
+ */
+export function lineIndex(text) {
+  const starts = [0];
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  return (offset) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >>> 1;
+      if (starts[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
 }
 
 /**
@@ -175,8 +189,13 @@ export function findIdentityClaims(files, exp) {
       continue;
     }
     const text = data.toString('latin1');
+    let lineAt = null;
     for (const c of textClaims(text)) {
-      if (claimMatches(c.canon, c.value, exp) === false) add({ path, line: lineAt(text, c.offset), key: c.key });
+      if (out.length >= MAX_PROBLEMS) break;
+      if (claimMatches(c.canon, c.value, exp) === false) {
+        lineAt ??= lineIndex(text);
+        add({ path, line: lineAt(c.offset), key: c.key });
+      }
     }
   }
   return out;
