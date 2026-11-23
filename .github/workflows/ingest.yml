@@ -1,0 +1,144 @@
+name: ingest
+
+# Judge one worker attempt and record the decision in the loop state.
+# Dispatched with the worker repo, its run id and the attempt id once the
+# worker run has completed. Running it again for the same attempt is safe:
+# a recorded attempt is a no-op. See ingest/README.md and docs/OPERATIONS.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Worker repository (owner/name)
+        required: true
+        type: string
+      run_id:
+        description: Workflow run id in that repository
+        required: true
+        type: string
+      attempt_id:
+        description: Attempt id from the dispatch
+        required: true
+        type: string
+
+permissions: {}
+
+# Every workflow that pushes the state asset runs in this group (one writer at a time).
+concurrency:
+  group: loop-state
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      proceed: ${{ steps.guard.outputs.proceed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/guard.mjs
+          sparse-checkout-cone-mode: false
+      - name: Kill switch
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_INGEST_ENABLED: ${{ vars.LANE_INGEST_ENABLED }}
+        run: node scripts/guard.mjs --job ingest --no-slots
+
+  ingest:
+    needs: guard
+    if: needs.guard.outputs.proceed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: loop
+    permissions:
+      contents: write # pull and push the state release asset
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Check inputs
+        id: inputs
+        env:
+          REPO: ${{ inputs.repo }}
+          RUN_ID: ${{ inputs.run_id }}
+          ATTEMPT_ID: ${{ inputs.attempt_id }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$REPO" =~ ^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$ ]]; then
+            echo "::error title=ingest::repo must be owner/name"; exit 1
+          fi
+          if ! [[ "$RUN_ID" =~ ^[1-9][0-9]{0,15}$ ]]; then
+            echo "::error title=ingest::run_id must be a positive whole number"; exit 1
+          fi
+          if ! [[ "$ATTEMPT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error title=ingest::attempt_id may only hold letters, digits, '.', '_' and '-'"; exit 1
+          fi
+          {
+            echo "owner=${REPO%%/*}"
+            echo "name=${REPO#*/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install age (pinned version, sha256 checked)
+        run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
+
+      # With a GitHub App configured (LOOP_APP_ID), artifacts are read with a
+      # short-lived token for the one worker repo; otherwise with this run's token.
+      - name: Token for the worker repo
+        id: app-token
+        if: vars.LOOP_APP_ID != ''
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ vars.LOOP_APP_ID }}
+          private-key: ${{ secrets.LOOP_APP_PRIVATE_KEY }}
+          owner: ${{ steps.inputs.outputs.owner }}
+          repositories: ${{ steps.inputs.outputs.name }}
+          permission-actions: read
+
+      - name: Pull state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/state-asset.mjs pull
+
+      - name: Ingest
+        id: ingest
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
+          REPO: ${{ inputs.repo }}
+          RUN_ID: ${{ inputs.run_id }}
+          ATTEMPT_ID: ${{ inputs.attempt_id }}
+        run: |
+          node ingest/ingest.mjs --repo "$REPO" --run-id "$RUN_ID" --attempt-id "$ATTEMPT_ID" \
+            --state state/state.sqlite --sealed "$RUNNER_TEMP/sealed/ingest-$ATTEMPT_ID.tar.age"
+
+      # The outputs are age-encrypted to worker-kit/ingest.pub; only the holder
+      # of AGE_IDENTITY can read them. Uploaded before the state push, so a
+      # recorded decision always has its outputs.
+      - name: Upload sealed outputs (30 days)
+        if: steps.ingest.outputs.sealed != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ingest-${{ inputs.attempt_id }}
+          path: ${{ steps.ingest.outputs.sealed }}
+          archive: false
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Push state
+        if: steps.ingest.outputs.recorded == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/state-asset.mjs push

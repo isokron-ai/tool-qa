@@ -329,3 +329,94 @@ paths) and load it with `launchctl load` on that file:
 `PATH` is set so the job can find the GitHub CLI for its token. Check the log
 after the first run; a full first pull of 30 days takes a while, because it
 paces itself under the API limits.
+
+## Result encryption keys
+
+Workers encrypt their result bundles with [age](https://age-encryption.org) to
+one public key; ingest decrypts them with the matching identity (secret key).
+Ingest also encrypts its own outputs to that key, so only the identity holder
+can read them.
+
+Create the pair on a trusted machine, not in CI:
+
+```sh
+age-keygen -o ingest-identity.txt   # writes the identity, prints the public key
+age-keygen -y ingest-identity.txt   # prints the public key again
+```
+
+1. Put the public key (`age1...`) on its own line in
+   [`worker-kit/ingest.pub`](../worker-kit/ingest.pub), in place of the
+   placeholder (lines starting with `#` may stay), and merge it. Workers use
+   the key in the tool-qa commit they pin.
+2. Store the identity as the secret `AGE_IDENTITY` in the environment `loop`:
+
+   ```sh
+   gh secret set AGE_IDENTITY --env loop --repo isokron-ai/tool-qa < ingest-identity.txt
+   ```
+
+3. Keep one offline copy of the identity somewhere safe, then delete the file.
+   Never commit it, and never paste it into an issue, a log or a workflow.
+
+Until `ingest.pub` holds a key, the worker action refuses to upload and ingest
+exits 1 without judging anything. Ingest also exits 1, before fetching
+anything, if `AGE_IDENTITY` is not the identity of a key in `ingest.pub`, so a
+wrong secret never turns into a series of `decrypt_failed` rejections.
+
+**Rotation.** Set `LOOP_ENABLED=false` and let running workers finish and be
+ingested. Create a new pair, put the new public key in `ingest.pub` and the
+new identity in `AGE_IDENTITY` together, update the tool-qa pin in every worker
+repo, then turn the loop back on. A bundle encrypted to the old key after that
+is rejected as `decrypt_failed`. If the identity may have leaked, rotate at
+once: it can read every bundle and every sealed ingest output encrypted to it.
+
+**Reading ingest outputs.** Each ingest run uploads `ingest-<attempt>` (kept 30
+days): one age-encrypted tar. Download it from the run's page (or with
+`gh run download`; unzip it if it arrives zipped), then:
+
+```sh
+age --decrypt -i ingest-identity.txt -o ingest.tar ingest-<attempt>.tar.age
+tar -tf ingest.tar    # accepted/<attempt>/..., rejected/<attempt>/... or quarantine/<attempt>/...
+```
+
+`ingest.json` in there is the report. For a rejected or quarantined attempt,
+`result.tar.age` is the worker's bundle as uploaded; it decrypts with the same
+identity. A quarantined bundle holds a secret or a canary in the clear: open it
+only on a trusted machine and never publish it.
+
+## Ingest
+
+[`.github/workflows/ingest.yml`](../.github/workflows/ingest.yml) judges one
+worker attempt and records the decision (details:
+[`ingest/README.md`](../ingest/README.md)). It is dispatched once the worker
+run has completed:
+
+```sh
+gh workflow run ingest.yml --repo isokron-ai/tool-qa \
+  -f repo=isokron-ai/mcp-check -f run_id=123456789 -f attempt_id=att-1
+```
+
+| Name | Kind | Where | Needed |
+|---|---|---|---|
+| `AGE_IDENTITY` | secret | environment `loop` | yes (see above) |
+| `LOOP_APP_ID` | variable | repository | optional: artifacts are then read with a short-lived GitHub App token for the one worker repo (`actions: read`) |
+| `LOOP_APP_PRIVATE_KEY` | secret | environment `loop` | with `LOOP_APP_ID` |
+| `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL`, `LANE_INGEST_ENABLED` | variables | repository | kill switches; ingest runs the guard with `--no-slots`, so `LOOP_SLOTS` does not stop it |
+
+Without `LOOP_APP_ID` the run's own token reads the artifacts, which can only
+work for public worker repos (not yet tried in CI).
+
+The job pulls the state asset, judges, uploads the sealed outputs, and pushes
+the state only if a result was recorded, after the upload. A run is green for
+every decision (accepted, rejected, quarantined, pending, already recorded):
+see the notice line and the step outputs. It is red only for operational
+errors (GitHub unreachable after retries, bad configuration, state problems),
+and then nothing is recorded. `pending` means the worker run was not finished:
+dispatch again later. Dispatching again for a recorded attempt does nothing.
+
+Ingest pushes state, so it runs in the concurrency group `loop-state`; every
+workflow that pushes state must use the same group. GitHub keeps at most one
+pending run per group and cancels the older pending run when another is
+queued, so when several attempts finish together some ingest dispatches are
+cancelled. Whatever dispatches ingest must dispatch again for completed worker
+runs whose attempt still has no recorded result.
+

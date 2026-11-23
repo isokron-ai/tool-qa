@@ -66,6 +66,9 @@ Details, and what to do in an emergency: [docs/OPERATIONS.md](docs/OPERATIONS.md
 | `pump/` | The pump: due list, shards, slots, dispatch to workers, API budgets, App tokens |
 | `watchdog/` | Loop health checks and the "Loop health" issue |
 | `.github/workflows/pump.yml`, `watchdog.yml` | The pump (back to back, restarted every 30 minutes) and the watchdog (every 15 minutes) |
+| `worker-kit/` | Result contract (manifest schema), bundle builder and sealing action for workers, ingest public key |
+| `ingest/` | Trusted ingest: decrypts a worker's sealed result and checks it before anything is recorded |
+| `.github/workflows/ingest.yml` | Runs the trusted ingest for one finished worker run |
 | `.github/workflows/lint-workflows.yml` | Reusable workflow lint (actionlint, zizmor, policy check) |
 | `.github/workflows/lint.yml`, `test.yml` | Lint and unit tests on push and pull request |
 | `docs/` | Architecture, operations, and the interfaces between pump, workers and ingest |

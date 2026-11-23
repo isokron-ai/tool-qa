@@ -1,0 +1,6 @@
+# age recipient (public key) for tool-qa result bundles.
+#
+# PLACEHOLDER: no key has been set yet. Workers and ingest refuse to run until
+# this file holds one real recipient line (age1...). See docs/OPERATIONS.md,
+# "Result encryption keys", for how to create the key pair. Only the public
+# key goes here; the identity is the AGE_IDENTITY secret in environment `loop`.

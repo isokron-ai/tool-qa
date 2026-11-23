@@ -195,11 +195,9 @@ outputs too), no `secrets: inherit` or `write-all`, and `concurrency` on every s
 
 - Worker workflows in the tool repos. All are switched off in
   `pump/workflows.json` until they exist.
-- Ingest: collecting worker results and checking them
-  ([INTERFACES.md](INTERFACES.md) has the hook and the state calls it will use).
+- Wiring ingest to the state store and the pump: the result contract and its
+  checks are in `worker-kit/` and `ingest/`, and the pump is the single state writer.
 - Counting other running jobs (`nonLoopRunning` in the slot formula is 0).
-- Creating the GitHub App and the `loop` environment (docs/OPERATIONS.md says
-  what they need).
-- Sandboxed workers, the result contract and its checks.
+- Sandboxed workers.
 - Any scanning, and any publishing to `mcp-results`.
 - Hourly versioned snapshots of the state asset.
