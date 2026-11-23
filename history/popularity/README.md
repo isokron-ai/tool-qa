@@ -2,7 +2,7 @@
 
 Snapshots popularity for the packages and repositories listed in `history/seed.txt`
 (`ecosystem:name`, one per line; `npm`, `pypi`, `crates`, `github`; github names are `owner/repo`).
-The seed ships empty, so a run with no seed makes no requests and writes empty files plus a manifest.
+The seed holds the v1 stratified list (see `history/seed/README.md`). An empty seed makes no requests and writes empty files plus a manifest.
 
 Run locally: `node history/popularity/run.mjs --out out --state .state --mode downloads|stars|all`.
 Tests (no network): `node --test 'history/popularity/test/*.test.mjs'`.

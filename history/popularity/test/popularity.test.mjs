@@ -12,9 +12,12 @@ import { runPopularity, readNdjsonGz } from '../run.mjs';
 
 const mk = (h) => { const f = mockFetch(h); return { f, http: createHttp({ fetch: f, sleep: noSleep }) }; };
 
-test('shipped seed is empty and parses', () => {
+test('shipped seed parses and has the expected shape', () => {
   const s = readSeed(new URL('../../seed.txt', import.meta.url));
-  assert.deepEqual(s, { npm: [], pypi: [], crates: [], github: [] });
+  assert.ok(s.github.length >= 900, 'about 1,000 github subjects');
+  assert.ok(s.npm.length > 0 && s.pypi.length > 0 && s.crates.length > 0);
+  for (const n of ['isokron-ai/mcp-check', 'github/github-mcp-server', 'modelcontextprotocol/servers']) assert.ok(s.github.includes(n), n);
+  assert.ok(s.npm.includes('@isokron/mcp-check'));
 });
 test('parseSeed', () => {
   const s = parseSeed('# c\nnpm:@a/b\nnpm:@a/b\n\nPyPI: x # trailing\ngithub:o/r\ncrates:c\n'.replace('PyPI: x', 'PyPI: x'));
