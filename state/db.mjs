@@ -9,16 +9,22 @@
 // of the subject's current, live, unreleased lease. A holder that stalled past
 // expiry and lost its lease to a newer holder is rejected as `stale_fence`; its
 // result is still stored in `attempts`, marked rejected, and never overwrites.
+//
+// Schema v3 adds the dispatch ledger. Leases are keyed by run_key (the `subject`
+// column of `leases` holds the run_key), each dispatch (attempt_id) carries one or
+// more run_keys with their fences, and recordResult() is the call ingest makes
+// for every result it has checked. See docs/INTERFACES.md.
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const MAX_SLOTS = 15;
 
 const MIGRATIONS = [
   { version: 1, sql: () => readFileSync(new URL('./schema.sql', import.meta.url), 'utf8') },
   { version: 2, sql: () => readFileSync(new URL('./schema-v2.sql', import.meta.url), 'utf8') },
+  { version: 3, sql: () => readFileSync(new URL('./schema-v3.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -50,6 +56,10 @@ function checkTtl(ttlMs) {
     throw new TypeError(`ttlMs must be a positive whole number of milliseconds, got ${ttlMs}`);
   }
 }
+
+// Rejection reasons that say nothing about the run_key's own work (identity or
+// fencing failures), so they don't count towards parking it.
+const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'"].join(', ');
 
 function plain(row) {
   return row ? { ...row } : undefined;
@@ -267,6 +277,8 @@ export class StateDb {
     return this.tx(() => {
       this.reapExpired({ now });
       const used = new Set(this.raw.prepare('SELECT slot FROM slot_ledger WHERE released IS NULL').all().map((r) => r.slot));
+      // Every open row counts, including rows above a budget that has since shrunk.
+      if (used.size >= limit) return null;
       for (let slot = 0; slot < limit; slot++) {
         if (used.has(slot)) continue;
         this.raw.prepare('INSERT INTO slot_ledger (slot, holder_run, acquired, expires) VALUES (?, ?, ?, ?)').run(slot, String(holderRun), t, expires);
@@ -280,7 +292,7 @@ export class StateDb {
   reapExpired({ now } = {}) {
     const t = iso(now);
     return Number(this.raw.prepare(
-      'UPDATE slot_ledger SET released = ? WHERE released IS NULL AND expires <= ?',
+      "UPDATE slot_ledger SET released = ?, release_reason = 'expired' WHERE released IS NULL AND expires <= ?",
     ).run(t, t).changes);
   }
 
@@ -293,6 +305,283 @@ export class StateDb {
 
   openSlots() {
     return this.raw.prepare('SELECT * FROM slot_ledger WHERE released IS NULL ORDER BY slot').all().map(plain);
+  }
+
+  /** Close the open slot row held by an attempt. Returns true if one was open. */
+  releaseSlotForAttempt(attemptId, reason, { now } = {}) {
+    const r = this.raw.prepare(
+      'UPDATE slot_ledger SET released = ?, release_reason = ? WHERE holder_run = ? AND released IS NULL',
+    ).run(iso(now), reason, String(attemptId));
+    return r.changes > 0;
+  }
+
+  // ---- subjects: what the due list reads (schema v3) ----
+
+  /**
+   * Insert or update a subject with its tier and current version. A new SHA or
+   * artifact digest counts as a change event and moves `changed_at`.
+   */
+  setSubjectVersion({ id, kind, source, tier, sha = null, artifactDigest = null, now }) {
+    if (!Number.isInteger(tier) || tier < 0 || tier > 4) throw new TypeError(`tier must be 0..4, got ${tier}`);
+    const t = iso(now);
+    this.tx(() => {
+      this.upsertSubject({ id, kind, source, now });
+      const cur = this.getSubject(id);
+      const changed = cur.sha !== sha || cur.artifact_digest !== artifactDigest;
+      this.raw.prepare(`
+        UPDATE subjects SET tier = ?, sha = ?, artifact_digest = ?,
+          changed_at = CASE WHEN ? THEN ? ELSE changed_at END,
+          change_reason = CASE WHEN ? THEN 'new_version' ELSE change_reason END
+        WHERE id = ?
+      `).run(tier, sha, artifactDigest, changed ? 1 : 0, t, changed ? 1 : 0, id);
+    });
+  }
+
+  /** Record a change event (for example an advisory) that makes the subject due. */
+  noteChange(id, { reason, now } = {}) {
+    const r = this.raw.prepare('UPDATE subjects SET changed_at = ?, change_reason = ? WHERE id = ?').run(iso(now), String(reason || 'change'), id);
+    return r.changes > 0;
+  }
+
+  listSubjects() {
+    return this.raw.prepare('SELECT * FROM subjects ORDER BY id').all().map(plain);
+  }
+
+  // ---- run keys, dispatches and results (schema v3) ----
+
+  /** Remember the fields a run_key was computed from. First write wins. */
+  recordRunKey(runKey, { subject, workflow, fields, now }) {
+    this.raw.prepare(`
+      INSERT INTO run_keys (run_key, subject, workflow, fields, first_seen) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (run_key) DO NOTHING
+    `).run(runKey, subject, workflow, typeof fields === 'string' ? fields : JSON.stringify(fields), iso(now));
+  }
+
+  getRunKey(runKey) {
+    return plain(this.raw.prepare('SELECT * FROM run_keys WHERE run_key = ?').get(runKey));
+  }
+
+  /**
+   * Record a dispatch before it is sent. `items` are [{run_key, subject, fence}];
+   * their leases (keyed by run_key, held by attemptId) must already be taken.
+   */
+  createDispatch({ attemptId, shardId, workflow, repo, workflowFile, ref, expires, items, now }) {
+    if (!attemptId || !shardId || !workflow || !repo || !workflowFile || !ref) {
+      throw new TypeError('createDispatch needs attemptId, shardId, workflow, repo, workflowFile and ref');
+    }
+    if (!Array.isArray(items) || items.length === 0) throw new TypeError('createDispatch needs at least one item');
+    const t = iso(now);
+    this.tx(() => {
+      this.raw.prepare(`
+        INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+      `).run(attemptId, shardId, workflow, repo, workflowFile, ref, t, iso(expires));
+      const ins = this.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence) VALUES (?, ?, ?, ?, ?)');
+      for (const it of items) ins.run(attemptId, it.run_key, it.subject, workflow, it.fence);
+    });
+  }
+
+  /** The worker run was created. runId may be null when it could not be correlated yet. */
+  markDispatched(attemptId, { runId = null, runUrl = null, workflowSha = null, correlatedBy = null } = {}) {
+    const r = this.raw.prepare(`
+      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = ?, correlated_by = ?
+      WHERE attempt_id = ? AND status = 'pending'
+    `).run(runId === null ? null : String(runId), runUrl, workflowSha, correlatedBy, attemptId);
+    return r.changes > 0;
+  }
+
+  /** The dispatch call failed: close it and free its leases and slot so the work is due again. */
+  failDispatch(attemptId, { error, now } = {}) {
+    const t = iso(now);
+    return this.tx(() => {
+      const r = this.raw.prepare(`
+        UPDATE dispatches SET status = 'failed', closed = ?, close_reason = 'dispatch_failed', error = ?
+        WHERE attempt_id = ? AND status = 'pending'
+      `).run(t, error === undefined ? null : String(error).slice(0, 500), attemptId);
+      if (r.changes === 0) return false;
+      for (const it of this.raw.prepare('SELECT run_key, fence FROM dispatch_items WHERE attempt_id = ?').all(attemptId)) {
+        this.releaseLease(it.run_key, attemptId, it.fence, { now });
+      }
+      this.releaseSlotForAttempt(attemptId, 'failed', { now });
+      return true;
+    });
+  }
+
+  /**
+   * Close a live dispatch whose worker run ended without reporting every run_key
+   * (for example the run failed). Call it after recording every result the run
+   * did produce. Leases of unresolved items and the slot are released with
+   * `reason`, so that work is due again. Returns false if it was not open.
+   */
+  closeDispatch(attemptId, { reason, now } = {}) {
+    const t = iso(now);
+    const why = String(reason || 'closed');
+    return this.tx(() => {
+      const r = this.raw.prepare(`
+        UPDATE dispatches SET status = 'done', closed = ?, close_reason = ?
+        WHERE attempt_id = ? AND status IN ('pending', 'dispatched')
+      `).run(t, why, attemptId);
+      if (r.changes === 0) return false;
+      for (const it of this.raw.prepare('SELECT run_key, fence FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').all(attemptId)) {
+        this.releaseLease(it.run_key, attemptId, it.fence, { now });
+      }
+      this.releaseSlotForAttempt(attemptId, why, { now });
+      return true;
+    });
+  }
+
+  /** A dispatch with its items, or undefined. Ingest uses this to check run id, repo and workflow SHA. */
+  getDispatch(attemptId) {
+    const d = plain(this.raw.prepare('SELECT * FROM dispatches WHERE attempt_id = ?').get(attemptId));
+    if (!d) return undefined;
+    d.items = this.raw.prepare('SELECT * FROM dispatch_items WHERE attempt_id = ? ORDER BY run_key').all(attemptId).map(plain);
+    return d;
+  }
+
+  /** Dispatches still waiting for results whose lease has not expired. */
+  openDispatches({ now } = {}) {
+    return this.raw.prepare(`
+      SELECT * FROM dispatches WHERE status IN ('pending', 'dispatched') AND expires > ? ORDER BY created, attempt_id
+    `).all(iso(now)).map(plain);
+  }
+
+  /** [{subject, workflow}] with an unresolved item on a live dispatch. */
+  inFlight({ now } = {}) {
+    return this.raw.prepare(`
+      SELECT DISTINCT i.subject, i.workflow FROM dispatch_items i JOIN dispatches d USING (attempt_id)
+      WHERE d.status IN ('pending', 'dispatched') AND d.expires > ? AND i.resolved IS NULL
+    `).all(iso(now)).map(plain);
+  }
+
+  /**
+   * Close dispatches whose lease expired and release their slots. Their leases
+   * lapse on their own, so the run_keys become due again. Returns the closed rows.
+   */
+  reapExpiredDispatches({ now } = {}) {
+    const t = iso(now);
+    return this.tx(() => {
+      const rows = this.raw.prepare(`
+        SELECT * FROM dispatches WHERE status IN ('pending', 'dispatched') AND expires <= ? ORDER BY attempt_id
+      `).all(t).map(plain);
+      for (const d of rows) {
+        this.raw.prepare("UPDATE dispatches SET status = 'expired', closed = ?, close_reason = 'lease_expired' WHERE attempt_id = ?").run(t, d.attempt_id);
+        this.releaseSlotForAttempt(d.attempt_id, 'expired', { now });
+      }
+      this.reapExpired({ now });
+      return rows;
+    });
+  }
+
+  /**
+   * The ingest interface (docs/INTERFACES.md). Store one checked result.
+   *
+   * Accepted only when the attempt is known, carries this run_key with the fence
+   * the pump issued, has not reported already, that fence is the current live
+   * lease for the run_key, and ingest itself accepted it. Anything else is stored
+   * as a rejected attempt with the reason and never overwrites a result. When the
+   * attempt is current (accepted or rejected by ingest), its lease is released,
+   * and its slot is released once every run_key in the dispatch has reported.
+   *
+   * @param {{run_key: string, attempt_id: string, fence: number, outcome?: string,
+   *   verdict?: 'accepted'|'rejected', accepted?: boolean, reason?: string,
+   *   digest?: string, now?: number|string|Date}} args
+   * @returns {{accepted: boolean, reason: string|null, id: number}}
+   */
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, now } = {}) {
+    if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
+    if (verdict !== 'accepted' && verdict !== 'rejected') {
+      throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
+    }
+    if (!runKey || !attemptId) throw new TypeError('recordResult needs run_key and attempt_id');
+    const t = iso(now);
+    return this.tx(() => {
+      const d = plain(this.raw.prepare('SELECT * FROM dispatches WHERE attempt_id = ?').get(attemptId));
+      const item = d && plain(this.raw.prepare('SELECT * FROM dispatch_items WHERE attempt_id = ? AND run_key = ?').get(attemptId, runKey));
+      let why = null;
+      let current = false;
+      if (!d) why = 'unknown_attempt';
+      else if (!item) why = 'unknown_run_key';
+      else if (item.fence !== fence) why = 'fence_mismatch';
+      else if (item.resolved !== null) why = 'duplicate_result';
+      else {
+        const c = this.checkFence(runKey, fence, { holder: attemptId, now });
+        if (!c.ok) why = c.reason;
+        else current = true;
+      }
+      const ok = current && verdict === 'accepted';
+      if (current && !ok) why = reason ? String(reason) : 'rejected_by_ingest';
+      const subject = item?.subject ?? this.getRunKey(runKey)?.subject ?? 'unknown';
+      const r = this.raw.prepare(`
+        INSERT INTO attempts (subject, holder, fence, run_id, run_key, digest, received, accepted, reason, attempt_id, outcome)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(subject, attemptId, Number.isSafeInteger(fence) ? fence : -1, d?.run_id ?? null, runKey, digest, t, ok ? 1 : 0, why, attemptId, outcome);
+      if (current) {
+        this.raw.prepare('UPDATE dispatch_items SET resolved = ? WHERE attempt_id = ? AND run_key = ?').run(t, attemptId, runKey);
+        this.releaseLease(runKey, attemptId, fence, { now });
+        if (ok) {
+          this.raw.prepare(`
+            INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, digest, accepted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (run_key) DO UPDATE SET attempt_id = excluded.attempt_id, fence = excluded.fence,
+              outcome = excluded.outcome, digest = excluded.digest, accepted_at = excluded.accepted_at
+          `).run(runKey, item.subject, item.workflow, attemptId, fence, outcome, digest, t);
+        }
+        const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
+        if (open === 0) {
+          this.raw.prepare(`
+            UPDATE dispatches SET status = 'done', closed = ?, close_reason = 'results_in'
+            WHERE attempt_id = ? AND status IN ('pending', 'dispatched')
+          `).run(t, attemptId);
+          this.releaseSlotForAttempt(attemptId, 'result', { now });
+        }
+      }
+      return { accepted: ok, reason: why, id: Number(r.lastInsertRowid) };
+    });
+  }
+
+  getResult(runKey) {
+    return plain(this.raw.prepare('SELECT * FROM results WHERE run_key = ?').get(runKey));
+  }
+
+  /** All accepted results (one row per run_key). */
+  listResults() {
+    return this.raw.prepare('SELECT * FROM results ORDER BY subject, workflow, accepted_at').all().map(plain);
+  }
+
+  /**
+   * Rejections that count against a run_key: ingest said no (or the lease lapsed)
+   * since its last accepted result. Identity and fencing failures from other
+   * attempts don't count, so a forger can't park someone else's work.
+   */
+  rejectedCount(runKey) {
+    return this.raw.prepare(`
+      SELECT COUNT(*) AS n FROM attempts WHERE run_key = ? AND accepted = 0 AND reason NOT IN (${NOT_COUNTED})
+        AND received > COALESCE((SELECT accepted_at FROM results WHERE run_key = ?), '')
+    `).get(runKey, runKey).n;
+  }
+
+  /** [{run_key, n}] for run_keys with no accepted result and at least `min` counted rejections. */
+  rejectedRunKeys(min = 1) {
+    return this.raw.prepare(`
+      SELECT a.run_key, COUNT(*) AS n FROM attempts a
+      WHERE a.run_key IS NOT NULL AND a.accepted = 0 AND a.reason NOT IN (${NOT_COUNTED})
+        AND NOT EXISTS (SELECT 1 FROM results r WHERE r.run_key = a.run_key)
+      GROUP BY a.run_key HAVING COUNT(*) >= ?
+    `).all(min).map(plain);
+  }
+
+  // ---- kv ----
+
+  getKv(key) {
+    const row = this.raw.prepare('SELECT value FROM kv WHERE key = ?').get(key);
+    return row ? JSON.parse(row.value) : undefined;
+  }
+
+  setKv(key, value, { now } = {}) {
+    this.raw.prepare(`
+      INSERT INTO kv (key, value, updated) VALUES (?, ?, ?)
+      ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated = excluded.updated
+    `).run(key, JSON.stringify(value), iso(now));
   }
 }
 

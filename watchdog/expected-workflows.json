@@ -1,0 +1,10 @@
+{
+  "about": "Loop workflows the watchdog expects to be enabled. If GitHub disables one for inactivity, the watchdog re-enables it. One disabled by hand is reported as off and left alone.",
+  "workflows": [
+    ".github/workflows/pump.yml",
+    ".github/workflows/watchdog.yml",
+    ".github/workflows/history-registry.yml",
+    ".github/workflows/history-packages.yml",
+    ".github/workflows/history-popularity.yml"
+  ]
+}

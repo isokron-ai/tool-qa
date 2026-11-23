@@ -27,13 +27,22 @@ Set `LOOP_SLOTS` to 5 or less:
 gh variable set LOOP_SLOTS --body 5 --repo isokron-ai/tool-qa
 ```
 
-`LOOP_SLOTS` is the loop's ceiling on concurrent jobs across all repos. In the
-state store, each slot row carries an expiry (set when it is taken); expired
-rows are reaped the next time a slot is acquired, so a crashed run can't hold a
-slot for good.
+`LOOP_SLOTS` is the number of worker runs the loop may have going at once,
+across all repos. The pump's own job is one more on top (the account runs at
+most 20 jobs at once, and the pump keeps 2 free for ordinary CI, so
+`LOOP_SLOTS=15` gives 14 workers plus the pump). In the state store, each slot
+row carries an expiry (set when it is taken); expired rows are reaped on every
+pump tick and whenever a slot is acquired, so a crashed run can't hold a slot
+for good.
 It is read as a whole number and clamped to 0..15: unset or 0 means slot-based
 jobs do nothing, values above 15 count as 15, and a value that isn't a whole
-number counts as 0.
+number counts as 0. With 0 the pump still runs on its schedule, but only for
+housekeeping: it reaps expired leases and slots, runs ingest, dispatches no
+work and does not start a successor run.
+
+Lowering `LOOP_SLOTS` does not stop workers already running; they finish or
+their leases expire. The pump simply starts no new work until the number of
+open slots is below the new value.
 
 ## Pause until a set time
 
@@ -48,16 +57,20 @@ can't read (no zone, a typo) keeps the loop paused, so a mistake fails safe.
 
 ## Which variable affects which workflow
 
-| Variable | `history-registry` | `history-packages` | `history-popularity` | Workers and pump (later) |
-|---|---|---|---|---|
-| `LOOP_ENABLED` | yes | yes | yes | yes |
-| `LOOP_PAUSE_UNTIL` | yes | yes | yes | yes |
-| `LANE_<JOB>_ENABLED` | `LANE_HISTORY_REGISTRY_ENABLED` | `LANE_HISTORY_PACKAGES_ENABLED` | `LANE_HISTORY_POPULARITY_ENABLED` | their own lane |
-| `LOOP_SLOTS` | no | no | no | yes |
+| Variable | `history-registry` | `history-packages` | `history-popularity` | `pump` | `watchdog` | Workers (later) |
+|---|---|---|---|---|---|---|
+| `LOOP_ENABLED` | yes | yes | yes | yes | yes | yes |
+| `LOOP_PAUSE_UNTIL` | yes | yes | yes | yes | yes | yes |
+| `LANE_<JOB>_ENABLED` | `LANE_HISTORY_REGISTRY_ENABLED` | `LANE_HISTORY_PACKAGES_ENABLED` | `LANE_HISTORY_POPULARITY_ENABLED` | `LANE_PUMP_ENABLED` | `LANE_WATCHDOG_ENABLED` | their own lane |
+| `LOOP_SLOTS` | no | no | no | 0 = housekeeping only | 0 = no pump expected | yes |
 
 The three history workflows capture public data and don't work in slots, so
 they run the guard with `--no-slots`: `LOOP_SLOTS=0` does not stop them. Use
 `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` or the lane switch for those.
+
+The watchdog also reads every lane switch above: a lane that is off shows as
+`off` on the health issue instead of red, and the watchdog does not dispatch a
+pump whose lane is off.
 
 ## Stop one job
 
@@ -120,8 +133,8 @@ jobs:
           LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
           LOOP_SLOTS: ${{ vars.LOOP_SLOTS }}
           LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
-          LANE_PUMP_ENABLED: ${{ vars.LANE_PUMP_ENABLED }}
-        run: node scripts/guard.mjs --job pump --slots
+          LANE_META_GITHUB_ENABLED: ${{ vars.LANE_META_GITHUB_ENABLED }}
+        run: node scripts/guard.mjs --job meta-github --slots
 
   work:
     needs: guard
@@ -157,3 +170,162 @@ starts empty.
 ## State store: one writer at a time
 
 `scripts/state-asset.mjs push` refuses to overwrite the state asset if it changed since this run pulled it, and re-checks just before replacing it. There is still a short window between that re-check and the swap, so the check is a safety net, not a lock: every workflow that pushes state must run in the same `concurrency` group (one writer at a time). Pull again before every push.
+
+The pump is that one writer (concurrency group `pump`). To push state by hand,
+first switch the pump off (`LANE_PUMP_ENABLED=false`) and wait until no pump
+run is going. The watchdog only downloads a copy and never pushes.
+
+## The pump
+
+`.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
+(Actions → pump → Run workflow). Each run works for about 11 minutes, ticking
+every 150 seconds, and first dispatches the next run, which waits for it in the
+`pump` concurrency group. While `LOOP_SLOTS` is above 0 the pump therefore runs
+back to back; the schedule restarts the chain if it breaks. Because only one
+run can wait in a concurrency group, a scheduled run that starts while one is
+already waiting replaces it, and the replaced run shows as cancelled. That is
+normal.
+
+To start it:
+
+1. Set up the GitHub App and the `loop` environment (below).
+2. Enable a worker workflow in `pump/workflows.json` (`"enabled": true`) once it
+   exists in its repository. Until then the pump has nothing to dispatch.
+3. Set `LOOP_SLOTS` (for example 5) and `LOOP_ENABLED=true`.
+4. Run the pump by hand once, or wait for the schedule.
+
+To see what it would do without dispatching anything, pull the state and run
+the plan:
+
+```sh
+GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs pull
+node pump/run.mjs --plan --state state/state.sqlite
+```
+
+To stop it:
+
+| Do this | Effect |
+|---|---|
+| `LOOP_SLOTS=0` | The pump only does housekeeping on its schedule (reap expired leases and slots, run ingest). No new work, no successor run. Workers already running finish. |
+| `LANE_PUMP_ENABLED=false` | The pump does nothing at all. Leases and slots are not reaped until it is back; they expire on their own. The health issue shows the pump as off. |
+| `LOOP_ENABLED=false` | Everything stops, the watchdog too. |
+
+A running pump run notices none of these until its next start; cancel it from
+the Actions tab if it must stop at once. Its dispatches stay in the state, and
+their leases expire as usual.
+
+## The GitHub App and the `loop` environment
+
+The pump and the watchdog use a GitHub App owned by the organisation. They mint
+short-lived tokens from it, each for one repository and only the permissions
+that call needs, and refuse a token that comes back with more.
+
+| What | Where | Value |
+|---|---|---|
+| App permissions | App settings | Repository: Actions read and write, Issues read and write, Metadata read. Nothing else. |
+| App installation | Organisation settings | `tool-qa` and each worker repository (for example `mcp-check`, `mcp-writecheck-action`). |
+| `APP_ID` | Variable (repository or `loop` environment) | The App's id. |
+| `APP_INSTALLATION_ID` | Variable (repository or `loop` environment) | The installation's id. |
+| `APP_PRIVATE_KEY` | Secret in the `loop` environment only | The App's private key (PEM). |
+
+What each token is used for:
+
+| Job | Repository | Permissions | For |
+|---|---|---|---|
+| pump | each worker repository | `actions: write` | dispatching shards and finding their runs |
+| pump (successor) | `tool-qa` | `actions: write` | dispatching the next pump run |
+| pump (successor failed) | `tool-qa` | `issues: write` | marking `pump-successor` red on the health issue |
+| watchdog | `tool-qa` | `issues: write`, `actions: write` | reading runs and artifacts, dispatching the pump, re-enabling workflows, the health issue |
+
+The state asset is pushed with the pump job's own token (`contents: write` on
+this repository only) and read by the watchdog with its job token
+(`contents: read`).
+
+Create the environment under Settings → Environments → `loop`. Limit
+deployment branches to `main`, so no other branch can use the key, and add no
+required reviewers (scheduled runs would wait for approval). Each pump and
+watchdog run shows up as a deployment to `loop`; that is expected.
+
+## The loop health issue
+
+The watchdog runs at minutes 7, 22, 37 and 52 of every hour and keeps one
+pinned issue titled **Loop health** (label `loop-health`) up to date. The body
+is rewritten in place; a comment is added only when the overall status turns
+red or recovers, so subscribe to the issue to be told when something needs a
+person. The issue is not updated while the loop is stopped or paused, because
+the watchdog stops too.
+
+green: fine. amber: late or degraded, the loop is handling it. red: needs a
+person. off: switched off on purpose.
+
+| Check | Amber or red means | What to do |
+|---|---|---|
+| `pump` | No pump run started for 20 minutes (amber; the watchdog dispatches one) or 40 minutes (red). | Look at recent pump runs: are they queued, failing, or skipped by the guard? Check the Actions queue and the App settings. |
+| `pump-dispatch` | The watchdog could not dispatch the pump; the HTTP status is in the details. | 403: the App lacks `actions: write` or is not installed on `tool-qa`. 404 or 422: `pump.yml` is missing or has no `workflow_dispatch`. |
+| `pump-successor` | The pump could not dispatch its next run, so the chain is broken until the next schedule (at most 30 minutes). | Check `APP_ID`, `APP_INSTALLATION_ID`, the private key and the installation. Clears when a later pump run succeeds. |
+| `history-registry-delta` | Newest delta capture is over 45 minutes old (amber), or over 90 (red). | Open the `history-registry` runs. |
+| `history-registry-full`, `history-packages`, `history-popularity` | Newest artifact is over 26 hours old (amber), or over 50 (red). | Open that workflow's runs. |
+| `state` | No state asset yet, or it could not be read (amber; the details say which). | Normal until the first pump run has saved state. Otherwise check the `state` release. |
+| `slots`, `dispatches` | Rows more than 15 minutes past their expiry (red): the pump is not reaping. | See the `pump` check and the latest pump logs. |
+| `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
+| `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
+
+If the issue is missing, the next watchdog run creates it. If pinning fails
+(the App may not be allowed to pin), pin it once by hand.
+
+## Archive of history artifacts
+
+History artifacts are kept by GitHub for 30 days. `scripts/archive-pull.mjs`
+copies them to a folder you keep, on any machine with Node 22.13 or newer:
+
+```sh
+node scripts/archive-pull.mjs --dest /path/to/tool-qa-history            # pull what is new
+node scripts/archive-pull.mjs --dest /path/to/tool-qa-history --dry-run  # list only
+```
+
+It needs a token that can read this repository's Actions artifacts:
+`GITHUB_TOKEN` or `GH_TOKEN` (a fine-grained token with Actions: read on
+`tool-qa` is enough), or else the token of a signed-in GitHub CLI. It copies
+every artifact named `history-*` or `registry-*` that is not in the folder's
+`index.ndjson` yet, checks each file against the sha256 in the artifact's
+manifest, and writes it to `<dest>/<artifact name>/`. It never overwrites or
+deletes anything in the folder. An artifact that fails a check is left out and
+tried again next time, and the command exits 1. `<dest>/.last-pull.json` keeps
+its place; each run looks back one hour before it.
+
+To run it every six hours on a Mac, save this as
+`~/Library/LaunchAgents/ai.isokron.tool-qa.archive-pull.plist` (adjust the
+paths) and load it with `launchctl load` on that file:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.isokron.tool-qa.archive-pull</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/you/src/tool-qa/scripts/archive-pull.mjs</string>
+    <string>--dest</string>
+    <string>/Users/you/archive/tool-qa-history</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>21600</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/you/Library/Logs/tool-qa-archive-pull.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/tool-qa-archive-pull.log</string>
+</dict>
+</plist>
+```
+
+`PATH` is set so the job can find the GitHub CLI for its token. Check the log
+after the first run; a full first pull of 30 days takes a while, because it
+paces itself under the API limits.

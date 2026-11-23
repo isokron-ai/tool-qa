@@ -7,7 +7,8 @@ comes later, through [isokron-ai/mcp-results](https://github.com/isokron-ai/mcp-
 
 More about IsoKron: [isokron.ai](https://isokron.ai/?utm_source=tool-qa&utm_medium=readme).
 
-**Status: P0: foundations and history capture; no scanning yet.**
+**Status: P1 in progress: the pump, dispatch and the watchdog are built; no
+worker workflow is switched on yet, so there is no scanning yet.**
 
 ## What runs where
 
@@ -47,7 +48,7 @@ Variables), or with `gh variable set NAME --body VALUE --repo isokron-ai/tool-qa
 | Variable | Effect |
 |---|---|
 | `LOOP_ENABLED` | Must be exactly `true` for anything to run. **Set it to `false` to stop everything in one step.** Unset means off. |
-| `LOOP_SLOTS` | Whole number of worker slots, 0 to 15. Default 0 (do nothing). Values above 15 count as 15. Set it to 5 or less to shrink the loop at once. |
+| `LOOP_SLOTS` | Whole number of worker slots, 0 to 15. Default 0: no work is sent out, and the pump only tidies up (expired leases and slots). Values above 15 count as 15. Set it to 5 or less to shrink the loop at once. |
 | `LOOP_PAUSE_UNTIL` | Optional ISO 8601 time, such as `2026-12-01T09:00:00Z`. The loop does nothing until then. A value the guard can't read keeps the loop paused. |
 | `LANE_<JOB>_ENABLED` | Optional per-job switch, for example `LANE_HISTORY_ENABLED=false`. Unset leaves the job on. |
 
@@ -60,10 +61,14 @@ Details, and what to do in an emergency: [docs/OPERATIONS.md](docs/OPERATIONS.md
 | `scripts/guard.mjs` | Kill-switch guard for loop jobs |
 | `scripts/check-workflows.mjs` | Workflow policy check (permissions, SHA pins, timeouts, triggers, injection) |
 | `scripts/state-asset.mjs` | Pulls and pushes the state database as a Release asset |
-| `state/schema.sql`, `state/db.mjs` | State store: subjects, runs, leases with fencing, slot ledger, attempts |
+| `scripts/archive-pull.mjs` | Copies history artifacts into a local archive folder and checks them |
+| `state/schema*.sql`, `state/db.mjs` | State store: subjects, runs, leases with fencing, slot ledger, attempts, dispatch ledger, results |
+| `pump/` | The pump: due list, shards, slots, dispatch to workers, API budgets, App tokens |
+| `watchdog/` | Loop health checks and the "Loop health" issue |
+| `.github/workflows/pump.yml`, `watchdog.yml` | The pump (back to back, restarted every 30 minutes) and the watchdog (every 15 minutes) |
 | `.github/workflows/lint-workflows.yml` | Reusable workflow lint (actionlint, zizmor, policy check) |
 | `.github/workflows/lint.yml`, `test.yml` | Lint and unit tests on push and pull request |
-| `docs/` | Architecture and operations notes |
+| `docs/` | Architecture, operations, and the interfaces between pump, workers and ingest |
 
 ## Development
 
