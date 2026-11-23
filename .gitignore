@@ -1,0 +1,12 @@
+node_modules/
+npm-debug.log*
+
+# Local copies of the state database (the real one lives in a Release asset)
+state/*.sqlite
+state/*.sqlite-journal
+state/*.sqlite.download
+*.sqlite-wal
+*.sqlite-shm
+
+.DS_Store
+.tool-qa-checker/

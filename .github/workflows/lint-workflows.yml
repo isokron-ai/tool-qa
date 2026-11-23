@@ -1,0 +1,106 @@
+# Reusable workflow lint: actionlint, zizmor and our own policy check.
+# Any finding fails the job.
+#
+# Call it from this repository:
+#   uses: ./.github/workflows/lint-workflows.yml
+# Call it from another repository (pin both refs to the same commit):
+#   uses: isokron-ai/tool-qa/.github/workflows/lint-workflows.yml@<sha>
+#   with:
+#     checker-ref: <same sha>
+name: lint-workflows
+
+on:
+  workflow_call:
+    inputs:
+      checker-ref:
+        description: >-
+          Commit SHA of isokron-ai/tool-qa whose scripts/check-workflows.mjs to run.
+          Leave empty when the calling repository has the script itself.
+        type: string
+        required: false
+        default: ''
+
+permissions: {}
+
+jobs:
+  lint:
+    name: actionlint, zizmor, policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      # sha256 of actionlint_1.7.12_linux_amd64.tar.gz from the release's checksums file.
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate checker-ref
+        env:
+          CHECKER_REF: ${{ inputs.checker-ref }}
+        run: |
+          if [ -n "$CHECKER_REF" ] && ! printf '%s' "$CHECKER_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::checker-ref must be a full 40-character commit SHA"
+            exit 1
+          fi
+
+      - name: Check out the policy checker
+        if: inputs.checker-ref != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isokron-ai/tool-qa
+          ref: ${{ inputs.checker-ref }}
+          path: .tool-qa-checker
+          persist-credentials: false
+
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -version
+          "$RUNNER_TEMP/actionlint" -color
+
+      - name: zizmor
+        if: ${{ !cancelled() }}
+        env:
+          # Read-only token so zizmor can run its online checks (for example impostor commits).
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Exact version, installed only if the wheel matches one of these hashes
+          # (manylinux x86_64 and aarch64 wheels from PyPI).
+          cat > "$RUNNER_TEMP/zizmor-requirements.txt" <<'EOF'
+          zizmor==1.32.0 \
+              --hash=sha256:84a6acb975accc13408786a2bd274b572537ca19c933ebbc13e78f3988562071 \
+              --hash=sha256:0cdd38fca6eb34ceb567548548d706332e3535ea66894b9168c048e03207b68c
+          EOF
+          python3 -m venv "$RUNNER_TEMP/zizmor-venv"
+          "$RUNNER_TEMP/zizmor-venv/bin/pip" install --quiet --disable-pip-version-check \
+            --require-hashes --only-binary :all: --no-deps -r "$RUNNER_TEMP/zizmor-requirements.txt"
+          "$RUNNER_TEMP/zizmor-venv/bin/zizmor" --version
+          "$RUNNER_TEMP/zizmor-venv/bin/zizmor" --format github .github/workflows
+
+      - name: Workflow policy (scripts/check-workflows.mjs)
+        if: ${{ !cancelled() }}
+        env:
+          CHECKER_REF: ${{ inputs.checker-ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CHECKER_REF" ]; then
+            script=.tool-qa-checker/scripts/check-workflows.mjs
+          else
+            script=scripts/check-workflows.mjs
+          fi
+          if [ ! -f "$script" ]; then
+            echo "::error::$script not found; pass checker-ref when calling from another repository"
+            exit 1
+          fi
+          node "$script" .github/workflows

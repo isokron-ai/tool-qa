@@ -1,0 +1,10 @@
+on: push
+permissions: {}
+jobs:
+  a: &base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - run: echo hi
+  b: *base

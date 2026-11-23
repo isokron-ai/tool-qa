@@ -1,0 +1,15 @@
+{
+  "name": "tool-qa",
+  "version": "0.0.0",
+  "private": true,
+  "description": "IsoKron's continuous testing loop for its open-source MCP tools.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check-workflows": "node scripts/check-workflows.mjs .github/workflows"
+  }
+}
