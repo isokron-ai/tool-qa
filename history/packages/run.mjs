@@ -10,6 +10,7 @@ import { writeManifest, writeNdjsonGz } from './lib/manifest.mjs';
 import { runNpm } from './npm.mjs';
 import { runPypi } from './pypi.mjs';
 import { runCrates } from './crates.mjs';
+import { readSeed } from '../popularity/seed.mjs';
 import { runGo } from './go.mjs';
 
 // Sources that follow a feed from a stored position. If that position is lost
@@ -19,14 +20,14 @@ const FEED_SOURCES = new Set(['npm', 'pypi', 'go']);
 
 const RUNNERS = { npm: runNpm, pypi: runPypi, crates: runCrates, go: runGo };
 
-export async function runSource(name, { http, out, stateDir, now = Date.now() }) {
+export async function runSource(name, { http, out, stateDir, now = Date.now(), seedNames }) {
   const statePath = join(stateDir, `${name}.json`);
   const stateRestored = existsSync(statePath);
   const state = stateRestored ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
   const startedAt = Date.now();
   const day = new Date(now).toISOString().slice(0, 10);
   let result; const errors = [];
-  try { result = await RUNNERS[name]({ http, state, now }); errors.push(...result.errors); }
+  try { result = await RUNNERS[name]({ http, state, now, seedNames }); errors.push(...result.errors); }
   catch (e) { errors.push(e.message); result = { rows: [], state }; }
   const files = [];
   if (!result.skipped) files.push({ name: writeNdjsonGz(out, `${name}-${day}.ndjson.gz`, result.rows), rows: result.rows.length });
@@ -44,14 +45,16 @@ export async function runSource(name, { http, out, stateDir, now = Date.now() })
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { values } = parseArgs({ options: { out: { type: 'string' }, state: { type: 'string' }, source: { type: 'string', default: 'npm,pypi,crates,go' } } });
+  const { values } = parseArgs({ options: { out: { type: 'string' }, state: { type: 'string' }, source: { type: 'string', default: 'npm,pypi,crates,go' }, seed: { type: 'string', default: 'history/seed.txt' } } });
   if (!values.out || !values.state) { console.error('--out and --state are required'); process.exit(2); }
   mkdirSync(values.out, { recursive: true });
   const http = createHttp();
+  // Seeded crates are kept in the crates subset even when the MCP matcher misses them (H3 reads them from it).
+  const seedNames = existsSync(values.seed) ? new Set(readSeed(values.seed).crates) : new Set();
   let failed = 0;
   for (const s of values.source.split(',')) {
     if (!RUNNERS[s]) { console.error(`unknown source ${s}`); process.exit(2); }
-    const m = await runSource(s, { http, out: values.out, stateDir: values.state });
+    const m = await runSource(s, { http, out: values.out, stateDir: values.state, seedNames });
     if (m.gap_possible) {
       console.log(`::warning title=history-packages ${s}::No saved feed position for ${s} (first run, or the cache was evicted). It restarted at the feed head, so changes in the gap may be missing.`);
     }

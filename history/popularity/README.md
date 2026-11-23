@@ -31,6 +31,7 @@ Tests (no network): `node --test 'history/popularity/test/*.test.mjs'`.
 
 ## Notes
 - Rows have `observed_at`; npm rows also have the window start and end the API reported.
-- The workflow does not yet pass the crates subset (it is an artifact of the `history-packages` run). With
-  no crates in the seed that does nothing; with crates in the seed the run reports an error until a subset file is supplied.
+- On `all` and `downloads` runs the workflow downloads the newest `crates-*.ndjson.gz` from the last 10 successful
+  `history-packages` runs and passes it as `--crates-subset`. H2 keeps every seeded crate in that subset (match reason
+  `seed`). If no subset is found, or a seeded crate has left crates.io, the manifest lists a crates error and the run fails.
 - Shares `history/packages/lib/` for HTTP and manifests.
