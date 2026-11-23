@@ -11,7 +11,7 @@ import { openState } from '../../state/db.mjs';
 import { ApiBudget, budgetedFetch } from '../../pump/budgets.mjs';
 import { API, fakeApi } from '../../test/lib/fake-api.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
-import { ageDecrypt, ageEncrypt } from '../age.mjs';
+import { AgeError, ageDecrypt, ageEncrypt } from '../age.mjs';
 import { createCollector, IngestSetupError } from '../collect.mjs';
 import { parseRegistry } from '../registry.mjs';
 import {
@@ -203,7 +203,8 @@ test('when the outputs cannot be sealed nothing is recorded, and the next tick j
     const s = await h.collect(db);
     assert.equal(s.errors, 1);
     assert.equal(s.recorded, 0);
-    assert.equal(s.changed, false);
+    assert.equal(s.changed, true, 'the failure is counted in the state');
+    assert.equal(db.ingestFailures('att-1', 0).count, 1);
     assert.equal(db.getAttempt('att-1').items[0].outcome, null, 'the recorded result was rolled back');
     assert.equal(db.getResult(RUN_KEY), undefined);
     assert.equal(db.listAttempts('repo:1').length, 0);
@@ -217,6 +218,7 @@ test('when the outputs cannot be sealed nothing is recorded, and the next tick j
     assert.deepEqual(again.outcomes, { accepted: 1 });
     assert.equal(db.getResult(RUN_KEY).attempt_id, 'att-1');
     assert.ok(existsSync(h.sealed()));
+    assert.equal(db.ingestFailures('att-1', 0).count, 0, 'the count goes with the decision');
   } finally {
     h.cleanup();
     db.close();
@@ -479,7 +481,7 @@ test('when one item\'s outputs cannot be sealed, only that item waits for the ne
     assert.equal(db.getLease(keys[1]).holder, 'att-1');
     assert.equal(db.getDispatch('att-1').status, 'dispatched');
     assert.equal(existsSync(h.sealed('att-1', 1)), false);
-    assert.ok(h.lines.some((l) => /^ingest: qa shard s1 \(att-1\) item 1: disk full \(nothing recorded; will try again\)$/.test(l)), h.lines.join('\n'));
+    assert.ok(h.lines.some((l) => /^ingest: qa shard s1 \(att-1\) item 1: disk full \(failure 1 of 3; nothing recorded; will try again\)$/.test(l)), h.lines.join('\n'));
 
     const again = await h.collect(db);
     assert.equal(again.judged, 1);
@@ -675,6 +677,114 @@ test('with the real age binary: the bundle is decrypted and the outputs sealed t
     assert.ok(paths.includes('accepted/att-1/0/ingest.json'));
     assert.ok(paths.includes('accepted/att-1/0/manifest.json'));
     for (const l of h.lines) assert.ok(!l.includes('AGE-SECRET-KEY'), l);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+// ---- R-ING-05, R-ING-06: no item is retried forever or holds up the others ----
+
+test('R-ING-05: an item that keeps failing is counted in the state and recorded as ingest_error on the third failure', async () => {
+  const { db, fence } = setup({ ttlMs: 120 * MIN });
+  const api = worker({ bundle: makeBundle({ identity: { fence } }) });
+  const decrypt = () => {
+    throw new AgeError('could not run age (age): ENOENT', 'spawn');
+  };
+  const h = harness({ api, crypto: { decrypt, encrypt: (p) => fakeEncrypt(p), publicKey: () => PUBKEY } });
+  try {
+    for (const n of [1, 2]) {
+      const s = await h.collect(db);
+      assert.equal(s.errors, 1);
+      assert.equal(s.recorded, 0);
+      assert.equal(s.changed, true, 'the count must reach the pushed state');
+      assert.equal(db.ingestFailures('att-1', 0).count, n);
+      assert.equal(db.getAttempt('att-1').items[0].outcome, null);
+      assert.ok(h.lines.some((l) => l.includes(`ENOENT (failure ${n} of 3; nothing recorded; will try again)`)), h.lines.join('\n'));
+      h.clock.t += 3 * MIN;
+    }
+    const third = await h.collect(db);
+    assert.equal(third.recorded, 1);
+    assert.deepEqual(third.outcomes, { rejected: 1 });
+    assert.equal(db.getAttempt('att-1').items[0].outcome, 'rejected');
+    assert.equal(db.listAttempts('repo:1')[0].reason, 'ingest_error');
+    assert.equal(db.getDispatch('att-1').status, 'done', 'the dispatch is closed and its slot freed');
+    assert.deepEqual(db.openSlots(), []);
+    assert.equal(db.ingestFailures('att-1', 0).count, 0);
+    const report = JSON.parse(h.opened().get('rejected/att-1/0/ingest.json'));
+    assert.equal(report.reason, 'ingest_error');
+    assert.match(report.problems[0].detail, /failed to judge this item 3 times; last error: could not run age/);
+    assert.ok(h.lines.some((l) => l.includes('(failure 3 of 3; recorded as ingest_error)')), h.lines.join('\n'));
+
+    const calls = api.calls.length;
+    assert.equal((await h.collect(db)).checked, 0, 'nothing is left to retry');
+    assert.equal(api.calls.length, calls);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-ING-05: a count left by an earlier run is honoured: the item is recorded as ingest_error without a download', async () => {
+  const { db } = setup();
+  for (let i = 0; i < 3; i++) db.noteIngestFailure('att-1', 0, { error: 'seal failed', now: T0 });
+  const api = worker({ bundle: makeBundle() });
+  const h = harness({ api });
+  try {
+    const s = await h.collect(db);
+    assert.deepEqual(s.outcomes, { rejected: 1 });
+    assert.equal(db.listAttempts('repo:1')[0].reason, 'ingest_error');
+    assert.equal(api.calls.filter((c) => c.path.endsWith('/zip')).length, 0);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-ING-08: transient download errors are retried and never counted', async () => {
+  const { db } = setup({ ttlMs: 120 * MIN });
+  const api = fakeApi([
+    ['GET', `/repos/${WORKER_REPO}/actions/runs/${RUN_ID}`, () => ({ body: defaultRun() })],
+    ['GET', `/repos/${WORKER_REPO}/actions/runs/${RUN_ID}/artifacts`, () => ({ body: { total_count: 1, artifacts: [artifactEntry()] } })],
+    ['GET', `/repos/${WORKER_REPO}/actions/artifacts/901/zip`, () => ({ status: 502, body: { message: 'bad gateway' } })],
+  ]);
+  const h = harness({ api });
+  try {
+    for (let i = 0; i < 5; i++) {
+      const s = await h.collect(db);
+      assert.equal(s.errors, 1);
+      assert.equal(s.recorded, 0);
+      h.clock.t += 3 * MIN;
+    }
+    assert.equal(db.ingestFailures('att-1', 0).count, 0);
+    assert.equal(db.getAttempt('att-1').items[0].outcome, null);
+    assert.ok(h.lines.some((l) => /HTTP 502 \(transient; nothing recorded; will try again\)/.test(l)), h.lines.join('\n'));
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-ING-06: a poison item is decided in its own tick and the items after it are still judged', async () => {
+  const { runAnalysis } = await import('../analyze.mjs');
+  const keys = shardKeys(3);
+  const { db, items } = setup({ runKeys: keys });
+  const api = shardWorker(shardArtifacts(items));
+  const hang = new URL('data:text/javascript,for (;;) {}');
+  // Item 0's bundle makes the judge spin forever.
+  const analyze = (plaintext, ctx, opts) => runAnalysis(plaintext, ctx, ctx.exp.run_key === keys[0] ? { ...opts, workerUrl: hang } : opts);
+  const h = harness({ api, judge: { analyze, judgeTimeoutMs: 300 } });
+  try {
+    const t0 = performance.now();
+    const s = await h.collect(db);
+    assert.ok(performance.now() - t0 < 10_000);
+    assert.deepEqual(s.outcomes, { rejected: 1, accepted: 2 });
+    assert.deepEqual(db.getAttempt('att-1').items.map((it) => it.outcome), ['rejected', 'accepted', 'accepted']);
+    assert.equal(db.listAttempts('repo:1')[0].reason, 'ingest_timeout');
+    assert.equal(db.getDispatch('att-1').status, 'done');
+
+    const next = await h.collect(db);
+    assert.equal(next.checked, 0, 'the next tick has nothing left from it');
   } finally {
     h.cleanup();
     db.close();

@@ -123,12 +123,15 @@ const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.t
  * Otherwise `items` are the ledger items that have no result yet, in index
  * order, and judge(item) judges one of them, records the decision and returns
  * {index, run_key, outcome, reason, recorded, accepted, report, outputs}. Each
- * item can be judged once per open.
+ * item can be judged once per open; after a judge() that threw (nothing was
+ * decided) it can be judged again. judge(item, {abandon: text}) records the
+ * item as rejected ingest_error with that text, without a download (a stale
+ * fence or a failed run check still takes precedence).
  *
  * @param {{repo: string, runId: number|string, attemptId: string}} input  from the dispatch
  * @param {object} deps  as for ingestAttempt()
  * @returns {Promise<{done: object|null, attempt: object|null, items: object[],
- *   judge: (item: object) => Promise<object>}>}
+ *   judge: (item: object, opts?: {abandon?: string}) => Promise<object>}>}
  */
 export async function openAttempt(input, deps) {
   const {
@@ -211,12 +214,20 @@ export async function openAttempt(input, deps) {
 
   const judged = new Set();
 
-  async function judge(wanted) {
+  async function judge(wanted, { abandon = null } = {}) {
     const item = pending.find((it) => it.index === wanted?.index);
     if (!item) throw new TypeError('openAttempt: judge() takes one of the items openAttempt returned');
     if (judged.has(item.index)) throw new TypeError(`openAttempt: item ${item.index} was judged already`);
     judged.add(item.index);
+    try {
+      return await judgeItem(item, abandon);
+    } catch (err) {
+      judged.delete(item.index); // nothing was decided: it may be judged again
+      throw err;
+    }
+  }
 
+  async function judgeItem(item, abandon) {
     const report = { ...base, ledger: { run_key: item.run_key, fence: item.fence, current_fence: item.current_fence, ...base.ledger } };
     let ciphertext = null;
     let manifestBytes = null;
@@ -274,6 +285,8 @@ export async function openAttempt(input, deps) {
 
     if (isStale(item)) return reject('stale_fence', [{ reason: 'stale_fence', expected: item.current_fence, got: item.fence }]);
     if (runProblem) return reject(runProblem.reason, runProblem.problems);
+    // The caller gives up on an item it failed to judge too often (collect.mjs).
+    if (abandon) return reject('ingest_error', [{ reason: 'ingest_error', detail: String(abandon) }]);
 
     // 3. artifact
     const wantedName = artifactName(attemptId, item.index);

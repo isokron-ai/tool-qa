@@ -696,11 +696,45 @@ export class StateDb {
     `).all(min).map(plain);
   }
 
+  // ---- ingest failures ----
+  //
+  // How often the pump failed to judge one item of a dispatch (an error that
+  // was neither transient nor a decision). Kept in kv, outside the item's
+  // judging transaction, so a failure still counts when that transaction
+  // rolls back. collect.mjs gives up on the item after a few (R-ING-05).
+
+  static ingestFailureKey(attemptId, index) {
+    return `ingest.failures:${attemptId}:${index}`;
+  }
+
+  /** Count one more failure; returns the new count. */
+  noteIngestFailure(attemptId, index, { error = null, now } = {}) {
+    const key = StateDb.ingestFailureKey(attemptId, index);
+    const prev = this.getKv(key);
+    const t = iso(now);
+    const count = (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1;
+    this.setKv(key, { count, first: prev?.first ?? t, last: t, error: error === null ? null : String(error).slice(0, 300) }, { now });
+    return count;
+  }
+
+  /** {count, first, last, error} for an item, or {count: 0}. */
+  ingestFailures(attemptId, index) {
+    return this.getKv(StateDb.ingestFailureKey(attemptId, index)) ?? { count: 0 };
+  }
+
+  clearIngestFailures(attemptId, index) {
+    this.deleteKv(StateDb.ingestFailureKey(attemptId, index));
+  }
+
   // ---- kv ----
 
   getKv(key) {
     const row = this.raw.prepare('SELECT value FROM kv WHERE key = ?').get(key);
     return row ? JSON.parse(row.value) : undefined;
+  }
+
+  deleteKv(key) {
+    this.raw.prepare('DELETE FROM kv WHERE key = ?').run(key);
   }
 
   setKv(key, value, { now } = {}) {

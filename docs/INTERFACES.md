@@ -112,8 +112,15 @@ counts failed items and dispatches. `stopped` is `budget` when the API
 budget (pump/budgets.mjs; ingest's calls go through the same budget as the
 pump's, in the `actions` and `artifacts` families) would have to wait,
 `deadline`, or `registry` when the field registry could not be loaded; the
-rest waits for the next tick. An error on one item is logged,
-nothing is recorded for it, and the next tick tries again. Any other error
+rest waits for the next tick. An error on one item is logged and
+nothing is recorded for it. A transient GitHub or network error is tried
+again next tick (the lease and the six-hour late window bound it). Any other
+error (age cannot run, the ledger or sealing failed) is counted in the state
+(`ingest.failures:<attempt_id>:<index>` in `kv`, kept even though the item's
+transaction rolled back); on the third such failure the item is recorded as
+rejected `ingest_error`, so no item is retried forever. Problems caused by a
+downloaded bundle's contents are never thrown: they are recorded decisions
+(`ingest_timeout`, `ingest_error` and the reasons in ingest/README.md). Any other error
 thrown by `collect()` is logged and the tick goes on; `IngestSetupError` stops
 dispatching for the rest of the run. The pump keeps the summary in
 `pump.last_tick` (below).
@@ -223,3 +230,4 @@ instead of after the lease expires. It wraps `db.closeDispatch()` and returns
 | `pump.successor` | `{ ok, at, ref, runId?, error? }` from `pump/successor.mjs` for the current run. The watchdog reports `ok: false` as red. |
 | `pump.last_tick` | The last tick's summary: due, planned, dispatched, failed, reaped, why it stopped early; `ingest` (checked, judged, recorded, outcomes, errors, why ingest stopped, or `null` if it did not run) and `blocked` (why nothing may be dispatched this run, or `null`). |
 | `pump.last_run` | Start, finish, ticks, dispatched, failed and slot numbers of the last pump run. |
+| `ingest.failures:<attempt_id>:<index>` | `{ count, first, last, error }`: how often the pump failed to judge that item (not counting transient errors). Removed when the item is decided; at 3 it is recorded as `ingest_error`. |

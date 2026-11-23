@@ -55,6 +55,12 @@ import { loadRegistry as loadPinnedRegistry } from './registry.mjs';
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const TOKEN_MARGIN_MS = 5 * MINUTE;
+/**
+ * How many times the pump may fail to judge one item (an error of ours, not
+ * a transient GitHub or network one) before it records the item as rejected
+ * ingest_error. Three ticks rule out a passing glitch.
+ */
+export const MAX_ITEM_FAILURES = 3;
 const SEAL_TO = fileURLToPath(new URL('../worker-kit/ingest.pub', import.meta.url));
 
 /** Ingest cannot work as set up (keys, contract). The pump must not dispatch work. */
@@ -86,6 +92,9 @@ function isoSeconds(ms) {
  * @param {boolean} [o.allowNoControls]
  * @param {number} [o.lateMs]         how long after a lease expired a result is still judged
  * @param {number} [o.recheckLateMs]  how often such a late run is looked at
+ * @param {number} [o.maxItemFailures] failed judgings of one item before it is
+ *                                    recorded as rejected ingest_error
+ * @param {{analyze?: Function, judgeTimeoutMs?: number}} [o.judge]  passed to openAttempt (tests)
  */
 export function createCollector({
   env = process.env,
@@ -102,6 +111,8 @@ export function createCollector({
   allowNoControls = false,
   lateMs = 6 * HOUR,
   recheckLateMs = 10 * MINUTE,
+  maxItemFailures = MAX_ITEM_FAILURES,
+  judge = {},
 } = {}) {
   const ageBin = env.AGE_BIN || 'age';
   const keygenBin = env.AGE_KEYGEN_BIN || 'age-keygen';
@@ -260,6 +271,7 @@ export function createCollector({
           registry: reg,
           now: () => new Date(now()),
           allowNoControls,
+          ...judge,
         });
         if (opened.done) {
           const r = opened.done;
@@ -284,43 +296,70 @@ export function createCollector({
         }
 
         // Each item in its own transaction: its decision is recorded only if
-        // its outputs were sealed.
+        // its outputs were sealed. An item that fails with an error that is
+        // neither transient nor a decision is counted in the state; after
+        // maxItemFailures it is recorded as rejected ingest_error, so no item
+        // is retried forever (R-ING-05).
         let decided = 0;
         let stopped = false;
-        const failures = new Map(); // message -> item indexes
+        const failures = new Map(); // log line -> item indexes
+        const decide = async (item, abandon) => {
+          let sealed = false;
+          const r = await db.txAsync(async () => {
+            const res = await opened.judge(item, abandon ? { abandon } : {});
+            if (res.outputs.size > 0) {
+              seal(`${d.attempt_id}-${item.index}`, res.outputs, recipients);
+              sealed = true;
+            }
+            db.clearIngestFailures(d.attempt_id, item.index);
+            return res;
+          });
+          decided += 1;
+          summary.judged += 1;
+          summary.outcomes[r.outcome] = (summary.outcomes[r.outcome] ?? 0) + 1;
+          if (r.recorded) summary.recorded += 1;
+          summary.changed = true;
+          const why = r.reason ? ` (${r.reason})` : '';
+          log(`ingest: ${label} item ${item.index}: ${r.outcome}${why}${r.recorded ? ', recorded' : ''}${sealed ? ', outputs sealed' : ''}`);
+        };
+        const giveUpText = (n, error) => `the pump failed to judge this item ${n} times; last error: ${error ?? 'unknown'}`;
         for (const item of opened.items) {
           if (now() >= deadline) {
             summary.stopped = 'deadline';
             stopped = true;
             break;
           }
+          const before = db.ingestFailures(d.attempt_id, item.index);
           try {
-            let sealed = false;
-            const r = await db.txAsync(async () => {
-              const res = await opened.judge(item);
-              if (res.outputs.size > 0) {
-                seal(`${d.attempt_id}-${item.index}`, res.outputs, recipients);
-                sealed = true;
-              }
-              return res;
-            });
-            decided += 1;
-            summary.judged += 1;
-            summary.outcomes[r.outcome] = (summary.outcomes[r.outcome] ?? 0) + 1;
-            if (r.recorded) summary.recorded += 1;
-            summary.changed = true;
-            const why = r.reason ? ` (${r.reason})` : '';
-            log(`ingest: ${label} item ${item.index}: ${r.outcome}${why}${r.recorded ? ', recorded' : ''}${sealed ? ', outputs sealed' : ''}`);
+            await decide(item, before.count >= maxItemFailures ? giveUpText(before.count, before.error) : null);
           } catch (err) {
             if (err instanceof IngestSetupError || err?.name === 'BudgetExceededError') throw err;
             summary.errors += 1;
             const message = String(err?.message ?? err);
-            failures.set(message, [...(failures.get(message) ?? []), item.index]);
+            if (err?.transient === true) {
+              // GitHub or the network: not counted, tried again next tick.
+              const line = `${message} (transient; nothing recorded; will try again)`;
+              failures.set(line, [...(failures.get(line) ?? []), item.index]);
+              continue;
+            }
+            const n = db.noteIngestFailure(d.attempt_id, item.index, { error: message, now: now() });
+            summary.changed = true;
+            let line = `${message} (failure ${n} of ${maxItemFailures}; nothing recorded; will try again)`;
+            if (n >= maxItemFailures) {
+              try {
+                await decide(item, giveUpText(n, message));
+                line = `${message} (failure ${n} of ${maxItemFailures}; recorded as ingest_error)`;
+              } catch (again) {
+                if (again instanceof IngestSetupError || again?.name === 'BudgetExceededError') throw again;
+                line = `${message} (failure ${n} of ${maxItemFailures}; recording ingest_error failed too: ${again?.message ?? again}; will try again)`;
+              }
+            }
+            failures.set(line, [...(failures.get(line) ?? []), item.index]);
           }
         }
-        for (const [message, indexes] of failures) {
+        for (const [line, indexes] of failures) {
           const which = indexes.length === 1 ? `item ${indexes[0]}` : `items ${indexes.join(', ')}`;
-          log(`ingest: ${label} ${which}: ${message} (nothing recorded; will try again)`);
+          log(`ingest: ${label} ${which}: ${line}`);
         }
         if (decided === opened.items.length) {
           closeIfOpen();

@@ -145,7 +145,7 @@ Recorded rejections and quarantine:
 | controls and claims | `forgery_control_injected`, `forgery_marker_leaked`, `foreign_identity_claim`, `control_output_in_raw`, `control_failed`, `control_missing`, `forgery_control_unverified` |
 | registry | `observation_format`, `undeclared_field`, `deprecated_field`, `field_type` |
 | secrets (quarantined) | `secret_scan` |
-| judging | `ingest_timeout` (judging or decrypting ran past its time limit), `ingest_error` (judging failed on this bundle) |
+| judging | `ingest_timeout` (judging or decrypting ran past its time limit), `ingest_error` (judging failed on this bundle, or the pump failed to judge the item three times; see "Ingest in the pump" in docs/INTERFACES.md) |
 
 When a bundle has several problems, all are listed and the most specific names
 the rejection, in the order of the table (identity first).
