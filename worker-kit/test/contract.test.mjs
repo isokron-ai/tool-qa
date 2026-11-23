@@ -244,3 +244,24 @@ test('legacyArtifactName is the one-item name ingest still accepts', () => {
   assert.equal(legacyArtifactName('01JD'), 'result-01JD.tar.age');
   assert.throws(() => legacyArtifactName('../x'), /attempt/);
 });
+
+test('R-ING-03: collectFiles refuses a file over 8 MiB and a bundle over 64 MiB; the schema caps listed sizes', async () => {
+  const { MAX_FILE_BYTES, MAX_BUNDLE_BYTES } = await import('../contract.mjs');
+  assert.equal(loadSchema().properties.files.items.properties.bytes.maximum, MAX_FILE_BYTES);
+  const tooBig = validManifest();
+  tooBig.files = [{ path: 'raw/x.bin', sha256: SHA64, bytes: MAX_FILE_BYTES + 1 }];
+  assert.equal(validateManifest(tooBig).ok, false);
+
+  const dir = tempBundle();
+  try {
+    writeFileSync(join(dir, 'raw', 'big.bin'), Buffer.alloc(MAX_FILE_BYTES + 1));
+    assert.throws(() => collectFiles(dir), /raw\/big\.bin is 8388609 bytes, more than the 8388608 a file may hold/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+
+  const many = tempBundle();
+  try {
+    // Nine files at the per-file cap: 72 MiB in all.
+    for (let i = 0; i < 9; i++) writeFileSync(join(many, 'raw', `part${i}.bin`), Buffer.alloc(MAX_FILE_BYTES));
+    assert.throws(() => collectFiles(many), new RegExp(`more than the ${MAX_BUNDLE_BYTES} bytes a bundle may hold`));
+  } finally { rmSync(many, { recursive: true, force: true }); }
+});

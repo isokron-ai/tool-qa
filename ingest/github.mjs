@@ -9,6 +9,8 @@
 // BudgetExceededError thrown by the fetch it is given (the pump's API budget)
 // passes straight through, unretried.
 
+import { MAX_ARTIFACT_BYTES } from '../worker-kit/contract.mjs';
+
 const API_VERSION = '2022-11-28';
 /**
  * One artifact download, retries and redirects included, ends within this
@@ -66,12 +68,12 @@ async function readCapped(res, max) {
  * @param {string} [p.apiUrl]
  * @param {(ms: number) => Promise<void>} [p.sleep]
  * @param {number} [p.retries]           extra attempts after the first (default 3)
- * @param {number} [p.maxDownloadBytes]  default 512 MiB
+ * @param {number} [p.maxDownloadBytes]  default MAX_ARTIFACT_BYTES (worker-kit/contract.mjs)
  * @param {number} [p.downloadTimeoutMs]  one artifact download, all of it (DOWNLOAD_TIMEOUT_MS)
  */
 export function makeGithub({
   token, fetch = globalThis.fetch, apiUrl = 'https://api.github.com',
-  sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retries = 3, maxDownloadBytes = 512 * 1024 * 1024,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retries = 3, maxDownloadBytes = MAX_ARTIFACT_BYTES,
   downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS,
 } = {}) {
   if (!token) throw new GithubError('a GitHub token is required');

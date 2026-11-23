@@ -64,7 +64,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { artifactName, legacyArtifactName, MANIFEST_NAME, sha256Hex } from '../worker-kit/contract.mjs';
+import {
+  artifactName, legacyArtifactName, MANIFEST_NAME, MAX_ARTIFACT_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, sha256Hex,
+} from '../worker-kit/contract.mjs';
 import { isSafeRelativePath, writeTar } from '../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from './age.mjs';
 import { JUDGE_TIMEOUT_MS, readBundle, runAnalysis } from './analyze.mjs';
@@ -76,8 +78,8 @@ import { maskText, scanText } from './redact.mjs';
 import { loadRegistry } from './registry.mjs';
 
 export const REPORT_SCHEMA_VERSION = 1;
-export const MAX_ARTIFACT_BYTES = 512 * 1024 ** 2;
-export const MAX_BUNDLE_BYTES = 1024 ** 3;
+// The size caps live in the result contract (worker-kit/contract.mjs).
+export { MAX_ARTIFACT_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES };
 export const OUTCOME_DIRS = Object.freeze({ accepted: 'accepted', rejected: 'rejected', quarantined: 'quarantine' });
 
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
@@ -131,7 +133,7 @@ const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.t
 export async function openAttempt(input, deps) {
   const {
     ledger, github, decrypt, registry, now = () => new Date(), allowNoControls = false,
-    maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES,
+    maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES,
     analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS,
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
@@ -348,7 +350,7 @@ export async function openAttempt(input, deps) {
       run_id: runId,
       run_attempt: base.run.run_attempt,
     };
-    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes };
+    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes, maxFileBytes };
     const verdict = await analyze(plaintext, ctx, { timeoutMs: judgeTimeoutMs });
     if (verdict?.timedOut) {
       return reject('ingest_timeout', [{ reason: 'ingest_timeout', detail: `judging took longer than ${judgeTimeoutMs / 1000} s and was stopped` }]);
@@ -401,6 +403,7 @@ function checkRun(run, row, seen) {
  * @param {boolean} [deps.allowNoControls]  accept bundles that carry no control at all
  * @param {number} [deps.maxArtifactBytes]
  * @param {number} [deps.maxBundleBytes]
+ * @param {number} [deps.maxFileBytes]
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
  *   outcome and reason are the items' own when they all agree; otherwise outcome

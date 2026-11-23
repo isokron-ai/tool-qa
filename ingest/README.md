@@ -45,13 +45,14 @@ that item only.
    finished, nothing is recorded for any item (`pending`).
 3. **Artifact.** The run's artifacts are listed once. For each item, exactly
    one artifact named `result-<attempt>-<index>.tar.age` (or
-   `result-<attempt>-<index>`) from that run, not expired, at most 512 MiB.
+   `result-<attempt>-<index>`) from that run, not expired, at most 65 MiB.
    For an attempt of one item, the older name `result-<attempt>.tar.age` (or
    `result-<attempt>`) is accepted too; both at once is `duplicate_artifact`.
    It is downloaded through the API (the token never goes to blob storage)
    and, if GitHub wrapped it in a zip, unwrapped.
 4. **Decrypt** with age and the ingest identity (`AGE_IDENTITY`).
-5. **Bundle.** A tar of regular files with safe paths, at most 1 GiB, with a
+5. **Bundle.** A tar of regular files with safe paths, at most 64 MiB, each
+   file (`manifest.json` included) at most 8 MiB, with a
    `manifest.json` that is valid JSON and valid against
    [`manifest.schema.json`](../worker-kit/manifest.schema.json).
 6. **Forgery checks** ([`forgery.mjs`](forgery.mjs)): the manifest's identity
@@ -138,7 +139,7 @@ Recorded rejections and quarantine:
 | run | `run_repo_mismatch`, `run_workflow_mismatch`, `run_event_mismatch`, `run_sha_mismatch` |
 | artifact | `no_artifact`, `duplicate_artifact`, `artifact_run_mismatch`, `artifact_expired`, `artifact_too_large`, `bad_container` |
 | decrypt | `decrypt_failed` (not encrypted to the ingest key, or damaged), `bundle_too_large` |
-| bundle | `bad_bundle` (not a safe tar of regular files), `no_manifest`, `manifest_not_json`, `manifest_invalid` |
+| bundle | `bad_bundle` (not a safe tar of regular files), `file_too_large` (a file over 8 MiB), `no_manifest`, `manifest_not_json`, `manifest_invalid` |
 | identity | `attempt_mismatch`, `fence_mismatch`, `run_key_mismatch`, `workflow_repo_mismatch`, `workflow_file_mismatch`, `workflow_sha_mismatch`, `run_id_mismatch`, `run_attempt_mismatch` |
 | files | `unlisted_file`, `missing_file`, `size_mismatch`, `digest_mismatch` |
 | controls and claims | `forgery_control_injected`, `forgery_marker_leaked`, `foreign_identity_claim`, `control_output_in_raw`, `control_failed`, `control_missing`, `forgery_control_unverified` |

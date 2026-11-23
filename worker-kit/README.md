@@ -141,9 +141,18 @@ other event, file or commit.
 
 | What | Limit |
 |---|---|
-| Artifact (ciphertext) | 512 MiB per item |
-| Bundle content after decryption | 1 GiB per item |
+| One file in a bundle (`manifest.json` included) | 8 MiB |
+| Bundle tar, before encryption | 64 MiB per item |
+| Artifact (ciphertext) | 65 MiB per item |
 | `item-index` | 0 to 9,999 |
 | Files in a bundle | 10,000 (manifest schema) |
 | Path length | 240 characters |
 | Controls, skips | 20 controls, 1,000 skips |
+
+The size caps are in [`contract.mjs`](contract.mjs) (`MAX_FILE_BYTES`,
+`MAX_BUNDLE_BYTES`, `MAX_ARTIFACT_BYTES`). `build-bundle.mjs` refuses to
+build past them, and ingest rejects a bundle past them (`file_too_large`,
+`bundle_too_large`, `artifact_too_large`). Ingest judges every bundle inside
+a pump tick on one CPU, so the caps keep each item to seconds of work.
+Truncate captured target output in `raw/` to fit (and record that it was
+truncated) rather than dropping it.

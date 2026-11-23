@@ -16,7 +16,7 @@
 
 import { Worker } from 'node:worker_threads';
 
-import { MANIFEST_NAME, sha256Hex, validateManifest } from '../worker-kit/contract.mjs';
+import { MANIFEST_NAME, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, sha256Hex, validateManifest } from '../worker-kit/contract.mjs';
 import { readTar, TarError } from '../worker-kit/tar.mjs';
 import { checkBundle } from './forgery.mjs';
 import { cleanHit, cleanProblem, makeLabeler, MAX_LISTED } from './hygiene.mjs';
@@ -72,13 +72,13 @@ export function readBundle(plaintext, { maxBundleBytes } = {}) {
  *
  * @param {Buffer} plaintext
  * @param {{exp: object, registry: object, canaries?: string[], allowNoControls?: boolean,
- *   maxBundleBytes?: number}} ctx
+ *   maxBundleBytes?: number, maxFileBytes?: number}} ctx
  *   exp is the identity the bundle must name (forgery.mjs checkBundle)
  * @returns {{outcome: 'accepted'|'rejected'|'quarantined', reason: string|null,
  *   problems: object[], problemsTotal: number, report: object}}
  */
 export function analyzeBundle(plaintext, ctx) {
-  const { exp, registry, canaries = [], allowNoControls = false, maxBundleBytes } = ctx;
+  const { exp, registry, canaries = [], allowNoControls = false, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES } = ctx;
   const label = makeLabeler(canaries);
   const report = {};
   const done = (outcome, reason, problems = []) => ({
@@ -98,7 +98,11 @@ export function analyzeBundle(plaintext, ctx) {
     if (err instanceof TarError) return reject('bad_bundle', [{ reason: 'bad_bundle', detail: err.message }]);
     throw err;
   }
-  const { manifestBytes, files } = bundle;
+  const { entries, manifestBytes, files } = bundle;
+  // Every file, manifest.json included, within the contract's per-file cap.
+  const oversized = entries.filter((e) => e.data.length > maxFileBytes)
+    .map((e) => ({ reason: 'file_too_large', path: e.path, expected: `<= ${maxFileBytes}`, got: e.data.length }));
+  if (oversized.length > 0) return reject('file_too_large', oversized);
   if (!manifestBytes) return reject('no_manifest');
   let manifest;
   try {

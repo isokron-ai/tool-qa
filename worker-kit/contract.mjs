@@ -25,6 +25,25 @@ import { join } from 'node:path';
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 export const MANIFEST_NAME = 'manifest.json';
+
+// Size caps (R-ING-03 in REGRESSIONS.md). Ingest judges every bundle in a pump
+// tick on one CPU, so a bundle must be small enough to download, decrypt and
+// scan in seconds:
+//
+//   MAX_FILE_BYTES      8 MiB per file, manifest.json included. Reports, logs
+//                       and observations are kilobytes; captured target output
+//                       (raw/) is truncated by the worker to fit.
+//   MAX_BUNDLE_BYTES    64 MiB for the whole tar (headers included), before
+//                       encryption. Scanning that much crafted text takes a
+//                       few seconds, far inside the judge's 60 s limit.
+//   MAX_ARTIFACT_BYTES  the uploaded ciphertext: the tar plus age's overhead
+//                       (about 0.03 %), with room to spare.
+//
+// build-bundle refuses to build past them; ingest rejects a bundle past them
+// (file_too_large, bundle_too_large, artifact_too_large).
+export const MAX_FILE_BYTES = 8 * 1024 ** 2;
+export const MAX_BUNDLE_BYTES = 64 * 1024 ** 2;
+export const MAX_ARTIFACT_BYTES = MAX_BUNDLE_BYTES + 1024 ** 2;
 export const BUNDLE_DIRS = Object.freeze(['observations', 'results', 'controls', 'raw', 'logs']);
 
 /** Why a stage did not run. Skips are recorded, never silent. */
@@ -257,12 +276,14 @@ export function workflowFromEnv(env = process.env) {
 
 /**
  * Read every regular file under `dir` as bundle files, sorted by path.
- * Refuses symlinks, special files, a manifest.json of its own and paths
- * outside the bundle layout.
+ * Refuses symlinks, special files, a manifest.json of its own, paths outside
+ * the bundle layout, a file over MAX_FILE_BYTES and files over
+ * MAX_BUNDLE_BYTES in total.
  * @returns {{path: string, data: Buffer}[]}
  */
 export function collectFiles(dir) {
   const out = [];
+  let total = 0;
   const walk = (abs, rel) => {
     for (const name of readdirSync(abs).sort()) {
       const childAbs = join(abs, name);
@@ -275,6 +296,11 @@ export function collectFiles(dir) {
       if (!isBundlePath(childRel)) {
         throw new Error(`bundle: ${childRel} is outside the layout (${BUNDLE_DIRS.join('/, ')}/; names use A-Z a-z 0-9 . _ -)`);
       }
+      if (st.size > MAX_FILE_BYTES) {
+        throw new Error(`bundle: ${childRel} is ${st.size} bytes, more than the ${MAX_FILE_BYTES} a file may hold (truncate captured output first)`);
+      }
+      total += st.size;
+      if (total > MAX_BUNDLE_BYTES) throw new Error(`bundle: the files hold more than the ${MAX_BUNDLE_BYTES} bytes a bundle may hold`);
       out.push({ path: childRel, data: readFileSync(childAbs) });
     }
   };

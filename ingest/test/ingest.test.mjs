@@ -526,3 +526,51 @@ test('R-ING-04: the judge thread gets no environment', async () => {
   const out = await runAnalysis(Buffer.alloc(0), {}, { workerUrl: peek });
   assert.equal(out.error, '[]');
 });
+
+// ---- R-ING-03: size caps ----
+
+test('R-ING-03: a file over the per-file cap is rejected as file_too_large; the caps are the contract\'s', async () => {
+  const { MAX_FILE_BYTES, MAX_BUNDLE_BYTES, MAX_ARTIFACT_BYTES } = await import('../../worker-kit/contract.mjs');
+  const ingestCaps = await import('../ingest.mjs');
+  assert.equal(MAX_FILE_BYTES, 8 * 1024 ** 2);
+  assert.equal(MAX_BUNDLE_BYTES, 64 * 1024 ** 2);
+  assert.equal(MAX_ARTIFACT_BYTES, 65 * 1024 ** 2);
+  assert.equal(ingestCaps.MAX_ARTIFACT_BYTES, MAX_ARTIFACT_BYTES);
+  assert.equal(ingestCaps.MAX_BUNDLE_BYTES, MAX_BUNDLE_BYTES);
+
+  const big = makeBundle({ extraTarEntries: [['raw/capture.bin', Buffer.alloc(MAX_FILE_BYTES + 1, 0x61)]] });
+  const { r, ledger } = await run({ bundle: big });
+  assert.equal(r.outcome, 'rejected');
+  assert.equal(r.reason, 'file_too_large');
+  assert.deepEqual(ledger.records.map((x) => x.reason), ['file_too_large']);
+  const report = json(r.outputs.get('rejected/att-1/0/ingest.json'));
+  assert.deepEqual(report.problems, [{ reason: 'file_too_large', path: 'raw/capture.bin', expected: `<= ${MAX_FILE_BYTES}`, got: MAX_FILE_BYTES + 1 }]);
+
+  // At the cap is fine as far as size goes (this one is then unlisted).
+  const at = await run({ bundle: makeBundle({ extraTarEntries: [['raw/capture.bin', Buffer.alloc(MAX_FILE_BYTES, 0x61)]] }) });
+  assert.equal(at.r.reason, 'unlisted_file');
+});
+
+test('R-ING-03: an artifact over 65 MiB is rejected without a download', async () => {
+  const { MAX_ARTIFACT_BYTES } = await import('../../worker-kit/contract.mjs');
+  const api = fakeGithub({ artifacts: [artifactEntry({ size_in_bytes: MAX_ARTIFACT_BYTES + 1 })], blob: Buffer.alloc(0) });
+  const { r } = await run({ github: api });
+  assert.equal(r.reason, 'artifact_too_large');
+  assert.ok(!api.calls.some((c) => c[0] === 'downloadArtifact'));
+});
+
+test('R-ING-03: a full-size bundle of crafted text is judged well inside the time limit', async () => {
+  const { MAX_FILE_BYTES } = await import('../../worker-kit/contract.mjs');
+  // Two files at the cap, each built against one of the old quadratic scans.
+  const files = {
+    ...defaultFiles(),
+    'results/dots.txt': 'a.'.repeat(MAX_FILE_BYTES / 2),
+    'results/claims.txt': `attempt_id=att-1\n`.repeat(Math.floor(MAX_FILE_BYTES / 17)),
+  };
+  const bundle = makeBundle({ files });
+  const t0 = performance.now();
+  const { r } = await run({ bundle });
+  const ms = performance.now() - t0;
+  assert.equal(r.outcome, 'accepted', r.reason);
+  assert.ok(ms < 20_000, `took ${ms.toFixed(0)} ms`);
+});

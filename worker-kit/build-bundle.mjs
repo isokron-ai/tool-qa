@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  MANIFEST_NAME, artifactName, buildManifest, collectFiles, sha256Hex, workflowFromEnv,
+  MANIFEST_NAME, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, artifactName, buildManifest, collectFiles, sha256Hex, workflowFromEnv,
 } from './contract.mjs';
 import { writeTar } from './tar.mjs';
 
@@ -79,7 +79,9 @@ export function main(argv = process.argv.slice(2), env = process.env, io = {}) {
       files,
     });
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+    if (manifestBytes.length > MAX_FILE_BYTES) throw new Error(`manifest.json would be ${manifestBytes.length} bytes, more than the ${MAX_FILE_BYTES} a file may hold`);
     const tar = writeTar([{ path: MANIFEST_NAME, data: manifestBytes }, ...files]);
+    if (tar.length > MAX_BUNDLE_BYTES) throw new Error(`the bundle would be ${tar.length} bytes, more than the ${MAX_BUNDLE_BYTES} allowed`);
     mkdirSync(opts.out, { recursive: true });
     const name = artifactName(opts.attemptId, opts.itemIndex);
     const bundlePath = join(opts.out, name.replace(/\.age$/, ''));
