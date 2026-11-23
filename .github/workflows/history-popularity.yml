@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
+      actions: read # download the newest crates subset from history-packages
       contents: read
       id-token: write
       attestations: write
@@ -62,12 +63,33 @@ jobs:
       - name: Unit tests
         if: steps.guard.outputs.proceed == 'true'
         run: node --test 'history/popularity/test/*.test.mjs'
+      - name: Fetch crates subset
+        id: crates
+        if: steps.guard.outputs.proceed == 'true' && steps.mode.outputs.mode != 'stars'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # crates counts come from the H2 dump subset, written by history-packages on days the dump changed.
+          # Take the newest crates-*.ndjson.gz from its last 10 successful runs. None found = a warning; crates are skipped.
+          mkdir -p .crates
+          for id in $(gh run list -R "${REPO}" -w history-packages -s success -L 10 --json databaseId -q '.[].databaseId'); do
+            rm -rf .crates/dl
+            gh run download "${id}" -R "${REPO}" -n "history-packages-${id}" -D .crates/dl 2>/dev/null || continue
+            f=$(find .crates/dl -name 'crates-*.ndjson.gz' | sort | tail -n 1)
+            if [ -n "${f}" ]; then cp "${f}" .crates/subset.ndjson.gz; echo "path=.crates/subset.ndjson.gz" >> "$GITHUB_OUTPUT"; echo "crates subset from run ${id}: ${f##*/}"; break; fi
+          done
+          if [ ! -f .crates/subset.ndjson.gz ]; then echo "::warning title=history-popularity::No crates subset found in the last 10 successful history-packages runs; crates are not counted this run."; fi
       - name: Capture popularity
         if: steps.guard.outputs.proceed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MODE: ${{ steps.mode.outputs.mode }}
-        run: node history/popularity/run.mjs --out out/popularity --state .state/popularity --seed history/seed.txt --mode "${MODE}"
+          CRATES_SUBSET: ${{ steps.crates.outputs.path }}
+        run: |
+          args=()
+          if [ -n "${CRATES_SUBSET}" ]; then args=(--crates-subset "${CRATES_SUBSET}"); fi
+          node history/popularity/run.mjs --out out/popularity --state .state/popularity --seed history/seed.txt --mode "${MODE}" "${args[@]}"
       - name: Save ETag cache
         if: steps.guard.outputs.proceed == 'true' && always()
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
