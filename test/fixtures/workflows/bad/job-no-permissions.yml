@@ -1,0 +1,14 @@
+on: push
+permissions: {}
+jobs:
+  ok:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - run: echo hi
+  missing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo hi

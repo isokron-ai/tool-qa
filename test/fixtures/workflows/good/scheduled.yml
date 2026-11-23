@@ -1,0 +1,47 @@
+# A workflow that follows every rule.
+name: good scheduled
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      shard:
+        description: "Shard id"
+        type: string
+        default: ''
+permissions: {}
+concurrency:
+  group: good-scheduled
+  cancel-in-progress: false
+jobs:
+  work:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Guard
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          SHARD: ${{ github.event.inputs.shard }}
+        run: |
+          # The event payload reaches the shell through env, never inline.
+          node scripts/guard.mjs --job work --slots
+          echo "sha ${{ github.sha }} shard $SHARD"
+      - uses: ./.github/actions/local
+      - uses: docker://alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - name: folded
+        if: >-
+          steps.guard.outputs.proceed == 'true' &&
+          github.event_name == 'schedule'
+        run: >
+          echo one
+          echo two
+  call:
+    permissions:
+      contents: read
+    uses: isokron-ai/tool-qa/.github/workflows/lint-workflows.yml@3d3c42e5aac5ba805825da76410c181273ba90b1

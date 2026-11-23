@@ -1,0 +1,18 @@
+on: push
+permissions: {}
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e
+      - uses: actions/checkout@main
+      - uses: actions/checkout@3D3C42E5AAC5BA805825DA76410C181273BA90B1
+      - uses: docker://alpine:3.20
+      - uses: actions/checkout
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  reusable:
+    permissions: {}
+    uses: isokron-ai/tool-qa/.github/workflows/lint-workflows.yml@main

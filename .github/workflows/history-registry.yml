@@ -1,0 +1,104 @@
+name: history-registry
+
+on:
+  schedule:
+    - cron: '17 3 * * *'     # daily full capture
+    - cron: '*/15 * * * *'   # delta capture
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Capture mode'
+        type: choice
+        options: [delta, full]
+        default: delta
+      since:
+        description: 'Delta only: UTC timestamp for updated_since (default: 30 minutes ago)'
+        type: string
+        required: false
+
+permissions: {}
+
+concurrency:
+  group: history-registry-${{ github.event_name == 'schedule' && (github.event.schedule == '17 3 * * *' && 'full' || 'delta') || inputs.mode }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+      EVENT_NAME: ${{ github.event_name }}
+      EVENT_SCHEDULE: ${{ github.event.schedule }}
+      INPUT_MODE: ${{ inputs.mode }}
+      INPUT_SINCE: ${{ inputs.since }}
+    steps:
+      - name: Guard
+        id: guard
+        run: |
+          if [ "$LOOP_ENABLED" != "true" ]; then
+            echo "::notice::LOOP_ENABLED is not 'true'; history-registry skipped."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            if [ "$EVENT_SCHEDULE" = "17 3 * * *" ]; then mode="full"; else mode="delta"; fi
+          else
+            mode="$INPUT_MODE"
+          fi
+          case "$mode" in full|delta) ;; *) echo "::error::bad mode"; exit 1 ;; esac
+          since=""
+          if [ "$mode" = "delta" ]; then
+            since="${INPUT_SINCE:-$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)}"
+            case "$since" in
+              [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]*Z) ;;
+              *) echo "::error::since must be a UTC timestamp like 2026-01-01T00:00:00Z"; exit 1 ;;
+            esac
+          fi
+          {
+            echo "run=true"
+            echo "mode=$mode"
+            echo "since=$since"
+            echo "date=$(date -u +%Y%m%dT%H%M%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Capture
+        if: steps.guard.outputs.run == 'true'
+        env:
+          MODE: ${{ steps.guard.outputs.mode }}
+          SINCE: ${{ steps.guard.outputs.since }}
+        run: |
+          node history/registry.mjs --mode "$MODE" --out history-out --since "$SINCE"
+
+      - name: Upload artifact
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: registry-${{ steps.guard.outputs.mode }}-${{ steps.guard.outputs.date }}
+          path: history-out/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attest manifest and data
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            history-out/manifest.json
+            history-out/*.ndjson.gz

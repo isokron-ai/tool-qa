@@ -1,0 +1,11 @@
+on:
+  pull_request_target:
+    types: [opened]
+permissions: {}
+jobs:
+  a:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - run: echo hi

@@ -1,0 +1,3 @@
+# Seed list for popularity capture (H3). One `ecosystem:name` per line.
+# Ecosystems: npm, pypi, crates, github (github names are owner/repo).
+# Blank lines and lines starting with # are ignored. Ships empty on purpose.
