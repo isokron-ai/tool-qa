@@ -6,7 +6,7 @@
 // identity or anything age printed that looks like a key.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,9 +16,9 @@ const KEYISH_RE = /AGE-SECRET-KEY-1[0-9A-Z]*/gi;
 const DEFAULT_MAX = 2 * 1024 ** 3;
 
 /**
- * code: 'input' (bad key text), 'spawn' (age could not run), 'too_large'
- * (output over the cap) or 'failed' (age ran and refused, e.g. wrong key or
- * damaged ciphertext).
+ * code: 'input' (bad key text), 'placeholder' (the public-key file has no key
+ * yet), 'spawn' (age could not run), 'too_large' (output over the cap) or
+ * 'failed' (age ran and refused, e.g. wrong key or damaged ciphertext).
  */
 export class AgeError extends Error {
   constructor(message, code = 'failed') {
@@ -38,6 +38,30 @@ export function parseRecipientFile(text) {
     out.push(line);
   });
   return out;
+}
+
+/**
+ * The recipients ingest seals its outputs to, from a public-key file
+ * (worker-kit/ingest.pub by default). While the file is still the committed
+ * placeholder (comments only) this throws AgeError code 'placeholder': nothing
+ * may be judged or sealed until the real key is there.
+ */
+export function readSealRecipients(path) {
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (err) {
+    throw new AgeError(`cannot read ${path} (${err.code ?? 'error'})`, 'input');
+  }
+  const recipients = parseRecipientFile(text);
+  if (recipients.length === 0) {
+    throw new AgeError(
+      `${path} has no age public key yet (it is still the placeholder), so ingest will not seal anything to it; `
+        + 'put the real recipient there first (docs/OPERATIONS.md, "Result encryption keys")',
+      'placeholder',
+    );
+  }
+  return recipients;
 }
 
 /** The single X25519 identity in an age-keygen style text (comments allowed). Never echoes input. */

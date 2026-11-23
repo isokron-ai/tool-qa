@@ -12,8 +12,9 @@
 //
 // Schema v3 adds the dispatch ledger. Leases are keyed by run_key (the `subject`
 // column of `leases` holds the run_key), each dispatch (attempt_id) carries one or
-// more run_keys with their fences, and recordResult() is the call ingest makes
-// for every result it has checked. See docs/INTERFACES.md.
+// more run_keys with their fences. Ingest reads a dispatch with getAttempt() and
+// reports every result it has checked with recordResult(); the pump runs ingest
+// in-process, so it stays the only writer. See docs/INTERFACES.md.
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -79,6 +80,27 @@ export class StateDb {
     this.inTx = true;
     try {
       const result = fn();
+      this.raw.exec('COMMIT');
+      return result;
+    } catch (err) {
+      this.raw.exec('ROLLBACK');
+      throw err;
+    } finally {
+      this.inTx = false;
+    }
+  }
+
+  /**
+   * Like tx(), for an async fn: BEGIN IMMEDIATE, await fn(), COMMIT (ROLLBACK if it
+   * throws). The pump uses it to keep a recorded result and its sealed outputs
+   * together. Nothing else may use this connection until it settles.
+   */
+  async txAsync(fn) {
+    if (this.inTx) return fn();
+    this.raw.exec('BEGIN IMMEDIATE');
+    this.inTx = true;
+    try {
+      const result = await fn();
       this.raw.exec('COMMIT');
       return result;
     } catch (err) {
@@ -390,6 +412,20 @@ export class StateDb {
     return r.changes > 0;
   }
 
+  /**
+   * Fill in the run of a live dispatch that was sent without one (found later by
+   * its run name). Never replaces a known run id. A pending dispatch becomes
+   * dispatched. Returns true if the row changed.
+   */
+  setDispatchRun(attemptId, { runId, runUrl = null, workflowSha = null, correlatedBy = null } = {}) {
+    if (runId === undefined || runId === null) throw new TypeError('setDispatchRun needs a runId');
+    const r = this.raw.prepare(`
+      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = COALESCE(?, workflow_sha), correlated_by = ?
+      WHERE attempt_id = ? AND run_id IS NULL AND status IN ('pending', 'dispatched')
+    `).run(String(runId), runUrl, workflowSha, correlatedBy, attemptId);
+    return r.changes > 0;
+  }
+
   /** The dispatch call failed: close it and free its leases and slot so the work is due again. */
   failDispatch(attemptId, { error, now } = {}) {
     const t = iso(now);
@@ -445,6 +481,71 @@ export class StateDb {
     `).all(iso(now)).map(plain);
   }
 
+  /**
+   * Dispatches ingest should look at: every open one (pending or dispatched,
+   * expired or not, since the pump ingests before it reaps), and ones closed as
+   * expired within the last `lateMs` that have a run id and nothing recorded
+   * yet (a late result is still judged and stored, as rejected). Oldest first.
+   */
+  dispatchesAwaitingResults({ now, lateMs = 0 } = {}) {
+    const since = iso(toMs(now) - Math.max(0, Number(lateMs) || 0));
+    return this.raw.prepare(`
+      SELECT d.* FROM dispatches d
+      WHERE d.status IN ('pending', 'dispatched')
+         OR (d.status = 'expired' AND d.closed > ? AND d.run_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.attempt_id = d.attempt_id))
+      ORDER BY d.created, d.attempt_id
+    `).all(since).map(plain);
+  }
+
+  /**
+   * The ingest interface (docs/INTERFACES.md). What ingest needs to know about a
+   * dispatch, or undefined if there is no such attempt:
+   *
+   *   {attempt_id, run_key, fence, subject, workflow, repo, workflow_file,
+   *    run_id, workflow_sha, current_fence, outcome, canaries, status, shard_id,
+   *    created, expires}
+   *
+   * workflow_file is a path under .github/workflows/. current_fence is the fence
+   * of the run_key's lease now (a newer one means this attempt is stale).
+   * outcome is null until a result for this attempt and fence is recorded.
+   * canaries is always empty for now (none are injected yet).
+   *
+   * Throws for a dispatch with more than one run_key: result manifest v1 names
+   * one run_key, so such a shard cannot be ingested.
+   */
+  getAttempt(attemptId) {
+    const d = this.getDispatch(attemptId);
+    if (!d) return undefined;
+    if (d.items.length !== 1) {
+      throw new Error(`attempt ${attemptId} carries ${d.items.length} run_keys; result manifest v1 holds one run_key per attempt, so ingest needs shard_size 1`);
+    }
+    const [item] = d.items;
+    const lease = this.getLease(item.run_key);
+    const rec = this.raw.prepare(`
+      SELECT accepted, outcome FROM attempts WHERE attempt_id = ? AND run_key = ? AND fence = ? ORDER BY id LIMIT 1
+    `).get(attemptId, item.run_key, item.fence);
+    const file = String(d.workflow_file);
+    return {
+      attempt_id: d.attempt_id,
+      run_key: item.run_key,
+      fence: item.fence,
+      subject: item.subject,
+      workflow: d.workflow,
+      repo: d.repo,
+      workflow_file: file.includes('/') ? file : `.github/workflows/${file}`,
+      run_id: d.run_id !== null && /^\d{1,16}$/.test(d.run_id) ? Number(d.run_id) : null,
+      workflow_sha: d.workflow_sha,
+      current_fence: lease ? lease.fence : null,
+      outcome: rec ? rec.outcome ?? (rec.accepted === 1 ? 'accepted' : 'rejected') : null,
+      canaries: [],
+      status: d.status,
+      shard_id: d.shard_id,
+      created: d.created,
+      expires: d.expires,
+    };
+  }
+
   /** [{subject, workflow}] with an unresolved item on a live dispatch. */
   inFlight({ now } = {}) {
     return this.raw.prepare(`
@@ -476,16 +577,20 @@ export class StateDb {
    * The ingest interface (docs/INTERFACES.md). Store one checked result.
    *
    * Accepted only when the attempt is known, carries this run_key with the fence
-   * the pump issued, has not reported already, that fence is the current live
-   * lease for the run_key, and ingest itself accepted it. Anything else is stored
-   * as a rejected attempt with the reason and never overwrites a result. When the
-   * attempt is current (accepted or rejected by ingest), its lease is released,
-   * and its slot is released once every run_key in the dispatch has reported.
+   * the pump issued, that fence is the current live lease for the run_key, and
+   * ingest itself accepted it. Anything else is stored as a rejected attempt with
+   * the reason (outcome 'accepted' is stored as 'rejected' then) and never
+   * overwrites a result. When the attempt is current (accepted or rejected by
+   * ingest), its lease is released, and its slot is released once every run_key
+   * in the dispatch has reported.
+   *
+   * Idempotent: once something is stored for this attempt, run_key and fence, a
+   * repeat returns that first answer with `duplicate: true` and writes nothing.
    *
    * @param {{run_key: string, attempt_id: string, fence: number, outcome?: string,
    *   verdict?: 'accepted'|'rejected', accepted?: boolean, reason?: string,
    *   digest?: string, now?: number|string|Date}} args
-   * @returns {{accepted: boolean, reason: string|null, id: number}}
+   * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
   recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
@@ -497,6 +602,12 @@ export class StateDb {
     return this.tx(() => {
       const d = plain(this.raw.prepare('SELECT * FROM dispatches WHERE attempt_id = ?').get(attemptId));
       const item = d && plain(this.raw.prepare('SELECT * FROM dispatch_items WHERE attempt_id = ? AND run_key = ?').get(attemptId, runKey));
+      if (item && item.fence === fence) {
+        const prior = this.raw.prepare(`
+          SELECT id, accepted, reason FROM attempts WHERE attempt_id = ? AND run_key = ? AND fence = ? ORDER BY id LIMIT 1
+        `).get(attemptId, runKey, fence);
+        if (prior) return { accepted: prior.accepted === 1, reason: prior.reason, id: Number(prior.id), duplicate: true };
+      }
       let why = null;
       let current = false;
       if (!d) why = 'unknown_attempt';
@@ -510,11 +621,13 @@ export class StateDb {
       }
       const ok = current && verdict === 'accepted';
       if (current && !ok) why = reason ? String(reason) : 'rejected_by_ingest';
+      // An acceptance the store refused is kept with outcome 'rejected'.
+      const stored = !ok && outcome === 'accepted' ? 'rejected' : outcome;
       const subject = item?.subject ?? this.getRunKey(runKey)?.subject ?? 'unknown';
       const r = this.raw.prepare(`
         INSERT INTO attempts (subject, holder, fence, run_id, run_key, digest, received, accepted, reason, attempt_id, outcome)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(subject, attemptId, Number.isSafeInteger(fence) ? fence : -1, d?.run_id ?? null, runKey, digest, t, ok ? 1 : 0, why, attemptId, outcome);
+      `).run(subject, attemptId, Number.isSafeInteger(fence) ? fence : -1, d?.run_id ?? null, runKey, digest, t, ok ? 1 : 0, why, attemptId, stored);
       if (current) {
         this.raw.prepare('UPDATE dispatch_items SET resolved = ? WHERE attempt_id = ? AND run_key = ?').run(t, attemptId, runKey);
         this.releaseLease(runKey, attemptId, fence, { now });

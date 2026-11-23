@@ -15,6 +15,8 @@
 //     -> {accepted, reason}. The store does its own fence check and may refuse
 //     (accepted: false, reason: 'stale_fence'); ingest follows its answer.
 //
+// state/db.mjs implements both as StateDb methods. The pump wraps its own open
+// StateDb with dbLedger(); the CLI's --state FILE opens one with openLedger().
 // For local runs, a JSON file can stand in for the state store (--ledger-json):
 //   {"attempts": [<row>, ...], "results": [...]}
 
@@ -93,6 +95,28 @@ function normalizeRecord(answer, requested) {
   return { accepted: answer.accepted, reason: answer.reason ?? null };
 }
 
+function wrap({ getAttempt, recordResult, close, now }) {
+  return {
+    kind: 'state',
+    getAttempt: (id) => normalizeAttempt(getAttempt(id)),
+    recordResult: (r) => normalizeRecord(recordResult(now ? { ...r, now: now() } : r), r),
+    close,
+  };
+}
+
+/**
+ * The ledger over a StateDb that is already open (the pump's). close() leaves
+ * it open; its owner closes it.
+ * @param {{getAttempt: Function, recordResult: Function}} db  a StateDb
+ * @param {{now?: () => number|Date}} [opts]  the time recordResult stores
+ */
+export function dbLedger(db, { now } = {}) {
+  if (typeof db?.getAttempt !== 'function' || typeof db?.recordResult !== 'function') {
+    throw new LedgerError('ledger: the state store has no getAttempt()/recordResult()');
+  }
+  return wrap({ getAttempt: (id) => db.getAttempt(id), recordResult: (r) => db.recordResult(r), close: () => {}, now });
+}
+
 function stateLedger(mod, path) {
   if (typeof mod.openState !== 'function') throw new LedgerError('ledger: state/db.mjs has no openState()');
   const db = mod.openState(path);
@@ -112,12 +136,7 @@ function stateLedger(mod, path) {
     close();
     throw new LedgerError('ledger: state/db.mjs has no recordResult({run_key, attempt_id, fence, outcome, accepted, reason})');
   }
-  return {
-    kind: 'state',
-    getAttempt: (id) => normalizeAttempt(getAttempt(id)),
-    recordResult: (r) => normalizeRecord(recordResult(r), r),
-    close,
-  };
+  return wrap({ getAttempt, recordResult, close });
 }
 
 function jsonLedger(path, now) {

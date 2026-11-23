@@ -1,11 +1,15 @@
 name: pump
 
-# The pump: works out what is due, sends shards to worker repositories within
-# the slot budget, reaps expired leases and saves the state asset. Each run
-# first dispatches the next one, which waits in the concurrency group, so the
-# pump runs back to back while LOOP_SLOTS is above 0. The schedule restarts the
-# chain if it breaks. With LOOP_SLOTS=0 a run only does housekeeping and does
-# not dispatch a successor. See docs/OPERATIONS.md.
+# The pump, the only writer of the loop state. Each tick it ingests finished
+# worker runs (judges their results and records the decisions), works out what
+# is due, sends shards to worker repositories within the slot budget, reaps
+# expired leases and saves the state asset. Each run first dispatches the next
+# one, which waits in the concurrency group, so the pump runs back to back while
+# LOOP_SLOTS is above 0. The schedule restarts the chain if it breaks. With
+# LOOP_SLOTS=0 a run only does housekeeping (ingest included) and does not
+# dispatch a successor. The ingest outputs, age-encrypted to
+# worker-kit/ingest.pub, are uploaded as one artifact per run. See
+# docs/OPERATIONS.md.
 
 on:
   schedule:
@@ -52,6 +56,11 @@ jobs:
           APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: node pump/successor.mjs --out "$RUNNER_TEMP/successor.json"
+      - name: Install age (pinned version, sha256 checked)
+        if: steps.guard.outputs.proceed == 'true'
+        run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
+      # AGE_IDENTITY is passed to this step only. The pump drops it from its
+      # environment at start-up and scrubs it from every log line.
       - name: Pump
         if: steps.guard.outputs.proceed == 'true'
         env:
@@ -60,4 +69,21 @@ jobs:
           APP_ID: ${{ vars.APP_ID }}
           APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-        run: node pump/run.mjs --state "$RUNNER_TEMP/state/state.sqlite" --successor-result "$RUNNER_TEMP/successor.json"
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
+        run: >-
+          node pump/run.mjs --state "$RUNNER_TEMP/state/state.sqlite"
+          --successor-result "$RUNNER_TEMP/successor.json"
+          --ingest-out "$RUNNER_TEMP/ingest-out"
+      # Sealed ingest outputs (ingest-<attempt>.tar.age), readable only with
+      # AGE_IDENTITY. Uploaded even if the pump step failed, so outputs of
+      # decisions it already pushed are kept.
+      - name: Upload sealed ingest outputs (30 days)
+        if: always() && steps.guard.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ingest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ingest-out/
+          retention-days: 30
+          if-no-files-found: ignore

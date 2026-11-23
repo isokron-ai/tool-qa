@@ -2,13 +2,30 @@
 
 Trusted ingest of worker results. For one attempt it downloads the worker's
 encrypted bundle, decrypts it, checks it against what tool-qa dispatched,
-decides, and records the decision in the attempts ledger. It runs in
-[`.github/workflows/ingest.yml`](../.github/workflows/ingest.yml) and never runs
+decides, and records the decision in the attempts ledger. It never runs
 anything from the bundle.
 
-Trusted: the dispatch inputs (worker repo, run id, attempt id), the attempts
-ledger in the state store, and what the GitHub API says about the run.
-Untrusted: everything in the artifact, including the manifest.
+It runs in two places, with the same checks:
+
+- **In the pump** ([`collect.mjs`](collect.mjs)), at the start of every tick:
+  for each dispatch still waiting it finds the worker run, judges it once the
+  run has finished, records the decision in the pump's open state store, seals
+  the outputs, and closes the dispatch. This is the normal path; the pump is
+  the only state writer. See [docs/INTERFACES.md](../docs/INTERFACES.md)
+  ("Ingest in the pump").
+- **By hand** ([`ingest.mjs`](ingest.mjs) command line, run by
+  [`.github/workflows/ingest.yml`](../.github/workflows/ingest.yml)) for one
+  attempt the pump did not judge, only while the pump is paused. See
+  [docs/OPERATIONS.md](../docs/OPERATIONS.md) ("Manual re-ingest").
+
+Trusted: the dispatch (worker repo, attempt id, and the run id the pump found
+or the operator gave), the attempts ledger in the state store, and what the
+GitHub API says about the run. Untrusted: everything in the artifact,
+including the manifest.
+
+Result manifest v1 names one run_key, so ingest handles dispatches of one item
+only (`shard_size: 1`); the pump refuses to dispatch for an enabled workflow
+with a larger shard, and closes any such dispatch as `unsupported_shard`.
 
 ## Steps
 
@@ -53,12 +70,15 @@ the ledger's reason.
 | `accepted` | yes | `accepted/<attempt>/`: `manifest.json`, every bundle file, `ingest.json` |
 | `rejected` | yes, except the refusals below | `rejected/<attempt>/`: `ingest.json`, and `result.tar.age` (the ciphertext as uploaded) once it was downloaded |
 | `quarantined` | yes | `quarantine/<attempt>/`: `ingest.json`, `result.tar.age` |
-| `pending` | no | none; the run is not finished, dispatch ingest again later |
+| `pending` | no | none; the run is not finished, the pump looks again next tick (by hand: run again later) |
 | `already_recorded` | no | none; running again for a recorded attempt is a no-op |
 
-The CLI packs the outputs into one tar and age-encrypts it to
-`worker-kit/ingest.pub` (`--sealed`), so the workflow stores nothing in the
-clear. A rejected or quarantined bundle is kept only as ciphertext.
+The outputs are packed into one tar and age-encrypted to
+`worker-kit/ingest.pub`, so nothing is stored in the clear in CI: the pump
+writes `ingest-<attempt>.tar.age` per judged attempt into its outputs directory
+(`--ingest-out`, uploaded by `pump.yml` as `ingest-<run id>-<run attempt>`),
+the CLI writes `--sealed`. A rejected or quarantined bundle is kept only as
+ciphertext.
 
 `ingest.json` is the report: outcome, reason, the ledger row (canaries only as
 a count), the run, the artifact (id, name, sizes, sha256 of the download and of
@@ -135,29 +155,38 @@ operational error (GitHub unreachable after retries, bad configuration, state
 store problem), 2 a usage error. After exit 1 nothing is kept: the workflow
 pushes state only after the sealed outputs were uploaded.
 
+In the pump, an error on one attempt is logged and nothing is recorded for it;
+the next tick tries again. Recording, sealing and closing the dispatch are one
+state transaction, so a decision is never recorded without its sealed
+outputs on disk.
+
 ## Ledger interface
 
-[`ledger.mjs`](ledger.mjs) expects two calls from the state store, as methods on
-the object `openState()` returns or as module functions taking it first:
+[`ledger.mjs`](ledger.mjs) uses two calls of the state store
+([`state/db.mjs`](../state/db.mjs), documented in
+[docs/INTERFACES.md](../docs/INTERFACES.md)). The pump wraps its open store
+with `dbLedger(db)`; the CLI's `--state FILE` opens one with `openLedger()`.
 
 - `getAttempt(attempt_id)` returns the dispatched attempt or nothing:
   `attempt_id`, `run_key`, `fence`, `repo`, `workflow_file`, and optionally
   `run_id`, `workflow_sha`, `current_fence`, `outcome` (set once recorded) and
-  `canaries`.
+  `canaries` (always empty for now: the pump injects none yet).
 - `recordResult({run_key, attempt_id, fence, outcome, accepted, reason})`
-  returns `{accepted, reason}` after the store's own fence check.
+  returns `{accepted, reason}` after the store's own fence check. Calling it
+  again for a recorded attempt stores nothing and returns the first decision.
 
 ## Files
 
 | Path | What it is |
 |---|---|
-| `ingest.mjs` | The steps above and the command line |
+| `ingest.mjs` | The steps above (`ingestAttempt()`) and the command line |
+| `collect.mjs` | Ingest inside the pump: finds finished worker runs, judges them, records, seals, closes dispatches |
 | `forgery.mjs` | Identity, file list, foreign-claim and control checks |
 | `registry.mjs` | Field registry loader (pinned commit and sha256) and observation checks |
 | `redact.mjs` | Redaction rules (secrets, emails, canaries) as pure functions |
 | `container.mjs` | Gets the age ciphertext out of a raw or zipped artifact |
 | `age.mjs` | age encrypt, decrypt and key checks through the age binaries |
-| `github.mjs` | The REST calls: run, artifact list, artifact download |
+| `github.mjs` | The REST calls: run, run by name, artifact list, artifact download |
 | `ledger.mjs` | The attempts ledger: state store or JSON file |
 | `testkit.mjs` | Test helpers: synthetic bundles, fake GitHub API and ledger |
 

@@ -40,14 +40,14 @@
 // Exit codes: 0 a decision was made (any outcome), 1 operational error (nothing
 // was recorded unless stdout said so), 2 usage error.
 
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { artifactName, MANIFEST_NAME, sha256Hex, validateManifest } from '../worker-kit/contract.mjs';
 import { isSafeRelativePath, readTar, TarError, writeTar } from '../worker-kit/tar.mjs';
-import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, parseRecipientFile } from './age.mjs';
+import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from './age.mjs';
 import { ContainerError, unwrapArtifact } from './container.mjs';
 import { checkBundle } from './forgery.mjs';
 import { GithubError, makeGithub } from './github.mjs';
@@ -509,16 +509,13 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
   let ledger;
   let decided = null;
   try {
-    // Before anything is judged: the identity must belong to the key workers encrypt to.
+    // Before anything is judged: the outputs can be sealed (ingest.pub holds a
+    // real key) and the identity belongs to the key workers encrypt to.
     let recipients;
     try {
-      recipients = parseRecipientFile(readFileSync(sealTo, 'utf8'));
+      recipients = readSealRecipients(sealTo);
     } catch (err) {
-      if (err instanceof AgeError) throw err;
-      throw new Error(`cannot read ${sealTo} (${err.code ?? 'error'})`);
-    }
-    if (recipients.length === 0) {
-      throw new Error(`${sealTo} has no age public key yet (see docs/OPERATIONS.md, "Result encryption keys"); nothing was judged`);
+      throw new Error(`${err.message}; nothing was judged`);
     }
     const publicKey = agePublicKey({ identity, keygenBin });
     if (!recipients.includes(publicKey)) {

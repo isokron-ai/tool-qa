@@ -8,8 +8,11 @@
 #       bundle-dir: out/bundle
 #       meta-file: out/meta.json
 #       attempt-id: ${{ inputs.attempt_id }}
-#       fence: ${{ inputs.fence }}
-#       run-key: ${{ inputs.run_key }}
+#       fence: ${{ fromJSON(inputs.items)[0].fence }}
+#       run-key: ${{ fromJSON(inputs.items)[0].run_key }}
+#
+# The pump dispatches `shard_id`, `attempt_id` and `items` (docs/INTERFACES.md);
+# with shard_size 1, `items` holds exactly one {subject, run_key, fence}.
 #
 # The worker job needs no secrets and no token permissions (`permissions: {}`
 # is enough; artifact upload uses the runner's own upload token). Node 20 or

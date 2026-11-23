@@ -194,18 +194,22 @@ test('a result after expiry but before re-dispatch is rejected as lease_expired'
   db.close();
 });
 
-test('unknown attempts, wrong run_keys, wrong fences and duplicates are rejected', () => {
+test('unknown attempts, wrong run_keys and wrong fences are rejected; a repeat is a no-op', () => {
   const db = fresh();
   const [item] = dispatch(db);
   const t = T0 + MIN;
   assert.equal(db.recordResult({ run_key: KEY_A, attempt_id: 'forged', fence: item.fence, verdict: 'accepted', now: t }).reason, 'unknown_attempt');
   assert.equal(db.recordResult({ run_key: KEY_B, attempt_id: 'att-1', fence: item.fence, verdict: 'accepted', now: t }).reason, 'unknown_run_key');
   assert.equal(db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item.fence + 1, verdict: 'accepted', now: t }).reason, 'fence_mismatch');
-  assert.equal(db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item.fence, verdict: 'accepted', now: t }).accepted, true);
-  assert.equal(db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item.fence, verdict: 'accepted', now: t }).reason, 'duplicate_result');
-  // Five attempts are kept, one accepted; the result is the accepted one.
+  const first = db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item.fence, verdict: 'accepted', now: t });
+  assert.equal(first.accepted, true);
+  // The same report again returns the first answer and stores nothing new.
+  assert.deepEqual(db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item.fence, verdict: 'accepted', now: t }), {
+    accepted: true, reason: null, id: first.id, duplicate: true,
+  });
+  // Four attempts are kept, one accepted; the result is the accepted one.
   const all = db.raw.prepare('SELECT accepted, reason FROM attempts ORDER BY id').all();
-  assert.equal(all.length, 5);
+  assert.equal(all.length, 4);
   assert.equal(all.filter((a) => a.accepted === 1).length, 1);
   db.close();
 });

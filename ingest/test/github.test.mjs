@@ -118,3 +118,35 @@ test('retries 5xx, 429 and network errors with backoff, then gives up as transie
   const denied = makeGithub({ token: TOKEN, sleep: noSleep, fetch: fakeFetch([() => json({ message: 'Resource not accessible' }, 403)]) });
   await assert.rejects(denied.getRun('a/b', 1), (e) => !e.transient && e.status === 403 && !e.message.includes(TOKEN));
 });
+
+test('findDispatchRun lists the workflow_dispatch runs of the worker workflow and matches the run name', async () => {
+  const fetch = fakeFetch([
+    () => json({ total_count: 2, workflow_runs: [{ id: 7, display_title: 'shard other' }, { id: 8, display_title: 'shard live-probe-abc', head_sha: '1'.repeat(40) }] }),
+    () => json({ total_count: 0, workflow_runs: [] }),
+  ]);
+  const client = makeGithub({ token: TOKEN, fetch, sleep: noSleep });
+  const run = await client.findDispatchRun('isokron-ai/mcp-check', '.github/workflows/live-probe.yml', 'shard live-probe-abc', { since: '2026-03-02T10:00:00.000Z' });
+  assert.equal(run.id, 8);
+  const u = new URL(fetch.calls[0].url);
+  assert.equal(u.pathname, '/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/runs');
+  assert.equal(u.searchParams.get('event'), 'workflow_dispatch');
+  assert.equal(u.searchParams.get('created'), '>=2026-03-02T10:00:00.000Z');
+  assert.equal(await client.findDispatchRun('isokron-ai/mcp-check', 'live-probe.yml', 'shard nope'), null);
+  await assert.rejects(client.findDispatchRun('isokron-ai/mcp-check', '../x.yml', 'shard a'), /workflow file/);
+});
+
+test('a budget refusal from the fetch layer is not retried as a network error', async () => {
+  let calls = 0;
+  const fetch = async () => {
+    calls += 1;
+    const err = new Error('actions: hourly budget of 400 calls is used');
+    err.name = 'BudgetExceededError';
+    throw err;
+  };
+  const sleeps = [];
+  const client = makeGithub({ token: TOKEN, fetch, sleep: async (ms) => { sleeps.push(ms); } });
+  await assert.rejects(client.getRun('isokron-ai/mcp-check', 5), (err) => err.name === 'BudgetExceededError');
+  assert.equal(calls, 1);
+  assert.deepEqual(sleeps, []);
+});
+

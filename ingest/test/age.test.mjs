@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import {
-  ageDecrypt, ageEncrypt, agePublicKey, parseRecipientFile, parseIdentity, AgeError,
+  ageDecrypt, ageEncrypt, agePublicKey, parseRecipientFile, parseIdentity, readSealRecipients, AgeError,
 } from '../age.mjs';
 
 const AGE = process.env.AGE_BIN || 'age';
@@ -85,6 +86,27 @@ test('decrypt with the wrong key fails without leaking the key', { skip }, () =>
 test('encrypt refuses an empty or malformed recipient list', () => {
   assert.throws(() => ageEncrypt({ plaintext: Buffer.from('x'), recipients: [] }), /no recipients/);
   assert.throws(() => ageEncrypt({ plaintext: Buffer.from('x'), recipients: ['age1nope'] }), /not an age X25519 public key/);
+});
+
+test('readSealRecipients refuses the committed placeholder ingest.pub with a clear error', () => {
+  const placeholder = fileURLToPath(new URL('../../worker-kit/ingest.pub', import.meta.url));
+  assert.match(readFileSync(placeholder, 'utf8'), /PLACEHOLDER/, 'the committed file is still the placeholder');
+  assert.throws(() => readSealRecipients(placeholder), (err) => err instanceof AgeError
+    && err.code === 'placeholder'
+    && /ingest\.pub has no age public key yet \(it is still the placeholder\)/.test(err.message)
+    && /will not seal anything to it/.test(err.message)
+    && /docs\/OPERATIONS\.md, "Result encryption keys"/.test(err.message));
+  const dir = mkdtempSync(join(tmpdir(), 'seal-to-'));
+  try {
+    const pub = join(dir, 'ingest.pub');
+    writeFileSync(pub, `# real key\n${fakeRecipient('q')}\n`);
+    assert.deepEqual(readSealRecipients(pub), [fakeRecipient('q')]);
+    assert.throws(() => readSealRecipients(join(dir, 'missing.pub')), /cannot read .*missing\.pub \(ENOENT\)/);
+    writeFileSync(pub, 'not a key\n');
+    assert.throws(() => readSealRecipients(pub), /line 1 is not an age X25519 public key/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a missing age binary is a clear error', () => {

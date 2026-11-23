@@ -1,15 +1,18 @@
-// The few GitHub REST calls ingest needs: a workflow run, its artifacts, and
-// an artifact's bytes.
+// The few GitHub REST calls ingest needs: a workflow run, its artifacts, an
+// artifact's bytes, and (for the pump) the run a dispatch created, by run name.
 //
 // The token goes only to the API host. An artifact download answers with a
 // redirect to blob storage; that hop is followed by hand, https only, without
 // the Authorization header. Downloads are capped in size. 429, 5xx, rate-limit
 // 403s and network errors are retried with backoff and then reported as
-// transient (the caller records nothing and can run again).
+// transient (the caller records nothing and can run again). A
+// BudgetExceededError thrown by the fetch it is given (the pump's API budget)
+// passes straight through, unretried.
 
 const API_VERSION = '2022-11-28';
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const ID_RE = /^[1-9]\d{0,19}$/;
+const WORKFLOW_FILE_RE = /^(?:\.github\/workflows\/)?([A-Za-z0-9_.-]{1,100}\.ya?ml)$/;
 
 export class GithubError extends Error {
   constructor(message, { status = 0, transient = false, code = null } = {}) {
@@ -82,6 +85,7 @@ export function makeGithub({
       try {
         res = await send();
       } catch (err) {
+        if (err?.name === 'BudgetExceededError') throw err;
         if (attempt >= retries) throw new GithubError(`${label}: network error (${err.cause?.code ?? err.name})`, { transient: true });
       }
       if (res) {
@@ -122,6 +126,21 @@ export function makeGithub({
         if (err.status === 404) return null;
         throw err;
       }
+    },
+
+    /**
+     * The workflow_dispatch run of `workflowFile` (a file name, or a path under
+     * .github/workflows/) whose run name is `runName`, created at or after
+     * `since` (ISO time), from the newest 100; null if there is none yet.
+     */
+    async findDispatchRun(repo, workflowFile, runName, { since } = {}) {
+      const m = WORKFLOW_FILE_RE.exec(String(workflowFile));
+      if (!m) throw new GithubError(`invalid workflow file ${JSON.stringify(String(workflowFile).slice(0, 120))}`);
+      const query = new URLSearchParams({ event: 'workflow_dispatch', per_page: '100' });
+      if (since) query.set('created', `>=${since}`);
+      const body = await apiJson(`/repos/${checkRepo(repo)}/actions/workflows/${encodeURIComponent(m[1])}/runs?${query}`);
+      const runs = Array.isArray(body.workflow_runs) ? body.workflow_runs : [];
+      return runs.find((r) => r && (r.display_title === runName || r.name === runName)) ?? null;
     },
 
     /** Every artifact of a run (all pages, up to 1000). */

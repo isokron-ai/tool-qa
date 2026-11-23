@@ -2,35 +2,50 @@
 // The pump: one run of .github/workflows/pump.yml.
 //
 //   node pump/run.mjs [--state state/state.sqlite] [--successor-result <file>]
-//                     [--max-minutes 11] [--tick-seconds 150]
+//                     [--max-minutes 11] [--tick-seconds 150] [--ingest-out <dir>]
 //   node pump/run.mjs --plan [--state <file>]   print the due list from a local file
 //
 // A run pulls the state database from its Release asset, then ticks every
-// 150 seconds for about 11 minutes (pump/tick.mjs), then pushes the state back.
-// State is also pushed after every tick that dispatched, failed or reaped
-// something, so a run that dies loses little. With LOOP_SLOTS=0 the run does one
-// housekeeping tick (reap expired leases and slots, run ingest if present) and
-// dispatches nothing.
+// 150 seconds for about 11 minutes, then pushes the state back. Each tick:
+//
+//   1. ingest   judge the results of worker runs that finished and record them
+//               (ingest/collect.mjs). Only until two minutes before the end, so
+//               the last results are in the state before the final push.
+//   2. tick     reap expired leases and slots, then dispatch due work into free
+//               slots (pump/tick.mjs).
+//   3. push     the state, if the tick recorded, dispatched, failed or reaped
+//               anything, so a run that dies loses little.
+//
+// The pump is the state's only writer: ingest runs inside it, never as a
+// separate job. Before it dispatches anything, the run checks that ingest can
+// judge the results (worker-kit/ingest.pub holds the real key, AGE_IDENTITY
+// matches it, every enabled workflow has shard_size 1). If not, it says why,
+// dispatches nothing, does one housekeeping tick and fails. With LOOP_SLOTS=0
+// the run does one housekeeping tick (ingest, reap) and dispatches nothing.
 //
 // Environment:
 //   LOOP_SLOTS          worker slots (the guard step's `slots` output)
 //   GITHUB_REPOSITORY   this repository (holds the state asset)
 //   GITHUB_TOKEN        job token with contents: write, for the state asset only
 //   APP_ID, APP_INSTALLATION_ID, APP_PRIVATE_KEY
-//                       the loop's GitHub App; dispatch tokens are minted per worker
-//                       repository with actions: write only
+//                       the loop's GitHub App; tokens are minted per worker
+//                       repository: actions: write to dispatch, actions: read
+//                       for ingest
+//   AGE_IDENTITY        the ingest age identity (decrypts results); removed from
+//                       the process environment once read
+//   AGE_BIN, AGE_KEYGEN_BIN, GITHUB_API_URL, RUNNER_TEMP   optional
 //
-// Ingest: if ingest/collect.mjs exists and exports collect(), the pump calls
-// collect({ db, now, log, mintToken }) at the start of every tick. The pump is the
-// state's only writer, so ingest runs inside it (docs/INTERFACES.md).
+// Ingest outputs are sealed to worker-kit/ingest.pub and written to --ingest-out
+// (default $RUNNER_TEMP/ingest-out); pump.yml uploads that directory.
 
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
+import { createCollector, IngestSetupError } from '../ingest/collect.mjs';
 import { openState } from '../state/db.mjs';
 import { pullState, pushState } from '../scripts/state-asset.mjs';
 import { appTokenMinter } from './app-token.mjs';
-import { ApiBudget } from './budgets.mjs';
+import { ApiBudget, budgetedFetch } from './budgets.mjs';
 import { createDispatcher } from './dispatch.mjs';
 import { dueFromState, loadConfig } from './due.mjs';
 import { scrub } from './github.mjs';
@@ -38,16 +53,14 @@ import { computeBudget } from './slots.mjs';
 import { planShards, runTick } from './tick.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
-const INGEST_PATH = new URL('../ingest/collect.mjs', import.meta.url);
 
-/** Load ingest/collect.mjs's collect() if the file exists. */
-export async function loadIngest(path = INGEST_PATH) {
-  if (!existsSync(path)) return null;
-  const mod = await import(path instanceof URL ? path.href : pathToFileURL(path).href);
-  return typeof mod.collect === 'function' ? mod.collect : null;
-}
+const isSetupError = (err) => err instanceof IngestSetupError || err?.name === 'IngestSetupError';
 
 /**
+ * ingest: undefined for the pump's own collector (ingest/collect.mjs, built
+ * with `ingestOptions`), null for none, a function (called as collect()), or an
+ * object with collect() and optionally check().
+ *
  * @returns {Promise<{ ok: boolean, ticks: number, dispatched: number, failed: number,
  *   workerSlots: number, loopBudget: number }>}
  */
@@ -65,6 +78,8 @@ export async function runPump({
   dispatcher,
   budget,
   ingest,
+  ingestOptions = {},
+  ingestStopMs = 2 * 60_000,
   successorFile,
   maxRunMs = 11 * 60_000,
   tickIntervalMs = 150_000,
@@ -72,9 +87,10 @@ export async function runPump({
 } = {}) {
   const start = now();
   const deadline = start + maxRunMs;
+  const ingestDeadline = deadline - ingestStopMs;
   const repo = env.GITHUB_REPOSITORY;
   const stateToken = env.GITHUB_TOKEN || undefined;
-  const secrets = [stateToken, env.APP_PRIVATE_KEY];
+  const secrets = [stateToken, env.APP_PRIVATE_KEY, env.AGE_IDENTITY];
   const safe = (text) => scrub(text, secrets);
   const say = (line) => log(safe(line));
   const cfg = config ?? loadConfig();
@@ -98,11 +114,38 @@ export async function runPump({
     disp = disp ?? createDispatcher({ mintToken: lazyMint, fetch, budget: bud, now, sleep, pollAttempts: 4, pollIntervalMs: 4000 });
     return disp;
   };
-  const collect = ingest === undefined ? await loadIngest() : ingest;
+  const apiUrl = env.GITHUB_API_URL || 'https://api.github.com';
+  let collector;
+  if (ingest === undefined) {
+    collector = createCollector({ env, fetch: budgetedFetch(fetch, bud, { apiUrl }), apiUrl, sleep, ...ingestOptions });
+  } else if (typeof ingest === 'function') {
+    collector = { collect: ingest };
+  } else {
+    collector = ingest || null;
+  }
+  // The collector has its copy; nothing the pump starts needs it.
+  if (env === process.env) delete process.env.AGE_IDENTITY;
+
+  let ok = true;
+  let blocked = null; // why nothing may be dispatched (or judged) this run
+  const block = (err) => {
+    ok = false;
+    blocked = err?.message ?? String(err);
+    say(`pump: ingest is not ready, so nothing is dispatched this run: ${blocked}`);
+  };
+  const enabled = Object.values(cfg.workflows ?? {}).some((w) => w?.enabled === true);
+  if (workerSlots > 0 && enabled && typeof collector?.check === 'function') {
+    // Only local checks (keys, shard sizes): no API calls.
+    try {
+      await collector.check({ workflows: cfg.workflows });
+    } catch (err) {
+      if (!isSetupError(err)) throw err;
+      block(err);
+    }
+  }
 
   await pull({ repo, token: stateToken, file: stateFile, fetch, log: say });
   const db = openState(stateFile);
-  let ok = true;
   let ticks = 0;
   let dispatched = 0;
   let failed = 0;
@@ -125,22 +168,32 @@ export async function runPump({
     for (;;) {
       const tickStart = now();
       ticks += 1;
-      if (collect) {
+      let ingested = null;
+      if (collector && !blocked && tickStart < ingestDeadline) {
         try {
-          await collect({ db, now, log: say, mintToken: lazyMint });
+          ingested = (await collector.collect({ db, now, log: say, mintToken: lazyMint, deadline: ingestDeadline })) ?? null;
         } catch (err) {
-          say(`pump: ingest failed (continuing): ${err?.message ?? err}`);
+          if (isSetupError(err)) block(err);
+          else say(`pump: ingest failed (continuing): ${err?.message ?? err}`);
+        }
+        if (ingested?.checked) {
+          const outcomes = Object.entries(ingested.outcomes ?? {}).map(([k, v]) => `${k} ${v}`).join(', ');
+          say(`pump: ingest: checked ${ingested.checked}, judged ${ingested.judged}${outcomes ? ` (${outcomes})` : ''}, waiting ${ingested.waiting}, errors ${ingested.errors}${ingested.stopped ? `, stopped (${ingested.stopped})` : ''}`);
         }
       }
+      const slots = blocked ? 0 : workerSlots;
       const summary = await runTick({
-        db, now, config: cfg, workerSlots, dispatcher: workerSlots > 0 ? getDispatcher() : null, log: say, newId, deadline,
+        db, now, config: cfg, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline,
       });
       dispatched += summary.dispatched;
       failed += summary.failed;
-      db.setKv('pump.last_tick', { ...summary, loopBudget, requested }, { now: now() });
+      const ingestNote = ingested
+        ? { checked: ingested.checked, judged: ingested.judged, recorded: ingested.recorded, outcomes: ingested.outcomes, errors: ingested.errors, stopped: ingested.stopped }
+        : null;
+      db.setKv('pump.last_tick', { ...summary, loopBudget, requested, ingest: ingestNote, blocked }, { now: now() });
       say(`pump: tick ${ticks}: due ${summary.due ?? '-'}, dispatched ${summary.dispatched}, failed ${summary.failed}, reaped ${summary.reaped}${summary.stopped ? `, stopped (${summary.stopped})` : ''}`);
-      if (summary.dispatched || summary.failed || summary.reaped || summary.reapedSlots) await save(`tick ${ticks}`);
-      if (workerSlots === 0 || summary.stopped === 'unauthorized') break;
+      if (summary.dispatched || summary.failed || summary.reaped || summary.reapedSlots || ingested?.changed) await save(`tick ${ticks}`);
+      if (slots === 0 || summary.stopped === 'unauthorized') break;
       const next = tickStart + tickIntervalMs;
       if (next >= deadline) break;
       await sleep(Math.max(0, next - now()));
@@ -168,7 +221,7 @@ export function plan({ stateFile = DEFAULT_STATE, now = Date.now(), config = loa
 }
 
 function parseArgs(argv) {
-  const opts = { stateFile: DEFAULT_STATE, successorFile: undefined, maxMinutes: 11, tickSeconds: 150, plan: false };
+  const opts = { stateFile: DEFAULT_STATE, successorFile: undefined, maxMinutes: 11, tickSeconds: 150, ingestOut: undefined, plan: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => {
@@ -180,6 +233,7 @@ function parseArgs(argv) {
     else if (a === '--successor-result') opts.successorFile = val();
     else if (a === '--max-minutes') opts.maxMinutes = Number(val());
     else if (a === '--tick-seconds') opts.tickSeconds = Number(val());
+    else if (a === '--ingest-out') opts.ingestOut = val();
     else if (a === '--plan') opts.plan = true;
     else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
@@ -204,6 +258,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     process.stderr.write('pump: GITHUB_REPOSITORY is required\n');
     return 2;
   }
+  const secrets = [env.GITHUB_TOKEN, env.APP_PRIVATE_KEY, env.AGE_IDENTITY];
   try {
     const out = await runPump({
       env,
@@ -211,10 +266,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       successorFile: opts.successorFile,
       maxRunMs: opts.maxMinutes * 60_000,
       tickIntervalMs: opts.tickSeconds * 1000,
+      ingestOptions: opts.ingestOut ? { outDir: opts.ingestOut } : {},
     });
     return out.ok ? 0 : 1;
   } catch (err) {
-    process.stderr.write(`pump: ${scrub(err?.message ?? err, [env.GITHUB_TOKEN, env.APP_PRIVATE_KEY])}\n`);
+    process.stderr.write(`pump: ${scrub(err?.message ?? err, secrets)}\n`);
     return 1;
   }
 }

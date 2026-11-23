@@ -19,8 +19,9 @@ function which(bin) {
   const r = spawnSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : null;
 }
-const AGE = which('age');
-const AGE_KEYGEN = which('age-keygen');
+// AGE_BIN / AGE_KEYGEN_BIN (as set in CI) win over PATH.
+const AGE = process.env.AGE_BIN || which('age');
+const AGE_KEYGEN = process.env.AGE_KEYGEN_BIN || which('age-keygen');
 
 function readOutputs(file) {
   const out = {};

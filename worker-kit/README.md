@@ -75,6 +75,15 @@ the runner's own `GITHUB_*` variables; the meta file can't set either.
 ## Using the action
 
 ```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      shard_id: { type: string, required: true }
+      attempt_id: { type: string, required: true }
+      items: { type: string, required: true }
+
+run-name: shard ${{ inputs.shard_id }}
+
 permissions: {}
 
 jobs:
@@ -89,9 +98,15 @@ jobs:
           bundle-dir: out/bundle
           meta-file: out/meta.json
           attempt-id: ${{ inputs.attempt_id }}
-          fence: ${{ inputs.fence }}
-          run-key: ${{ inputs.run_key }}
+          fence: ${{ fromJSON(inputs.items)[0].fence }}
+          run-key: ${{ fromJSON(inputs.items)[0].run_key }}
 ```
+
+The inputs are the ones the pump sends ([docs/INTERFACES.md](../docs/INTERFACES.md),
+"Worker dispatch"). Result manifest v1 holds one run_key, so workers are
+dispatched with `shard_size: 1` and `items` holds exactly one entry. The
+`run-name` lets the pump find the run when the dispatch response does not
+name it.
 
 The job needs no secrets and no token permissions. The action:
 

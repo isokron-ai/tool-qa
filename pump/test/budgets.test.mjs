@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ApiBudget, BudgetExceededError, DEFAULT_FAMILIES, familyFor } from '../budgets.mjs';
-import { fakeClock } from '../../test/lib/fake-api.mjs';
+import { ApiBudget, BudgetExceededError, budgetedFetch, DEFAULT_FAMILIES, familyFor } from '../budgets.mjs';
+import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
 
 const headers = (h) => new Headers(h);
 
@@ -109,4 +109,35 @@ test('familyFor maps request paths to endpoint families', () => {
   assert.equal(familyFor('GET', '/search/code'), 'search');
   assert.equal(familyFor('GET', '/repos/o/r/releases/tags/state'), 'contents');
   assert.equal(familyFor('POST', '/app/installations/1/access_tokens'), 'auth');
+});
+
+test('budgetedFetch counts API calls by family and lets other hosts through', async () => {
+  const c = fakeClock();
+  const b = new ApiBudget({ now: c.now, sleep: c.sleep });
+  const api = fakeApi([
+    ['GET', '/repos/o/r/actions/runs/5', () => ({ body: { id: 5 } })],
+    ['GET', '/repos/o/r/actions/artifacts/9/zip', () => ({ status: 302, headers: { location: 'https://blob.example.test/a/9' } })],
+    ['GET', '/a/9', () => ({ body: 'bytes' })],
+  ]);
+  const f = budgetedFetch(api.fetch, b, { apiUrl: API });
+  assert.equal((await f(new URL('/repos/o/r/actions/runs/5', API))).status, 200);
+  assert.equal((await f(`${API}/repos/o/r/actions/artifacts/9/zip`, { redirect: 'manual' })).status, 302);
+  assert.equal((await f('https://blob.example.test/a/9')).status, 200);
+  assert.deepEqual(b.snapshot().used, { actions: 1, artifacts: 1 });
+  assert.equal(b.snapshot().totalUsed, 2);
+  assert.equal(api.calls.length, 3);
+});
+
+test('budgetedFetch refuses before sending and learns from responses', async () => {
+  const c = fakeClock();
+  const b = new ApiBudget({ now: c.now, sleep: c.sleep, families: { actions: { perHour: 0, perMinute: 0 } } });
+  const api = fakeApi([['GET', /.*/, () => ({ status: 429, headers: { 'retry-after': '600' }, body: { message: 'slow down' } })]]);
+  const f = budgetedFetch(api.fetch, b, { apiUrl: API });
+  await assert.rejects(f(`${API}/repos/o/r/actions/runs/5`), (err) => err instanceof BudgetExceededError && err.family === 'actions');
+  assert.equal(api.calls.length, 0);
+  assert.equal((await f(`${API}/repos/o/r/actions/artifacts/9/zip`)).status, 429);
+  assert.equal(api.calls.length, 1);
+  assert.ok(b.snapshot().blockedUntil >= c.t + 600_000);
+  await assert.rejects(f(`${API}/repos/o/r/contents/x`), (err) => err instanceof BudgetExceededError && err.reason === 'blocked');
+  assert.equal(api.calls.length, 1);
 });

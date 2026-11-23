@@ -32,5 +32,11 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      # Without age the tests that use the real binaries skip themselves.
+      - name: Install age (pinned version, sha256 checked)
+        run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
       - name: Test
+        env:
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
         run: node --test

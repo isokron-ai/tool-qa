@@ -1,7 +1,8 @@
 // API budgets for the loop's GitHub calls.
 //
 // Every call the pump and the watchdog make goes through ApiBudget.take() first,
-// and every response is shown to ApiBudget.observe(). The budget:
+// and every response is shown to ApiBudget.observe() (ingest's calls inside the
+// pump do this through budgetedFetch()). The budget:
 //
 //   - keeps each endpoint family under its own hourly and per-minute cap, and all
 //     families together under totalPerHour (1,500 calls an hour by default);
@@ -239,4 +240,27 @@ export class ApiBudget {
       resources: Object.fromEntries(this.resources),
     };
   }
+}
+
+/**
+ * A fetch that puts every call to the API host through `budget`: take() before
+ * it is sent, observe() on the response. Other hosts (the blob storage an
+ * artifact download redirects to) pass straight through. Code that takes a
+ * plain fetch (ingest/github.mjs) is budgeted this way.
+ */
+export function budgetedFetch(fetch, budget, { apiUrl = 'https://api.github.com' } = {}) {
+  const api = new URL(apiUrl);
+  const base = api.pathname.replace(/\/+$/, '');
+  return async (input, init = {}) => {
+    const url = new URL(input instanceof URL ? input.href : typeof input === 'string' ? input : input.url);
+    if (url.origin !== api.origin) return fetch(input, init);
+    const path = base && url.pathname.startsWith(`${base}/`) ? url.pathname.slice(base.length) : url.pathname;
+    const family = familyFor(init.method ?? input?.method ?? 'GET', path);
+    await budget.take(family);
+    const res = await fetch(input, init);
+    const limited = res?.status === 403 || res?.status === 429;
+    const bodyText = limited && typeof res.clone === 'function' ? await res.clone().text().catch(() => '') : '';
+    budget.observe(family, res, bodyText);
+    return res;
+  };
 }
