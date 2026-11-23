@@ -71,11 +71,34 @@ export function sha256Hex(data) {
   return createHash('sha256').update(data).digest('hex');
 }
 
-/** Name of the uploaded artifact (and of the encrypted file) for an attempt. */
-export function artifactName(attemptId) {
+/** Highest item index a bundle name may carry (a shard holds far fewer items). */
+export const MAX_ITEM_INDEX = 9999;
+
+function checkAttemptId(attemptId) {
   if (typeof attemptId !== 'string' || !ATTEMPT_ID_RE.test(attemptId)) {
     throw new Error(`invalid attempt id ${JSON.stringify(attemptId)}`);
   }
+}
+
+/**
+ * Name of the uploaded artifact (and of the encrypted file) for one item of an
+ * attempt. A dispatch carries a list of items; the worker uploads one bundle
+ * per item, named by the item's position (0-based) in that list.
+ */
+export function artifactName(attemptId, index) {
+  checkAttemptId(attemptId);
+  if (!Number.isSafeInteger(index) || index < 0 || index > MAX_ITEM_INDEX) {
+    throw new Error(`invalid item index ${JSON.stringify(index)} (a whole number from 0 to ${MAX_ITEM_INDEX})`);
+  }
+  return `result-${attemptId}-${index}.tar.age`;
+}
+
+/**
+ * The older one-bundle-per-attempt name. Ingest still accepts it for a
+ * dispatch that carries exactly one item.
+ */
+export function legacyArtifactName(attemptId) {
+  checkAttemptId(attemptId);
   return `result-${attemptId}.tar.age`;
 }
 

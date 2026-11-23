@@ -51,9 +51,10 @@ test('builds a tar with a valid manifest and writes step outputs', () => {
     assert.equal(code, 0);
     const o = outputs(s.outFile);
     assert.equal(o.attempt_id, 'att-9');
-    assert.equal(o.artifact_name, 'result-att-9.tar.age');
-    assert.equal(o.bundle_path, join(s.out, 'result-att-9.tar'));
-    assert.equal(o.encrypted_path, join(s.out, 'result-att-9.tar.age'));
+    assert.equal(o.item_index, '0', 'the item index defaults to 0');
+    assert.equal(o.artifact_name, 'result-att-9-0.tar.age');
+    assert.equal(o.bundle_path, join(s.out, 'result-att-9-0.tar'));
+    assert.equal(o.encrypted_path, join(s.out, 'result-att-9-0.tar.age'));
     const entries = readTar(readFileSync(o.bundle_path));
     assert.equal(entries[0].path, 'manifest.json');
     const manifest = JSON.parse(entries[0].data.toString('utf8'));
@@ -71,6 +72,7 @@ test('bad identity inputs fail with a usage error and write nothing', () => {
   try {
     for (const args of [
       ['--fence', '0'], ['--fence', '1e3'], ['--fence', ' 5'], ['--run-key', 'xyz'], ['--attempt-id', '../evil'],
+      ['--item-index', '-1'], ['--item-index', '01'], ['--item-index', '1.0'], ['--item-index', '10000'], ['--item-index', ''],
     ]) {
       const base = { '--attempt-id': 'att-9', '--fence': '12', '--run-key': 'f'.repeat(64) };
       base[args[0]] = args[1];
@@ -79,7 +81,22 @@ test('bad identity inputs fail with a usage error and write nothing', () => {
       const code = main(argv, s.env, { write: () => {}, error: (m) => errs.push(m) });
       assert.equal(code, 2, args.join(' '));
       assert.equal(existsSync(join(s.out, 'result-att-9.tar')), false);
+      assert.equal(existsSync(s.out), false);
     }
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
+});
+
+test('--item-index names the bundle of that item of the dispatched items', () => {
+  const s = setup();
+  try {
+    const code = main(['--dir', s.dir, '--meta', s.meta, '--attempt-id', 'att-9', '--fence', '12', '--run-key', 'f'.repeat(64),
+      '--item-index', '24', '--out', s.out], s.env, { write: () => {} });
+    assert.equal(code, 0);
+    const o = outputs(s.outFile);
+    assert.equal(o.item_index, '24');
+    assert.equal(o.artifact_name, 'result-att-9-24.tar.age');
+    assert.equal(o.encrypted_path, join(s.out, 'result-att-9-24.tar.age'));
+    assert.ok(existsSync(join(s.out, 'result-att-9-24.tar')));
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 

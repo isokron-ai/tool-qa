@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import {
   MANIFEST_SCHEMA_VERSION, SKIP_REASONS, CONTROL_KINDS, SUPPORTED_KEYWORDS,
   loadSchema, validateAgainstSchema, validateManifest, isBundlePath, sha256Hex,
-  workflowFromEnv, collectFiles, buildManifest, artifactName,
+  workflowFromEnv, collectFiles, buildManifest, artifactName, legacyArtifactName,
 } from '../contract.mjs';
 
 const SHA40 = 'a'.repeat(40);
@@ -231,7 +231,16 @@ test('buildManifest refuses meta that tries to set identity or file fields', () 
   assert.throws(() => buildManifest({ ...base, meta: { ...meta, tools: [] } }), /tools/);
 });
 
-test('artifactName', () => {
-  assert.equal(artifactName('01JD'), 'result-01JD.tar.age');
-  assert.throws(() => artifactName('../x'), /attempt/);
+test('artifactName names one bundle per item: result-<attempt_id>-<index>.tar.age', () => {
+  assert.equal(artifactName('01JD', 0), 'result-01JD-0.tar.age');
+  assert.equal(artifactName('att-1', 24), 'result-att-1-24.tar.age');
+  assert.throws(() => artifactName('../x', 0), /attempt/);
+  for (const bad of [undefined, -1, 1.5, '0', NaN, 10_000]) {
+    assert.throws(() => artifactName('att-1', bad), /item index/, String(bad));
+  }
+});
+
+test('legacyArtifactName is the one-item name ingest still accepts', () => {
+  assert.equal(legacyArtifactName('01JD'), 'result-01JD.tar.age');
+  assert.throws(() => legacyArtifactName('../x'), /attempt/);
 });

@@ -4,15 +4,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { main } from '../ingest.mjs';
 import { ageDecrypt, ageEncrypt } from '../age.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
 import {
-  makeBundle, defaultRun, artifactEntry, expectedRow, REGISTRY_TEXT, WORKER_REPO, RUN_ID,
+  makeBundle, defaultRun, artifactEntry, expectedRow, multiItemRow, REGISTRY_TEXT, WORKER_REPO, RUN_ID,
 } from '../testkit.mjs';
 
 const AGE = process.env.AGE_BIN || 'age';
@@ -23,7 +23,8 @@ const skip = haveAge ? false : 'age and age-keygen are not on PATH (set AGE_BIN 
 // Built at run time so the file holds no token-shaped literal.
 const TOKEN = ['gh', 's_', 'T0k3nT0k3nT0k3nT0k3nT0k3nT0k3nT0k3nT0'].join('');
 const API = `https://api.github.com/repos/${WORKER_REPO}`;
-const BLOB = 'https://blob.example.net/artifact/901?sig=abc';
+const blobUrl = (id) => `https://blob.example.net/artifact/${id}?sig=abc`;
+const BLOB = blobUrl(901);
 
 function keypair() {
   const identity = spawnSync(KEYGEN, [], { encoding: 'utf8' }).stdout;
@@ -33,15 +34,18 @@ function keypair() {
 
 const jsonResponse = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-function fakeApi({ ciphertext, run = defaultRun(), artifacts = [artifactEntry()] }) {
+/** `blobs` maps artifact ids to what their download returns (default: artifact 901 holds `ciphertext`). */
+function fakeApi({ ciphertext, run = defaultRun(), artifacts = [artifactEntry()], blobs = { 901: ciphertext } }) {
   const requests = [];
   const fetch = async (url, init = {}) => {
     const u = String(url);
     requests.push({ url: u, auth: init.headers?.Authorization ?? null, redirect: init.redirect });
     if (u === `${API}/actions/runs/${RUN_ID}`) return jsonResponse(run);
     if (u === `${API}/actions/runs/${RUN_ID}/artifacts?per_page=100&page=1`) return jsonResponse({ total_count: artifacts.length, artifacts });
-    if (u === `${API}/actions/artifacts/901/zip`) return new Response(null, { status: 302, headers: { location: BLOB } });
-    if (u === BLOB) return new Response(ciphertext, { status: 200 });
+    for (const [id, data] of Object.entries(blobs)) {
+      if (u === `${API}/actions/artifacts/${id}/zip`) return new Response(null, { status: 302, headers: { location: blobUrl(id) } });
+      if (u === blobUrl(id)) return new Response(data, { status: 200 });
+    }
     return jsonResponse({ message: 'Not Found' }, 404);
   };
   return { fetch, requests };
@@ -105,7 +109,7 @@ test('accepts a real age bundle, seals the outputs to the ingest key and records
     assert.ok(box.subarray(0, 22).toString() === 'age-encryption.org/v1\n', 'the sealed file is age ciphertext');
     const tar = ageDecrypt({ ciphertext: box, identity: s.keys.identity, ageBin: AGE, tmpDir: s.dir });
     const paths = readTar(tar).map((e) => e.path).sort();
-    assert.ok(paths.includes('accepted/att-1/manifest.json') && paths.includes('accepted/att-1/ingest.json'), paths.join(','));
+    assert.ok(paths.includes('accepted/att-1/0/manifest.json') && paths.includes('accepted/att-1/0/ingest.json'), paths.join(','));
     assert.equal(paths.length, 7);
 
     const ledger = JSON.parse(readFileSync(s.ledger, 'utf8'));
@@ -137,10 +141,46 @@ test('a rejected bundle is kept as ciphertext only; --work-dir writes the output
     assert.equal(r.code, 0, r.stdout + r.stderr);
     assert.equal(r.stdout, '::warning title=ingest::attempt att-1: rejected (fence_mismatch), recorded\n');
     assert.deepEqual(readOutputs(s.out), { outcome: 'rejected', reason: 'fence_mismatch', accepted: 'false', recorded: 'true', sealed: '' });
-    assert.deepEqual(readFileSync(join(work, 'rejected/att-1/result.tar.age')), s.ciphertext);
-    const report = JSON.parse(readFileSync(join(work, 'rejected/att-1/ingest.json'), 'utf8'));
+    assert.deepEqual(readFileSync(join(work, 'rejected/att-1/0/result.tar.age')), s.ciphertext);
+    const report = JSON.parse(readFileSync(join(work, 'rejected/att-1/0/ingest.json'), 'utf8'));
     assert.equal(report.problems[0].reason, 'fence_mismatch');
     assert.ok(!existsSync(join(work, 'accepted')));
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('a shard of several items: one line per item, outputs per item, each recorded', { skip }, async () => {
+  const keysFor = ['d', 'e', 'f'].map((ch) => ch.repeat(64));
+  const s = setup({ rows: [multiItemRow(keysFor)] });
+  try {
+    const bundle = (i) => makeBundle({ identity: { run_key: keysFor[i], fence: 7 + i } });
+    const seal = (b) => ageEncrypt({ plaintext: b.tar, recipients: [s.keys.recipient], ageBin: AGE });
+    // Item 0 and 2 are good; item 1 carries item 2's run_key.
+    const blobs = { 901: seal(bundle(0)), 902: seal(makeBundle({ identity: { run_key: keysFor[2], fence: 8 } })), 903: seal(bundle(2)) };
+    const artifacts = [0, 1, 2].map((i) => artifactEntry({ id: 901 + i, name: `result-att-1-${i}.tar.age` }));
+    const api = fakeApi({ artifacts, blobs });
+    const work = join(s.dir, 'work');
+    const r = await cli([...s.args, '--work-dir', work], s.env, api.fetch);
+    assert.equal(r.code, 0, r.stdout + r.stderr);
+    assert.equal(r.stdout, [
+      '::warning title=ingest::attempt att-1: mixed, recorded',
+      '::notice title=ingest::attempt att-1 item 0: accepted, recorded',
+      '::warning title=ingest::attempt att-1 item 1: rejected (run_key_mismatch), recorded',
+      '::notice title=ingest::attempt att-1 item 2: accepted, recorded',
+      '',
+    ].join('\n'));
+    assert.deepEqual(readOutputs(s.out), { outcome: 'mixed', reason: '', accepted: 'false', recorded: 'true', sealed: '' });
+    assert.ok(existsSync(join(work, 'accepted/att-1/0/manifest.json')));
+    assert.ok(existsSync(join(work, 'rejected/att-1/1/result.tar.age')));
+    assert.ok(existsSync(join(work, 'accepted/att-1/2/manifest.json')));
+    const ledger = JSON.parse(readFileSync(s.ledger, 'utf8'));
+    assert.deepEqual(ledger.results.map((x) => [x.run_key, x.fence, x.outcome]), [
+      [keysFor[0], 7, 'accepted'], [keysFor[1], 8, 'rejected'], [keysFor[2], 9, 'accepted'],
+    ]);
+    // One run lookup and one artifact listing for the whole shard.
+    assert.equal(api.requests.filter((q) => q.url.endsWith(`/actions/runs/${RUN_ID}`)).length, 1);
+    assert.equal(api.requests.filter((q) => q.url.includes('/artifacts?')).length, 1);
   } finally {
     s.cleanup();
   }
@@ -164,9 +204,12 @@ test('refuses to judge anything while ingest.pub has no key or the identity is n
   try {
     const api = fakeApi({ ciphertext: s.ciphertext });
     const sealed = join(s.dir, 'sealed.tar.age');
-    // No --seal-to: the committed worker-kit/ingest.pub, still a placeholder.
+    // A recipients file with comments only, as the committed ingest.pub was before it got a key.
+    const placeholderPub = join(s.dir, 'placeholder', 'ingest.pub');
+    mkdirSync(dirname(placeholderPub));
+    writeFileSync(placeholderPub, '# age recipient (public key) for tool-qa result bundles.\n#\n# PLACEHOLDER: no key has been set yet.\n');
     const noSealTo = s.args.slice(0, s.args.indexOf('--seal-to'));
-    const placeholder = await cli([...noSealTo, '--sealed', sealed], s.env, api.fetch);
+    const placeholder = await cli([...noSealTo, '--seal-to', placeholderPub, '--sealed', sealed], s.env, api.fetch);
     assert.equal(placeholder.code, 1);
     assert.match(placeholder.stdout, /^::error title=ingest::.*ingest\.pub has no age public key yet.*nothing was judged\n$/);
 

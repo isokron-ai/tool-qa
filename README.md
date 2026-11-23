@@ -8,8 +8,8 @@ comes later, through [isokron-ai/mcp-results](https://github.com/isokron-ai/mcp-
 More about IsoKron: [isokron.ai](https://isokron.ai/?utm_source=tool-qa&utm_medium=readme).
 
 **Status: P1 in progress: the pump, dispatch, ingest (inside the pump) and the
-watchdog are built; no worker workflow is switched on yet and the ingest key
-is still a placeholder, so there is no scanning yet.**
+watchdog are built and the ingest key is in place; no worker workflow is
+switched on yet, so there is no scanning yet.**
 
 ## What runs where
 

@@ -2,12 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32 } from 'node:zlib';
 
-import { ingestAttempt } from '../ingest.mjs';
+import { ingestAttempt, openAttempt } from '../ingest.mjs';
 import { parseRegistry } from '../registry.mjs';
 import { GithubError } from '../github.mjs';
 import { writeTar } from '../../worker-kit/tar.mjs';
 import {
-  makeBundle, defaultFiles, defaultRun, artifactEntry, expectedRow, fakeGithub, fakeLedger,
+  makeBundle, defaultFiles, defaultRun, artifactEntry, expectedRow, multiItemRow, fakeGithub, fakeLedger,
   fakeEncrypt, fakeDecrypt, REGISTRY_TEXT, RUN_ID, WORKER_REPO, MARKER,
 } from '../testkit.mjs';
 
@@ -16,9 +16,9 @@ const INPUT = { repo: WORKER_REPO, runId: RUN_ID, attemptId: 'att-1' };
 const NOW = () => new Date('2026-01-01T01:00:00Z');
 
 async function run({ bundle = makeBundle(), blob, github, ledger = fakeLedger(), input = INPUT, ...rest } = {}) {
-  const gh = github ?? fakeGithub({ blob: blob ?? fakeEncrypt(bundle.tar) });
-  const r = await ingestAttempt(input, { ledger, github: gh, decrypt: fakeDecrypt, registry, now: NOW, ...rest });
-  return { r, gh, ledger };
+  const api = github ?? fakeGithub({ blob: blob ?? fakeEncrypt(bundle.tar) });
+  const r = await ingestAttempt(input, { ledger, github: api, decrypt: fakeDecrypt, registry, now: NOW, ...rest });
+  return { r, api, ledger };
 }
 
 const json = (buf) => JSON.parse(buf.toString('utf8'));
@@ -35,16 +35,16 @@ test('a clean bundle is accepted and recorded; outputs hold the bundle and a rep
   }]);
   const paths = [...r.outputs.keys()].sort();
   assert.deepEqual(paths, [
-    'accepted/att-1/controls/forgery.json',
-    'accepted/att-1/ingest.json',
-    'accepted/att-1/logs/run.log',
-    'accepted/att-1/manifest.json',
-    'accepted/att-1/observations/check.ndjson',
-    'accepted/att-1/raw/forgery-target.ndjson',
-    'accepted/att-1/results/report.json',
+    'accepted/att-1/0/controls/forgery.json',
+    'accepted/att-1/0/ingest.json',
+    'accepted/att-1/0/logs/run.log',
+    'accepted/att-1/0/manifest.json',
+    'accepted/att-1/0/observations/check.ndjson',
+    'accepted/att-1/0/raw/forgery-target.ndjson',
+    'accepted/att-1/0/results/report.json',
   ]);
-  assert.deepEqual(json(r.outputs.get('accepted/att-1/manifest.json')), bundle.manifest);
-  const report = json(r.outputs.get('accepted/att-1/ingest.json'));
+  assert.deepEqual(json(r.outputs.get('accepted/att-1/0/manifest.json')), bundle.manifest);
+  const report = json(r.outputs.get('accepted/att-1/0/ingest.json'));
   assert.equal(report.outcome, 'accepted');
   assert.equal(report.run.head_sha, '1'.repeat(40));
   assert.equal(report.artifact.container, 'raw');
@@ -53,6 +53,12 @@ test('a clean bundle is accepted and recorded; outputs hold the bundle and a rep
   assert.equal(report.registry.sha256, registry.sha256);
   assert.deepEqual(report.recorded, { accepted: true, reason: null });
   assert.equal(report.ingested_at, '2026-01-01T01:00:00.000Z');
+  assert.equal(report.item_index, 0);
+  assert.equal(report.artifact.name, 'result-att-1-0.tar.age');
+  assert.equal(report.ledger.items, 1);
+  assert.equal(report.ledger.run_key, 'a'.repeat(64));
+  assert.deepEqual(r.items.map((it) => [it.index, it.run_key, it.outcome]), [[0, 'a'.repeat(64), 'accepted']]);
+  assert.deepEqual(r.report, report);
 });
 
 test('forged bundles are rejected, recorded, and kept only as ciphertext', async () => {
@@ -77,9 +83,9 @@ test('forged bundles are rejected, recorded, and kept only as ciphertext', async
     assert.equal(r.reason, reason, name);
     assert.equal(r.recorded, true, name);
     assert.deepEqual(ledger.records.map((x) => [x.outcome, x.accepted, x.reason]), [['rejected', false, reason]], name);
-    assert.deepEqual([...r.outputs.keys()].sort(), ['rejected/att-1/ingest.json', 'rejected/att-1/result.tar.age'], name);
-    assert.deepEqual(r.outputs.get('rejected/att-1/result.tar.age'), fakeEncrypt(bundle.tar), name);
-    const report = json(r.outputs.get('rejected/att-1/ingest.json'));
+    assert.deepEqual([...r.outputs.keys()].sort(), ['rejected/att-1/0/ingest.json', 'rejected/att-1/0/result.tar.age'], name);
+    assert.deepEqual(r.outputs.get('rejected/att-1/0/result.tar.age'), fakeEncrypt(bundle.tar), name);
+    const report = json(r.outputs.get('rejected/att-1/0/ingest.json'));
     assert.equal(report.problems[0].reason, reason, name);
   }
 });
@@ -105,8 +111,8 @@ test('a secret outside raw/ quarantines the bundle; the report names the rule, n
   assert.equal(r.outcome, 'quarantined');
   assert.equal(r.reason, 'secret_scan');
   assert.deepEqual(ledger.records.map((x) => [x.outcome, x.accepted, x.reason]), [['quarantined', false, 'secret_scan']]);
-  assert.deepEqual([...r.outputs.keys()].sort(), ['quarantine/att-1/ingest.json', 'quarantine/att-1/result.tar.age']);
-  const reportText = r.outputs.get('quarantine/att-1/ingest.json').toString('utf8');
+  assert.deepEqual([...r.outputs.keys()].sort(), ['quarantine/att-1/0/ingest.json', 'quarantine/att-1/0/result.tar.age']);
+  const reportText = r.outputs.get('quarantine/att-1/0/ingest.json').toString('utf8');
   assert.ok(!reportText.includes(token));
   const report = JSON.parse(reportText);
   assert.deepEqual(report.secret_scan.hits.map((h) => [h.path, h.rule, h.line]), [['logs/run.log', 'github-token', undefined]]);
@@ -119,7 +125,7 @@ test('names that reach the report are scrubbed of secrets and canaries', async (
   const bundle = makeBundle({ extraTarEntries: [[`results/${token}.json`, '{}'], [`results/${canary}.json`, '{}']] });
   const { r } = await run({ bundle, ledger: fakeLedger([expectedRow({ canaries: [canary] })]) });
   assert.equal(r.reason, 'unlisted_file');
-  const text = r.outputs.get('rejected/att-1/ingest.json').toString('utf8');
+  const text = r.outputs.get('rejected/att-1/0/ingest.json').toString('utf8');
   assert.ok(!text.includes(token) && !text.includes(canary), 'no secret or canary in the report');
   assert.deepEqual(JSON.parse(text).problems.map((p) => p.path).sort(), ['results/[CANARY].json', 'results/[REDACTED:github-token].json']);
 
@@ -127,7 +133,7 @@ test('names that reach the report are scrubbed of secrets and canaries', async (
   files['logs/run.log'] = `token ${token}\n`;
   const q = await run({ bundle: makeBundle({ files }) });
   const allowed = new Set(['path', 'rule', 'class', 'line', 'json_path', 'in_key', 'start', 'length']);
-  const hits = json(q.r.outputs.get('quarantine/att-1/ingest.json')).secret_scan.hits;
+  const hits = json(q.r.outputs.get('quarantine/att-1/0/ingest.json')).secret_scan.hits;
   assert.ok(hits.length > 0 && hits.every((h) => Object.keys(h).every((k) => allowed.has(k))), 'hits carry locations only');
 });
 
@@ -142,7 +148,7 @@ test('canaries from the ledger are searched for; raw/ hits are counted but do no
   rawOnly['raw/target-stderr.txt'] = `leaked ${canary} and admin@corp-mail.io\n`;
   const a = await run({ bundle: makeBundle({ files: rawOnly }), ledger: fakeLedger([expectedRow({ canaries: [canary] })]) });
   assert.equal(a.r.outcome, 'accepted');
-  const report = json(a.r.outputs.get('accepted/att-1/ingest.json'));
+  const report = json(a.r.outputs.get('accepted/att-1/0/ingest.json'));
   assert.deepEqual(report.secret_scan.raw_hits_by_rule, { canary: 1, email: 1 });
 });
 
@@ -151,14 +157,14 @@ test('the ledger decides staleness: stale before download, refused at record tim
   assert.equal(stale.r.outcome, 'rejected');
   assert.equal(stale.r.reason, 'stale_fence');
   assert.equal(stale.r.recorded, true);
-  assert.ok(!stale.gh.calls.some((c) => c[0] === 'downloadArtifact'), 'no download for a stale attempt');
+  assert.ok(!stale.api.calls.some((c) => c[0] === 'downloadArtifact'), 'no download for a stale attempt');
 
   const refused = await run({ ledger: fakeLedger([expectedRow()], { answer: () => ({ accepted: false, reason: 'stale_fence' }) }) });
   assert.equal(refused.r.outcome, 'rejected');
   assert.equal(refused.r.reason, 'stale_fence');
   assert.equal(refused.r.accepted, false);
-  assert.ok([...refused.r.outputs.keys()].every((p) => p.startsWith('rejected/att-1/')));
-  assert.ok(refused.r.outputs.has('rejected/att-1/result.tar.age'));
+  assert.ok([...refused.r.outputs.keys()].every((p) => p.startsWith('rejected/att-1/0/')));
+  assert.ok(refused.r.outputs.has('rejected/att-1/0/result.tar.age'));
 });
 
 test('inputs that do not match the ledger are refused without recording', async () => {
@@ -183,12 +189,12 @@ test('inputs that do not match the ledger are refused without recording', async 
 });
 
 test('a run that is still going is pending: nothing recorded, nothing written', async () => {
-  const { r, ledger, gh } = await run({ github: fakeGithub({ run: defaultRun({ status: 'in_progress', conclusion: null }) }) });
+  const { r, ledger, api } = await run({ github: fakeGithub({ run: defaultRun({ status: 'in_progress', conclusion: null }) }) });
   assert.equal(r.outcome, 'pending');
   assert.equal(r.recorded, false);
   assert.equal(r.outputs.size, 0);
   assert.equal(ledger.records.length, 0);
-  assert.deepEqual(gh.calls.map((c) => c[0]), ['getRun']);
+  assert.deepEqual(api.calls.map((c) => c[0]), ['getRun']);
 });
 
 test('the run must be the dispatched workflow in the worker repo', async () => {
@@ -217,7 +223,9 @@ test('artifact problems are recorded rejections', async () => {
   const tar = makeBundle().tar;
   const cases = [
     [{ artifacts: [] }, 'no_artifact'],
-    [{ artifacts: [artifactEntry(), artifactEntry({ id: 902, name: 'result-att-1' })] }, 'duplicate_artifact'],
+    [{ artifacts: [artifactEntry(), artifactEntry({ id: 902, name: 'result-att-1-0' })] }, 'duplicate_artifact'],
+    [{ artifacts: [artifactEntry(), artifactEntry({ id: 902, name: 'result-att-1.tar.age' })] }, 'duplicate_artifact'],
+    [{ artifacts: [artifactEntry({ name: 'result-att-1-1.tar.age' })] }, 'no_artifact'],
     [{ artifacts: [artifactEntry({ expired: true })] }, 'artifact_expired'],
     [{ artifacts: [artifactEntry({ size_in_bytes: 10 ** 12 })] }, 'artifact_too_large'],
     [{ artifacts: [artifactEntry({ workflow_run: { id: 1 } })] }, 'artifact_run_mismatch'],
@@ -230,8 +238,8 @@ test('artifact problems are recorded rejections', async () => {
     [{ blob: fakeEncrypt(writeTar([{ path: 'manifest.json', data: Buffer.from('{"schema_version": 2}') }])) }, 'manifest_invalid'],
   ];
   for (const [opts, reason] of cases) {
-    const gh = fakeGithub({ blob: fakeEncrypt(tar), ...opts });
-    const { r, ledger } = await run({ github: gh });
+    const api = fakeGithub({ blob: fakeEncrypt(tar), ...opts });
+    const { r, ledger } = await run({ github: api });
     assert.equal(r.outcome, 'rejected', reason);
     assert.equal(r.reason, reason);
     assert.equal(r.recorded, true, reason);
@@ -240,15 +248,15 @@ test('artifact problems are recorded rejections', async () => {
 });
 
 test('an artifact uploaded as a zip is unwrapped', async () => {
-  const { r } = await run({ blob: zipOne('result-att-1.tar.age', fakeEncrypt(makeBundle().tar)) });
+  const { r } = await run({ blob: zipOne('result-att-1-0.tar.age', fakeEncrypt(makeBundle().tar)) });
   assert.equal(r.outcome, 'accepted');
-  assert.equal(json(r.outputs.get('accepted/att-1/ingest.json')).artifact.container, 'zip');
+  assert.equal(json(r.outputs.get('accepted/att-1/0/ingest.json')).artifact.container, 'zip');
 });
 
 test('transient GitHub errors abort without recording anything', async () => {
-  const gh = fakeGithub({ blob: new GithubError('GET x: HTTP 502', { status: 502, transient: true }) });
+  const api = fakeGithub({ blob: new GithubError('GET x: HTTP 502', { status: 502, transient: true }) });
   const ledger = fakeLedger();
-  await assert.rejects(run({ github: gh, ledger }), (e) => e.transient === true);
+  await assert.rejects(run({ github: api, ledger }), (e) => e.transient === true);
   assert.equal(ledger.records.length, 0);
 });
 
@@ -262,6 +270,198 @@ test('the forgery marker never needs to leave raw/', async () => {
   // Sanity check on the fixture: the clean bundle carries the marker only in raw/.
   const b = makeBundle();
   for (const [p, d] of b.files) assert.equal(d.includes(MARKER), p.startsWith('raw/'), p);
+});
+
+test('a one-item attempt still accepts the older artifact name', async () => {
+  const tar = makeBundle().tar;
+  const raw = await run({ github: fakeGithub({ artifacts: [artifactEntry({ name: 'result-att-1.tar.age' })], blob: fakeEncrypt(tar) }) });
+  assert.equal(raw.r.outcome, 'accepted');
+  assert.equal(json(raw.r.outputs.get('accepted/att-1/0/ingest.json')).artifact.name, 'result-att-1.tar.age');
+  const zipped = await run({
+    github: fakeGithub({ artifacts: [artifactEntry({ name: 'result-att-1' })], blob: zipOne('result-att-1.tar.age', fakeEncrypt(tar)) }),
+  });
+  assert.equal(zipped.r.outcome, 'accepted');
+  // The file inside a zip is named like the artifact itself.
+  const wrongInner = await run({
+    github: fakeGithub({ artifacts: [artifactEntry({ name: 'result-att-1-0' })], blob: zipOne('result-att-1.tar.age', fakeEncrypt(tar)) }),
+  });
+  assert.equal(wrongInner.r.reason, 'bad_container');
+});
+
+// ---- shards of several items ----
+
+const KEYS = ['d', 'e', 'f'].map((ch) => ch.repeat(64));
+
+/** Item i's bundle: its own run_key and fence (7 + i), unless `identity` forges them. */
+function itemBundle(i, identity = {}) {
+  return makeBundle({ identity: { run_key: KEYS[i], fence: 7 + i, ...identity } });
+}
+
+const itemArtifact = (i, over = {}) => artifactEntry({ id: 900 + i, name: `result-att-1-${i}.tar.age`, ...over });
+
+/** A fake API whose artifact 900 + i holds bundles[i]. */
+function itemsApi(bundles, { artifacts = bundles.map((_, i) => itemArtifact(i)), run: runObj = defaultRun() } = {}) {
+  return fakeGithub({
+    artifacts,
+    run: runObj,
+    blob: (id) => (bundles[id - 900] ? fakeEncrypt(bundles[id - 900].tar) : new Error(`no artifact ${id}`)),
+  });
+}
+
+const shardLedger = () => fakeLedger([multiItemRow(KEYS)]);
+const shardDeps = (ledger, github) => ({ ledger, github, decrypt: fakeDecrypt, registry, now: NOW });
+
+test('a shard of several items: each item has its own bundle, judged and recorded on its own', async () => {
+  const bundles = [0, 1, 2].map((i) => itemBundle(i));
+  const api = itemsApi(bundles);
+  const ledger = shardLedger();
+  const r = await ingestAttempt(INPUT, shardDeps(ledger, api));
+  assert.equal(r.outcome, 'accepted');
+  assert.equal(r.reason, null);
+  assert.equal(r.accepted, true);
+  assert.equal(r.recorded, true);
+  assert.equal(r.report, null, 'no single report for several items');
+  assert.deepEqual(r.items.map((it) => [it.index, it.run_key, it.outcome]), KEYS.map((k, i) => [i, k, 'accepted']));
+  assert.deepEqual(ledger.records.map((x) => [x.attempt_id, x.run_key, x.fence, x.outcome]), KEYS.map((k, i) => ['att-1', k, 7 + i, 'accepted']));
+  // The run is checked and its artifacts listed once; one download per item.
+  assert.deepEqual(api.calls.map((c) => (c[0] === 'downloadArtifact' ? `download ${c[2]}` : c[0])), [
+    'getRun', 'listRunArtifacts', 'download 900', 'download 901', 'download 902',
+  ]);
+  for (const i of [0, 1, 2]) {
+    const report = json(r.outputs.get(`accepted/att-1/${i}/ingest.json`));
+    assert.equal(report.item_index, i);
+    assert.equal(report.ledger.run_key, KEYS[i]);
+    assert.equal(report.ledger.fence, 7 + i);
+    assert.equal(report.ledger.items, 3);
+    assert.equal(report.artifact.name, `result-att-1-${i}.tar.age`);
+    assert.deepEqual(json(r.outputs.get(`accepted/att-1/${i}/manifest.json`)), bundles[i].manifest);
+  }
+});
+
+test('a shard with one bundle missing: that item is rejected as no_artifact, the others are accepted', async () => {
+  const api = itemsApi([0, 1, 2].map((i) => itemBundle(i)), { artifacts: [itemArtifact(0), itemArtifact(2)] });
+  const ledger = shardLedger();
+  const r = await ingestAttempt(INPUT, shardDeps(ledger, api));
+  assert.equal(r.outcome, 'mixed');
+  assert.equal(r.reason, null);
+  assert.equal(r.accepted, false);
+  assert.equal(r.recorded, true);
+  assert.deepEqual(r.items.map((it) => [it.index, it.outcome, it.reason]), [[0, 'accepted', null], [1, 'rejected', 'no_artifact'], [2, 'accepted', null]]);
+  assert.deepEqual(ledger.records.map((x) => [x.run_key, x.outcome, x.reason]), [
+    [KEYS[0], 'accepted', null], [KEYS[1], 'rejected', 'no_artifact'], [KEYS[2], 'accepted', null],
+  ]);
+  assert.deepEqual(json(r.outputs.get('rejected/att-1/1/ingest.json')).problems, [{ reason: 'no_artifact', expected: 'result-att-1-1.tar.age' }]);
+  assert.ok(!r.outputs.has('rejected/att-1/1/result.tar.age'));
+});
+
+test('a bundle filed under another item\'s index is rejected for that item only', async () => {
+  // Item 1's bundle names item 2's run_key (with item 1's fence).
+  const swapped = await ingestAttempt(INPUT, shardDeps(shardLedger(), itemsApi([itemBundle(0), itemBundle(1, { run_key: KEYS[2] }), itemBundle(2)])));
+  assert.deepEqual(swapped.items.map((it) => [it.outcome, it.reason]), [['accepted', null], ['rejected', 'run_key_mismatch'], ['accepted', null]]);
+  // Item 2's whole bundle uploaded again as item 1.
+  const copied = await ingestAttempt(INPUT, shardDeps(shardLedger(), itemsApi([itemBundle(0), itemBundle(2), itemBundle(2)])));
+  assert.equal(copied.items[1].outcome, 'rejected');
+  const reasons = json(copied.outputs.get('rejected/att-1/1/ingest.json')).problems.map((p) => p.reason);
+  assert.ok(reasons.includes('run_key_mismatch') && reasons.includes('fence_mismatch'), reasons.join(','));
+  assert.deepEqual([copied.items[0].outcome, copied.items[2].outcome], ['accepted', 'accepted']);
+});
+
+test('two artifacts for one index reject that item as duplicate_artifact', async () => {
+  const artifacts = [itemArtifact(0), itemArtifact(1), itemArtifact(2), artifactEntry({ id: 911, name: 'result-att-1-1' })];
+  const api = itemsApi([0, 1, 2].map((i) => itemBundle(i)), { artifacts });
+  const r = await ingestAttempt(INPUT, shardDeps(shardLedger(), api));
+  assert.deepEqual(r.items.map((it) => it.reason), [null, 'duplicate_artifact', null]);
+  assert.deepEqual(json(r.outputs.get('rejected/att-1/1/ingest.json')).problems, [
+    { reason: 'duplicate_artifact', expected: 'result-att-1-1.tar.age', got: 2 },
+  ]);
+  assert.deepEqual(api.calls.filter((c) => c[0] === 'downloadArtifact').map((c) => c[2]), [900, 902]);
+});
+
+test('only a one-item attempt accepts the older artifact name', async () => {
+  const artifacts = [artifactEntry({ id: 900, name: 'result-att-1.tar.age' }), itemArtifact(1), itemArtifact(2)];
+  const r = await ingestAttempt(INPUT, shardDeps(shardLedger(), itemsApi([0, 1, 2].map((i) => itemBundle(i)), { artifacts })));
+  assert.deepEqual(r.items.map((it) => it.reason), ['no_artifact', null, null]);
+});
+
+test('items with a result are skipped; a stale item is recorded without a download', async () => {
+  const bundles = [0, 1, 2].map((i) => itemBundle(i));
+  const row = multiItemRow(KEYS);
+  row.items[0].outcome = 'accepted';
+  row.items[1].current_fence = 20;
+  const api = itemsApi(bundles);
+  const ledger = fakeLedger([row]);
+  const r = await ingestAttempt(INPUT, shardDeps(ledger, api));
+  assert.deepEqual(r.items.map((it) => [it.index, it.outcome, it.reason]), [[1, 'rejected', 'stale_fence'], [2, 'accepted', null]]);
+  assert.deepEqual(ledger.records.map((x) => [x.run_key, x.reason]), [[KEYS[1], 'stale_fence'], [KEYS[2], null]]);
+  assert.deepEqual(api.calls.filter((c) => c[0] === 'downloadArtifact').map((c) => c[2]), [902]);
+  assert.deepEqual(json(r.outputs.get('rejected/att-1/1/ingest.json')).problems, [{ reason: 'stale_fence', expected: 20, got: 8 }]);
+
+  // Every open item stale: recorded without a single API call.
+  const allStale = multiItemRow(KEYS);
+  for (const it of allStale.items) it.current_fence = 20;
+  const quiet = itemsApi(bundles);
+  const s = await ingestAttempt(INPUT, shardDeps(fakeLedger([allStale]), quiet));
+  assert.equal(s.outcome, 'rejected');
+  assert.equal(s.reason, 'stale_fence');
+  assert.equal(s.items.length, 3);
+  assert.deepEqual(quiet.calls, []);
+
+  // Every item has a result: already_recorded, nothing written.
+  const allDone = multiItemRow(KEYS);
+  for (const it of allDone.items) it.outcome = 'rejected';
+  const d = await ingestAttempt(INPUT, shardDeps(fakeLedger([allDone]), itemsApi(bundles)));
+  assert.equal(d.outcome, 'already_recorded');
+  assert.equal(d.outputs.size, 0);
+  assert.deepEqual(d.items, []);
+});
+
+test('a run-level failure is recorded for every item, without listing artifacts', async () => {
+  const api = itemsApi([0, 1, 2].map((i) => itemBundle(i)), { run: defaultRun({ event: 'push' }) });
+  const ledger = shardLedger();
+  const r = await ingestAttempt(INPUT, shardDeps(ledger, api));
+  assert.equal(r.outcome, 'rejected');
+  assert.equal(r.reason, 'run_event_mismatch');
+  assert.deepEqual(ledger.records.map((x) => [x.run_key, x.reason]), KEYS.map((k) => [k, 'run_event_mismatch']));
+  assert.deepEqual(api.calls.map((c) => c[0]), ['getRun']);
+  assert.deepEqual([...r.outputs.keys()].sort(), ['rejected/att-1/0/ingest.json', 'rejected/att-1/1/ingest.json', 'rejected/att-1/2/ingest.json']);
+});
+
+test('openAttempt checks the attempt once and lets the caller judge one item at a time', async () => {
+  const api = itemsApi([0, 1, 2].map((i) => itemBundle(i)));
+  const ledger = shardLedger();
+  const opened = await openAttempt(INPUT, shardDeps(ledger, api));
+  assert.equal(opened.done, null);
+  assert.equal(opened.attempt.attempt_id, 'att-1');
+  assert.deepEqual(opened.items.map((it) => it.index), [0, 1, 2]);
+  assert.deepEqual(api.calls.map((c) => c[0]), ['getRun', 'listRunArtifacts']);
+  assert.equal(ledger.records.length, 0, 'opening records nothing');
+  const one = await opened.judge(opened.items[1]);
+  assert.equal(one.index, 1);
+  assert.equal(one.outcome, 'accepted');
+  assert.ok([...one.outputs.keys()].every((p) => p.startsWith('accepted/att-1/1/')));
+  assert.deepEqual(ledger.records.map((x) => x.run_key), [KEYS[1]]);
+  await assert.rejects(opened.judge(opened.items[1]), /judged already/);
+  await assert.rejects(opened.judge({ index: 7 }), /one of the items/);
+
+  const unknown = await openAttempt(INPUT, shardDeps(fakeLedger([]), api));
+  assert.equal(unknown.done.outcome, 'rejected');
+  assert.equal(unknown.done.reason, 'unknown_attempt');
+  assert.deepEqual(unknown.items, []);
+  assert.deepEqual([...unknown.done.outputs.keys()], ['rejected/att-1/ingest.json']);
+});
+
+test('an error part-way through a shard says which items were recorded', async () => {
+  const bundles = [0, 1, 2].map((i) => itemBundle(i));
+  const api = fakeGithub({
+    artifacts: [0, 1, 2].map((i) => itemArtifact(i)),
+    blob: (id) => (id === 901 ? new GithubError('GET x: HTTP 502', { status: 502, transient: true }) : fakeEncrypt(bundles[id - 900].tar)),
+  });
+  const ledger = shardLedger();
+  await assert.rejects(
+    ingestAttempt(INPUT, shardDeps(ledger, api)),
+    (e) => e.transient === true && e.partial?.recorded === true && e.partial.items.map((it) => it.index).join() === '0',
+  );
+  assert.deepEqual(ledger.records.map((x) => x.run_key), [KEYS[0]]);
 });
 
 // One stored zip entry, enough for the container test.

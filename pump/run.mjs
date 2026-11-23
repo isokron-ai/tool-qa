@@ -18,10 +18,10 @@
 //
 // The pump is the state's only writer: ingest runs inside it, never as a
 // separate job. Before it dispatches anything, the run checks that ingest can
-// judge the results (worker-kit/ingest.pub holds the real key, AGE_IDENTITY
-// matches it, every enabled workflow has shard_size 1). If not, it says why,
-// dispatches nothing, does one housekeeping tick and fails. With LOOP_SLOTS=0
-// the run does one housekeeping tick (ingest, reap) and dispatches nothing.
+// judge the results (worker-kit/ingest.pub holds the real key and AGE_IDENTITY
+// matches it). If not, it says why, dispatches nothing, does one housekeeping
+// tick and fails. With LOOP_SLOTS=0 the run does one housekeeping tick
+// (ingest, reap) and dispatches nothing.
 //
 // Environment:
 //   LOOP_SLOTS          worker slots (the guard step's `slots` output)
@@ -135,9 +135,9 @@ export async function runPump({
   };
   const enabled = Object.values(cfg.workflows ?? {}).some((w) => w?.enabled === true);
   if (workerSlots > 0 && enabled && typeof collector?.check === 'function') {
-    // Only local checks (keys, shard sizes): no API calls.
+    // Only local checks (keys): no API calls.
     try {
-      await collector.check({ workflows: cfg.workflows });
+      await collector.check();
     } catch (err) {
       if (!isSetupError(err)) throw err;
       block(err);

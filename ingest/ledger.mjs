@@ -5,15 +5,22 @@
 // that object first:
 //
 //   getAttempt(attempt_id) -> row or null/undefined. The row describes what was
-//     dispatched: attempt_id, run_key, fence (or fencing_no), repo (the worker
-//     repo, or worker_repo), workflow_file (or workflow), and optionally run_id
-//     (or workflow_run_id), workflow_sha, current_fence (the subject's live
-//     fence now), outcome (set once a result is recorded) and canaries (the
-//     canary values injected for this attempt, list or JSON text).
+//     dispatched: attempt_id, repo (the worker repo, or worker_repo),
+//     workflow_file (or workflow), optionally run_id (or workflow_run_id),
+//     workflow_sha and canaries (the canary values injected for this attempt,
+//     list or JSON text), and the dispatched items:
+//       items: [{index (or item_index), run_key, fence (or fencing_no),
+//                current_fence, outcome}]
+//     in dispatch order. index is the item's 0-based position in the list the
+//     worker received; it names the item's result bundle. current_fence is the
+//     run_key's live fence now; outcome is set once a result is recorded for
+//     the item. A row without `items` describes one item with run_key, fence,
+//     current_fence and outcome at the top level (index 0).
 //
 //   recordResult({run_key, attempt_id, fence, outcome, accepted, reason})
-//     -> {accepted, reason}. The store does its own fence check and may refuse
-//     (accepted: false, reason: 'stale_fence'); ingest follows its answer.
+//     -> {accepted, reason}. One call per item. The store does its own fence
+//     check and may refuse (accepted: false, reason: 'stale_fence'); ingest
+//     follows its answer.
 //
 // state/db.mjs implements both as StateDb methods. The pump wraps its own open
 // StateDb with dbLedger(); the CLI's --state FILE opens one with openLedger().
@@ -47,16 +54,36 @@ function toInt(v) {
   return NaN;
 }
 
-/** Normalise a ledger row; null for "no such attempt". Errors name fields, never values. */
+/** Most items one attempt may carry (item indexes run 0..9999). */
+export const MAX_ITEMS = 10_000;
+
+function normalizeItem(it, position, bad) {
+  if (it === null || typeof it !== 'object' || Array.isArray(it)) bad('items');
+  const rawIndex = pick(it, 'index', 'item_index');
+  const index = rawIndex === undefined ? position : toInt(rawIndex);
+  if (!(index >= 0) || index >= MAX_ITEMS) bad('item index');
+  const runKey = pick(it, 'run_key');
+  if (typeof runKey !== 'string' || !/^[0-9a-f]{64}$/.test(runKey)) bad('run_key');
+  const fence = toInt(pick(it, 'fence', 'fencing_no'));
+  if (!(fence >= 1)) bad('fence');
+  const curRaw = pick(it, 'current_fence');
+  const current = curRaw === undefined ? null : toInt(curRaw);
+  if (current !== null && !(current >= 1)) bad('current_fence');
+  const outcome = pick(it, 'outcome') ?? null;
+  return { index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome) };
+}
+
+/**
+ * Normalise a ledger row; null for "no such attempt". Errors name fields,
+ * never values. Returns {attempt_id, repo, run_id, workflow_file, workflow_sha,
+ * canaries, items: [{index, run_key, fence, current_fence, outcome}]} with
+ * items sorted by index, and the indexes exactly 0..n-1.
+ */
 export function normalizeAttempt(row) {
   if (row === null || row === undefined) return null;
   const bad = (field) => { throw new LedgerError(`ledger: attempt row has a missing or invalid ${field}`); };
   const attemptId = pick(row, 'attempt_id');
   if (typeof attemptId !== 'string' || !ATTEMPT_ID_RE.test(attemptId)) bad('attempt_id');
-  const runKey = pick(row, 'run_key');
-  if (typeof runKey !== 'string' || !/^[0-9a-f]{64}$/.test(runKey)) bad('run_key');
-  const fence = toInt(pick(row, 'fence', 'fencing_no'));
-  if (!(fence >= 1)) bad('fence');
   const repo = pick(row, 'repo', 'worker_repo');
   if (typeof repo !== 'string' || !REPO_RE.test(repo)) bad('repo');
   const workflowFile = pick(row, 'workflow_file', 'workflow');
@@ -66,26 +93,28 @@ export function normalizeAttempt(row) {
   if (runId !== null && !(runId >= 1)) bad('run_id');
   const sha = pick(row, 'workflow_sha');
   if (sha !== undefined && (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha))) bad('workflow_sha');
-  const curRaw = pick(row, 'current_fence');
-  const current = curRaw === undefined ? null : toInt(curRaw);
-  if (current !== null && !(current >= 1)) bad('current_fence');
   let canaries = pick(row, 'canaries') ?? [];
   if (typeof canaries === 'string') {
     try { canaries = JSON.parse(canaries); } catch { bad('canaries'); }
   }
   if (!Array.isArray(canaries) || !canaries.every((c) => typeof c === 'string')) bad('canaries');
-  const outcome = pick(row, 'outcome') ?? null;
+  let items;
+  if (row.items !== undefined) {
+    if (!Array.isArray(row.items) || row.items.length === 0 || row.items.length > MAX_ITEMS) bad('items');
+    items = row.items.map((it, i) => normalizeItem(it, i, bad)).sort((a, b) => a.index - b.index);
+  } else {
+    items = [normalizeItem({ ...row, index: 0 }, 0, bad)];
+  }
+  items.forEach((it, i) => { if (it.index !== i) bad('item index (indexes must run 0, 1, 2, ... without gaps)'); });
+  if (new Set(items.map((it) => it.run_key)).size !== items.length) bad('run_key (each item needs its own)');
   return {
     attempt_id: attemptId,
-    run_key: runKey,
-    fence,
     repo,
     run_id: runId,
     workflow_file: workflowFile,
     workflow_sha: sha ?? null,
-    current_fence: current,
-    outcome: outcome === null ? null : String(outcome),
     canaries,
+    items,
   };
 }
 
@@ -156,19 +185,24 @@ function jsonLedger(path, now) {
   return {
     kind: 'json',
     getAttempt: (id) => {
-      const row = doc.attempts.find((a) => a.attempt_id === id);
-      // Like the state store: an attempt with a recorded result carries its outcome.
-      const last = doc.results.findLast((x) => x.attempt_id === id);
-      return normalizeAttempt(row && last && !row.outcome ? { ...row, outcome: last.outcome } : row);
+      const a = normalizeAttempt(doc.attempts.find((x) => x.attempt_id === id));
+      if (!a) return null;
+      // Like the state store: an item with a recorded result carries its outcome.
+      for (const it of a.items) {
+        const last = doc.results.findLast((x) => x.attempt_id === id && x.run_key === it.run_key && x.fence === it.fence);
+        if (last && it.outcome === null) it.outcome = last.outcome ?? null;
+      }
+      return a;
     },
     recordResult: (r) => {
       const a = normalizeAttempt(doc.attempts.find((x) => x.attempt_id === r.attempt_id));
+      const item = a?.items.find((it) => it.run_key === r.run_key);
       let { accepted } = r;
       let reason = r.reason ?? null;
       let { outcome } = r;
-      if (accepted && (!a || (a.current_fence !== null && a.current_fence !== r.fence))) {
+      if (accepted && (!item || item.fence !== r.fence || (item.current_fence !== null && item.current_fence !== r.fence))) {
         accepted = false;
-        reason = a ? 'stale_fence' : 'unknown_attempt';
+        reason = !a ? 'unknown_attempt' : !item ? 'unknown_run_key' : item.fence !== r.fence ? 'fence_mismatch' : 'stale_fence';
         outcome = 'rejected';
       }
       doc.results.push({

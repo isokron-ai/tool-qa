@@ -34,8 +34,8 @@ function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 
 
 test('schema v3 adds the dispatch ledger tables and columns', () => {
   const db = fresh();
-  assert.equal(SCHEMA_VERSION, 3);
-  assert.equal(db.schemaVersion(), 3);
+  assert.equal(SCHEMA_VERSION, 4);
+  assert.equal(db.schemaVersion(), 4);
   const tables = db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const t of ['dispatches', 'dispatch_items', 'results', 'run_keys', 'kv']) assert.ok(tables.includes(t), t);
   const cols = (t) => db.raw.prepare(`PRAGMA table_info(${t})`).all().map((r) => r.name);
@@ -53,11 +53,50 @@ test('migration from version 2 keeps existing rows', () => {
   raw.prepare("INSERT INTO subjects VALUES ('s', 'repo', 'test', 'x', 'x')").run();
   const db = new StateDb(':memory:');
   db.raw = raw;
-  assert.equal(db.migrate(), 3);
+  assert.equal(db.migrate(), 4);
   const s = db.getSubject('s');
   assert.equal(s.tier, 4);
   assert.equal(s.sha, null);
   assert.equal(db.nextFence(), 8);
+  db.close();
+});
+
+test('schema v4 gives each dispatch item its position in the dispatched list', () => {
+  const db = fresh();
+  const cols = db.raw.prepare('PRAGMA table_info(dispatch_items)').all();
+  const col = cols.find((c) => c.name === 'item_index');
+  assert.ok(col, 'dispatch_items.item_index');
+  assert.equal(col.notnull, 1);
+  // Items keep the order they were dispatched in, not run_key order.
+  dispatch(db, { items: [{ runKey: KEY_B, subject: 's2' }, { runKey: KEY_A, subject: 's1' }] });
+  const d = db.getDispatch('att-1');
+  assert.deepEqual(d.items.map((i) => [i.item_index, i.run_key]), [[0, KEY_B], [1, KEY_A]]);
+  assert.throws(
+    () => db.raw.prepare("INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence, item_index) VALUES ('att-1', ?, 's3', 'live-probe', 9, 1)").run('c'.repeat(64)),
+    /UNIQUE/, 'one item per position',
+  );
+  db.close();
+});
+
+test('migration from version 3 numbers existing items in the order they were stored', () => {
+  const raw = new DatabaseSync(':memory:');
+  for (const f of ['schema.sql', 'schema-v2.sql', 'schema-v3.sql']) raw.exec(readFileSync(new URL(`../state/${f}`, import.meta.url), 'utf8'));
+  raw.exec("INSERT INTO counters (name, value) VALUES ('fence', 3); PRAGMA user_version = 3");
+  const t = new Date(T0).toISOString();
+  for (const id of ['old-1', 'old-2']) {
+    raw.prepare(`INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status)
+      VALUES (?, ?, 'live-probe', 'isokron-ai/mcp-check', 'live-probe.yml', 'main', ?, ?, 'dispatched')`).run(id, `shard-${id}`, t, t);
+  }
+  const ins = raw.prepare("INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence) VALUES (?, ?, ?, 'live-probe', ?)");
+  ins.run('old-1', KEY_A, 's1', 1);
+  ins.run('old-2', KEY_B, 's2', 2);
+  ins.run('old-2', KEY_A, 's1', 3);
+  const db = new StateDb(':memory:');
+  db.raw = raw;
+  assert.equal(db.migrate(), 4);
+  assert.deepEqual(db.getDispatch('old-1').items.map((i) => [i.item_index, i.run_key]), [[0, KEY_A]]);
+  assert.deepEqual(db.getDispatch('old-2').items.map((i) => [i.item_index, i.run_key]), [[0, KEY_B], [1, KEY_A]]);
+  assert.equal(db.nextFence(), 4);
   db.close();
 });
 

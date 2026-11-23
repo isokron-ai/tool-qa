@@ -33,16 +33,20 @@ A worker workflow must:
   secrets, like every worker;
 - pass the inputs to its steps through `env:`, never by writing
   `${{ inputs.* }}` inside `run:`;
-- report one result per item, quoting `run_key`, `attempt_id` and `fence`
-  exactly as given. A result for anything else is rejected.
+- report one result per item, each in its own bundle, quoting `run_key`,
+  `attempt_id` and `fence` exactly as given. A result for anything else is
+  rejected.
 
 The result format (files, artifact name, encryption, checks) is the worker
 contract in [`worker-kit/README.md`](../worker-kit/README.md) and
-[`ingest/README.md`](../ingest/README.md): one artifact
-`result-<attempt_id>.tar.age` per run, sealed to `worker-kit/ingest.pub`.
-Result manifest v1 names exactly one `run_key`, so for now every enabled
-workflow needs `shard_size: 1` in `pump/workflows.json`; the pump refuses to
-dispatch anything otherwise (see "Ingest in the pump").
+[`ingest/README.md`](../ingest/README.md): one artifact per item,
+`result-<attempt_id>-<index>.tar.age`, sealed to `worker-kit/ingest.pub`,
+where `<index>` is the item's 0-based position in `items`. Result manifest v1
+names exactly one `run_key`, which is why each item has its own bundle. Each
+item is judged and recorded on its own: a missing or bad bundle rejects that
+item only. For a dispatch of one item, ingest also accepts the older name
+`result-<attempt_id>.tar.age`. Any `shard_size` in `pump/workflows.json`
+works; `items` holds between one and `shard_size` entries.
 
 How long a dispatch may take: 1.5 × (`setup_minutes` + items ×
 `minutes_per_subject`) + 10 minutes, from `pump/workflows.json`. After that its
@@ -72,10 +76,10 @@ const summary = await collector.collect({ db, now, log, mintToken, deadline });
 Order inside one pump run:
 
 1. Before the first tick, if the pump has worker slots and any workflow is
-   enabled, `collector.check({ workflows })` makes sure results can be judged:
-   `worker-kit/ingest.pub` holds a real age key (not the placeholder),
-   `AGE_IDENTITY` is set and is the identity of a key in it, and every enabled
-   workflow has `shard_size: 1`. It makes no API calls. If it throws
+   enabled, `collector.check()` makes sure results can be judged:
+   `worker-kit/ingest.pub` holds a real age key (not only comments), and
+   `AGE_IDENTITY` is set and is the identity of a key in it. It makes no API
+   calls. If it throws
    `IngestSetupError`, the pump logs why, dispatches nothing for the whole run,
    still reaps and pushes, and the run fails. `collect()` repeats the key
    checks whenever there is a dispatch to look at, so a housekeeping run with
@@ -94,16 +98,21 @@ What `collect()` does, oldest dispatch first, for each dispatch from
 |---|---|
 | No run id yet | Look the run up by its name, `shard <shard_id>`, among `workflow_dispatch` runs of the worker workflow created since two minutes before the dispatch; store it with `db.setDispatchRun()`. None yet: wait. |
 | Run not finished, or GitHub does not know it | Wait. A run that never finishes is handled by lease expiry. |
-| Run finished | Judge its one result artifact (`ingestAttempt()` in [`ingest/ingest.mjs`](../ingest/ingest.mjs), steps in [`ingest/README.md`](../ingest/README.md)), record the decision with `db.recordResult()`, seal the outputs to `worker-kit/ingest.pub` as `ingest-<attempt_id>.tar.age` in the outputs directory, and close the dispatch as `run_completed` (frees its slot and any lease left). Recording, sealing and closing are one transaction (`db.txAsync()`): if sealing fails, nothing is recorded and a later tick tries again. |
-| More than one run_key | Closed as `unsupported_shard` without judging (result manifest v1 holds one run_key). |
-| Lease expired before the run finished | Still judged for six hours after the dispatch was closed, at most every ten minutes; the store keeps the late result as rejected. |
+| Run finished | Check the run and list its artifacts once (`openAttempt()` in [`ingest/ingest.mjs`](../ingest/ingest.mjs), steps in [`ingest/README.md`](../ingest/README.md)). Then, for each item without a result, in index order: judge it against its own artifact `result-<attempt_id>-<index>.tar.age`, record the decision with `db.recordResult()`, and seal the item's outputs to `worker-kit/ingest.pub` as `ingest-<attempt_id>-<index>.tar.age` in the outputs directory. Recording and sealing one item are one transaction (`db.txAsync()`): if sealing fails, nothing is recorded for that item, the other items go on, and a later tick tries it again. Once every item has a result, the dispatch is closed as `run_completed` (frees its slot and any lease left), unless the store already closed it as `results_in`. |
+| Refused before any item was judged | Unknown attempt, wrong repo or run, run not found: nothing is recorded, the report is sealed as `ingest-<attempt_id>.tar.age`, and the dispatch is closed. |
+| Lease expired before the run finished | Still judged for six hours after the dispatch was closed, at most every ten minutes; the store keeps the late results as rejected. |
+
+The `deadline` is checked before every item, so a large shard may be judged
+over several ticks; items already recorded are skipped.
 
 It returns a summary: `{ checked, waiting, judged, recorded, closed,
-correlated, unsupported, errors, stopped, outcomes, changed }`. `stopped` is
-`budget` when the API budget (pump/budgets.mjs; ingest's calls go through the
-same budget as the pump's, in the `actions` and `artifacts` families) would
-have to wait, `deadline`, or `registry` when the field registry could not be
-loaded; the rest waits for the next tick. An error on one attempt is logged,
+correlated, errors, stopped, outcomes, changed }`. `checked` and `waiting`
+count dispatches; `judged`, `recorded` and `outcomes` count items; `errors`
+counts failed items and dispatches. `stopped` is `budget` when the API
+budget (pump/budgets.mjs; ingest's calls go through the same budget as the
+pump's, in the `actions` and `artifacts` families) would have to wait,
+`deadline`, or `registry` when the field registry could not be loaded; the
+rest waits for the next tick. An error on one item is logged,
 nothing is recorded for it, and the next tick tries again. Any other error
 thrown by `collect()` is logged and the tick goes on; `IngestSetupError` stops
 dispatching for the rest of the run. The pump keeps the summary in
@@ -122,13 +131,16 @@ paused.
 ### `db.getAttempt(attemptId)`
 
 What ingest needs to know about a dispatch, or `undefined` if there is no
-such attempt: `attempt_id`, `run_key`, `fence`, `subject`, `workflow`, `repo`,
-`workflow_file` (a path under `.github/workflows/`), `run_id` (a number, or
-`null` until the run is known), `workflow_sha`, `current_fence` (the fence of
-the run_key's lease now; a newer one means this attempt is stale), `outcome`
-(`null` until a result for this attempt and fence is recorded), `canaries`
-(always empty for now: none are injected yet), `status`, `shard_id`, `created`
-and `expires`. It throws for a dispatch that carries more than one run_key.
+such attempt: `attempt_id`, `workflow`, `repo`, `workflow_file` (a path under
+`.github/workflows/`), `run_id` (a number, or `null` until the run is known),
+`workflow_sha`, `canaries` (always empty for now: none are injected yet),
+`status`, `shard_id`, `created`, `expires`, and `items`, one per dispatched
+item in dispatch order:
+`{ index, run_key, fence, subject, current_fence, outcome, resolved }`.
+`index` is the item's 0-based position in the `items` input the worker got,
+which names its result artifact; `current_fence` is the fence of the
+run_key's lease now (a newer one means this item is stale); `outcome` is
+`null` until a result for this attempt, run_key and fence is recorded.
 [`ingest/ledger.mjs`](../ingest/ledger.mjs) (`dbLedger()`) adapts it for
 ingest.
 
@@ -152,7 +164,8 @@ connection meanwhile.
 The dispatch row with its items, or `undefined`. Fields include `repo`,
 `workflow`, `workflow_file`, `ref`, `status` (`pending`, `dispatched`, `done`,
 `failed`, `expired`), `run_id`, `run_url`, `workflow_sha` and `expires`. Each
-item has `run_key`, `subject`, `fence` and `resolved`. Ingest uses it to check
+item has `item_index` (its 0-based position in the `items` input), `run_key`,
+`subject`, `fence` and `resolved`, in index order. Ingest uses it to check
 that a result came from the run the pump started, in the repository and at the
 workflow commit it expected.
 

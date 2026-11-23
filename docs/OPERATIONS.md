@@ -194,12 +194,14 @@ normal.
 Each tick, in this order:
 
 1. **Ingest.** For every dispatch still waiting for a result, the pump checks
-   whether its worker run has finished. For a finished run it judges the result
-   artifact (the checks in [`ingest/README.md`](../ingest/README.md)), records
-   the decision in the state, writes the outputs sealed to
-   `worker-kit/ingest.pub`, and closes the dispatch, which frees its slot. One
-   log line per judged attempt: `ingest: <workflow> shard <shard id>
-   (<attempt id>): <outcome> (<reason>), recorded, outputs sealed`. Ingest stops
+   whether its worker run has finished. For a finished run it judges each
+   item's result artifact on its own (the checks in
+   [`ingest/README.md`](../ingest/README.md)), records each decision in the
+   state, writes each item's outputs sealed to `worker-kit/ingest.pub`, and,
+   once every item has a decision, closes the dispatch, which frees its slot.
+   One log line per judged item: `ingest: <workflow> shard <shard id>
+   (<attempt id>) item <index>: <outcome> (<reason>), recorded, outputs
+   sealed`. Ingest stops
    taking new results about two minutes before the run ends (about minute 9),
    so everything it judged is in the final push.
 2. **Reap and dispatch.** Close dispatches whose lease expired, then send due
@@ -210,9 +212,8 @@ At the end of the job, `pump.yml` uploads the sealed ingest outputs as one
 artifact (see "Reading ingest outputs" below).
 
 Before it dispatches anything, a run checks that results can be judged:
-`worker-kit/ingest.pub` holds the real key, `AGE_IDENTITY` is set and matches
-it, and every enabled workflow has `"shard_size": 1` (result manifest v1 holds
-one run_key per result). If any of these fails, the run logs `pump: ingest is
+`worker-kit/ingest.pub` holds the real key, and `AGE_IDENTITY` is set and
+matches it. If either fails, the run logs `pump: ingest is
 not ready, so nothing is dispatched this run: <why>`, still reaps and pushes,
 and fails (red), so no worker is sent out whose result could not be judged.
 
@@ -220,8 +221,9 @@ To start it:
 
 1. Set up the GitHub App and the `loop` environment (below), including the
    ingest key pair ("Result encryption keys").
-2. Enable a worker workflow in `pump/workflows.json` (`"enabled": true`, with
-   `"shard_size": 1`) once it exists in its repository. Until then the pump
+2. Enable a worker workflow in `pump/workflows.json` (`"enabled": true`) once
+   it exists in its repository and uploads one result bundle per item
+   ([`worker-kit/README.md`](../worker-kit/README.md)). Until then the pump
    has nothing to dispatch.
 3. Set `LOOP_SLOTS` (for example 5) and `LOOP_ENABLED=true`.
 4. Run the pump by hand once, or wait for the schedule.
@@ -383,7 +385,7 @@ age-keygen -y ingest-identity.txt   # prints the public key again
 
 1. Put the public key (`age1...`) on its own line in
    [`worker-kit/ingest.pub`](../worker-kit/ingest.pub), in place of the
-   placeholder (lines starting with `#` may stay), and merge it. Workers use
+   current one (lines starting with `#` may stay), and merge it. Workers use
    the key in the tool-qa commit they pin.
 2. Store the identity as the secret `AGE_IDENTITY` in the environment `loop`:
 
@@ -394,14 +396,15 @@ age-keygen -y ingest-identity.txt   # prints the public key again
 3. Keep one offline copy of the identity somewhere safe, then delete the file.
    Never commit it, and never paste it into an issue, a log or a workflow.
 
-`worker-kit/ingest.pub` ships with a placeholder and stays that way until you
-put the real key in. Until then the worker action refuses to upload, the pump
-judges nothing and dispatches no work (each run fails with `pump: ingest is not
-ready ... worker-kit/ingest.pub has no age public key yet (it is still the
-placeholder) ...`), and the manual re-ingest exits 1 without judging anything.
-The same happens, before anything is fetched, if `AGE_IDENTITY` is missing or
-is not the identity of a key in `ingest.pub`, so a wrong secret never turns
-into a series of `decrypt_failed` rejections.
+`worker-kit/ingest.pub` holds the real key. If it ever holds no key (only
+`#` comment lines, the placeholder it once shipped with), the worker action
+refuses to upload, the pump judges nothing and dispatches no work (each run
+fails with `pump: ingest is not ready ... worker-kit/ingest.pub has no age
+public key yet (it is still the placeholder) ...`), and the manual re-ingest
+exits 1 without judging anything. The same happens, before anything is
+fetched, if `AGE_IDENTITY` is missing or is not the identity of a key in
+`ingest.pub`, so a wrong secret never turns into a series of
+`decrypt_failed` rejections.
 
 **Rotation.** Set `LOOP_SLOTS=0` so no new work goes out, and wait until the
 pump has judged every running worker (no open dispatches: `ingest: checked 0`
@@ -414,18 +417,21 @@ every bundle and every sealed ingest output encrypted to it.
 
 **Reading ingest outputs.** Each pump run that sealed any outputs uploads one
 artifact `ingest-<run id>-<run attempt>` (kept 30 days) holding one
-age-encrypted tar per judged attempt, `ingest-<attempt>.tar.age`. To find the
-run that judged an attempt, search the pump logs for its attempt id (the
-`ingest:` line). A manual re-ingest uploads `ingest-<attempt>` instead. Download
+age-encrypted tar per judged item, `ingest-<attempt>-<index>.tar.age`
+(`<index>` is the item's position in the shard, from 0), and
+`ingest-<attempt>.tar.age` for an attempt refused before any item was judged.
+To find the run that judged an attempt, search the pump logs for its attempt
+id (the `ingest:` lines). A manual re-ingest uploads `ingest-<attempt>`
+instead, one tar with every item it judged. Download
 it from the run's page (or with `gh run download`; unzip it if it arrives
 zipped), then:
 
 ```sh
-age --decrypt -i ingest-identity.txt -o ingest.tar ingest-<attempt>.tar.age
-tar -tf ingest.tar    # accepted/<attempt>/..., rejected/<attempt>/... or quarantine/<attempt>/...
+age --decrypt -i ingest-identity.txt -o ingest.tar ingest-<attempt>-<index>.tar.age
+tar -tf ingest.tar    # accepted/<attempt>/<index>/..., rejected/<attempt>/<index>/... or quarantine/<attempt>/<index>/...
 ```
 
-`ingest.json` in there is the report. For a rejected or quarantined attempt,
+`ingest.json` in there is the report. For a rejected or quarantined item,
 `result.tar.age` is the worker's bundle as uploaded; it decrypts with the same
 identity. A quarantined bundle holds a secret or a canary in the clear: open it
 only on a trusted machine and never publish it.
@@ -434,7 +440,7 @@ The pump uploads the artifact at the end of the job, after it has pushed the
 state, and also when the pump step failed. If the job is lost before the upload
 (a lost runner, a job timeout), decisions it already pushed stay recorded but
 their outputs are gone; judging the attempt again does not bring them back,
-because a recorded attempt is a no-op.
+because items that already have a result are skipped.
 
 ## Manual re-ingest
 
@@ -444,8 +450,8 @@ the attempts it did not judge, for example one whose run it never found (no run
 id came back from the dispatch and no run named `shard <shard id>` turned up
 before the lease expired), one that finished more than six hours after its
 lease expired, or one that kept failing with an error in the pump log. It judges one attempt with the same
-checks (details: [`ingest/README.md`](../ingest/README.md)) and records the
-decision.
+checks (details: [`ingest/README.md`](../ingest/README.md)) and records a
+decision for each of its items that has none yet.
 
 It writes the state, so **pause the pump first**:
 

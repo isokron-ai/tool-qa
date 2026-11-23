@@ -43,18 +43,16 @@ test('getAttempt describes a dispatch in the shape ingest reads', () => {
   assert.equal(db.getAttempt('nope'), undefined);
   const before = db.getAttempt('att-1');
   assert.equal(before.attempt_id, 'att-1');
-  assert.equal(before.run_key, KEY_A);
-  assert.equal(before.fence, item.fence);
-  assert.equal(before.subject, 'repo:1');
   assert.equal(before.workflow, 'live-probe');
   assert.equal(before.repo, WORKER_REPO);
   assert.equal(before.workflow_file, '.github/workflows/qa-worker.yml', 'a bare file name gets the workflows directory');
   assert.equal(before.run_id, null);
   assert.equal(before.workflow_sha, null);
-  assert.equal(before.current_fence, item.fence);
-  assert.equal(before.outcome, null);
   assert.deepEqual(before.canaries, []);
   assert.equal(before.status, 'pending');
+  assert.deepEqual(before.items, [{
+    index: 0, run_key: KEY_A, fence: item.fence, subject: 'repo:1', current_fence: item.fence, outcome: null, resolved: null,
+  }]);
 
   db.markDispatched('att-1', { runId: 4242, workflowSha: SHA, correlatedBy: 'response' });
   const after = db.getAttempt('att-1');
@@ -65,9 +63,10 @@ test('getAttempt describes a dispatch in the shape ingest reads', () => {
   const n = normalizeAttempt(after);
   assert.equal(n.workflow_file, '.github/workflows/qa-worker.yml');
   assert.equal(n.run_id, 4242);
+  assert.deepEqual(n.items.map((i) => [i.index, i.run_key, i.fence]), [[0, KEY_A, item.fence]]);
 
   db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item.fence, outcome: 'accepted', accepted: true, now: T0 + MIN });
-  assert.equal(db.getAttempt('att-1').outcome, 'accepted', 'a recorded attempt carries its outcome');
+  assert.equal(db.getAttempt('att-1').items[0].outcome, 'accepted', 'a recorded item carries its outcome');
   db.close();
 });
 
@@ -78,10 +77,23 @@ test('getAttempt keeps a workflow path that already names the directory', () => 
   db.close();
 });
 
-test('getAttempt refuses a dispatch that carries several run_keys (result manifest v1 holds one)', () => {
+test('getAttempt lists every item of a multi-item dispatch in dispatch order, each with its own outcome', () => {
   const db = openState(':memory:');
-  dispatch(db, { items: [{ runKey: KEY_A, subject: 's1' }, { runKey: KEY_B, subject: 's2' }] });
-  assert.throws(() => db.getAttempt('att-1'), /att-1 carries 2 run_keys.*one run_key per attempt.*shard_size 1/);
+  const c = 'c'.repeat(64);
+  const leased = dispatch(db, { items: [{ runKey: KEY_B, subject: 's2' }, { runKey: KEY_A, subject: 's1' }, { runKey: c, subject: 's3' }] });
+  db.markDispatched('att-1', { runId: 4242, workflowSha: SHA });
+  const a = db.getAttempt('att-1');
+  assert.deepEqual(a.items.map((i) => [i.index, i.run_key, i.subject, i.fence]), leased.map((l, i) => [i, l.run_key, l.subject, l.fence]));
+  assert.ok(a.items.every((i) => i.outcome === null && i.current_fence === i.fence));
+
+  db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: leased[1].fence, outcome: 'rejected', accepted: false, reason: 'no_artifact', now: T0 + MIN });
+  const b = db.getAttempt('att-1');
+  assert.deepEqual(b.items.map((i) => i.outcome), [null, 'rejected', null]);
+  assert.equal(db.getLease(KEY_A).holder, null, 'the decided item gave its lease back');
+  assert.equal(b.items[1].current_fence, leased[1].fence, 'a released lease keeps its fence, so the item is not stale');
+  assert.equal(b.status, 'dispatched', 'still open while other items wait');
+  const n = normalizeAttempt(b);
+  assert.deepEqual(n.items.map((i) => i.index), [0, 1, 2]);
   db.close();
 });
 
@@ -129,8 +141,8 @@ test('recordResult: a holder whose lease was taken over is refused as stale_fenc
   assert.equal(db.getLease(KEY_A).holder, 'att-new', 'the newer lease is untouched');
   assert.equal(db.getDispatch('att-new').status, 'pending');
   assert.equal(db.rejectedCount(KEY_A), 0, 'a fencing failure does not count against the run_key');
-  assert.equal(db.getAttempt('att-old').outcome, 'rejected');
-  assert.equal(db.getAttempt('att-old').current_fence, cur.fence);
+  assert.equal(db.getAttempt('att-old').items[0].outcome, 'rejected');
+  assert.equal(db.getAttempt('att-old').items[0].current_fence, cur.fence);
   db.close();
 });
 
@@ -197,8 +209,8 @@ test('the CLI ledger (--state FILE) opens the real store and sees the same fence
     try {
       assert.equal(ledger.kind, 'state');
       const row = ledger.getAttempt('att-old');
-      assert.equal(row.fence, old.fence);
-      assert.notEqual(row.current_fence, old.fence);
+      assert.equal(row.items[0].fence, old.fence);
+      assert.notEqual(row.items[0].current_fence, old.fence);
       assert.equal(ledger.getAttempt('forged'), null);
       const r = await ingestAttempt({ repo: WORKER_REPO, runId: 4242, attemptId: 'att-old' }, {
         ledger, github: fakeGithub(), decrypt: () => { throw new Error('not reached'); }, registry: null,
@@ -270,5 +282,19 @@ test('dispatchesAwaitingResults lists open dispatches and recently expired ones 
   // Once something is recorded for the late attempt it is no longer listed.
   db.recordResult({ run_key: KEY_B, attempt_id: 'late', fence: db.getDispatch('late').items[0].fence, outcome: 'accepted', accepted: true, now: T0 + 7 * MIN });
   assert.deepEqual(ids(T0 + 7 * MIN, 60 * MIN), ['open']);
+  db.close();
+});
+
+test('dispatchesAwaitingResults keeps a late multi-item dispatch listed until every item has something recorded', () => {
+  const db = openState(':memory:');
+  const items = dispatch(db, { attemptId: 'late', items: [{ runKey: KEY_A, subject: 's1' }, { runKey: KEY_B, subject: 's2' }], ttlMs: 5 * MIN });
+  db.markDispatched('late', { runId: 9 });
+  db.reapExpiredDispatches({ now: T0 + 6 * MIN });
+  const ids = () => db.dispatchesAwaitingResults({ now: T0 + 7 * MIN, lateMs: 60 * MIN }).map((d) => d.attempt_id);
+  assert.deepEqual(ids(), ['late']);
+  db.recordResult({ run_key: KEY_A, attempt_id: 'late', fence: items[0].fence, outcome: 'accepted', accepted: true, now: T0 + 7 * MIN });
+  assert.deepEqual(ids(), ['late'], 'one item is still undecided');
+  db.recordResult({ run_key: KEY_B, attempt_id: 'late', fence: items[1].fence, outcome: 'accepted', accepted: true, now: T0 + 7 * MIN });
+  assert.deepEqual(ids(), []);
   db.close();
 });

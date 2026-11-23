@@ -15,17 +15,22 @@
 // more run_keys with their fences. Ingest reads a dispatch with getAttempt() and
 // reports every result it has checked with recordResult(); the pump runs ingest
 // in-process, so it stays the only writer. See docs/INTERFACES.md.
+//
+// Schema v4 numbers the items of a dispatch (item_index, their 0-based position
+// in the dispatched list). The worker names each item's result bundle by that
+// position and ingest judges every item on its own.
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const MAX_SLOTS = 15;
 
 const MIGRATIONS = [
   { version: 1, sql: () => readFileSync(new URL('./schema.sql', import.meta.url), 'utf8') },
   { version: 2, sql: () => readFileSync(new URL('./schema-v2.sql', import.meta.url), 'utf8') },
   { version: 3, sql: () => readFileSync(new URL('./schema-v3.sql', import.meta.url), 'utf8') },
+  { version: 4, sql: () => readFileSync(new URL('./schema-v4.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -384,8 +389,10 @@ export class StateDb {
   }
 
   /**
-   * Record a dispatch before it is sent. `items` are [{run_key, subject, fence}];
-   * their leases (keyed by run_key, held by attemptId) must already be taken.
+   * Record a dispatch before it is sent. `items` are [{run_key, subject, fence}]
+   * in the order the worker receives them; each item's position is stored as its
+   * item_index. Their leases (keyed by run_key, held by attemptId) must already
+   * be taken.
    */
   createDispatch({ attemptId, shardId, workflow, repo, workflowFile, ref, expires, items, now }) {
     if (!attemptId || !shardId || !workflow || !repo || !workflowFile || !ref) {
@@ -398,8 +405,8 @@ export class StateDb {
         INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
       `).run(attemptId, shardId, workflow, repo, workflowFile, ref, t, iso(expires));
-      const ins = this.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence) VALUES (?, ?, ?, ?, ?)');
-      for (const it of items) ins.run(attemptId, it.run_key, it.subject, workflow, it.fence);
+      const ins = this.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence, item_index) VALUES (?, ?, ?, ?, ?, ?)');
+      items.forEach((it, index) => ins.run(attemptId, it.run_key, it.subject, workflow, it.fence, index));
     });
   }
 
@@ -466,11 +473,11 @@ export class StateDb {
     });
   }
 
-  /** A dispatch with its items, or undefined. Ingest uses this to check run id, repo and workflow SHA. */
+  /** A dispatch with its items in dispatch order (item_index), or undefined. */
   getDispatch(attemptId) {
     const d = plain(this.raw.prepare('SELECT * FROM dispatches WHERE attempt_id = ?').get(attemptId));
     if (!d) return undefined;
-    d.items = this.raw.prepare('SELECT * FROM dispatch_items WHERE attempt_id = ? ORDER BY run_key').all(attemptId).map(plain);
+    d.items = this.raw.prepare('SELECT * FROM dispatch_items WHERE attempt_id = ? ORDER BY item_index').all(attemptId).map(plain);
     return d;
   }
 
@@ -484,8 +491,9 @@ export class StateDb {
   /**
    * Dispatches ingest should look at: every open one (pending or dispatched,
    * expired or not, since the pump ingests before it reaps), and ones closed as
-   * expired within the last `lateMs` that have a run id and nothing recorded
-   * yet (a late result is still judged and stored, as rejected). Oldest first.
+   * expired within the last `lateMs` that have a run id and an item with nothing
+   * recorded yet (a late result is still judged and stored, as rejected). Oldest
+   * first.
    */
   dispatchesAwaitingResults({ now, lateMs = 0 } = {}) {
     const since = iso(toMs(now) - Math.max(0, Number(lateMs) || 0));
@@ -493,7 +501,9 @@ export class StateDb {
       SELECT d.* FROM dispatches d
       WHERE d.status IN ('pending', 'dispatched')
          OR (d.status = 'expired' AND d.closed > ? AND d.run_id IS NOT NULL
-             AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.attempt_id = d.attempt_id))
+             AND EXISTS (SELECT 1 FROM dispatch_items i WHERE i.attempt_id = d.attempt_id
+               AND NOT EXISTS (SELECT 1 FROM attempts a
+                 WHERE a.attempt_id = i.attempt_id AND a.run_key = i.run_key AND a.fence = i.fence)))
       ORDER BY d.created, d.attempt_id
     `).all(since).map(plain);
   }
@@ -502,47 +512,50 @@ export class StateDb {
    * The ingest interface (docs/INTERFACES.md). What ingest needs to know about a
    * dispatch, or undefined if there is no such attempt:
    *
-   *   {attempt_id, run_key, fence, subject, workflow, repo, workflow_file,
-   *    run_id, workflow_sha, current_fence, outcome, canaries, status, shard_id,
-   *    created, expires}
+   *   {attempt_id, workflow, repo, workflow_file, run_id, workflow_sha,
+   *    canaries, status, shard_id, created, expires,
+   *    items: [{index, run_key, fence, subject, current_fence, outcome, resolved}]}
    *
-   * workflow_file is a path under .github/workflows/. current_fence is the fence
-   * of the run_key's lease now (a newer one means this attempt is stale).
-   * outcome is null until a result for this attempt and fence is recorded.
+   * workflow_file is a path under .github/workflows/. items are in dispatch
+   * order; index is the item's 0-based position, which names its result bundle
+   * (result-<attempt_id>-<index>.tar.age). current_fence is the fence of the
+   * item's run_key lease now (a newer one means the item is stale). outcome is
+   * null until a result for this attempt, run_key and fence is recorded.
    * canaries is always empty for now (none are injected yet).
-   *
-   * Throws for a dispatch with more than one run_key: result manifest v1 names
-   * one run_key, so such a shard cannot be ingested.
    */
   getAttempt(attemptId) {
     const d = this.getDispatch(attemptId);
     if (!d) return undefined;
-    if (d.items.length !== 1) {
-      throw new Error(`attempt ${attemptId} carries ${d.items.length} run_keys; result manifest v1 holds one run_key per attempt, so ingest needs shard_size 1`);
-    }
-    const [item] = d.items;
-    const lease = this.getLease(item.run_key);
-    const rec = this.raw.prepare(`
+    const recorded = this.raw.prepare(`
       SELECT accepted, outcome FROM attempts WHERE attempt_id = ? AND run_key = ? AND fence = ? ORDER BY id LIMIT 1
-    `).get(attemptId, item.run_key, item.fence);
+    `);
+    const items = d.items.map((it) => {
+      const lease = this.getLease(it.run_key);
+      const rec = recorded.get(attemptId, it.run_key, it.fence);
+      return {
+        index: it.item_index,
+        run_key: it.run_key,
+        fence: it.fence,
+        subject: it.subject,
+        current_fence: lease ? lease.fence : null,
+        outcome: rec ? rec.outcome ?? (rec.accepted === 1 ? 'accepted' : 'rejected') : null,
+        resolved: it.resolved,
+      };
+    });
     const file = String(d.workflow_file);
     return {
       attempt_id: d.attempt_id,
-      run_key: item.run_key,
-      fence: item.fence,
-      subject: item.subject,
       workflow: d.workflow,
       repo: d.repo,
       workflow_file: file.includes('/') ? file : `.github/workflows/${file}`,
       run_id: d.run_id !== null && /^\d{1,16}$/.test(d.run_id) ? Number(d.run_id) : null,
       workflow_sha: d.workflow_sha,
-      current_fence: lease ? lease.fence : null,
-      outcome: rec ? rec.outcome ?? (rec.accepted === 1 ? 'accepted' : 'rejected') : null,
       canaries: [],
       status: d.status,
       shard_id: d.shard_id,
       created: d.created,
       expires: d.expires,
+      items,
     };
   }
 

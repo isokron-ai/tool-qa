@@ -9,28 +9,36 @@
 //                       there is none yet, wait
 //   run not finished    wait (a run GitHub does not know also waits: the lease
 //                       expires and the work is due again)
-//   run finished        ingestAttempt() (ingest.mjs) judges the one result
-//                       artifact and records the decision; the outputs are
+//   run finished        openAttempt() (ingest.mjs) reads the ledger row, checks
+//                       the run and lists its artifacts once; then each item
+//                       (run_key) of the shard that has no result yet is judged
+//                       against its own result bundle, recorded, and its outputs
 //                       sealed to worker-kit/ingest.pub as
-//                       <outDir>/ingest-<attempt>.tar.age; the dispatch is closed
-//                       (run_completed), which frees its slot and any lease left
+//                       <outDir>/ingest-<attempt>-<index>.tar.age. Once every
+//                       item has a decision the dispatch is closed
+//                       (run_completed, unless the store already closed it as
+//                       results_in), which frees its slot and any lease left
 //
-// Recording, sealing and closing share one state transaction: if the outputs
-// cannot be written, nothing is recorded and a later tick judges it again. A
-// dispatch whose lease expired before its run finished is still judged for
-// `lateMs` after it closed (the store keeps that late result as rejected); such
-// late runs are looked at every `recheckLateMs` at most.
+// Each item's recording and sealing share one state transaction: if its outputs
+// cannot be written, nothing is recorded for it, the other items go on, and a
+// later tick judges it again; the dispatch stays open until then. The deadline
+// is checked before every item, so a large shard can be judged over several
+// ticks; items already recorded are skipped. An attempt refused before any item
+// could be judged records nothing; its report is sealed as
+// <outDir>/ingest-<attempt>.tar.age and the dispatch is closed. A dispatch whose
+// lease expired before its run finished is still judged for `lateMs` after it
+// closed (the store keeps those late results as rejected); such late runs are
+// looked at every `recheckLateMs` at most.
 //
 // Before anything is judged, check() makes sure it can be sealed and decrypted:
-// ingest.pub holds a real age key, AGE_IDENTITY is set and belongs to it, and
-// (given the workflows) every enabled workflow has shard_size 1, because result
-// manifest v1 carries one run_key. Otherwise it throws IngestSetupError, and the
-// pump dispatches nothing, so no worker runs whose result could not be judged.
+// ingest.pub holds a real age key, AGE_IDENTITY is set and belongs to it.
+// Otherwise it throws IngestSetupError, and the pump dispatches nothing, so no
+// worker runs whose result could not be judged.
 //
 // GitHub calls use an installation token per worker repository with actions:
 // read only. The pump hands in a fetch that goes through its API budget
 // (pump/budgets.mjs budgetedFetch); a BudgetExceededError ends this tick's
-// ingest without recording anything.
+// ingest: items recorded before it stay recorded, nothing more is judged.
 
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -40,7 +48,7 @@ import { fileURLToPath } from 'node:url';
 import { writeTar } from '../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from './age.mjs';
 import { makeGithub } from './github.mjs';
-import { ingestAttempt, MAX_BUNDLE_BYTES } from './ingest.mjs';
+import { MAX_BUNDLE_BYTES, openAttempt } from './ingest.mjs';
 import { dbLedger } from './ledger.mjs';
 import { loadRegistry as loadPinnedRegistry } from './registry.mjs';
 
@@ -55,10 +63,6 @@ export class IngestSetupError extends Error {
     super(message);
     this.name = 'IngestSetupError';
   }
-}
-
-function shardSize(wf) {
-  return Math.max(1, Math.trunc(Number(wf?.shard_size)) || 1);
 }
 
 /** ISO time to the second (the form GitHub's created filter documents). */
@@ -112,18 +116,10 @@ export function createCollector({
   const lateSeen = new Map(); // attempt_id -> when a late dispatch was last looked at
 
   /**
-   * Throw IngestSetupError unless results can be decrypted and sealed (and, given
-   * `workflows`, every enabled one has shard_size 1). Local only: no API calls.
+   * Throw IngestSetupError unless results can be decrypted and sealed. Local
+   * only: no API calls. Any shard size can be judged (one bundle per item).
    */
-  async function check({ workflows } = {}) {
-    for (const [name, wf] of Object.entries(workflows ?? {})) {
-      if (wf?.enabled === true && shardSize(wf) !== 1) {
-        throw new IngestSetupError(
-          `workflow "${name}" has shard_size ${wf.shard_size}, but result manifest v1 carries one run_key, so ingest needs `
-            + 'shard_size 1: set it in pump/workflows.json (or extend the result contract first)',
-        );
-      }
-    }
+  async function check() {
     if (ready) return ready;
     let recipients;
     try {
@@ -174,12 +170,14 @@ export function createCollector({
 
   /**
    * Judge what has finished. Returns a summary; `changed` says the state was
-   * written. Throws IngestSetupError (nothing can be judged) and nothing else:
-   * other failures are logged per dispatch and tried again on a later tick.
+   * written. judged, recorded and outcomes count items; checked, waiting,
+   * closed and correlated count dispatches. Throws IngestSetupError (nothing
+   * can be judged) and nothing else: other failures are logged and tried again
+   * on a later tick.
    */
   async function collect({ db, now = Date.now, log = () => {}, mintToken, deadline = Infinity } = {}) {
     const summary = {
-      checked: 0, waiting: 0, judged: 0, recorded: 0, closed: 0, correlated: 0, unsupported: 0, errors: 0,
+      checked: 0, waiting: 0, judged: 0, recorded: 0, closed: 0, correlated: 0, errors: 0,
       stopped: null, outcomes: {}, changed: false,
     };
     const list = db.dispatchesAwaitingResults({ now: now(), lateMs });
@@ -201,19 +199,14 @@ export function createCollector({
       }
       summary.checked += 1;
       const label = `${d.workflow} shard ${d.shard_id} (${d.attempt_id})`;
-      try {
-        const { items } = db.getDispatch(d.attempt_id);
-        if (items.length !== 1) {
-          summary.unsupported += 1;
-          if (open && db.closeDispatch(d.attempt_id, { reason: 'unsupported_shard', now: t })) {
-            summary.closed += 1;
-            summary.changed = true;
-          }
-          if (!open) lateSeen.set(d.attempt_id, Infinity);
-          log(`ingest: ${label} carries ${items.length} run_keys; result manifest v1 holds one, so it cannot be judged (use shard_size 1); closed as unsupported_shard`);
-          continue;
+      const closeIfOpen = () => {
+        if (open && db.closeDispatch(d.attempt_id, { reason: 'run_completed', now: now() })) {
+          summary.closed += 1;
+          summary.changed = true;
         }
-
+        if (!open) lateSeen.set(d.attempt_id, Infinity);
+      };
+      try {
         const client = await clientFor(d.repo, mintToken, t);
         let runId = d.run_id;
         if (runId === null || runId === undefined) {
@@ -255,39 +248,86 @@ export function createCollector({
           }
         }
 
-        let sealed = false;
-        const result = await db.txAsync(async () => {
-          const r = await ingestAttempt({ repo: d.repo, runId: Number(runId), attemptId: d.attempt_id }, {
-            ledger: dbLedger(db, { now }),
-            github: {
-              getRun: async () => run,
-              listRunArtifacts: (repo, id) => client.listRunArtifacts(repo, id),
-              downloadArtifact: (repo, id) => client.downloadArtifact(repo, id),
-            },
-            decrypt,
-            registry: reg,
-            now: () => new Date(now()),
-            allowNoControls,
-          });
-          if (r.outcome === 'pending') return r;
-          if (r.outputs.size > 0) {
-            seal(d.attempt_id, r.outputs, recipients);
-            sealed = true;
-          }
-          if (open && db.closeDispatch(d.attempt_id, { reason: 'run_completed', now: now() })) summary.closed += 1;
-          return r;
+        // The ledger row, the run checks and the artifact list, once per dispatch.
+        const opened = await openAttempt({ repo: d.repo, runId: Number(runId), attemptId: d.attempt_id }, {
+          ledger: dbLedger(db, { now }),
+          github: {
+            getRun: async () => run,
+            listRunArtifacts: (repo, id) => client.listRunArtifacts(repo, id),
+            downloadArtifact: (repo, id) => client.downloadArtifact(repo, id),
+          },
+          decrypt,
+          registry: reg,
+          now: () => new Date(now()),
+          allowNoControls,
         });
-        if (result.outcome === 'pending') {
-          summary.waiting += 1;
+        if (opened.done) {
+          const r = opened.done;
+          if (r.outcome === 'pending') {
+            summary.waiting += 1;
+            continue;
+          }
+          // Refused before any item could be judged (nothing recorded), or
+          // every item has a result already: seal the report, close the dispatch.
+          let sealed = false;
+          db.tx(() => {
+            if (r.outputs.size > 0) {
+              seal(d.attempt_id, r.outputs, recipients);
+              sealed = true;
+            }
+            closeIfOpen();
+          });
+          if (r.outcome !== 'already_recorded') {
+            log(`ingest: ${label}: ${r.outcome}${r.reason ? ` (${r.reason})` : ''}, nothing recorded${sealed ? ', outputs sealed' : ''}`);
+          }
           continue;
         }
-        summary.judged += 1;
-        summary.outcomes[result.outcome] = (summary.outcomes[result.outcome] ?? 0) + 1;
-        if (result.recorded) summary.recorded += 1;
-        summary.changed = true;
-        if (!open) lateSeen.set(d.attempt_id, Infinity);
-        const why = result.reason ? ` (${result.reason})` : '';
-        log(`ingest: ${label}: ${result.outcome}${why}${result.recorded ? ', recorded' : ''}${sealed ? ', outputs sealed' : ''}`);
+
+        // Each item in its own transaction: its decision is recorded only if
+        // its outputs were sealed.
+        let decided = 0;
+        let stopped = false;
+        const failures = new Map(); // message -> item indexes
+        for (const item of opened.items) {
+          if (now() >= deadline) {
+            summary.stopped = 'deadline';
+            stopped = true;
+            break;
+          }
+          try {
+            let sealed = false;
+            const r = await db.txAsync(async () => {
+              const res = await opened.judge(item);
+              if (res.outputs.size > 0) {
+                seal(`${d.attempt_id}-${item.index}`, res.outputs, recipients);
+                sealed = true;
+              }
+              return res;
+            });
+            decided += 1;
+            summary.judged += 1;
+            summary.outcomes[r.outcome] = (summary.outcomes[r.outcome] ?? 0) + 1;
+            if (r.recorded) summary.recorded += 1;
+            summary.changed = true;
+            const why = r.reason ? ` (${r.reason})` : '';
+            log(`ingest: ${label} item ${item.index}: ${r.outcome}${why}${r.recorded ? ', recorded' : ''}${sealed ? ', outputs sealed' : ''}`);
+          } catch (err) {
+            if (err instanceof IngestSetupError || err?.name === 'BudgetExceededError') throw err;
+            summary.errors += 1;
+            const message = String(err?.message ?? err);
+            failures.set(message, [...(failures.get(message) ?? []), item.index]);
+          }
+        }
+        for (const [message, indexes] of failures) {
+          const which = indexes.length === 1 ? `item ${indexes[0]}` : `items ${indexes.join(', ')}`;
+          log(`ingest: ${label} ${which}: ${message} (nothing recorded; will try again)`);
+        }
+        if (decided === opened.items.length) {
+          closeIfOpen();
+        } else if (stopped && !open) {
+          lateSeen.delete(d.attempt_id); // the rest is judged on the next tick
+        }
+        if (stopped) break;
       } catch (err) {
         if (err instanceof IngestSetupError) throw err;
         if (err?.name === 'BudgetExceededError') {

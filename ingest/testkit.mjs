@@ -123,7 +123,7 @@ export function defaultRun(over = {}) {
 export function artifactEntry(over = {}) {
   return {
     id: 901,
-    name: 'result-att-1.tar.age',
+    name: 'result-att-1-0.tar.age',
     size_in_bytes: 1000,
     expired: false,
     workflow_run: { id: RUN_ID },
@@ -133,7 +133,8 @@ export function artifactEntry(over = {}) {
 
 /**
  * A fake of ingest/github.mjs. `blob` is what downloadArtifact returns (or an
- * Error to throw). Calls are kept in `.calls`.
+ * Error to throw), or a function of the artifact id that returns one. Calls
+ * are kept in `.calls`.
  */
 export function fakeGithub({ run = defaultRun(), artifacts = [artifactEntry()], blob } = {}) {
   const calls = [];
@@ -149,8 +150,9 @@ export function fakeGithub({ run = defaultRun(), artifacts = [artifactEntry()], 
     },
     async downloadArtifact(repo, id) {
       calls.push(['downloadArtifact', repo, id]);
-      if (blob instanceof Error) throw blob;
-      return blob;
+      const b = typeof blob === 'function' ? blob(id) : blob;
+      if (b instanceof Error) throw b;
+      return b;
     },
   };
 }
@@ -169,6 +171,19 @@ export function expectedRow(over = {}) {
     current_fence: null,
     outcome: null,
     canaries: [],
+    ...over,
+  };
+}
+
+/**
+ * A ledger row for a shard of several items: item i has run_keys[i] and fence
+ * firstFence + i.
+ */
+export function multiItemRow(runKeys, { firstFence = 7, ...over } = {}) {
+  const { run_key: _k, fence: _f, current_fence: _c, outcome: _o, ...shared } = expectedRow();
+  return {
+    ...shared,
+    items: runKeys.map((k, index) => ({ index, run_key: k, fence: firstFence + index, current_fence: null, outcome: null })),
     ...over,
   };
 }

@@ -1,10 +1,10 @@
 # Architecture
 
 A short overview of how the loop is put together. Status: P1 in progress. The
-pump, dispatch, ingest (inside the pump) and the watchdog are built; every
-worker workflow is still switched off (`enabled: false` in
-`pump/workflows.json`) and `worker-kit/ingest.pub` still holds the placeholder,
-so nothing scans servers yet.
+pump, dispatch, ingest (inside the pump) and the watchdog are built, and
+`worker-kit/ingest.pub` holds the real ingest key; every worker workflow is
+still switched off (`enabled: false` in `pump/workflows.json`), so nothing
+scans servers yet.
 
 ## Repositories and roles
 
@@ -125,25 +125,27 @@ A worker's result is a claim until tool-qa has checked it. Ingest runs inside
 the pump process, at the start of every tick, so the pump stays the only
 writer of the state. For each dispatch still waiting, it looks up the worker
 run (by the id the dispatch returned, or by its run name `shard <shard_id>`).
-Once the run has finished, it downloads the one result artifact, decrypts it
-with the ingest identity (`AGE_IDENTITY`), checks it against the dispatch
+Once the run has finished, it judges every item of the shard on its own: it
+downloads the item's result artifact (`result-<attempt_id>-<index>.tar.age`,
+one per item, since result manifest v1 holds one run_key), decrypts it with
+the ingest identity (`AGE_IDENTITY`), checks it against the dispatch
 (identity, fence, workflow file and commit, file list, controls, the field
-registry, a secret scan), records the decision with the fence check of the
-state store, and closes the dispatch, which frees its slot. The worker's own
-exit status never decides. The checks are described in
+registry, a secret scan) and records the item's decision with the fence check
+of the state store. A missing or bad bundle rejects that item only. Once every
+item has a decision, the dispatch is closed, which frees its slot. The
+worker's own exit status never decides. The checks are described in
 [`ingest/README.md`](../ingest/README.md), the calls between pump, state and
 ingest in [INTERFACES.md](INTERFACES.md).
 
-Ingest's outputs (the accepted bundle, or the report and the ciphertext of a
-rejected or quarantined one) are age-encrypted to `worker-kit/ingest.pub` and
-uploaded by `pump.yml` as one artifact per run, so nothing is kept in the
-clear in CI.
+Ingest's outputs for each item (the accepted bundle, or the report and the
+ciphertext of a rejected or quarantined one) are age-encrypted to
+`worker-kit/ingest.pub` and uploaded by `pump.yml` as one artifact per run, so
+nothing is kept in the clear in CI.
 
 Before a run dispatches anything, it checks that results could be judged: a
-real key in `worker-kit/ingest.pub`, a matching `AGE_IDENTITY`, and
-`shard_size: 1` for every enabled workflow (result manifest v1 holds one
-run_key). Otherwise it dispatches nothing and fails, so no worker runs whose
-result would be lost.
+real key in `worker-kit/ingest.pub` and a matching `AGE_IDENTITY`. Otherwise
+it dispatches nothing and fails, so no worker runs whose result would be
+lost.
 
 [`.github/workflows/ingest.yml`](../.github/workflows/ingest.yml) is a manual
 re-ingest tool for single attempts the pump did not judge. It writes the
@@ -236,12 +238,6 @@ outputs too), no `secrets: inherit` or `write-all`, and `concurrency` on every s
 
 - Worker workflows in the tool repos. All are switched off in
   `pump/workflows.json` until they exist.
-- The real ingest key. `worker-kit/ingest.pub` still holds the placeholder,
-  so the pump would refuse to dispatch even with a workflow switched on.
-- Shards of more than one item. Result manifest v1 holds one run_key, so
-  ingest needs `shard_size: 1`, and every workflow in `pump/workflows.json`
-  still has a larger one. Set it to 1 before enabling a workflow (the pump
-  refuses to dispatch otherwise), or extend the result contract.
 - Canaries. Ingest scans for the canaries of an attempt, but the pump does not
   inject any yet, so that list is always empty.
 - Ingest outputs are uploaded at the end of the pump job, after the state was

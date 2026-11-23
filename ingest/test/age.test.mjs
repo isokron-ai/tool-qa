@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -83,21 +83,35 @@ test('decrypt with the wrong key fails without leaking the key', { skip }, () =>
   }
 });
 
+const PLACEHOLDER_PUB = `# age recipient (public key) for tool-qa result bundles.
+#
+# PLACEHOLDER: no key has been set yet. Workers and ingest refuse to run until
+# this file holds one real recipient line (age1...).
+`;
+
+test('the committed worker-kit/ingest.pub holds exactly one real recipient', () => {
+  const committed = fileURLToPath(new URL('../../worker-kit/ingest.pub', import.meta.url));
+  const keys = readSealRecipients(committed);
+  assert.equal(keys.length, 1);
+  assert.match(keys[0], /^age1[02-9ac-hj-np-z]{58}$/);
+});
+
 test('encrypt refuses an empty or malformed recipient list', () => {
   assert.throws(() => ageEncrypt({ plaintext: Buffer.from('x'), recipients: [] }), /no recipients/);
   assert.throws(() => ageEncrypt({ plaintext: Buffer.from('x'), recipients: ['age1nope'] }), /not an age X25519 public key/);
 });
 
-test('readSealRecipients refuses the committed placeholder ingest.pub with a clear error', () => {
-  const placeholder = fileURLToPath(new URL('../../worker-kit/ingest.pub', import.meta.url));
-  assert.match(readFileSync(placeholder, 'utf8'), /PLACEHOLDER/, 'the committed file is still the placeholder');
-  assert.throws(() => readSealRecipients(placeholder), (err) => err instanceof AgeError
-    && err.code === 'placeholder'
-    && /ingest\.pub has no age public key yet \(it is still the placeholder\)/.test(err.message)
-    && /will not seal anything to it/.test(err.message)
-    && /docs\/OPERATIONS\.md, "Result encryption keys"/.test(err.message));
+test('readSealRecipients refuses a placeholder ingest.pub with a clear error', () => {
   const dir = mkdtempSync(join(tmpdir(), 'seal-to-'));
   try {
+    // A file with comments only, like the placeholder ingest.pub once was.
+    const placeholder = join(dir, 'ingest.pub');
+    writeFileSync(placeholder, PLACEHOLDER_PUB);
+    assert.throws(() => readSealRecipients(placeholder), (err) => err instanceof AgeError
+      && err.code === 'placeholder'
+      && /ingest\.pub has no age public key yet \(it is still the placeholder\)/.test(err.message)
+      && /will not seal anything to it/.test(err.message)
+      && /docs\/OPERATIONS\.md, "Result encryption keys"/.test(err.message));
     const pub = join(dir, 'ingest.pub');
     writeFileSync(pub, `# real key\n${fakeRecipient('q')}\n`);
     assert.deepEqual(readSealRecipients(pub), [fakeRecipient('q')]);

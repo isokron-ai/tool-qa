@@ -1,18 +1,23 @@
-# tool-qa result bundle: build manifest.json, encrypt the whole bundle with age
-# and upload it as a 3-day artifact.
+# tool-qa result bundle: build manifest.json for one item, encrypt the whole
+# bundle with age and upload it as a 3-day artifact.
 #
-# Call it from a worker workflow, pinned to a full commit SHA of tool-qa:
+# The pump dispatches `shard_id`, `attempt_id` and `items` (docs/INTERFACES.md):
+# a JSON list of one or more {subject, run_key, fence}. The worker produces one
+# bundle per item and calls this action once per item, pinned to a full commit
+# SHA of tool-qa, passing the item's 0-based position in `items`:
 #
 #   - uses: isokron-ai/tool-qa/worker-kit@<sha> # <tag or branch>
 #     with:
-#       bundle-dir: out/bundle
-#       meta-file: out/meta.json
+#       bundle-dir: out/0/bundle
+#       meta-file: out/0/meta.json
 #       attempt-id: ${{ inputs.attempt_id }}
+#       item-index: 0
 #       fence: ${{ fromJSON(inputs.items)[0].fence }}
 #       run-key: ${{ fromJSON(inputs.items)[0].run_key }}
 #
-# The pump dispatches `shard_id`, `attempt_id` and `items` (docs/INTERFACES.md);
-# with shard_size 1, `items` holds exactly one {subject, run_key, fence}.
+# Each call uploads result-<attempt-id>-<item-index>.tar.age. Ingest judges
+# every item on its own; an item whose bundle is missing is rejected
+# (no_artifact) without holding back the others.
 #
 # The worker job needs no secrets and no token permissions (`permissions: {}`
 # is enough; artifact upload uses the runner's own upload token). Node 20 or
@@ -31,11 +36,17 @@ inputs:
   attempt-id:
     description: Attempt ID from the dispatch.
     required: true
+  item-index:
+    description: >-
+      0-based position of this item in the dispatched `items` list. Names the
+      artifact result-<attempt-id>-<item-index>.tar.age.
+    required: false
+    default: '0'
   fence:
-    description: Fencing number from the dispatch.
+    description: Fencing number of this item, from the dispatch.
     required: true
   run-key:
-    description: run_key (sha256 hex) from the dispatch.
+    description: run_key (sha256 hex) of this item, from the dispatch.
     required: true
   recipient:
     description: >-
@@ -50,7 +61,7 @@ inputs:
 
 outputs:
   artifact-name:
-    description: Name of the uploaded artifact (result-<attempt-id>.tar.age).
+    description: Name of the uploaded artifact (result-<attempt-id>-<item-index>.tar.age).
     value: ${{ steps.build.outputs.artifact_name }}
   manifest-sha256:
     description: sha256 of manifest.json inside the bundle.
@@ -79,12 +90,14 @@ runs:
         BUNDLE_DIR: ${{ inputs.bundle-dir }}
         META_FILE: ${{ inputs.meta-file }}
         ATTEMPT_ID: ${{ inputs.attempt-id }}
+        ITEM_INDEX: ${{ inputs.item-index }}
         FENCE: ${{ inputs.fence }}
         RUN_KEY: ${{ inputs.run-key }}
       run: |
         node "$GITHUB_ACTION_PATH/build-bundle.mjs" \
           --dir "$BUNDLE_DIR" --meta "$META_FILE" \
           --attempt-id "$ATTEMPT_ID" --fence "$FENCE" --run-key "$RUN_KEY" \
+          --item-index "$ITEM_INDEX" \
           --out "$RUNNER_TEMP/tool-qa-result"
 
     - name: Install age (pinned version, sha256 checked)

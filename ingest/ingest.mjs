@@ -6,31 +6,44 @@
 //     [--registry FILE] [--seal-to FILE] [--allow-no-controls]
 //
 // The dispatch inputs (worker repo, run id, attempt id) and the attempts ledger
-// are trusted. Everything the worker uploaded is not. Steps, in order:
+// are trusted. Everything the worker uploaded is not. An attempt is one shard:
+// one or more items (run_keys), each at a 0-based index in the list the worker
+// received, and each with its own result bundle. The attempt and its run are
+// checked once; every item is then judged and recorded on its own. Steps:
 //
-//   1. ledger    the attempt exists, belongs to that repo (and run, if the ledger
-//                knows it) and has no result yet; if the subject's fence has
-//                moved on, stale_fence is recorded straight away
+//   1. ledger    the attempt exists and belongs to that repo (and run, if the
+//                ledger knows it); items that already have a result are
+//                skipped; an item whose fence has moved on gets stale_fence
+//                recorded straight away, without a download
 //   2. run       the run is completed, in that repo, from the dispatched
 //                workflow file, started by workflow_dispatch and (if the ledger
-//                knows it) at the dispatched commit
-//   3. artifact  exactly one artifact named result-<attempt>.tar.age (or
-//                result-<attempt>) from that run, not expired, under the size
-//                cap; downloaded and, if zipped, unwrapped
+//                knows it) at the dispatched commit; a failure here is recorded
+//                for every item
+//   3. artifact  the run's artifacts are listed once; per item, exactly one
+//                named result-<attempt>-<index>.tar.age (or without .tar.age),
+//                not expired, under the size cap; downloaded and, if zipped,
+//                unwrapped. A one-item attempt also accepts the older name
+//                result-<attempt>.tar.age (or result-<attempt>)
 //   4. decrypt   with age and the ingest identity
 //   5. bundle    a tar of regular files with a valid manifest.json
-//   6. forgery   forgery.mjs: identity, file list, foreign claims, controls
+//   6. forgery   forgery.mjs: identity (this item's run_key and fence), file
+//                list, foreign claims, controls
 //   7. registry  observations use declared, non-deprecated fields of the right type
 //   8. secrets   redaction rules and the attempt's canaries over the manifest and
 //                every file outside raw/; any hit quarantines; raw/ hits are
 //                only counted
 //
-// The decision is then recorded through the ledger, which does its own fence
-// check and may refuse an acceptance (the outcome becomes rejected). Outputs:
+// Each item's decision is then recorded through the ledger, which does its own
+// fence check and may refuse an acceptance (the outcome becomes rejected).
+// Outputs, per item:
 //
-//   accepted/<attempt>/    manifest.json, every bundle file, ingest.json
-//   rejected/<attempt>/    ingest.json and result.tar.age (the ciphertext, if any)
-//   quarantine/<attempt>/  ingest.json and result.tar.age
+//   accepted/<attempt>/<index>/    manifest.json, every bundle file, ingest.json
+//   rejected/<attempt>/<index>/    ingest.json and result.tar.age (the ciphertext, if any)
+//   quarantine/<attempt>/<index>/  ingest.json and result.tar.age
+//
+// An attempt refused before any item could be judged (unknown attempt, wrong
+// repo or run, run not found) records nothing and writes only
+// rejected/<attempt>/ingest.json.
 //
 // ingest.json is the report: reason codes, paths, lines, digests and counts,
 // never file contents or secret values. The CLI packs the outputs into one tar
@@ -45,13 +58,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { artifactName, MANIFEST_NAME, sha256Hex, validateManifest } from '../worker-kit/contract.mjs';
+import { artifactName, legacyArtifactName, MANIFEST_NAME, sha256Hex, validateManifest } from '../worker-kit/contract.mjs';
 import { isSafeRelativePath, readTar, TarError, writeTar } from '../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from './age.mjs';
 import { ContainerError, unwrapArtifact } from './container.mjs';
 import { checkBundle } from './forgery.mjs';
 import { GithubError, makeGithub } from './github.mjs';
-import { openLedger } from './ledger.mjs';
+import { normalizeAttempt, openLedger } from './ledger.mjs';
 import { maskText, scanFiles, scanText } from './redact.mjs';
 import { loadRegistry, validateObservations } from './registry.mjs';
 
@@ -106,7 +119,315 @@ function rank(reason) {
 }
 
 /**
- * Judge one attempt and record the decision.
+ * Open one attempt for judging: read the ledger, check the run once and list its
+ * artifacts once. Nothing is recorded here; judge() records one item at a time,
+ * so a caller can give each item its own transaction (collect.mjs does).
+ *
+ * `done` is set when there is nothing to judge item by item. It has the shape
+ * ingestAttempt() returns:
+ *   rejected          refused before anything could be judged (unknown_attempt,
+ *                     ledger_repo_mismatch, ledger_run_mismatch, run_not_found);
+ *                     nothing is recorded, the report goes to rejected/<attempt>/
+ *   already_recorded  every item has a result already; no outputs
+ *   pending           the run is not completed yet; nothing recorded, no outputs
+ * Otherwise `items` are the ledger items that have no result yet, in index
+ * order, and judge(item) judges one of them, records the decision and returns
+ * {index, run_key, outcome, reason, recorded, accepted, report, outputs}. Each
+ * item can be judged once per open.
+ *
+ * @param {{repo: string, runId: number|string, attemptId: string}} input  from the dispatch
+ * @param {object} deps  as for ingestAttempt()
+ * @returns {Promise<{done: object|null, attempt: object|null, items: object[],
+ *   judge: (item: object) => Promise<object>}>}
+ */
+export async function openAttempt(input, deps) {
+  const {
+    ledger, github, decrypt, registry, now = () => new Date(), allowNoControls = false,
+    maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES,
+  } = deps;
+  const { repo, runId, attemptId } = checkInput(input);
+
+  const base = { input: { repo, run_id: runId } };
+  let row = null;
+  let label = makeLabeler([]);
+
+  const nothingToJudge = async () => { throw new TypeError('openAttempt: there is nothing to judge'); };
+  function stop(outcome, reason, { write = true, problems = [] } = {}) {
+    const listed = problems.map((p) => cleanProblem(p, label));
+    const report = {
+      schema_version: REPORT_SCHEMA_VERSION,
+      attempt_id: attemptId,
+      outcome,
+      reason,
+      ingested_at: now().toISOString(),
+      ...base,
+      problems: listed.slice(0, MAX_LISTED),
+      problems_total: listed.length,
+      recorded: null,
+    };
+    const outputs = new Map();
+    if (write) outputs.set(`${OUTCOME_DIRS[outcome]}/${attemptId}/ingest.json`, Buffer.from(`${JSON.stringify(report, null, 2)}\n`));
+    return { done: { outcome, reason, recorded: false, accepted: false, report, outputs }, attempt: row, items: [], judge: nothingToJudge };
+  }
+
+  // 1. ledger
+  row = normalizeAttempt(await ledger.getAttempt(attemptId));
+  if (!row) return stop('rejected', 'unknown_attempt');
+  label = makeLabeler(row.canaries);
+  base.ledger = {
+    repo: row.repo,
+    workflow_file: row.workflow_file,
+    workflow_sha: row.workflow_sha,
+    run_id: row.run_id,
+    items: row.items.length,
+    canaries: row.canaries.length,
+  };
+  if (!sameRepo(row.repo, repo)) {
+    return stop('rejected', 'ledger_repo_mismatch', { problems: [{ reason: 'ledger_repo_mismatch', expected: row.repo, got: repo }] });
+  }
+  if (row.run_id !== null && row.run_id !== runId) {
+    return stop('rejected', 'ledger_run_mismatch', { problems: [{ reason: 'ledger_run_mismatch', expected: row.run_id, got: runId }] });
+  }
+  const pending = row.items.filter((it) => it.outcome === null);
+  if (pending.length === 0) return stop('already_recorded', null, { write: false });
+  const isStale = (it) => it.current_fence !== null && it.current_fence !== it.fence;
+
+  // 2. run (only when some item still needs it)
+  let run = null;
+  let runProblem = null;
+  let artifacts = [];
+  if (pending.some((it) => !isStale(it))) {
+    run = await github.getRun(row.repo, runId);
+    if (!run || (run.id !== undefined && Number(run.id) !== runId)) return stop('rejected', 'run_not_found');
+    base.run = {
+      id: runId,
+      repo: textOrNull(run.repository?.full_name, label),
+      path: textOrNull(run.path, label),
+      event: textOrNull(run.event, label),
+      status: textOrNull(run.status, label),
+      conclusion: textOrNull(run.conclusion, label),
+      head_sha: textOrNull(run.head_sha, label),
+      run_attempt: Number.isSafeInteger(run.run_attempt) ? run.run_attempt : null,
+    };
+    if (run.status !== 'completed') return stop('pending', 'run_not_completed', { write: false });
+    runProblem = checkRun(run, row, base.run);
+    if (!runProblem) {
+      // 3. artifact (listed once for every item)
+      const listed = await github.listRunArtifacts(row.repo, runId);
+      artifacts = (Array.isArray(listed) ? listed : []).filter((a) => a && typeof a === 'object');
+    }
+  }
+
+  const judged = new Set();
+
+  async function judge(wanted) {
+    const item = pending.find((it) => it.index === wanted?.index);
+    if (!item) throw new TypeError('openAttempt: judge() takes one of the items openAttempt returned');
+    if (judged.has(item.index)) throw new TypeError(`openAttempt: item ${item.index} was judged already`);
+    judged.add(item.index);
+
+    const report = { ...base, ledger: { run_key: item.run_key, fence: item.fence, current_fence: item.current_fence, ...base.ledger } };
+    let ciphertext = null;
+    let manifestBytes = null;
+    let files = null;
+
+    async function finish(outcome, reason, problems = []) {
+      const listed = problems.map((p) => cleanProblem(p, label));
+      const wantedRecord = {
+        run_key: item.run_key, attempt_id: row.attempt_id, fence: item.fence, outcome, accepted: outcome === 'accepted', reason,
+      };
+      const answer = (await ledger.recordResult(wantedRecord)) ?? { accepted: wantedRecord.accepted, reason };
+      const recorded = { accepted: answer.accepted === true, reason: typeof answer.reason === 'string' ? answer.reason : null };
+      let finalOutcome = outcome;
+      let finalReason = reason;
+      if (outcome === 'accepted' && !recorded.accepted) {
+        finalOutcome = 'rejected';
+        finalReason = recorded.reason && REASON_RE.test(recorded.reason) ? recorded.reason : 'ledger_refused';
+        listed.unshift({ reason: finalReason, detail: 'the ledger refused the result' });
+      }
+      const full = {
+        schema_version: REPORT_SCHEMA_VERSION,
+        attempt_id: attemptId,
+        item_index: item.index,
+        outcome: finalOutcome,
+        reason: finalReason,
+        ingested_at: now().toISOString(),
+        ...report,
+        problems: listed.slice(0, MAX_LISTED),
+        problems_total: listed.length,
+        recorded,
+      };
+      const outputs = new Map();
+      const dir = `${OUTCOME_DIRS[finalOutcome]}/${attemptId}/${item.index}`;
+      outputs.set(`${dir}/ingest.json`, Buffer.from(`${JSON.stringify(full, null, 2)}\n`));
+      if (finalOutcome === 'accepted') {
+        outputs.set(`${dir}/${MANIFEST_NAME}`, manifestBytes);
+        for (const [path, data] of files) outputs.set(`${dir}/${path}`, data);
+      } else if (ciphertext) {
+        outputs.set(`${dir}/result.tar.age`, ciphertext);
+      }
+      return {
+        index: item.index,
+        run_key: item.run_key,
+        outcome: finalOutcome,
+        reason: finalReason,
+        recorded: true,
+        accepted: finalOutcome === 'accepted',
+        report: full,
+        outputs,
+      };
+    }
+    const reject = (reason, problems = []) => finish('rejected', reason, problems);
+
+    if (isStale(item)) return reject('stale_fence', [{ reason: 'stale_fence', expected: item.current_fence, got: item.fence }]);
+    if (runProblem) return reject(runProblem.reason, runProblem.problems);
+
+    // 3. artifact
+    const wantedName = artifactName(attemptId, item.index);
+    const names = [wantedName, wantedName.replace(/\.tar\.age$/, '')];
+    if (row.items.length === 1) {
+      const legacy = legacyArtifactName(attemptId);
+      names.push(legacy, legacy.replace(/\.tar\.age$/, ''));
+    }
+    const matches = artifacts.filter((a) => names.includes(a.name));
+    if (matches.length === 0) return reject('no_artifact', [{ reason: 'no_artifact', expected: wantedName }]);
+    if (matches.length > 1) return reject('duplicate_artifact', [{ reason: 'duplicate_artifact', expected: wantedName, got: matches.length }]);
+    const art = matches[0];
+    report.artifact = {
+      id: Number.isSafeInteger(art.id) ? art.id : null,
+      name: art.name,
+      size_in_bytes: Number.isSafeInteger(art.size_in_bytes) ? art.size_in_bytes : null,
+      created_at: textOrNull(art.created_at, label),
+    };
+    const artRun = art.workflow_run?.id;
+    if (artRun !== undefined && artRun !== null && Number(artRun) !== runId) {
+      return reject('artifact_run_mismatch', [{ reason: 'artifact_run_mismatch', expected: runId, got: Number(artRun) }]);
+    }
+    if (art.expired === true) return reject('artifact_expired');
+    if (Number(art.size_in_bytes) > maxArtifactBytes) {
+      return reject('artifact_too_large', [{ reason: 'artifact_too_large', expected: `<= ${maxArtifactBytes}`, got: art.size_in_bytes }]);
+    }
+    let blob;
+    try {
+      blob = await github.downloadArtifact(row.repo, art.id);
+    } catch (err) {
+      if (err instanceof GithubError && !err.transient && err.status === 410) return reject('artifact_expired');
+      if (err instanceof GithubError && err.code === 'too_large') return reject('artifact_too_large');
+      throw err;
+    }
+    report.artifact.download_sha256 = sha256Hex(blob);
+    report.artifact.download_bytes = blob.length;
+    // A zipped artifact holds one file named like the artifact, with .tar.age.
+    const innerName = art.name.endsWith('.tar.age') ? art.name : `${art.name}.tar.age`;
+    try {
+      const unwrapped = unwrapArtifact(blob, innerName, { maxBytes: maxBundleBytes + 1024 ** 2 });
+      ciphertext = unwrapped.ciphertext;
+      report.artifact.container = unwrapped.container;
+    } catch (err) {
+      if (err instanceof ContainerError) return reject('bad_container', [{ reason: 'bad_container', detail: err.message }]);
+      throw err;
+    }
+    report.artifact.sha256 = sha256Hex(ciphertext);
+    report.artifact.bytes = ciphertext.length;
+
+    // 4. decrypt
+    let plaintext;
+    try {
+      plaintext = await decrypt(ciphertext);
+    } catch (err) {
+      if (err instanceof AgeError && err.code === 'failed') return reject('decrypt_failed', [{ reason: 'decrypt_failed', detail: err.message }]);
+      if (err instanceof AgeError && err.code === 'too_large') return reject('bundle_too_large', [{ reason: 'bundle_too_large', detail: err.message }]);
+      throw err;
+    }
+
+    // 5. bundle
+    let entries;
+    try {
+      entries = readTar(plaintext, { maxBytes: maxBundleBytes });
+    } catch (err) {
+      if (err instanceof TarError) return reject('bad_bundle', [{ reason: 'bad_bundle', detail: err.message }]);
+      throw err;
+    }
+    const manifestEntry = entries.find((e) => e.path === MANIFEST_NAME);
+    if (!manifestEntry) return reject('no_manifest');
+    manifestBytes = manifestEntry.data;
+    let manifest;
+    try {
+      manifest = JSON.parse(strictUtf8.decode(manifestBytes));
+    } catch {
+      return reject('manifest_not_json');
+    }
+    const valid = validateManifest(manifest);
+    if (!valid.ok) {
+      return reject('manifest_invalid', valid.errors.map((e) => ({ reason: 'manifest_invalid', json_path: e.path, detail: e.message })));
+    }
+    files = new Map(entries.filter((e) => e.path !== MANIFEST_NAME).map((e) => [e.path, e.data]));
+    report.bundle = {
+      manifest_sha256: sha256Hex(manifestBytes),
+      files: files.size,
+      bytes: [...files.values()].reduce((n, d) => n + d.length, 0),
+      controls: manifest.controls.length,
+      skips: manifest.skips.length,
+    };
+
+    // 6. forgery: the bundle must name this item's run_key and fence
+    const exp = {
+      attempt_id: row.attempt_id,
+      fence: item.fence,
+      run_key: item.run_key,
+      repo: row.repo,
+      workflow_file: row.workflow_file,
+      workflow_sha: run.head_sha,
+      run_id: runId,
+      run_attempt: base.run.run_attempt,
+    };
+    const forged = checkBundle(manifest, files, exp, { requireControl: !allowNoControls })
+      .map((p, i) => [p, i])
+      .sort((a, b) => rank(a[0].reason) - rank(b[0].reason) || a[1] - b[1])
+      .map(([p]) => p);
+    if (forged.length > 0) return reject(forged[0].reason, forged);
+
+    // 7. registry
+    const obs = validateObservations(files, registry);
+    report.registry = { source: registry.source ?? null, version: registry.version, sha256: registry.sha256 };
+    report.observations = { records: obs.records, errors: obs.errors.length, ...(obs.truncated ? { truncated: true } : {}) };
+    if (!obs.ok) return reject(obs.errors[0]?.reason ?? 'observation_format', obs.errors);
+
+    // 8. secrets
+    const scanned = [[MANIFEST_NAME, manifestBytes], ...[...files].filter(([p]) => !p.startsWith('raw/'))];
+    const hits = scanFiles(scanned, { canaries: row.canaries });
+    const rawHits = scanFiles([...files].filter(([p]) => p.startsWith('raw/')), { canaries: row.canaries });
+    const byRule = {};
+    for (const h of rawHits) byRule[h.rule] = (byRule[h.rule] ?? 0) + 1;
+    report.secret_scan = {
+      hits: hits.slice(0, MAX_LISTED).map((h) => cleanHit(h, label)),
+      hits_total: hits.length,
+      raw_hits_by_rule: byRule,
+    };
+    if (hits.length > 0) return finish('quarantined', 'secret_scan');
+
+    return finish('accepted', null);
+  }
+
+  return { done: null, attempt: row, items: pending.slice(), judge };
+}
+
+/** The run-level checks every item shares; {reason, problems} or null. */
+function checkRun(run, row, seen) {
+  const fail = (reason, expected, got) => ({ reason, problems: [{ reason, expected, got }] });
+  if (!sameRepo(run.repository?.full_name, row.repo)) return fail('run_repo_mismatch', row.repo, seen.repo);
+  const runFile = typeof run.path === 'string' ? run.path.replace(/@.*$/s, '') : null;
+  if (runFile !== row.workflow_file) return fail('run_workflow_mismatch', row.workflow_file, seen.path);
+  if (run.event !== 'workflow_dispatch') return fail('run_event_mismatch', 'workflow_dispatch', seen.event);
+  if (typeof run.head_sha !== 'string' || !SHA_RE.test(run.head_sha) || (row.workflow_sha && run.head_sha !== row.workflow_sha)) {
+    return fail('run_sha_mismatch', row.workflow_sha ?? 'a commit SHA', seen.head_sha);
+  }
+  return null;
+}
+
+/**
+ * Judge every item of one attempt that has no result yet and record each
+ * decision.
  *
  * @param {{repo: string, runId: number|string, attemptId: string}} input  from the dispatch
  * @param {object} deps
@@ -119,242 +440,43 @@ function rank(reason) {
  * @param {number} [deps.maxArtifactBytes]
  * @param {number} [deps.maxBundleBytes]
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
- *   report: object|null, outputs: Map<string, Buffer>}>}
+ *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
+ *   outcome and reason are the items' own when they all agree; otherwise outcome
+ *   is 'mixed' and reason null. report is the item's report when one item was
+ *   judged (or the attempt's when none was), else null. items holds each judged
+ *   item's result (see openAttempt), in index order.
  */
 export async function ingestAttempt(input, deps) {
-  const {
-    ledger, github, decrypt, registry, now = () => new Date(), allowNoControls = false,
-    maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES,
-  } = deps;
-  const { repo, runId, attemptId } = checkInput(input);
-
-  const report = { input: { repo, run_id: runId } };
-  let row = null;
-  let label = makeLabeler([]);
-  let ciphertext = null;
-  let manifestBytes = null;
-  let files = null;
-
-  async function finish(outcome, reason, { record = false, write = true, problems = [] } = {}) {
-    let recorded = null;
-    let finalOutcome = outcome;
-    let finalReason = reason;
-    const listed = problems.map((p) => cleanProblem(p, label));
-    if (record) {
-      const wanted = { run_key: row.run_key, attempt_id: row.attempt_id, fence: row.fence, outcome, accepted: outcome === 'accepted', reason };
-      const answer = (await ledger.recordResult(wanted)) ?? { accepted: wanted.accepted, reason };
-      recorded = { accepted: answer.accepted === true, reason: typeof answer.reason === 'string' ? answer.reason : null };
-      if (outcome === 'accepted' && !recorded.accepted) {
-        finalOutcome = 'rejected';
-        finalReason = recorded.reason && REASON_RE.test(recorded.reason) ? recorded.reason : 'ledger_refused';
-        listed.unshift({ reason: finalReason, detail: 'the ledger refused the result' });
-      }
+  const opened = await openAttempt(input, deps);
+  if (opened.done) return { ...opened.done, items: [] };
+  const results = [];
+  for (const item of opened.items) {
+    try {
+      results.push(await opened.judge(item));
+    } catch (err) {
+      // Items judged before the failure stay recorded; say so to the caller.
+      if (results.length > 0 && err !== null && typeof err === 'object') err.partial = combineResults(results);
+      throw err;
     }
-    const full = {
-      schema_version: REPORT_SCHEMA_VERSION,
-      attempt_id: attemptId,
-      outcome: finalOutcome,
-      reason: finalReason,
-      ingested_at: now().toISOString(),
-      ...report,
-      problems: listed.slice(0, MAX_LISTED),
-      problems_total: listed.length,
-      recorded,
-    };
-    const outputs = new Map();
-    if (write) {
-      const dir = `${OUTCOME_DIRS[finalOutcome]}/${attemptId}`;
-      outputs.set(`${dir}/ingest.json`, Buffer.from(`${JSON.stringify(full, null, 2)}\n`));
-      if (finalOutcome === 'accepted') {
-        outputs.set(`${dir}/${MANIFEST_NAME}`, manifestBytes);
-        for (const [path, data] of files) outputs.set(`${dir}/${path}`, data);
-      } else if (ciphertext) {
-        outputs.set(`${dir}/result.tar.age`, ciphertext);
-      }
-    }
-    return {
-      outcome: finalOutcome,
-      reason: finalReason,
-      recorded: recorded !== null,
-      accepted: finalOutcome === 'accepted',
-      report: full,
-      outputs,
-    };
   }
-  const refuse = (reason, problems = []) => finish('rejected', reason, { record: false, problems });
-  const reject = (reason, problems = []) => finish('rejected', reason, { record: true, problems });
+  return combineResults(results);
+}
 
-  // 1. ledger
-  row = await ledger.getAttempt(attemptId);
-  if (!row) return refuse('unknown_attempt');
-  label = makeLabeler(row.canaries);
-  report.ledger = {
-    run_key: row.run_key,
-    fence: row.fence,
-    repo: row.repo,
-    workflow_file: row.workflow_file,
-    workflow_sha: row.workflow_sha,
-    run_id: row.run_id,
-    current_fence: row.current_fence,
-    canaries: row.canaries.length,
+/** One summary over several judged items (see ingestAttempt). */
+export function combineResults(results) {
+  if (!Array.isArray(results) || results.length === 0) throw new TypeError('combineResults: no judged items');
+  const outputs = new Map();
+  for (const r of results) for (const [path, data] of r.outputs) outputs.set(path, data);
+  const same = (key) => results.every((r) => r[key] === results[0][key]);
+  return {
+    outcome: same('outcome') ? results[0].outcome : 'mixed',
+    reason: same('reason') ? results[0].reason : null,
+    recorded: results.some((r) => r.recorded),
+    accepted: results.every((r) => r.accepted),
+    report: results.length === 1 ? results[0].report : null,
+    outputs,
+    items: results,
   };
-  if (!sameRepo(row.repo, repo)) return refuse('ledger_repo_mismatch', [{ reason: 'ledger_repo_mismatch', expected: row.repo, got: repo }]);
-  if (row.run_id !== null && row.run_id !== runId) {
-    return refuse('ledger_run_mismatch', [{ reason: 'ledger_run_mismatch', expected: row.run_id, got: runId }]);
-  }
-  if (row.outcome !== null) return finish('already_recorded', null, { write: false });
-  if (row.current_fence !== null && row.current_fence !== row.fence) {
-    return reject('stale_fence', [{ reason: 'stale_fence', expected: row.current_fence, got: row.fence }]);
-  }
-
-  // 2. run
-  const run = await github.getRun(row.repo, runId);
-  if (!run || (run.id !== undefined && Number(run.id) !== runId)) return refuse('run_not_found');
-  report.run = {
-    id: runId,
-    repo: textOrNull(run.repository?.full_name, label),
-    path: textOrNull(run.path, label),
-    event: textOrNull(run.event, label),
-    status: textOrNull(run.status, label),
-    conclusion: textOrNull(run.conclusion, label),
-    head_sha: textOrNull(run.head_sha, label),
-    run_attempt: Number.isSafeInteger(run.run_attempt) ? run.run_attempt : null,
-  };
-  if (run.status !== 'completed') return finish('pending', 'run_not_completed', { write: false });
-  if (!sameRepo(run.repository?.full_name, row.repo)) {
-    return reject('run_repo_mismatch', [{ reason: 'run_repo_mismatch', expected: row.repo, got: report.run.repo }]);
-  }
-  const runFile = typeof run.path === 'string' ? run.path.replace(/@.*$/s, '') : null;
-  if (runFile !== row.workflow_file) {
-    return reject('run_workflow_mismatch', [{ reason: 'run_workflow_mismatch', expected: row.workflow_file, got: report.run.path }]);
-  }
-  if (run.event !== 'workflow_dispatch') {
-    return reject('run_event_mismatch', [{ reason: 'run_event_mismatch', expected: 'workflow_dispatch', got: report.run.event }]);
-  }
-  if (typeof run.head_sha !== 'string' || !SHA_RE.test(run.head_sha) || (row.workflow_sha && run.head_sha !== row.workflow_sha)) {
-    return reject('run_sha_mismatch', [{ reason: 'run_sha_mismatch', expected: row.workflow_sha ?? 'a commit SHA', got: report.run.head_sha }]);
-  }
-
-  // 3. artifact
-  const wantedName = artifactName(attemptId);
-  const names = new Set([wantedName, wantedName.replace(/\.tar\.age$/, '')]);
-  const listedArtifacts = await github.listRunArtifacts(row.repo, runId);
-  const matches = (Array.isArray(listedArtifacts) ? listedArtifacts : []).filter((a) => a && names.has(a.name));
-  if (matches.length === 0) return reject('no_artifact', [{ reason: 'no_artifact', expected: wantedName }]);
-  if (matches.length > 1) return reject('duplicate_artifact', [{ reason: 'duplicate_artifact', expected: wantedName, got: matches.length }]);
-  const art = matches[0];
-  report.artifact = {
-    id: Number.isSafeInteger(art.id) ? art.id : null,
-    name: art.name,
-    size_in_bytes: Number.isSafeInteger(art.size_in_bytes) ? art.size_in_bytes : null,
-    created_at: textOrNull(art.created_at, label),
-  };
-  const artRun = art.workflow_run?.id;
-  if (artRun !== undefined && artRun !== null && Number(artRun) !== runId) {
-    return reject('artifact_run_mismatch', [{ reason: 'artifact_run_mismatch', expected: runId, got: Number(artRun) }]);
-  }
-  if (art.expired === true) return reject('artifact_expired');
-  if (Number(art.size_in_bytes) > maxArtifactBytes) {
-    return reject('artifact_too_large', [{ reason: 'artifact_too_large', expected: `<= ${maxArtifactBytes}`, got: art.size_in_bytes }]);
-  }
-  let blob;
-  try {
-    blob = await github.downloadArtifact(row.repo, art.id);
-  } catch (err) {
-    if (err instanceof GithubError && !err.transient && err.status === 410) return reject('artifact_expired');
-    if (err instanceof GithubError && err.code === 'too_large') return reject('artifact_too_large');
-    throw err;
-  }
-  report.artifact.download_sha256 = sha256Hex(blob);
-  report.artifact.download_bytes = blob.length;
-  try {
-    const unwrapped = unwrapArtifact(blob, wantedName, { maxBytes: maxBundleBytes + 1024 ** 2 });
-    ciphertext = unwrapped.ciphertext;
-    report.artifact.container = unwrapped.container;
-  } catch (err) {
-    if (err instanceof ContainerError) return reject('bad_container', [{ reason: 'bad_container', detail: err.message }]);
-    throw err;
-  }
-  report.artifact.sha256 = sha256Hex(ciphertext);
-  report.artifact.bytes = ciphertext.length;
-
-  // 4. decrypt
-  let plaintext;
-  try {
-    plaintext = await decrypt(ciphertext);
-  } catch (err) {
-    if (err instanceof AgeError && err.code === 'failed') return reject('decrypt_failed', [{ reason: 'decrypt_failed', detail: err.message }]);
-    if (err instanceof AgeError && err.code === 'too_large') return reject('bundle_too_large', [{ reason: 'bundle_too_large', detail: err.message }]);
-    throw err;
-  }
-
-  // 5. bundle
-  let entries;
-  try {
-    entries = readTar(plaintext, { maxBytes: maxBundleBytes });
-  } catch (err) {
-    if (err instanceof TarError) return reject('bad_bundle', [{ reason: 'bad_bundle', detail: err.message }]);
-    throw err;
-  }
-  const manifestEntry = entries.find((e) => e.path === MANIFEST_NAME);
-  if (!manifestEntry) return reject('no_manifest');
-  manifestBytes = manifestEntry.data;
-  let manifest;
-  try {
-    manifest = JSON.parse(strictUtf8.decode(manifestBytes));
-  } catch {
-    return reject('manifest_not_json');
-  }
-  const valid = validateManifest(manifest);
-  if (!valid.ok) {
-    return reject('manifest_invalid', valid.errors.map((e) => ({ reason: 'manifest_invalid', json_path: e.path, detail: e.message })));
-  }
-  files = new Map(entries.filter((e) => e.path !== MANIFEST_NAME).map((e) => [e.path, e.data]));
-  report.bundle = {
-    manifest_sha256: sha256Hex(manifestBytes),
-    files: files.size,
-    bytes: [...files.values()].reduce((n, d) => n + d.length, 0),
-    controls: manifest.controls.length,
-    skips: manifest.skips.length,
-  };
-
-  // 6. forgery
-  const exp = {
-    attempt_id: row.attempt_id,
-    fence: row.fence,
-    run_key: row.run_key,
-    repo: row.repo,
-    workflow_file: row.workflow_file,
-    workflow_sha: run.head_sha,
-    run_id: runId,
-    run_attempt: report.run.run_attempt,
-  };
-  const forged = checkBundle(manifest, files, exp, { requireControl: !allowNoControls })
-    .map((p, i) => [p, i])
-    .sort((a, b) => rank(a[0].reason) - rank(b[0].reason) || a[1] - b[1])
-    .map(([p]) => p);
-  if (forged.length > 0) return reject(forged[0].reason, forged);
-
-  // 7. registry
-  const obs = validateObservations(files, registry);
-  report.registry = { source: registry.source ?? null, version: registry.version, sha256: registry.sha256 };
-  report.observations = { records: obs.records, errors: obs.errors.length, ...(obs.truncated ? { truncated: true } : {}) };
-  if (!obs.ok) return reject(obs.errors[0]?.reason ?? 'observation_format', obs.errors);
-
-  // 8. secrets
-  const scanned = [[MANIFEST_NAME, manifestBytes], ...[...files].filter(([p]) => !p.startsWith('raw/'))];
-  const hits = scanFiles(scanned, { canaries: row.canaries });
-  const rawHits = scanFiles([...files].filter(([p]) => p.startsWith('raw/')), { canaries: row.canaries });
-  const byRule = {};
-  for (const h of rawHits) byRule[h.rule] = (byRule[h.rule] ?? 0) + 1;
-  report.secret_scan = {
-    hits: hits.slice(0, MAX_LISTED).map((h) => cleanHit(h, label)),
-    hits_total: hits.length,
-    raw_hits_by_rule: byRule,
-  };
-  if (hits.length > 0) return finish('quarantined', 'secret_scan', { record: true });
-
-  return finish('accepted', null, { record: true });
 }
 
 // ---- report hygiene ----
@@ -558,14 +680,19 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
     if (env.GITHUB_OUTPUT) {
       appendFileSync(env.GITHUB_OUTPUT, Object.entries(outputs).map(([k, v]) => `${k}=${String(v).replace(/[\r\n]/g, ' ')}\n`).join(''));
     }
-    const level = result.outcome === 'rejected' || result.outcome === 'quarantined' ? 'warning' : 'notice';
-    const why = result.reason ? ` (${result.reason})` : '';
-    stdout.write(`::${level} title=ingest::attempt ${opts.attemptId}: ${result.outcome}${why}${result.recorded ? ', recorded' : ''}\n`);
+    const line = (what, r) => {
+      const level = ['rejected', 'quarantined', 'mixed'].includes(r.outcome) ? 'warning' : 'notice';
+      const why = r.reason ? ` (${r.reason})` : '';
+      stdout.write(`::${level} title=ingest::${what}: ${r.outcome}${why}${r.recorded ? ', recorded' : ''}\n`);
+    };
+    line(`attempt ${opts.attemptId}`, result);
+    if (result.items.length > 1) for (const it of result.items) line(`attempt ${opts.attemptId} item ${it.index}`, it);
     return 0;
   } catch (err) {
-    if (decided?.recorded) {
+    const before = decided ?? err?.partial;
+    if (before?.recorded) {
       // In CI the state is only pushed after this step succeeds, so the decision is not kept.
-      return fail(new Error(`${scrubError(err, [token, identity])} (after ${decided.outcome} was recorded in the local ledger)`));
+      return fail(new Error(`${scrubError(err, [token, identity])} (after ${before.outcome} was recorded in the local ledger)`));
     }
     return fail(err);
   } finally {

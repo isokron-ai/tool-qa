@@ -147,30 +147,35 @@ test('a failed push makes the run fail, after the remaining ticks', async () => 
 
 const PUBKEY = `age1${'q'.repeat(58)}`;
 
-/** One subject, live-probe with shard_size 1, a worker repo whose run finishes at once and uploads a good result. */
-function ingestHarness({ ingestOptions = {}, env = {} } = {}) {
-  const h = harness({ slots: '2', subjects: 1 });
+/**
+ * live-probe against a worker repo whose run finishes at once and uploads one
+ * good result bundle per item (result-<attempt_id>-<index>.tar.age). By default
+ * one subject and shard_size 1.
+ */
+function ingestHarness({ ingestOptions = {}, env = {}, subjects = 1, shardSize = 1 } = {}) {
+  const h = harness({ slots: '2', subjects });
   h.opts.ingest = undefined; // the pump's own collector
   const pub = join(h.dir, 'ingest.pub');
   writeFileSync(pub, `# test\n${PUBKEY}\n`);
   const outDir = join(h.dir, 'ingest-out');
   const minted = [];
-  const blob = () => {
-    const sent = h.calls.dispatch[0];
-    const [item] = JSON.parse(sent.inputs.items);
-    const bundle = makeBundle({ identity: { attempt_id: sent.inputs.attempt_id, run_key: item.run_key, fence: item.fence } });
+  const sent = () => h.calls.dispatch[0].inputs;
+  const blob = (index) => {
+    const item = JSON.parse(sent().items)[index];
+    const bundle = makeBundle({ identity: { attempt_id: sent().attempt_id, run_key: item.run_key, fence: item.fence } });
     return fakeEncrypt(bundle.tar);
   };
+  const artifacts = () => JSON.parse(sent().items).map((_, i) => artifactEntry({ id: 901 + i, name: `result-${sent().attempt_id}-${i}.tar.age` }));
   const api = fakeApi([
     ['GET', `/repos/${WORKER_REPO}/actions/runs/${RUN_ID}`, () => ({ body: defaultRun() })],
-    ['GET', `/repos/${WORKER_REPO}/actions/runs/${RUN_ID}/artifacts`, () => ({ body: { total_count: 1, artifacts: [artifactEntry()] } })],
-    ['GET', `/repos/${WORKER_REPO}/actions/artifacts/901/zip`, () => ({ status: 302, headers: { location: 'https://blob.example.test/a/901' } })],
-    ['GET', '/a/901', () => ({ body: blob() })],
+    ['GET', `/repos/${WORKER_REPO}/actions/runs/${RUN_ID}/artifacts`, () => ({ body: { total_count: artifacts().length, artifacts: artifacts() } })],
+    ['GET', /^\/repos\/[^/]+\/[^/]+\/actions\/artifacts\/\d+\/zip$/, (req) => ({ status: 302, headers: { location: `https://blob.example.test/a/${req.path.split('/').at(-2)}` } })],
+    ['GET', /^\/a\/\d+$/, (req) => ({ body: blob(Number(req.path.split('/').at(-1)) - 901) })],
   ]);
   const budget = new ApiBudget({ now: h.c.now, sleep: h.c.sleep });
   Object.assign(h.opts, {
     env: { ...h.opts.env, GITHUB_API_URL: API, ...env },
-    config: { tiers, workflows: { 'live-probe': { ...wf, repo: WORKER_REPO, file: 'qa-worker.yml', shard_size: 1, slots_max: 1 } } },
+    config: { tiers, workflows: { 'live-probe': { ...wf, repo: WORKER_REPO, file: 'qa-worker.yml', shard_size: shardSize, slots_max: 1 } } },
     fetch: api.fetch,
     budget,
     mintToken: async (args) => {
@@ -219,22 +224,51 @@ test('a finished worker run is ingested in the next tick and recorded before tha
   assert.deepEqual(h.minted, [{ repositories: ['mcp-check'], permissions: { actions: 'read' } }]);
   const used = h.budget.snapshot().used;
   assert.ok(used.actions >= 1 && used.artifacts >= 2, `ingest calls go through the API budget: ${JSON.stringify(used)}`);
-  const files = readTar(fakeDecrypt(readFileSync(join(h.outDir, `ingest-${d.attempt_id}.tar.age`)))).map((e) => e.path);
-  assert.ok(files.includes(`accepted/${d.attempt_id}/ingest.json`));
-  assert.ok(h.lines.some((l) => /^ingest: live-probe shard .*: accepted, recorded, outputs sealed$/.test(l)), h.lines.join('\n'));
+  const files = readTar(fakeDecrypt(readFileSync(join(h.outDir, `ingest-${d.attempt_id}-0.tar.age`)))).map((e) => e.path);
+  assert.ok(files.includes(`accepted/${d.attempt_id}/0/ingest.json`));
+  assert.ok(h.lines.some((l) => /^ingest: live-probe shard .* item 0: accepted, recorded, outputs sealed$/.test(l)), h.lines.join('\n'));
   assert.ok(h.lines.every((l) => !l.includes('ghs_synthetic_')), 'tokens are never logged');
   h.cleanup();
 });
 
-test('with ingest.pub still the placeholder the pump dispatches nothing and fails the run', async () => {
-  const h = ingestHarness({ ingestOptions: { sealTo: undefined } });
-  delete h.opts.ingestOptions.sealTo;
+test('a shard of three subjects: one bundle per item, each judged and recorded, the dispatch closed once', async () => {
+  const h = ingestHarness({ subjects: 3, shardSize: 3 });
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true, h.lines.join('\n'));
+  assert.equal(out.dispatched, 1, 'one dispatch carries all three subjects');
+  assert.equal(JSON.parse(h.calls.dispatch[0].inputs.items).length, 3);
+
+  const db = openState(h.stateFile);
+  const [d] = db.raw.prepare('SELECT * FROM dispatches').all();
+  assert.equal(d.status, 'done');
+  assert.equal(d.close_reason, 'results_in');
+  const results = db.listResults();
+  assert.equal(results.length, 3);
+  assert.ok(results.every((r) => r.attempt_id === d.attempt_id && r.outcome === 'accepted'));
+  assert.deepEqual(db.getAttempt(d.attempt_id).items.map((i) => [i.index, i.outcome]), [[0, 'accepted'], [1, 'accepted'], [2, 'accepted']]);
+  db.close();
+
+  for (const i of [0, 1, 2]) {
+    const files = readTar(fakeDecrypt(readFileSync(join(h.outDir, `ingest-${d.attempt_id}-${i}.tar.age`)))).map((e) => e.path);
+    assert.ok(files.includes(`accepted/${d.attempt_id}/${i}/ingest.json`), `item ${i}: ${files.join(', ')}`);
+    assert.ok(h.lines.some((l) => l.endsWith(`item ${i}: accepted, recorded, outputs sealed`)), h.lines.join('\n'));
+  }
+  const listings = h.api.calls.filter((c) => c.path.endsWith(`/runs/${RUN_ID}/artifacts`));
+  assert.equal(listings.length, 1, 'the artifacts are listed once for the whole shard');
+  h.cleanup();
+});
+
+test('with ingest.pub holding only the placeholder comments the pump dispatches nothing and fails the run', async () => {
+  const h = ingestHarness();
+  const placeholder = join(h.dir, 'placeholder.pub');
+  writeFileSync(placeholder, '# The ingest public key goes here.\n# Nothing else yet.\n');
+  h.opts.ingestOptions.sealTo = placeholder;
   const out = await runPump(h.opts);
   assert.equal(out.ok, false);
   assert.equal(h.calls.dispatch.length, 0);
   assert.equal(out.ticks, 1, 'one housekeeping tick');
   assert.equal(h.calls.push.length, 1, 'the state is still saved');
-  assert.ok(h.lines.some((l) => /ingest\.pub has no age public key yet/.test(l) && /nothing is dispatched/.test(l)), h.lines.join('\n'));
+  assert.ok(h.lines.some((l) => /placeholder\.pub has no age public key yet/.test(l) && /nothing is dispatched/.test(l)), h.lines.join('\n'));
   assert.equal(h.api.calls.length, 0);
   h.cleanup();
 });
@@ -249,15 +283,24 @@ test('without AGE_IDENTITY the pump dispatches nothing', async () => {
   h.cleanup();
 });
 
-test('an enabled workflow with shard_size above 1 blocks dispatch until ingest can judge it', async () => {
-  const h = harness({ slots: '2', ingest: { check: async ({ workflows }) => {
-    assert.ok(workflows['live-probe']);
-    throw new IngestSetupError('workflow "live-probe" has shard_size 2');
+test('a failed ingest setup check blocks dispatch and is reported', async () => {
+  const h = harness({ slots: '2', ingest: { check: async () => {
+    throw new IngestSetupError('the keys do not match');
   }, collect: async () => assert.fail('collect is not called once setup failed') } });
   const out = await runPump(h.opts);
   assert.equal(out.ok, false);
   assert.equal(h.calls.dispatch.length, 0);
-  assert.ok(h.lines.some((l) => /shard_size 2/.test(l)));
+  assert.ok(h.lines.some((l) => /the keys do not match/.test(l) && /nothing is dispatched/.test(l)), h.lines.join('\n'));
+  h.cleanup();
+});
+
+test('an enabled workflow with shard_size above 1 is not a setup problem', async () => {
+  const h = ingestHarness();
+  h.opts.config.workflows['live-probe'].shard_size = 4;
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true, h.lines.join('\n'));
+  assert.equal(h.calls.dispatch.length, 1);
+  assert.ok(h.lines.every((l) => !/not ready/.test(l)), h.lines.join('\n'));
   h.cleanup();
 });
 

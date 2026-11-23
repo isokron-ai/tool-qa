@@ -76,7 +76,7 @@ jobs:
           node pump/run.mjs --state "$RUNNER_TEMP/state/state.sqlite"
           --successor-result "$RUNNER_TEMP/successor.json"
           --ingest-out "$RUNNER_TEMP/ingest-out"
-      # Sealed ingest outputs (ingest-<attempt>.tar.age), readable only with
+      # Sealed ingest outputs (ingest-<attempt>-<index>.tar.age), readable only with
       # AGE_IDENTITY. Uploaded even if the pump step failed, so outputs of
       # decisions it already pushed are kept.
       - name: Upload sealed ingest outputs (30 days)

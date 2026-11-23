@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, readdirSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,7 +51,7 @@ function evalIf(cond, ctx) {
 }
 
 /** Run the composite action. Returns { ran, skipped, uses, outputs, failed }. */
-function runAction(inputs, { runnerTemp, env: extraEnv = {} }) {
+function runAction(inputs, { runnerTemp, env: extraEnv = {}, actionPath = KIT }) {
   const defaults = Object.fromEntries(Object.entries(action.inputs).map(([k, v]) => [k, v.default ?? '']));
   const ctx = { inputs: { ...defaults, ...inputs }, steps: {} };
   const result = { ran: [], skipped: [], uses: [], failed: null };
@@ -67,7 +67,7 @@ function runAction(inputs, { runnerTemp, env: extraEnv = {} }) {
     }
     const outFile = join(runnerTemp, `out-${result.ran.length}`);
     writeFileSync(outFile, '');
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME, RUNNER_TEMP: runnerTemp, GITHUB_ACTION_PATH: KIT, GITHUB_OUTPUT: outFile, ...extraEnv };
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, RUNNER_TEMP: runnerTemp, GITHUB_ACTION_PATH: actionPath, GITHUB_OUTPUT: outFile, ...extraEnv };
     for (const [k, v] of Object.entries(step.env ?? {})) env[k] = resolveExpr(v, ctx);
     assert.doesNotMatch(step.run, /\$\{\{/, `${step.name}: no expressions inside run`);
     const r = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], { env, encoding: 'utf8' });
@@ -118,9 +118,9 @@ test('install-age.sh pins an exact version and sha256 per architecture and check
   assert.match(sh, /sha256sum --check --strict/);
 });
 
-test('ingest.pub is a placeholder or holds exactly one recipient', () => {
+test('ingest.pub holds exactly one recipient', () => {
   const lines = readFileSync(join(KIT, 'ingest.pub'), 'utf8').split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'));
-  assert.ok(lines.length <= 1);
+  assert.equal(lines.length, 1);
   for (const l of lines) assert.match(l.trim(), /^age1[02-9ac-hj-np-z]{58}$/);
   assert.doesNotMatch(readFileSync(join(KIT, 'ingest.pub'), 'utf8'), /AGE-SECRET-KEY/);
 });
@@ -137,7 +137,22 @@ test('dry run builds the bundle and skips the age download, encryption and uploa
     assert.equal(existsSync(join(s.runnerTemp, 'tool-qa-age')), false);
     const entries = readTar(readFileSync(r.outputs['bundle-path']));
     assert.deepEqual(entries.map((e) => e.path), ['manifest.json', 'results/report.json']);
-    assert.equal(r.outputs['artifact-name'], 'result-att-77.tar.age');
+    assert.equal(r.outputs['artifact-name'], 'result-att-77-0.tar.age');
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
+});
+
+test('item-index is passed through: each item of a shard gets its own artifact name', () => {
+  assert.equal(action.inputs['item-index'].default, '0');
+  assert.equal(String(action.inputs['item-index'].required), 'false');
+  const s = workerSetup();
+  try {
+    const r = runAction({ ...s.inputs, 'item-index': '3', 'dry-run': 'true' }, { runnerTemp: s.runnerTemp, env: s.env });
+    assert.equal(r.failed, null, JSON.stringify(r.failed));
+    assert.equal(r.outputs['artifact-name'], 'result-att-77-3.tar.age');
+    assert.ok(r.outputs['bundle-path'].endsWith('result-att-77-3.tar'));
+
+    const bad = runAction({ ...s.inputs, 'item-index': 'x', 'dry-run': 'true' }, { runnerTemp: s.runnerTemp, env: s.env });
+    assert.equal(bad.failed?.step, 'Build manifest and bundle');
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 
@@ -161,8 +176,8 @@ test('encrypts to the given recipient, removes the plain tar and hands only the 
     assert.equal(r.failed, null, JSON.stringify(r.failed));
     assert.equal(r.uses.length, 1);
     const up = r.uses[0].with;
-    assert.equal(up.name, 'result-att-77.tar.age');
-    assert.ok(up.path.endsWith('result-att-77.tar.age'));
+    assert.equal(up.name, 'result-att-77-0.tar.age');
+    assert.ok(up.path.endsWith('/result-att-77-0.tar.age'), 'archive: false names the artifact after the file');
     assert.equal(existsSync(up.path.replace(/\.age$/, '')), false, 'plain tar removed');
     const ct = readFileSync(up.path);
     assert.ok(ct.subarray(0, 21).toString() === 'age-encryption.org/v1');
@@ -171,16 +186,38 @@ test('encrypts to the given recipient, removes the plain tar and hands only the 
   } finally { rmSync(s.root, { recursive: true, force: true }); }
 });
 
-test('refuses to upload when no recipient is given and ingest.pub is still a placeholder, or the recipient is malformed', (t) => {
+/** A copy of the kit whose ingest.pub is the placeholder (comments only). */
+function placeholderKit(root) {
+  const kit = join(root, 'kit');
+  cpSync(KIT, kit, { recursive: true, filter: (src) => !src.includes(`${KIT}/test`) });
+  writeFileSync(join(kit, 'ingest.pub'), '# age recipient for result bundles.\n#\n# PLACEHOLDER: no key has been set yet.\n');
+  return kit;
+}
+
+test('refuses to upload when no recipient is given and ingest.pub is a placeholder, or the recipient is malformed', (t) => {
   if (!AGE) { t.skip('age is not installed'); return; }
-  const placeholder = !readFileSync(join(KIT, 'ingest.pub'), 'utf8').split('\n').some((l) => l.trim() && !l.trim().startsWith('#'));
-  for (const recipient of [...(placeholder ? [''] : []), 'age1notakey', `age1${'q'.repeat(58)}\nage1${'q'.repeat(58)}`]) {
+  for (const recipient of ['', 'age1notakey', `age1${'q'.repeat(58)}\nage1${'q'.repeat(58)}`]) {
     const s = workerSetup();
     try {
-      const r = runAction({ ...s.inputs, recipient }, { runnerTemp: s.runnerTemp, env: s.env });
+      const r = runAction({ ...s.inputs, recipient }, { runnerTemp: s.runnerTemp, env: s.env, actionPath: placeholderKit(s.root) });
       assert.equal(r.failed?.step, 'Encrypt bundle', JSON.stringify(recipient));
+      if (recipient === '') assert.match(r.failed.stdout, /ingest\.pub has no key yet/);
       assert.deepEqual(r.uses, []);
-      assert.equal(existsSync(join(s.runnerTemp, 'tool-qa-result', 'result-att-77.tar')), false, 'plain tar removed');
+      assert.equal(existsSync(join(s.runnerTemp, 'tool-qa-result', 'result-att-77-0.tar')), false, 'plain tar removed');
     } finally { rmSync(s.root, { recursive: true, force: true }); }
   }
+});
+
+test('with no recipient input, the bundle is encrypted to the committed ingest.pub', (t) => {
+  if (!AGE) { t.skip('age is not installed'); return; }
+  const s = workerSetup();
+  try {
+    const r = runAction(s.inputs, { runnerTemp: s.runnerTemp, env: s.env });
+    assert.equal(r.failed, null, JSON.stringify(r.failed));
+    assert.equal(r.uses.length, 1);
+    const ct = readFileSync(r.uses[0].with.path);
+    assert.equal(ct.subarray(0, 21).toString(), 'age-encryption.org/v1');
+    assert.match(ct.toString('latin1'), /\n-> X25519 /, 'one X25519 recipient stanza');
+    assert.equal(existsSync(r.uses[0].with.path.replace(/\.age$/, '')), false, 'plain tar removed');
+  } finally { rmSync(s.root, { recursive: true, force: true }); }
 });

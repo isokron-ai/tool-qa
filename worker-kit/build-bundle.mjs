@@ -4,7 +4,10 @@
 // encrypts the tar with age and uploads only the encrypted file.
 //
 //   node worker-kit/build-bundle.mjs --dir <bundle-dir> --meta <meta.json> \
-//     --attempt-id <id> --fence <n> --run-key <sha256> --out <dir>
+//     --attempt-id <id> --fence <n> --run-key <sha256> [--item-index <i>] --out <dir>
+//
+// --item-index is the item's 0-based position in the dispatched items list
+// (default 0). The bundle is named result-<attempt_id>-<index>.tar(.age).
 //
 // --meta is a JSON file with: subject {id, repo, sha}, tools [{name, version}],
 // oracles [{name, version}], settings_manifest_digest, started_at, optional
@@ -12,8 +15,8 @@
 // observed, output?, marker?}]. The workflow identity comes from the runner's
 // GITHUB_* variables.
 //
-// Step outputs (to $GITHUB_OUTPUT, else stdout): attempt_id, artifact_name,
-// bundle_path, encrypted_path, manifest_sha256.
+// Step outputs (to $GITHUB_OUTPUT, else stdout): attempt_id, item_index,
+// artifact_name, bundle_path, encrypted_path, manifest_sha256.
 //
 // Exit codes: 0 built, 1 the bundle or meta is invalid, 2 usage error.
 // Errors never echo file contents.
@@ -32,8 +35,9 @@ class UsageError extends Error {}
 function parseArgs(argv) {
   const opts = {};
   const names = { '--dir': 'dir', '--meta': 'meta', '--attempt-id': 'attemptId', '--fence': 'fence', '--run-key': 'runKey', '--out': 'out' };
+  const optional = { '--item-index': 'itemIndex' };
   for (let i = 0; i < argv.length; i++) {
-    const key = names[argv[i]];
+    const key = names[argv[i]] ?? optional[argv[i]];
     if (!key) throw new UsageError(`unknown argument ${JSON.stringify(argv[i])}`);
     if (i + 1 >= argv.length) throw new UsageError(`${argv[i]} needs a value`);
     opts[key] = argv[++i];
@@ -41,10 +45,12 @@ function parseArgs(argv) {
   for (const [flag, key] of Object.entries(names)) {
     if (opts[key] === undefined || opts[key] === '') throw new UsageError(`${flag} is required`);
   }
+  opts.itemIndex ??= '0';
+  if (!/^(0|[1-9]\d{0,3})$/.test(opts.itemIndex)) throw new UsageError('--item-index must be a whole number from 0 to 9999');
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(opts.attemptId)) throw new UsageError('--attempt-id has characters outside A-Z a-z 0-9 . _ -');
   if (!/^[1-9]\d{0,15}$/.test(opts.fence) || !Number.isSafeInteger(Number(opts.fence))) throw new UsageError('--fence must be a positive whole number');
   if (!/^[0-9a-f]{64}$/.test(opts.runKey)) throw new UsageError('--run-key must be 64 lowercase hex characters');
-  return { ...opts, fence: Number(opts.fence) };
+  return { ...opts, fence: Number(opts.fence), itemIndex: Number(opts.itemIndex) };
 }
 
 export function main(argv = process.argv.slice(2), env = process.env, io = {}) {
@@ -75,11 +81,12 @@ export function main(argv = process.argv.slice(2), env = process.env, io = {}) {
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
     const tar = writeTar([{ path: MANIFEST_NAME, data: manifestBytes }, ...files]);
     mkdirSync(opts.out, { recursive: true });
-    const name = artifactName(opts.attemptId);
+    const name = artifactName(opts.attemptId, opts.itemIndex);
     const bundlePath = join(opts.out, name.replace(/\.age$/, ''));
     writeFileSync(bundlePath, tar, { mode: 0o600 });
     const outputs = {
       attempt_id: opts.attemptId,
+      item_index: opts.itemIndex,
       artifact_name: name,
       bundle_path: bundlePath,
       encrypted_path: join(opts.out, name),

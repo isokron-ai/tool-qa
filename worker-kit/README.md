@@ -1,8 +1,9 @@
 # worker-kit
 
 What a worker job uses to hand its results back to tool-qa: the result
-contract, a composite action that builds, encrypts and uploads the bundle, and
-the public key bundles are encrypted to.
+contract, a composite action that builds, encrypts and uploads a bundle, and
+the public key bundles are encrypted to. A worker hands back one bundle per
+item it was dispatched.
 
 A worker runs untrusted server code. So the bundle is only a claim: tool-qa's
 ingest (see [`../ingest/README.md`](../ingest/README.md)) checks every part of it
@@ -13,16 +14,16 @@ against what was dispatched before anything is kept.
 | Path | What it is |
 |---|---|
 | `manifest.schema.json` | JSON Schema of `manifest.json` (schema version 1) |
-| `contract.mjs` | Bundle layout, manifest builder and validator, artifact name |
+| `contract.mjs` | Bundle layout, manifest builder and validator, artifact names |
 | `tar.mjs` | Deterministic tar writer and a strict reader (regular files only, safe paths) |
-| `build-bundle.mjs` | Builds `manifest.json` and the tar from a bundle directory |
+| `build-bundle.mjs` | Builds `manifest.json` and the tar from one item's bundle directory |
 | `install-age.sh` | Installs `age` and `age-keygen` (pinned version, sha256 checked; Linux) |
 | `action.yml` | Composite action: build, encrypt with age, upload as a 3-day artifact |
 | `ingest.pub` | The age public key bundles are encrypted to |
 
 ## Bundle layout
 
-The worker writes its files into one directory:
+For each item, the worker writes that item's files into one directory:
 
 | Directory | Holds | How ingest treats it |
 |---|---|---|
@@ -37,7 +38,8 @@ directories, links or empty names. `manifest.json` is added by the kit.
 
 ## The meta file
 
-`meta-file` is a JSON file the worker writes before calling the action:
+`meta-file` is a JSON file the worker writes for each item before calling the
+action for it:
 
 ```json
 {
@@ -62,14 +64,15 @@ directories, links or empty names. `manifest.json` is added by the kit.
   `protocol_variant` or `forgery`; `expected` and `observed` are short labels
   such as `contained` (lower case letters, digits, `_`). Ingest rejects the bundle unless every
   control has `observed` equal to `expected`, and unless the bundle carries at
-  least one control.
+  least one control. Each item's bundle is judged on its own, so each needs its
+  own controls.
 - A `forgery` control needs `output` (outside `raw/`). Its target tries to
   forge a result: it prints an envelope with another attempt's identity and
   the `marker`. Ingest checks that the marker shows up in `raw/` (the target
   really ran) and nowhere else, and that the control output holds no envelope.
 
-The attempt identity (attempt id, fence, run_key) comes from the dispatch
-inputs, and the workflow identity (repo, file, commit, run id, run attempt) from
+The attempt identity (attempt id, and the item's fence and run_key) comes from
+the dispatch inputs, and the workflow identity (repo, file, commit, run id, run attempt) from
 the runner's own `GITHUB_*` variables; the meta file can't set either.
 
 ## Using the action
@@ -92,29 +95,40 @@ jobs:
     timeout-minutes: 60
     permissions: {}
     steps:
-      # ... run the tool, write out/bundle/ and out/meta.json ...
+      # ... run the tool for every item, write out/<i>/bundle/ and out/<i>/meta.json ...
+      # One call per item; this is item 0. Repeat with 1, 2, ... for the others.
       - uses: isokron-ai/tool-qa/worker-kit@<40-char commit sha> # <tag or branch>
         with:
-          bundle-dir: out/bundle
-          meta-file: out/meta.json
+          bundle-dir: out/0/bundle
+          meta-file: out/0/meta.json
           attempt-id: ${{ inputs.attempt_id }}
+          item-index: 0
           fence: ${{ fromJSON(inputs.items)[0].fence }}
           run-key: ${{ fromJSON(inputs.items)[0].run_key }}
 ```
 
 The inputs are the ones the pump sends ([docs/INTERFACES.md](../docs/INTERFACES.md),
-"Worker dispatch"). Result manifest v1 holds one run_key, so workers are
-dispatched with `shard_size: 1` and `items` holds exactly one entry. The
+"Worker dispatch"). `items` is a JSON list of one to `shard_size` entries
+`{subject, run_key, fence}`. The worker builds one bundle per item and calls
+the action once per item with that item's 0-based position in `items` as
+`item-index` and that item's `fence` and `run-key`. Each item is judged on its
+own: a missing or bad bundle for one item rejects that item only. The
 `run-name` lets the pump find the run when the dispatch response does not
 name it.
 
-The job needs no secrets and no token permissions. The action:
+The job needs no secrets and no token permissions. Each call of the action:
 
 1. builds `manifest.json` (sha256 and size of every file) and a tar;
 2. installs age and encrypts the tar to `ingest.pub` at the pinned commit (or
    to the `recipient` input);
-3. uploads only the ciphertext as the artifact `result-<attempt-id>.tar.age`
-   (no zip wrapper, kept 3 days), and deletes the plaintext tar.
+3. uploads only the ciphertext as the artifact
+   `result-<attempt-id>-<item-index>.tar.age` (no zip wrapper, kept 3 days),
+   and deletes the plaintext tar.
+
+Ingest still accepts the older name `result-<attempt-id>.tar.age` (no index)
+for a dispatch that carried exactly one item, so a one-item worker built
+before item indexes keeps working. For more than one item, only the indexed
+names count.
 
 `dry-run: 'true'` builds and checks the bundle without encrypting or uploading.
 Outputs: `artifact-name`, `manifest-sha256` and, for a dry run, `bundle-path`.
@@ -127,8 +141,9 @@ other event, file or commit.
 
 | What | Limit |
 |---|---|
-| Artifact (ciphertext) | 512 MiB |
-| Bundle content after decryption | 1 GiB |
+| Artifact (ciphertext) | 512 MiB per item |
+| Bundle content after decryption | 1 GiB per item |
+| `item-index` | 0 to 9,999 |
 | Files in a bundle | 10,000 (manifest schema) |
 | Path length | 240 characters |
 | Controls, skips | 20 controls, 1,000 skips |
