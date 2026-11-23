@@ -315,3 +315,29 @@ test('AGE_IDENTITY never reaches the log', async () => {
   assert.ok(h.lines.every((l) => !l.includes(secret)));
   h.cleanup();
 });
+
+test('R-ING-06: expired dispatches are reaped before ingest looks at them', async () => {
+  const seen = [];
+  const h = harness({ slots: '0', ingest: async ({ db, now }) => {
+    seen.push(db.dispatchesAwaitingResults({ now: now(), lateMs: 0 }).map((d) => [d.attempt_id, d.status]));
+    seen.push(db.getDispatch('att-old').status);
+  } });
+  const db = openState(h.stateFile);
+  const t = h.c.t - 60 * 60_000;
+  db.acquireSlot('att-old', { budget: 5, ttlMs: 30 * 60_000, now: t });
+  const l = db.acquireLease('k'.repeat(64), 'att-old', { ttlMs: 30 * 60_000, now: t });
+  db.createDispatch({
+    attemptId: 'att-old', shardId: 's-old', workflow: 'live-probe', repo: 'isokron-ai/mcp-check', workflowFile: 'live-probe.yml', ref: 'main',
+    expires: t + 30 * 60_000, items: [{ run_key: 'k'.repeat(64), subject: 'npm:p0', fence: l.fence }], now: t,
+  });
+  db.markDispatched('att-old', { runId: 99 });
+  db.close();
+  const out = await runPump(h.opts);
+  assert.deepEqual(seen, [[], 'expired'], 'ingest never sees it as an open dispatch');
+  assert.ok(h.lines.some((l2) => /lease expired: closed live-probe shard s-old/.test(l2)), h.lines.join('\n'));
+  const after = openState(h.stateFile);
+  assert.equal(after.getKv('pump.last_tick').reaped, 1);
+  after.close();
+  assert.equal(out.ok, true);
+  h.cleanup();
+});

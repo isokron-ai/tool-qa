@@ -489,8 +489,8 @@ export class StateDb {
   }
 
   /**
-   * Dispatches ingest should look at: every open one (pending or dispatched,
-   * expired or not, since the pump ingests before it reaps), and ones closed as
+   * Dispatches ingest should look at: every open one (pending or dispatched;
+   * the pump reaps expired ones first, so these are live), and ones closed as
    * expired within the last `lateMs` that have a run id and an item with nothing
    * recorded yet (a late result is still judged and stored, as rejected). Oldest
    * first.

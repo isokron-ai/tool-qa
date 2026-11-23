@@ -8,12 +8,17 @@
 // A run pulls the state database from its Release asset, then ticks every
 // 150 seconds for about 11 minutes, then pushes the state back. Each tick:
 //
-//   1. ingest   judge the results of worker runs that finished and record them
+//   1. reap     close dispatches whose lease expired and free their slots,
+//               before ingest looks at anything, so a dispatch that cannot be
+//               judged stops being an open one when its lease ends (it is then
+//               only looked at as a late result, at most every ten minutes for
+//               six hours; R-ING-06).
+//   2. ingest   judge the results of worker runs that finished and record them
 //               (ingest/collect.mjs). Only until two minutes before the end, so
 //               the last results are in the state before the final push.
-//   2. tick     reap expired leases and slots, then dispatch due work into free
-//               slots (pump/tick.mjs).
-//   3. push     the state, if the tick recorded, dispatched, failed or reaped
+//   3. tick     reap again (a no-op unless ingest took long), then dispatch due
+//               work into free slots (pump/tick.mjs).
+//   4. push     the state, if the tick recorded, dispatched, failed or reaped
 //               anything, so a run that dies loses little.
 //
 // The pump is the state's only writer: ingest runs inside it, never as a
@@ -49,7 +54,7 @@ import { ApiBudget, budgetedFetch } from './budgets.mjs';
 import { createDispatcher } from './dispatch.mjs';
 import { dueFromState, loadConfig } from './due.mjs';
 import { scrub } from './github.mjs';
-import { computeBudget } from './slots.mjs';
+import { computeBudget, reapExpired } from './slots.mjs';
 import { planShards, runTick } from './tick.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
@@ -168,6 +173,8 @@ export async function runPump({
     for (;;) {
       const tickStart = now();
       ticks += 1;
+      const early = reapExpired(db, { now: tickStart });
+      for (const d of early.dispatches) say(`lease expired: closed ${d.workflow} shard ${d.shard_id} (${d.attempt_id})`);
       let ingested = null;
       if (collector && !blocked && tickStart < ingestDeadline) {
         try {
@@ -185,6 +192,8 @@ export async function runPump({
       const summary = await runTick({
         db, now, config: cfg, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline,
       });
+      summary.reaped += early.dispatches.length;
+      summary.reapedSlots += early.slots;
       dispatched += summary.dispatched;
       failed += summary.failed;
       const ingestNote = ingested

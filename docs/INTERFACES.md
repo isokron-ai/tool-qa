@@ -84,9 +84,12 @@ Order inside one pump run:
    still reaps and pushes, and the run fails. `collect()` repeats the key
    checks whenever there is a dispatch to look at, so a housekeeping run with
    a bad key judges nothing either.
-2. Each tick: `collect()`, then the tick itself (reap, then dispatch), then a
-   state push if anything changed. So a result judged in a tick is in the state
-   before that tick's push.
+2. Each tick: reap expired dispatches, `collect()`, then the tick itself
+   (dispatch), then a state push if anything changed. So a result judged in a
+   tick is in the state before that tick's push, and a dispatch whose lease
+   ran out is already closed when ingest looks at it: it is then only
+   rechecked as a late result, at most every ten minutes for six hours, and
+   can never hold up later ticks.
 3. `collect()` is not called within two minutes of the run's end (the
    `deadline` is the run's end minus two minutes, about minute 9 of 11), so the
    last decisions are pushed with the final state.
