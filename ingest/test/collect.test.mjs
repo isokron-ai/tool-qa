@@ -828,3 +828,23 @@ test('R-ING-12: setDispatchRun never sets the expected commit, and markDispatche
   assert.equal(db.getDispatch('a').workflow_sha, WORKFLOW_SHA);
   db.close();
 });
+
+test('R-ING-08: a bundle that makes the judge throw is a recorded rejection, never downloaded again', async () => {
+  const { db, fence } = setup();
+  const api = worker({ bundle: makeBundle({ identity: { fence } }) });
+  // A registry the judge cannot read stands in for any bug the bundle hits.
+  const h = harness({ api, registry: { ...parseRegistry(REGISTRY_TEXT), fields: null, source: 'test' } });
+  try {
+    const s = await h.collect(db);
+    assert.equal(s.errors, 0, 'not an error to retry');
+    assert.deepEqual(s.outcomes, { rejected: 1 });
+    assert.equal(db.listAttempts('repo:1')[0].reason, 'ingest_error');
+    assert.equal(db.getDispatch('att-1').status, 'done');
+    const downloads = api.calls.filter((c) => c.path.endsWith('/zip')).length;
+    assert.equal((await h.collect(db)).checked, 0);
+    assert.equal(api.calls.filter((c) => c.path.endsWith('/zip')).length, downloads, 'no second download');
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
