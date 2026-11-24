@@ -23,7 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 export const MAX_SLOTS = 15;
 /** How far apart one tick's dispatches may be created and still count as one burst (R-ING-26). */
 export const SHA_BURST_MS = 30_000;
@@ -35,6 +35,7 @@ const MIGRATIONS = [
   { version: 4, sql: () => readFileSync(new URL('./schema-v4.sql', import.meta.url), 'utf8') },
   { version: 5, sql: () => readFileSync(new URL('./schema-v5.sql', import.meta.url), 'utf8') },
   { version: 6, sql: () => readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8') },
+  { version: 7, sql: () => readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -655,13 +656,17 @@ export class StateDb {
    *
    * @param {{run_key: string, attempt_id: string, fence: number, outcome?: string,
    *   verdict?: 'accepted'|'rejected', accepted?: boolean, reason?: string,
-   *   digest?: string, resultOutcome?: string, now?: number|string|Date}} args
+   *   digest?: string, resultOutcome?: string, fault?: string|null, coverage?: string,
+   *   now?: number|string|Date}} args
    *   resultOutcome: what the results row stores as its outcome when accepted
    *   (default: outcome); ingest passes 'skips_only' for a result with no
    *   records whose every skip is retryable (R-SUB-06).
+   *   fault, coverage: the result's fault side and coverage state
+   *   (worker-kit/contract.mjs resultFault, R-COV-02); stored on the results
+   *   row, NULL when not given. coverage 'assessed' also sets assessed_at.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -704,14 +709,21 @@ export class StateDb {
           // A skips_only result keeps measured_at, so the retry counters run on (R-SUB-08).
           const final = resultOutcome ?? outcome;
           const skipsOnly = final === 'skips_only';
+          // fault and coverage describe this result; assessed_at keeps the
+          // last assessed one for the run_key (R-COV-02).
+          const assessed = coverage === 'assessed' ? t : null;
           this.raw.prepare(`
-            INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, digest, accepted_at, measured_at, skips_streak)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, digest, accepted_at, measured_at, skips_streak,
+              fault, coverage, assessed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (run_key) DO UPDATE SET attempt_id = excluded.attempt_id, fence = excluded.fence,
               outcome = excluded.outcome, digest = excluded.digest, accepted_at = excluded.accepted_at,
               measured_at = CASE WHEN excluded.outcome IS 'skips_only' THEN results.measured_at ELSE excluded.accepted_at END,
-              skips_streak = CASE WHEN excluded.outcome IS 'skips_only' THEN results.skips_streak + 1 ELSE 0 END
-          `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0);
+              skips_streak = CASE WHEN excluded.outcome IS 'skips_only' THEN results.skips_streak + 1 ELSE 0 END,
+              fault = excluded.fault, coverage = excluded.coverage,
+              assessed_at = COALESCE(excluded.assessed_at, results.assessed_at)
+          `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0,
+            fault, coverage, assessed);
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {

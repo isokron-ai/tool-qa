@@ -202,6 +202,17 @@ result again after `skips_only_max_age_days`, doubling for each one in a row,
 at most the tier max age (R-SUB-06, R-SUB-08). The results row keeps
 `measured_at` and counts `skips_streak` for this.
 
+`recordResult` also takes `fault` and `coverage` for an accepted result
+(R-COV-02): the result's fault side (`tool`, `unknown`, `infra`, `subject`,
+`policy`, or `null` with no skip) and coverage state (`assessed`,
+`unassessed_tool`, `unassessed_unknown`, `unassessed_infra`, `subject`,
+`excluded`), from `resultFault()` in `worker-kit/contract.mjs`. The results
+row stores both (state schema 7) and keeps `assessed_at`, the last time the
+run_key had an assessed result. A tool-fault skip is `unassessed_tool`:
+never `excluded` and never the server's failure. Rows from before schema 7
+have all three `NULL`. The due list reads them for the coverage-gap boost
+(`pump/due.mjs`, R-COV-03).
+
 `index` is the item's 0-based position in the `items` input the worker got,
 which names its result artifact; `current_fence` is the fence of the
 run_key's lease now (a newer one means this item is stale); `outcome` is

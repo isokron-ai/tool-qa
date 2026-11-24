@@ -17,10 +17,12 @@
 //     the item. A row without `items` describes one item with run_key, fence,
 //     current_fence and outcome at the top level (index 0).
 //
-//   recordResult({run_key, attempt_id, fence, outcome, accepted, reason})
+//   recordResult({run_key, attempt_id, fence, outcome, accepted, reason,
+//                 resultOutcome?, fault?, coverage?})
 //     -> {accepted, reason}. One call per item. The store does its own fence
 //     check and may refuse (accepted: false, reason: 'stale_fence'); ingest
-//     follows its answer.
+//     follows its answer. An accepted item also carries its fault side and
+//     coverage state (worker-kit/contract.mjs resultFault, R-COV-02).
 //
 // state/db.mjs implements both as StateDb methods. The pump wraps its own open
 // StateDb with dbLedger(); the CLI's --state FILE opens one with openLedger().
@@ -221,6 +223,8 @@ function jsonLedger(path, now) {
       }
       doc.results.push({
         run_key: r.run_key, attempt_id: r.attempt_id, fence: r.fence, outcome, accepted, reason,
+        ...(accepted && r.resultOutcome ? { result_outcome: r.resultOutcome } : {}),
+        ...(accepted && r.coverage ? { fault: r.fault ?? null, coverage: r.coverage } : {}),
         recorded_at: now().toISOString(),
       });
       save();

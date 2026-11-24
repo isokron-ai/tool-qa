@@ -16,7 +16,9 @@
 
 import { Worker } from 'node:worker_threads';
 
-import { MANIFEST_NAME, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, sha256Hex, validateManifest } from '../worker-kit/contract.mjs';
+import {
+  MANIFEST_NAME, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, resultFault, sha256Hex, validateManifest,
+} from '../worker-kit/contract.mjs';
 import { readTar, TarError } from '../worker-kit/tar.mjs';
 import { checkBundle } from './forgery.mjs';
 import { cleanHit, cleanProblem, makeLabeler, MAX_LISTED } from './hygiene.mjs';
@@ -132,6 +134,9 @@ export function analyzeBundle(plaintext, ctx) {
     return reject('manifest_invalid', valid.errors.map((e) => ({ reason: 'manifest_invalid', json_path: e.path, detail: e.message })));
   }
   const retryableSkips = manifest.skips.filter((sk) => sk.retryable === true).length;
+  // Who the skips are down to (R-COV-01): the declared fault, or the reason's
+  // default ("unknown" for an ambiguous reason from an older worker kit).
+  const rf = resultFault(manifest.skips);
   report.bundle = {
     manifest_sha256: sha256Hex(manifestBytes),
     files: files.size,
@@ -141,6 +146,10 @@ export function analyzeBundle(plaintext, ctx) {
     retryable_skips: retryableSkips,
     // results/ files that are not only a skip's evidence: measured results (R-SUB-10).
     result_files: [...files.keys()].filter((p) => p.startsWith('results/') && !manifest.skips.some((sk) => sk.evidence === p)).length,
+    fault: rf.fault,
+    coverage: rf.coverage,
+    skip_faults: rf.faults,
+    declared_faults: manifest.skips.filter((sk) => sk.fault !== undefined).length,
   };
   // Every stage that did not run may succeed later (R-ING-16).
   const retryable = manifest.skips.length > 0 && retryableSkips === manifest.skips.length;
