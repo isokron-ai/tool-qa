@@ -39,8 +39,17 @@ function world() {
   const ago = (h) => new Date(c.t - h * HOUR).toISOString();
   const artifacts = [];
   const zips = new Map();
-  const add = (id, name, zip, { hoursAgo = 1, expired = false, digest, size, createdAt } = {}) => {
-    artifacts.unshift({ id, name, created_at: createdAt ?? ago(hoursAgo), expired, size_in_bytes: size ?? zip?.length ?? 0, workflow_run: { id: id * 10, head_sha: 'abc' }, ...(digest ? { digest } : {}) });
+  // Each artifact's run: our repository (id 1), branch main, the workflow that makes that kind.
+  const runs = new Map();
+  const workflowFor = (name) => (name.startsWith('ingest-') ? 'pump.yml' : name.startsWith('registry-') ? 'history-registry.yml'
+    : name.startsWith('history-packages-') ? 'history-packages.yml' : name.startsWith('history-popularity-') ? 'history-popularity.yml' : 'test.yml');
+  const add = (id, name, zip, { hoursAgo = 1, expired = false, digest, size, createdAt, runId = id * 10, branch = 'main', headRepo = 1, workflow, runGone = false } = {}) => {
+    artifacts.unshift({
+      id, name, created_at: createdAt ?? ago(hoursAgo), expired, size_in_bytes: size ?? zip?.length ?? 0,
+      workflow_run: { id: runId, repository_id: 1, head_repository_id: headRepo, head_branch: branch, head_sha: 'abc' },
+      ...(digest ? { digest } : {}),
+    });
+    if (!runGone) runs.set(runId, { id: runId, path: `.github/workflows/${workflow ?? workflowFor(name)}`, repository: { id: 1 }, head_repository: { id: headRepo } });
     if (zip) zips.set(id, zip);
   };
   // Repository variables, for the heartbeat; `varStatus` forces an error answer.
@@ -63,12 +72,16 @@ function world() {
       const page = Number(req.query.get('page') ?? 1);
       return { body: { total_count: artifacts.length, artifacts: artifacts.slice((page - 1) * per, page * per) } };
     }],
+    ['GET', /^\/repos\/isokron-ai\/tool-qa\/actions\/runs\/\d+$/, (req) => {
+      const run = runs.get(Number(req.path.split('/').pop()));
+      return run ? { body: run } : { status: 404, body: { message: 'Not Found' } };
+    }],
     ['GET', /\/actions\/artifacts\/\d+\/zip$/, (req) => ({ status: 302, headers: { location: `https://storage.test/blob/${req.path.split('/')[6]}?sig=secret` } })],
     ['GET', /^\/blob\/\d+$/, (req) => ({ body: zips.get(Number(req.path.split('/')[2])) })],
   ]);
   const dest = mkdtempSync(join(tmpdir(), 'archive-'));
   const opts = { dest, repo: REPO, token: 'ghs_synthetic_archive', fetch: api.fetch, apiUrl: API, now: c.now, sleep: c.sleep, log: () => {} };
-  return { c, api, add, artifacts, vars, v, opts, dest, cleanup: () => rmSync(dest, { recursive: true, force: true }) };
+  return { c, api, add, artifacts, runs, zips, vars, v, opts, dest, cleanup: () => rmSync(dest, { recursive: true, force: true }) };
 }
 
 const index = (dest) => readFileSync(join(dest, 'index.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
@@ -567,7 +580,7 @@ test('R-ARC-05: a successful run records .last-ok.json and sets ARCHIVE_LAST_OK 
   assert.equal(r.code, 0);
   assert.deepEqual(r.notes, []);
   const ok = JSON.parse(readFileSync(join(w.dest, '.last-ok.json'), 'utf8'));
-  assert.deepEqual(ok, { at: '2026-03-02T12:00:00.000Z', pulled: 1, recovered: 0, quarantined: 0, already: 0, failed: 0, listed: 1 });
+  assert.deepEqual(ok, { at: '2026-03-02T12:00:00.000Z', pulled: 1, recovered: 0, quarantined: 0, already: 0, refused_foreign: 0, failed: 0, listed: 1 });
   // the first heartbeat creates the variable, later ones update it
   assert.deepEqual(variableCalls(w.api).map((c) => c.method), ['PATCH', 'POST']);
   assert.deepEqual(JSON.parse(w.vars.get('ARCHIVE_LAST_OK')), ok);
@@ -693,8 +706,8 @@ test('R-ARC-07: every file and folder is synced to disk before the folder is ren
   const seen = [];
   await archivePull({ ...w.opts, fsync: () => seen.push(existsSync(final)) });
   // 3 files + the marker, the temporary folder and its pypi/ subfolder, then the parent after the rename
-  assert.equal(seen.length, 7);
-  assert.deepEqual(seen, [false, false, false, false, false, false, true]);
+  // (the index line and the cursor follow: R-ARC-15)
+  assert.deepEqual(seen.slice(0, 7), [false, false, false, false, false, false, true]);
   w.cleanup();
 });
 
@@ -719,7 +732,7 @@ test('R-ARC-08: a second run while a live one holds the lock does nothing and ex
   w.cleanup();
 });
 
-test('R-ARC-08: a lock from a dead run, or one older than 12 hours, is taken over; one from another host is not', async () => {
+test('R-ARC-08: a lock from a dead run on this host, or from another host untouched for 12 hours, is taken over; a recent one from another host is not', async () => {
   const w = world();
   w.add(1, 'ingest-1-1', ingestZip('l', 1));
   const lock = (owner) => {
@@ -783,5 +796,244 @@ test('R-ARC-10: an ingest artifact whose created_at is not a date fails with tha
   assert.deepEqual(out.pulled, ['ingest-2-1']);
   const cursor = JSON.parse(readFileSync(join(w.dest, '.last-pull.json'), 'utf8'));
   assert.equal(cursor.by_kind.ingest, '2026-03-02T11:00:00.000Z', 'a bad time never becomes the cursor');
+  // with a cursor in place, the next run still lists it and still fails it (R-ARC-18)
+  const again = await archivePull(w.opts);
+  assert.deepEqual(again.failed.map((f) => f.error), ['created_at "not-a-date" is not a date']);
+  w.cleanup();
+});
+
+// ---- R-ARC-11..18: second review of #27 ----
+
+/** A zip whose central directory lists `n` entries, all pointing at one local entry. */
+function sharedDataZip(n, data, { badCrc = true } = {}) {
+  const one = makeZip([{ name: 'e00.tar.age', data }], { corruptCrc: badCrc ? ['e00.tar.age'] : [] });
+  const cdOffset = one.readUInt32LE(one.length - 22 + 16);
+  const cdSize = one.readUInt32LE(one.length - 22 + 12);
+  const local = one.subarray(0, cdOffset);
+  const central = one.subarray(cdOffset, cdOffset + cdSize);
+  const cds = Array.from({ length: n }, (_, i) => {
+    const c = Buffer.from(central);
+    c.write(`e${String(i).padStart(2, '0')}`, 46, 'utf8');
+    return c;
+  });
+  const cd = Buffer.concat(cds);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(n, 8);
+  end.writeUInt16LE(n, 10);
+  end.writeUInt32LE(cd.length, 12);
+  end.writeUInt32LE(local.length, 16);
+  return Buffer.concat([local, cd, end]);
+}
+
+test('R-ARC-11: entries that fail after inflating still count toward the cap, and entries sharing local data are refused', async () => {
+  const { readZip, readZipLenient } = await import('../scripts/lib/unzip.mjs');
+  // The review's case: a small zip listing 30 entries of 64 MiB with bad CRCs, all on one local entry.
+  const bomb = sharedDataZip(30, Buffer.alloc(64 * 1024 ** 2));
+  assert.ok(bomb.length < 200_000, 'the archive itself is small');
+  let r = readZipLenient(bomb, { maxTotalBytes: 100 * 1024 ** 2 });
+  assert.deepEqual(r.entries, []);
+  assert.equal(r.refused.filter((x) => /CRC/.test(x.reason)).length, 1, 'inflated once, not 30 times');
+  assert.ok(r.refused.slice(1).every((x) => /points at the same data as an earlier entry|more than 104857600 bytes/.test(x.reason)));
+  // Distinct entries that each inflate and then fail their CRC: every one is counted, so the cap stops the work.
+  const bad = makeZip(Array.from({ length: 30 }, (_, i) => ({ name: `b${i}.tar.age`, data: Buffer.alloc(1024 ** 2, i) })), {
+    corruptCrc: Array.from({ length: 30 }, (_, i) => `b${i}.tar.age`),
+  });
+  r = readZipLenient(bad, { maxTotalBytes: 4 * 1024 ** 2 });
+  assert.equal(r.refused.filter((x) => /CRC/.test(x.reason)).length, 4);
+  assert.equal(r.refused.filter((x) => /more than 4194304 bytes once inflated/.test(x.reason)).length, 26);
+  // readZip refuses shared data too, even with good CRCs
+  assert.throws(() => readZip(sharedDataZip(2, Buffer.from('ok'), { badCrc: false })), /points at the same data/);
+});
+
+test('R-ARC-12: a live run on this host keeps its lock however long it runs; one on another host keeps it while it touches it', async () => {
+  const w = world();
+  w.add(1, 'ingest-1-1', ingestZip('l', 1), { hoursAgo: 2 });
+  w.add(2, 'ingest-2-1', ingestZip('m', 1), { hoursAgo: 1 });
+  const lock = (owner) => {
+    rmSync(join(w.dest, '.lock'), { recursive: true, force: true });
+    mkdirSync(join(w.dest, '.lock'));
+    writeFileSync(join(w.dest, '.lock', 'owner.json'), JSON.stringify(owner));
+  };
+  const longAgo = new Date(w.c.t - 30 * HOUR).toISOString();
+  lock({ pid: 4242, host: hostname(), started_at: longAgo });
+  assert.ok((await archivePull({ ...w.opts, alive: (pid) => pid === 4242 })).locked, 'a 30-hour backfill on this host is not stale');
+  lock({ pid: 4242, host: 'elsewhere', started_at: longAgo, touched_at: new Date(w.c.t - HOUR).toISOString() });
+  assert.ok((await archivePull({ ...w.opts, alive: () => false })).locked, 'touched an hour ago on another host: live');
+  rmSync(join(w.dest, '.lock'), { recursive: true, force: true });
+  // a run touches its lock after each artifact
+  const touched = [];
+  const fetch = async (url, init) => {
+    if (String(url).startsWith('https://storage.test/')) {
+      touched.push(JSON.parse(readFileSync(join(w.dest, '.lock', 'owner.json'), 'utf8')).touched_at);
+      w.c.t += HOUR;
+    }
+    return w.api.fetch(url, init);
+  };
+  const out = await archivePull({ ...w.opts, fetch });
+  assert.equal(out.pulled.length, 2);
+  assert.equal(touched.length, 2);
+  assert.ok(touched[1] > touched[0], `touched again before the second artifact: ${touched}`);
+  w.cleanup();
+});
+
+test('R-ARC-13: two runs cannot both take over one stale lock, nor take one another run has just taken', async () => {
+  const w = world();
+  w.add(1, 'ingest-1-1', ingestZip('l', 1));
+  const lockDir = join(w.dest, '.lock');
+  mkdirSync(lockDir);
+  writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: 111, host: hostname(), started_at: new Date(w.c.t - HOUR).toISOString() }));
+  // While this run decides pid 111 is dead, another run takes the lock over first.
+  const winner = { pid: 222, host: hostname(), started_at: new Date(w.c.t).toISOString() };
+  let swapped = false;
+  const alive = (pid) => {
+    if (pid === 111 && !swapped) {
+      swapped = true;
+      rmSync(lockDir, { recursive: true, force: true });
+      mkdirSync(lockDir);
+      writeFileSync(join(lockDir, 'owner.json'), JSON.stringify(winner));
+      return false;
+    }
+    return pid === 222;
+  };
+  const out = await archivePull({ ...w.opts, alive });
+  assert.deepEqual(out.locked, winner, 'it sees the new holder and backs off');
+  assert.deepEqual(JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')), winner, "the winner's lock is untouched");
+  assert.equal(existsSync(join(w.dest, '.lock.takeover')), false);
+  // a takeover in progress elsewhere (a fresh guard): back off, leave the stale lock alone
+  writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({ pid: 111, host: hostname(), started_at: new Date(w.c.t - HOUR).toISOString() }));
+  mkdirSync(join(w.dest, '.lock.takeover'));
+  const t = w.c.t / 1000;
+  utimesSync(join(w.dest, '.lock.takeover'), t, t);
+  assert.ok((await archivePull({ ...w.opts, alive: () => false })).locked);
+  assert.equal(JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8')).pid, 111);
+  // a guard left by a run that died in a takeover (over 10 minutes old) is cleared
+  const old = (w.c.t - 11 * 60_000) / 1000;
+  utimesSync(join(w.dest, '.lock.takeover'), old, old);
+  const took = await archivePull({ ...w.opts, alive: () => false });
+  assert.equal(took.locked, null);
+  assert.deepEqual(took.pulled, ['ingest-1-1']);
+  w.cleanup();
+});
+
+test('R-ARC-14: names that one disk folds together, and empty or "." parts, are refused; a name the disk cannot write sends the whole download to quarantine', async () => {
+  const w = world();
+  const zip = makeZip([
+    { name: 'ingest-A.tar.age', data: AGE('A'), method: 'store' },
+    { name: 'ingest-a.tar.age', data: AGE('a'), method: 'store' },
+    { name: 'ingest-é.tar.age', data: AGE('nfc'), method: 'store' },
+    { name: 'ingest-é.tar.age', data: AGE('nfd'), method: 'store' },
+    { name: 'x/./y.tar.age', data: AGE('dot'), method: 'store' },
+    { name: 'a//b.tar.age', data: AGE('empty'), method: 'store' },
+    { name: '.ARTIFACT.json', data: AGE('marker'), method: 'store' },
+  ]);
+  w.add(1, 'ingest-1-1', zip, { hoursAgo: 2 });
+  // a name too long for any common disk: writing fails the same way every time
+  const long = makeZip([{ name: 'ingest-ok.tar.age', data: AGE('ok'), method: 'store' }, { name: `${'x'.repeat(300)}.tar.age`, data: AGE('long'), method: 'store' }]);
+  w.add(2, 'ingest-2-1', long, { hoursAgo: 1 });
+  const out = await archivePull(w.opts);
+  assert.deepEqual(out.failed, []);
+  const [m1, m2] = manifestLines(w.dest);
+  assert.deepEqual(m1.files.map((f) => f.name), ['ingest-A.tar.age', 'ingest-é.tar.age']);
+  assert.deepEqual(m1.refused.map((r) => [r.name, r.reason]), [
+    ['ingest-a.tar.age', 'a second file with this name (ignoring case and Unicode form)'],
+    ['ingest-é.tar.age', 'a second file with this name (ignoring case and Unicode form)'],
+    ['x/./y.tar.age', 'its name has an empty, "." or ".." part'],
+    ['a//b.tar.age', 'its name has an empty, "." or ".." part'],
+    ['.ARTIFACT.json', '.artifact.json is a reserved name'],
+  ]);
+  assert.equal(m2.dir, null);
+  assert.deepEqual(m2.files, []);
+  assert.deepEqual(m2.refused.map((r) => r.name), ['ingest-ok.tar.age', `${'x'.repeat(300)}.tar.age`]);
+  assert.match(m2.problems.at(-1), /could not be written under their names here \(ENAMETOOLONG/);
+  assert.deepEqual(readFileSync(join(w.dest, m2.quarantine)), long);
+  assert.deepEqual(readdirSync(w.dest).filter((n) => n.startsWith('.partial')), []);
+  const again = await archivePull(w.opts);
+  assert.deepEqual([again.failed, again.pulled, again.quarantined], [[], [], []], 'done, not retried');
+  w.cleanup();
+});
+
+test('R-ARC-15: index and manifest lines are synced to disk, and the cursor is replaced whole only after them', async () => {
+  const w = world();
+  w.add(1, 'ingest-1-1', ingestZip('s', 1));
+  const index = join(w.dest, 'index.ndjson');
+  const manifest = join(w.dest, 'ingest', 'manifest.ndjson');
+  const cursor = join(w.dest, '.last-pull.json');
+  const temp = join(w.dest, `.partial-0-${process.pid}.json`);
+  const seen = [];
+  await archivePull({ ...w.opts, fsync: () => seen.push({ index: existsSync(index), manifest: existsSync(manifest), cursor: existsSync(cursor), temp: existsSync(temp) }) });
+  const firstIndex = seen.findIndex((x) => x.index);
+  const firstManifest = seen.findIndex((x) => x.manifest);
+  const tempSync = seen.findIndex((x) => x.temp && !x.cursor);
+  const afterRename = seen.findIndex((x) => x.cursor);
+  assert.ok(firstIndex >= 0 && firstManifest > firstIndex, 'the index line, then the manifest line, each synced');
+  assert.ok(tempSync > firstManifest, 'the new cursor is written and synced to a temporary file after both');
+  assert.equal(afterRename, seen.length - 1, 'then renamed over the old one, and the folder synced last');
+  assert.equal(existsSync(temp), false);
+  assert.equal(JSON.parse(readFileSync(cursor, 'utf8')).by_kind.ingest, '2026-03-02T11:00:00.000Z');
+  w.cleanup();
+});
+
+test('R-ARC-16: an artifact not made by our own workflow on main is refused unread, not quarantined, and not a failure', async () => {
+  const w = world();
+  w.add(1, 'ingest-1-1', ingestZip('fork', 1), { hoursAgo: 6, headRepo: 999 });
+  w.add(2, 'ingest-2-1', ingestZip('branch', 1), { hoursAgo: 5, branch: 'feature' });
+  w.add(3, 'ingest-3-1', ingestZip('test', 1), { hoursAgo: 4, workflow: 'test.yml' });
+  w.add(4, 'registry-delta-x', registryZip('a'), { hoursAgo: 3, workflow: 'history-packages.yml' });
+  w.add(5, 'ingest-5-1', ingestZip('gone', 1), { hoursAgo: 2, runGone: true });
+  w.add(6, 'ingest-6-1', ingestZip('ok', 1), { hoursAgo: 1, runId: 777 });
+  w.add(7, 'ingest-manual.tar.age', AGE('manual'), { hoursAgo: 1, runId: 777, workflow: 'ingest.yml' });
+  const logs = [];
+  const r = await runMain(w, ['--no-heartbeat'], { log: (l) => logs.push(l) });
+  assert.equal(r.code, 0);
+  const out = await archivePull(w.opts);
+  // the next run checks again those still inside its look-back, and still refuses them
+  assert.deepEqual(out.foreign.map((f) => f.name), ['registry-delta-x', 'ingest-5-1']);
+  assert.deepEqual(out.failed, []);
+  assert.deepEqual(index(w.dest).map((e) => e.id), [6, 7]);
+  assert.equal(downloads(w.api).length, 2, 'only the two of ours were downloaded');
+  assert.deepEqual(quarantineFiles(w.dest), []);
+  const refused = logs.filter((l) => /REFUSED, not from our own workflow on main/.test(l));
+  assert.equal(refused.length, 5);
+  assert.match(refused[0], /ingest-1-1: .*another repository \(head repository 999\)/);
+  assert.match(refused[1], /ingest-2-1: .*branch "feature"/);
+  assert.match(refused[2], /ingest-3-1: .*"\.github\/workflows\/test\.yml", not pump\.yml or ingest\.yml/);
+  assert.match(refused[3], /registry-delta-x: .*not history-registry\.yml/);
+  assert.match(refused[4], /ingest-5-1: .*run 50 is gone/);
+  assert.match(logs.at(-1), /refused as not ours 5/);
+  // one run, one lookup, however many artifacts it made
+  assert.equal(w.api.calls.filter((c) => c.path.endsWith('/actions/runs/777')).length, 1);
+  w.cleanup();
+});
+
+test('R-ARC-17: a quarantine recovered after a run died before indexing it is still reported and notified', async () => {
+  const w = world();
+  w.add(1, 'ingest-1-1', makeZip([{ name: 'ingest-k-0.tar.age', data: AGE('k') }, { name: 'junk.txt', data: 'x' }]));
+  let r = await runMain(w, ['--no-heartbeat']);
+  assert.match(r.notes[0], /1 ingest artifact\(s\) quarantined/);
+  rmSync(join(w.dest, 'index.ndjson'));
+  rmSync(join(w.dest, 'ingest', 'manifest.ndjson'));
+  const out = await archivePull(w.opts);
+  assert.deepEqual(out.recovered, ['ingest-1-1']);
+  assert.equal(out.quarantined.length, 1);
+  assert.equal(out.quarantined[0].recovered, true);
+  rmSync(join(w.dest, 'index.ndjson'));
+  rmSync(join(w.dest, 'ingest', 'manifest.ndjson'));
+  r = await runMain(w, ['--no-heartbeat']);
+  assert.equal(r.code, 0);
+  assert.match(r.notes[0], /1 ingest artifact\(s\) quarantined in .*: ingest-1-1\./);
+  w.cleanup();
+});
+
+test('R-ARC-18: an artifact whose created_at is not a date keeps failing visibly on later runs', async () => {
+  const w = world();
+  w.add(1, 'ingest-1-1', ingestZip('t', 1), { createdAt: 'not-a-date' });
+  w.add(2, 'ingest-2-1', ingestZip('u', 1));
+  assert.equal((await runMain(w, ['--no-heartbeat'])).code, 1);
+  w.c.t += 6 * HOUR;
+  w.add(3, 'ingest-3-1', ingestZip('v', 1), { hoursAgo: 0.5 });
+  const r = await runMain(w, ['--no-heartbeat']);
+  assert.equal(r.code, 1, 'with a cursor in place it is still listed, and still fails');
+  assert.match(r.notes[0], /Archive pull failed: 1 artifact\(s\) \(ingest-1-1: created_at "not-a-date" is not a date\)/);
   w.cleanup();
 });

@@ -21,6 +21,11 @@
 //     attempt, and each file's name, size and sha256. Nothing is decrypted.
 //
 // For every such artifact that has not expired and is not in the index yet, it:
+//   0. checks it was made by our own workflow for its kind (pump.yml or
+//      ingest.yml for ingest; the history workflow for history), on main, in
+//      this repository and not a fork. Anything else (a pull request from a
+//      fork can upload any name) is logged and left alone: not downloaded, not
+//      quarantined, not a failure;
 //   1. downloads it (the API answers with a redirect to storage; the token is
 //      sent to the API only, never to the storage host);
 //   2. checks the download against the artifact's sha256 digest when GitHub
@@ -32,16 +37,19 @@
 //      then renames that to its place (or `<place>.<id>` if a different folder
 //      already has that name);
 //   5. appends a line to `<dest>/index.ndjson` (and, for ingest, to the
-//      manifest).
+//      manifest), each synced to disk; the cursor is replaced whole, through a
+//      synced temporary file, after them.
 // Nothing in the archive is ever overwritten or deleted. A history artifact
 // that fails a check is not kept and not indexed; it is tried again on the next
 // run, and the exit code is 1.
 //
 // An ingest artifact is the only copy of the loop's results, so a check that
 // will fail the same way every time does not throw it away. Each file in it
-// must be a non-empty `*.tar.age` file that starts like an age file, and must
-// not be named `.artifact.json`. If any file fails (or the zip itself is
-// damaged), the download is kept as it came, still encrypted, in
+// must be a non-empty `*.tar.age` file that starts like an age file, must not
+// be named `.artifact.json`, must have no empty or "." part in its name, and
+// must not be the same name as another once case and Unicode form are ignored
+// (as APFS sees names). If any file fails, the zip itself is damaged, or the
+// files cannot be written under their names on this disk, the download is kept as it came, still encrypted, in
 // `<dest>/quarantine/<id>-<name>.zip` with a `.reason.json` beside it; the files
 // that pass are archived in the usual place; and the index and manifest mark
 // the artifact `partial`, listing the refused files. It is then done, not
@@ -54,9 +62,11 @@
 // kind with no cursor yet (ingest, in an archive made before it was pulled) is
 // listed in full.
 //
-// One run at a time: a run holds the folder `<dest>/.lock` (made with mkdir)
-// and leaves at once, with exit 0, if a live run holds it. A lock whose run has
-// died (same host, pid gone) or that is older than 12 hours is taken over.
+// One run at a time: a run holds the folder `<dest>/.lock` (made with mkdir),
+// touches it after each artifact, and leaves at once, with exit 0, if a live
+// run holds it. A lock from this host is taken over only when its pid is gone;
+// one from another host when it has not been touched for 12 hours. A takeover
+// happens under `<dest>/.lock.takeover`, and only of the holder judged stale.
 // Temporary `.partial-<id>-<pid>` folders left by a run that died are removed
 // when the next run starts.
 //
@@ -70,7 +80,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
-  appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync,
+  closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync,
   renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { hostname } from 'node:os';
@@ -152,15 +162,37 @@ function readLines(file, key) {
   return out;
 }
 
-/** Append one line, first ending a torn last line so the new one stays whole. */
-function appendLine(file, entry) {
-  let prefix = '';
-  if (existsSync(file)) {
-    const text = readFileSync(file);
-    if (text.length && text[text.length - 1] !== 0x0a) prefix = '\n';
-  }
+/**
+ * Append one line, first ending a torn last line so the new one stays whole,
+ * and sync it to disk (and the folder, if the file is new) before returning.
+ */
+function appendLine(file, entry, fsync = fsyncSync) {
   mkdirSync(dirname(file), { recursive: true });
-  appendFileSync(file, `${prefix}${JSON.stringify(entry)}\n`);
+  const isNew = !existsSync(file);
+  const fd = openSync(file, 'a+');
+  try {
+    let prefix = '';
+    const size = fstatSync(fd).size;
+    if (size) {
+      const last = Buffer.alloc(1);
+      readSync(fd, last, 0, 1, size - 1);
+      if (last[0] !== 0x0a) prefix = '\n';
+    }
+    writeFileSync(fd, `${prefix}${JSON.stringify(entry)}\n`);
+    fsync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  if (isNew) syncDir(dirname(file), fsync);
+}
+
+/** Replace a small file whole: a synced temporary file renamed over it, then the folder synced. */
+function replaceFile(file, text, fsync = fsyncSync) {
+  const temp = join(dirname(file), `.partial-0-${process.pid}.json`);
+  rmSync(temp, { force: true });
+  writeDurable(temp, text, fsync);
+  renameSync(temp, file);
+  syncDir(dirname(file), fsync);
 }
 
 /** Per-kind cursors; an archive from before kinds holds the history cursor only. */
@@ -208,10 +240,18 @@ function manifestLine(marker, dir) {
   };
 }
 
+/**
+ * A name as a case-insensitive, normalising file system (APFS by default) sees
+ * it: two names with the same fold are the same file there.
+ */
+export const foldName = (name) => String(name).normalize('NFKC').toUpperCase().toLowerCase().normalize('NFKC');
+
 /** Why one file of an ingest artifact cannot be archived as a sealed output, or null. */
 export function ingestEntryProblem(entry) {
-  const base = entry.name.split('/').pop();
-  if (base === MARKER) return `${MARKER} is a reserved name`;
+  const parts = entry.name.split('/');
+  if (parts.some((p) => p === '' || p === '.' || p === '..')) return 'its name has an empty, "." or ".." part';
+  const base = parts.at(-1);
+  if (foldName(base) === MARKER) return `${MARKER} is a reserved name`;
   if (!base.endsWith('.tar.age')) return 'not a .tar.age file';
   if (!entry.data.length) return 'empty file';
   if (!isAge(entry.data)) return 'not an age-encrypted file';
@@ -335,8 +375,15 @@ function syncDir(path, fsync) {
   }
 }
 
-function writeFolder(dest, dir, entries, marker, fsync = fsyncSync) {
-  const final = join(dest, dir);
+/**
+ * Errors from writing an artifact's files that will be the same on every run:
+ * the names themselves cannot be written here as they are.
+ */
+const NAME_ERRORS = new Set(['EEXIST', 'ENOTDIR', 'EISDIR', 'ENAMETOOLONG', 'EINVAL', 'EILSEQ']);
+const isNameError = (err) => NAME_ERRORS.has(err?.code);
+
+/** Write the files and the marker to a temporary folder, all synced. Returns its path. */
+function prepareFolder(dest, entries, marker, fsync = fsyncSync) {
   const temp = join(dest, `.partial-${marker.id}-${process.pid}`);
   rmSync(temp, { recursive: true, force: true });
   mkdirSync(temp, { recursive: true });
@@ -351,6 +398,17 @@ function writeFolder(dest, dir, entries, marker, fsync = fsyncSync) {
     writeDurable(join(temp, MARKER), `${JSON.stringify(marker, null, 2)}\n`, fsync);
     // Deepest first, so each folder's entry is on disk before its parent's.
     for (const d of [...dirs].sort((a, b) => b.length - a.length)) syncDir(d, fsync);
+    return temp;
+  } catch (err) {
+    rmSync(temp, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+/** Rename a prepared folder into place and sync its parent. */
+function commitFolder(dest, dir, temp, fsync = fsyncSync) {
+  const final = join(dest, dir);
+  try {
     if (existsSync(final)) throw new Error(`${dir} appeared while writing; not overwriting it`);
     mkdirSync(dirname(final), { recursive: true });
     renameSync(temp, final);
@@ -361,39 +419,80 @@ function writeFolder(dest, dir, entries, marker, fsync = fsyncSync) {
   }
 }
 
+function writeFolder(dest, dir, entries, marker, fsync = fsyncSync) {
+  commitFolder(dest, dir, prepareFolder(dest, entries, marker, fsync), fsync);
+}
+
 /**
- * Keep a download that failed its checks as it came, with the reasons beside
- * it. Returns its path relative to the archive. An earlier copy with the same
- * sha256 (a run that died before indexing) is reused; one that differs is kept
- * and this one gets its own name.
+ * Where a download that failed its checks is kept: `quarantine/<id>-<name>.zip`.
+ * An earlier copy with the same sha256 (a run that died before indexing) is
+ * reused (`exists`); one that differs is left and this one gets its own name.
  */
-function writeQuarantine(dest, artifact, data, isZip, reason, fsync = fsyncSync) {
+function quarantinePlace(dest, artifact, data, isZip) {
   const qdir = join(dest, QUARANTINE);
-  mkdirSync(qdir, { recursive: true });
   const stem = `${artifact.id}-${folderName(artifact.name)}`;
   const ext = isZip ? '.zip' : '.download';
   const digest = sha256(data);
   for (const name of [`${stem}${ext}`, `${stem}.${digest.slice(0, 12)}${ext}`]) {
     const file = join(qdir, name);
-    if (existsSync(file)) {
-      if (sha256(readFileSync(file)) === digest) return join(QUARANTINE, name);
-      continue;
-    }
-    const reasonFile = file.slice(0, -ext.length) + '.reason.json';
-    const tempData = join(qdir, `.partial-${artifact.id}-${process.pid}${ext}`);
-    const tempReason = join(qdir, `.partial-${artifact.id}-${process.pid}.reason.json`);
-    rmSync(tempData, { force: true });
-    rmSync(tempReason, { force: true });
-    writeDurable(tempData, data, fsync);
-    writeDurable(tempReason, `${JSON.stringify(reason, null, 2)}\n`, fsync);
-    // The reason first: a quarantined download is never without one.
-    if (!existsSync(reasonFile)) renameSync(tempReason, reasonFile);
-    else rmSync(tempReason, { force: true });
-    renameSync(tempData, file);
-    syncDir(qdir, fsync);
-    return join(QUARANTINE, name);
+    if (!existsSync(file)) return { rel: join(QUARANTINE, name), file, ext, exists: false };
+    if (sha256(readFileSync(file)) === digest) return { rel: join(QUARANTINE, name), file, ext, exists: true };
   }
   throw new Error(`quarantine names for ${stem} are taken by other downloads; not overwriting`);
+}
+
+/** Keep the download as it came, with the reasons beside it (written first). */
+function writeQuarantine(dest, artifact, place, data, reason, fsync = fsyncSync) {
+  if (place.exists) return;
+  const qdir = join(dest, QUARANTINE);
+  mkdirSync(qdir, { recursive: true });
+  const reasonFile = place.file.slice(0, -place.ext.length) + '.reason.json';
+  const tempData = join(qdir, `.partial-${artifact.id}-${process.pid}${place.ext}`);
+  const tempReason = join(qdir, `.partial-${artifact.id}-${process.pid}.reason.json`);
+  rmSync(tempData, { force: true });
+  rmSync(tempReason, { force: true });
+  writeDurable(tempData, data, fsync);
+  writeDurable(tempReason, `${JSON.stringify(reason, null, 2)}\n`, fsync);
+  // The reason first: a quarantined download is never without one.
+  if (!existsSync(reasonFile)) renameSync(tempReason, reasonFile);
+  else rmSync(tempReason, { force: true });
+  renameSync(tempData, place.file);
+  syncDir(qdir, fsync);
+}
+
+// ---- where an artifact came from ----
+
+/** The workflows allowed to make each kind of artifact, by name prefix; the first match counts. */
+export const SOURCES = Object.freeze([
+  ['ingest-', ['pump.yml', 'ingest.yml']],
+  ['registry-', ['history-registry.yml']],
+  ['history-packages-', ['history-packages.yml']],
+  ['history-popularity-', ['history-popularity.yml']],
+  ['history-', ['history-registry.yml', 'history-packages.yml', 'history-popularity.yml']],
+].map(([p, w]) => Object.freeze([p, Object.freeze(w)])));
+export const SOURCE_BRANCH = 'main';
+
+/**
+ * Why an artifact was not made by one of our own workflows on main, or null.
+ * A pull request from a fork can upload an artifact with any name, so the name
+ * alone proves nothing. Looks the run up once per run id.
+ */
+async function provenanceProblem(client, repo, artifact, runs) {
+  const wr = artifact.workflow_run;
+  if (!wr || wr.id == null) return 'GitHub gives no workflow run for it';
+  if (wr.repository_id == null || wr.head_repository_id !== wr.repository_id) return `its run was made from another repository (head repository ${wr.head_repository_id ?? 'unknown'})`;
+  if (wr.head_branch !== SOURCE_BRANCH) return `its run was made on branch ${JSON.stringify(wr.head_branch ?? null)}, not ${SOURCE_BRANCH}`;
+  const allowed = SOURCES.find(([p]) => String(artifact.name).startsWith(p))?.[1] ?? [];
+  if (!runs.has(wr.id)) {
+    const res = await client.request('GET', `/repos/${repo}/actions/runs/${wr.id}`, { allow: [404] });
+    runs.set(wr.id, res.status === 404 ? null : res.data);
+  }
+  const run = runs.get(wr.id);
+  if (!run) return `its run ${wr.id} is gone, so where it came from cannot be checked`;
+  const path = String(run.path ?? '').split('@')[0];
+  if (!allowed.some((w) => path === `.github/workflows/${w}`)) return `it was made by ${JSON.stringify(path)}, not ${allowed.join(' or ')}`;
+  if (run.head_repository?.id != null && run.repository?.id != null && run.head_repository.id !== run.repository.id) return 'its run was made from another repository';
+  return null;
 }
 
 // ---- one run at a time ----
@@ -412,53 +511,106 @@ export function pidAlive(pid) {
 const heldLocks = new Set();
 
 /**
- * Take `<dest>/.lock`. Returns { release } or { holder } when a live run holds
- * it. A lock from a dead pid on this host, or older than LOCK_STALE_MS, is
- * taken over.
+ * Take `<dest>/.lock`. Returns { touch, release } or { holder } when a live run
+ * holds it.
+ *
+ * Staleness: a lock from this host is stale only when its pid is gone (a long
+ * backfill, or a Mac that slept mid-run, is still alive). A lock from another
+ * host, where the pid cannot be checked, is stale once it has not been touched
+ * for LOCK_STALE_MS; a run touches its lock after every artifact. A lock with
+ * no owner file yet is stale after a minute.
+ *
+ * A takeover happens under a second lock, `<dest>/.lock.takeover`, and only if
+ * the owner file still names the holder judged stale, so two runs cannot both
+ * take the same stale lock, nor one take a lock another has just taken.
  */
 export function acquireLock(dest, { now = Date.now, alive = pidAlive, pid = process.pid, host = hostname(), log = () => {} } = {}) {
   const dir = join(dest, LOCK);
   const owner = join(dir, 'owner.json');
+  const guard = join(dest, `${LOCK}.takeover`);
+  const who = (h) => JSON.stringify([h?.pid ?? null, h?.host ?? null, h?.started_at ?? null]);
+  /** null if the holder is live; otherwise why it is stale. 'gone' if the lock went away. */
+  const judge = (holder) => {
+    if (!holder) {
+      let mtime;
+      try {
+        mtime = statSync(dir).mtimeMs;
+      } catch {
+        return 'gone';
+      }
+      return now() - mtime > 60_000 ? 'it has had no owner file for over a minute' : null;
+    }
+    if (holder.host === host) return alive(Number(holder.pid)) ? null : `pid ${holder.pid} is gone`;
+    const last = Date.parse(holder.touched_at ?? holder.started_at);
+    if (Number.isFinite(last) && now() - last <= LOCK_STALE_MS) return null;
+    return `pid ${holder.pid} on ${holder.host} has not touched it for over ${LOCK_STALE_MS / 3_600_000} hours`;
+  };
+  const takeGuard = () => {
+    for (let i = 0; i < 2; i++) {
+      try {
+        mkdirSync(guard);
+        return true;
+      } catch (err) {
+        if (err?.code !== 'EEXIST') throw err;
+        // A takeover takes milliseconds; a guard ten minutes old was left by a run that died in one.
+        try {
+          if (now() - statSync(guard).mtimeMs <= 10 * 60_000) return false;
+          rmSync(guard, { recursive: true, force: true });
+        } catch {
+          // gone already; try again
+        }
+      }
+    }
+    return false;
+  };
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       mkdirSync(dir);
     } catch (err) {
       if (err?.code !== 'EEXIST') throw err;
-      const holder = readJson(owner);
-      let started = Date.parse(holder?.started_at);
-      if (!Number.isFinite(started)) {
-        try {
-          started = statSync(dir).mtimeMs;
-        } catch {
-          continue; // released just now
-        }
-      }
-      const age = now() - started;
-      // A lock with no owner file yet may be one being taken right now.
-      const dead = holder ? holder.host === host && !alive(Number(holder.pid)) : age > 60_000;
-      if (!dead && age <= LOCK_STALE_MS) return { holder: holder ?? { pid: null, started_at: new Date(started).toISOString() } };
-      log(`archive-pull: taking over a stale lock (pid ${holder?.pid ?? '?'} on ${holder?.host ?? '?'}, ${Math.round(age / 60_000)} min old)`);
-      const aside = join(dest, `${LOCK}.stale-${pid}-${attempt}`);
+      const judged = readJson(owner);
+      const why = judge(judged);
+      if (why === 'gone') continue;
+      if (!why) return { holder: judged ?? { pid: null, started_at: null } };
+      if (!takeGuard()) return { holder: judged ?? { pid: null, started_at: null } };
       try {
+        const current = readJson(owner);
+        const still = judge(current);
+        if (who(current) !== who(judged) || !still || still === 'gone') continue; // it changed hands; look again
+        log(`archive-pull: taking over a stale lock (${still})`);
+        const aside = join(dest, `${LOCK}.stale-${pid}-${attempt}`);
         renameSync(dir, aside);
         rmSync(aside, { recursive: true, force: true });
-      } catch {
-        // another run took it over first; try again
+      } finally {
+        rmSync(guard, { recursive: true, force: true });
       }
       continue;
     }
-    writeFileSync(owner, `${JSON.stringify({ pid, host, started_at: new Date(now()).toISOString() })}\n`);
+    const started = new Date(now()).toISOString();
+    const writeOwner = () => {
+      const temp = join(dir, `owner.json.${pid}.tmp`);
+      writeFileSync(temp, `${JSON.stringify({ pid, host, started_at: started, touched_at: new Date(now()).toISOString() })}\n`);
+      renameSync(temp, owner);
+    };
+    writeOwner();
+    const mine = () => {
+      const h = readJson(owner);
+      return Boolean(h && Number(h.pid) === pid && h.host === host && h.started_at === started);
+    };
     const lock = {
+      /** Mark the lock as still in use (for a holder on another host to see). */
+      touch() {
+        if (mine()) writeOwner();
+      },
       release() {
         heldLocks.delete(lock);
-        const h = readJson(owner);
-        if (h && Number(h.pid) === pid && h.host === host) rmSync(dir, { recursive: true, force: true });
+        if (mine()) rmSync(dir, { recursive: true, force: true });
       },
     };
     heldLocks.add(lock);
     return lock;
   }
-  return { holder: readJson(owner) ?? { pid: null } };
+  return { holder: readJson(owner) ?? { pid: null, started_at: null } };
 }
 
 /** Release every lock this process holds (for a signal handler). */
@@ -551,6 +703,7 @@ export async function archivePull({
     recovered: [],
     already: 0,
     quarantined: [],
+    foreign: [],
     failed: [],
     wouldPull: [],
     bytes: 0,
@@ -573,21 +726,21 @@ export async function archivePull({
       const removed = cleanPartials(dest, { alive });
       if (removed.length) log(`archive-pull: removed ${removed.length} temporary folder(s) left by a run that died: ${removed.join(', ')}`);
     }
-    await pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryRun, budgetFor, maxPages, zipLimits, fsync, previous, out });
+    await pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryRun, budgetFor, maxPages, zipLimits, fsync, previous, out, lock });
     return out;
   } finally {
     lock?.release();
   }
 }
 
-async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryRun, budgetFor, maxPages, zipLimits, fsync, previous, out }) {
+async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryRun, budgetFor, maxPages, zipLimits, fsync, previous, out, lock }) {
   // This runs on its own machine with its own token, not inside the loop, so a
   // long backlog may use more calls than the pump's caps allow. It waits for the
   // hourly cap rather than giving up; GitHub's own limits are still honoured.
   const budget = budgetFor ?? new ApiBudget({
     now,
     sleep,
-    families: { artifacts: { perHour: 2000, perMinute: 60 } },
+    families: { artifacts: { perHour: 2000, perMinute: 60 }, actions: { perHour: 1000, perMinute: 60 } },
     totalPerHour: 2500,
     maxWaitMs: 65 * 60_000,
   });
@@ -606,8 +759,10 @@ async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryR
   const wanted = listed
     .filter((a) => kindOf(a.name) && !a.expired)
     .filter((a) => {
+      // An artifact whose time is not a date stays in, to keep failing where it can be seen.
       const s = sinceOf(kindOf(a.name));
-      return s === null || Date.parse(a.created_at) >= s;
+      const t = Date.parse(a.created_at);
+      return s === null || !Number.isFinite(t) || t >= s;
     })
     .filter((a) => !seen.has(Number(a.id)) && seen.add(Number(a.id)))
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id - b.id);
@@ -616,16 +771,21 @@ async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryR
 
   if (!listing.complete) log(`archive-pull: the artifact list did not end within ${maxPages} pages; older artifacts were not seen and the cursor stays where it was`);
   const record = (entry) => {
-    appendLine(join(dest, INDEX), entry);
+    appendLine(join(dest, INDEX), entry, fsync);
     indexed.set(Number(entry.id), entry);
   };
   // An ingest artifact's manifest line; written once, also after a crash between the index and the manifest.
   const manifest = (marker, dir) => {
     if (kindOf(marker.name) !== 'ingest' || manifested.has(Number(marker.id))) return;
-    appendLine(join(dest, MANIFEST), manifestLine(marker, dir));
+    appendLine(join(dest, MANIFEST), manifestLine(marker, dir), fsync);
     manifested.set(Number(marker.id), true);
   };
+  const runs = new Map();
+  const quarantined = (marker, dir, recovered = false) => {
+    out.quarantined.push({ name: marker.name, id: marker.id, kept: marker.files.length, refused: (marker.refused ?? []).length, path: marker.quarantine, problems: marker.problems ?? [], dir, recovered });
+  };
   for (const a of wanted) {
+    lock?.touch();
     const known = indexed.get(Number(a.id));
     if (known) {
       out.already += 1;
@@ -633,6 +793,13 @@ async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryR
       continue;
     }
     try {
+      const foreign = await provenanceProblem(client, repo, a, runs);
+      if (foreign) {
+        // Not ours: never downloaded, kept or quarantined. Not a failure of the archive either.
+        out.foreign.push({ name: a.name, id: a.id, why: foreign });
+        log(`archive-pull: ${a.name}: REFUSED, not from our own workflow on ${SOURCE_BRANCH}: ${foreign}`);
+        continue;
+      }
       const place = placeFor(dest, a, log);
       if (place.recovered) {
         if (!dryRun) {
@@ -640,7 +807,9 @@ async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryR
           manifest(place.recovered, place.dir);
         }
         out.recovered.push(a.name);
-        log(`archive-pull: ${a.name}: found in ${place.dir} from an earlier run, every file checked; indexed`);
+        // A quarantine whose run died before indexing still needs to be seen.
+        if (place.recovered.partial) quarantined(place.recovered, place.dir, true);
+        log(`archive-pull: ${a.name}: found in ${place.dir} from an earlier run, every file checked; indexed${place.recovered.partial ? ` (partial; quarantined in ${place.recovered.quarantine})` : ''}`);
         continue;
       }
       if (dryRun) {
@@ -667,55 +836,81 @@ async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryR
       const fileList = (entries) => entries.map((e) => ({ name: e.name, bytes: e.data.length, sha256: sha256(e.data) }));
 
       if (kindOf(a.name) === 'ingest') {
-        const sorted = sortIngest(zip, isZip, a, zipLimits);
-        if (!sorted.problems.length) {
-          const marker = { ...base, verified: 'none', files: fileList(sorted.kept) };
-          writeFolder(dest, place.dir, sorted.kept, marker, fsync);
-          record({ ...marker, dir: place.dir });
-          manifest(marker, place.dir);
-          out.pulled.push(a.name);
-          out.bytes += zip.length;
-          log(`archive-pull: ${a.name}: ${sorted.kept.length} files into ${place.dir} (sealed${digest ? ', digest checked' : ', no digest to check'})`);
-          continue;
-        }
-        // A check failed. Unless the download itself is in doubt, it will fail the same way every
-        // time: keep the download and the files that pass, and mark the artifact partial.
-        const declared = Number(a.size_in_bytes);
-        if (!digest && Number.isFinite(declared) && declared !== zip.length) {
-          throw new Error(`downloaded ${zip.length} bytes but the artifact is ${declared}, and there is no digest to check; tried again next run (${sorted.problems.slice(0, 3).join('; ')})`);
-        }
-        const marker = {
-          ...base,
-          verified: 'none',
-          partial: true,
-          problems: sorted.problems,
-          refused: sorted.refused,
-          quarantine: null,
-          files: fileList(sorted.kept),
+        let { kept, refused, problems } = sortIngest(zip, isZip, a, zipLimits);
+        const markerFor = (extra) => ({ ...base, verified: 'none', ...extra, files: fileList(kept) });
+        // Files whose names this disk cannot hold as they are: the whole download goes to quarantine.
+        const demote = (err) => {
+          problems = [...problems, `the files could not be written under their names here (${err.code}: ${err.message})`];
+          refused = [...refused, ...kept.map((e) => ({ name: e.name, bytes: e.data.length, sha256: sha256(e.data), reason: `not written: ${err.code}` }))];
+          kept = [];
         };
-        marker.quarantine = writeQuarantine(dest, a, zip, isZip, {
-          artifact_id: a.id,
-          artifact: a.name,
-          created_at: a.created_at,
-          workflow_run: base.workflow_run,
-          bytes: zip.length,
-          sha256: zipSha,
-          digest_checked: Boolean(digest),
-          quarantined_at: base.pulled_at,
-          problems: sorted.problems,
-          refused: sorted.refused,
-          kept: marker.files.map((f) => f.name),
-          kept_in: sorted.kept.length ? place.dir : null,
-          note: 'The download as it came, still encrypted. Nothing in it was decrypted.',
-        }, fsync);
-        const dir = sorted.kept.length ? place.dir : null;
-        if (dir) writeFolder(dest, dir, sorted.kept, marker, fsync);
-        record({ ...marker, dir });
-        manifest(marker, dir);
-        out.quarantined.push({ name: a.name, id: a.id, kept: sorted.kept.length, refused: sorted.refused.length, path: marker.quarantine, problems: sorted.problems });
-        out.bytes += zip.length;
-        log(`archive-pull: ${a.name}: QUARANTINED in ${marker.quarantine} (${sorted.problems.slice(0, 5).join('; ')}); ${sorted.kept.length} sealed file(s) kept${dir ? ` in ${dir}` : ''}, marked partial`);
-        continue;
+        let temp = null;
+        try {
+          if (!problems.length) {
+            try {
+              temp = prepareFolder(dest, kept, markerFor({}), fsync);
+            } catch (err) {
+              if (!isNameError(err)) throw err;
+              demote(err);
+            }
+            if (temp) {
+              const marker = markerFor({});
+              commitFolder(dest, place.dir, temp, fsync);
+              temp = null;
+              record({ ...marker, dir: place.dir });
+              manifest(marker, place.dir);
+              out.pulled.push(a.name);
+              out.bytes += zip.length;
+              log(`archive-pull: ${a.name}: ${kept.length} files into ${place.dir} (sealed${digest ? ', digest checked' : ', no digest to check'})`);
+              continue;
+            }
+          }
+          // A check failed. Unless the download itself is in doubt, it will fail the same way every
+          // time: keep the download and the files that pass, and mark the artifact partial.
+          const declared = Number(a.size_in_bytes);
+          if (!digest && Number.isFinite(declared) && declared !== zip.length) {
+            throw new Error(`downloaded ${zip.length} bytes but the artifact is ${declared}, and there is no digest to check; tried again next run (${problems.slice(0, 3).join('; ')})`);
+          }
+          const q = quarantinePlace(dest, a, zip, isZip);
+          const partial = () => markerFor({ partial: true, problems, refused, quarantine: q.rel });
+          if (kept.length) {
+            try {
+              temp = prepareFolder(dest, kept, partial(), fsync);
+            } catch (err) {
+              if (!isNameError(err)) throw err;
+              demote(err);
+            }
+          }
+          const marker = partial();
+          const dir = kept.length ? place.dir : null;
+          writeQuarantine(dest, a, q, zip, {
+            artifact_id: a.id,
+            artifact: a.name,
+            created_at: a.created_at,
+            workflow_run: base.workflow_run,
+            bytes: zip.length,
+            sha256: zipSha,
+            digest_checked: Boolean(digest),
+            quarantined_at: base.pulled_at,
+            problems,
+            refused,
+            kept: marker.files.map((f) => f.name),
+            kept_in: dir,
+            note: 'The download as it came, still encrypted. Nothing in it was decrypted.',
+          }, fsync);
+          if (temp) {
+            commitFolder(dest, dir, temp, fsync);
+            temp = null;
+          }
+          record({ ...marker, dir });
+          manifest(marker, dir);
+          quarantined(marker, dir);
+          out.bytes += zip.length;
+          log(`archive-pull: ${a.name}: QUARANTINED in ${q.rel} (${problems.slice(0, 5).join('; ')}); ${kept.length} sealed file(s) kept${dir ? ` in ${dir}` : ''}, marked partial`);
+          continue;
+        } finally {
+          if (temp) rmSync(temp, { recursive: true, force: true });
+        }
       }
 
       const entries = isZip ? readZip(zip, zipLimits) : [{ name: folderName(a.name), data: zip }];
@@ -747,7 +942,8 @@ async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryR
     if (Object.values(cursors).some(Boolean)) {
       // last_created_at is the history cursor, as earlier versions wrote it.
       const body = { last_created_at: cursors.history, by_kind: cursors, updated: new Date(now()).toISOString() };
-      writeFileSync(join(dest, CURSOR), `${JSON.stringify(body)}\n`);
+      // Last, after the index and manifest lines it stands for are on disk.
+      replaceFile(join(dest, CURSOR), `${JSON.stringify(body)}\n`, fsync);
     }
     out.cursors = cursors;
     out.cursor = cursors.history;
@@ -774,15 +970,17 @@ function sortIngest(zip, isZip, artifact, zipLimits) {
     entries = [{ name: folderName(artifact.name), data: zip }];
   }
   const kept = [];
+  // Compared folded: on a case-insensitive or normalising disk, A.tar.age and a.tar.age are one file.
   const names = new Set();
   for (const e of entries) {
     let reason = ingestEntryProblem(e);
-    if (!reason && names.has(e.name)) reason = 'a second file with this name';
-    if (!reason && [...names].some((n) => n.startsWith(`${e.name}/`) || e.name.startsWith(`${n}/`))) reason = 'its name clashes with a folder of another file';
+    const key = foldName(e.name);
+    if (!reason && names.has(key)) reason = 'a second file with this name (ignoring case and Unicode form)';
+    if (!reason && [...names].some((n) => n.startsWith(`${key}/`) || key.startsWith(`${n}/`))) reason = 'its name clashes with a folder of another file';
     if (reason) refused.push({ name: e.name, bytes: e.data.length, sha256: sha256(e.data), reason });
     else {
       kept.push(e);
-      names.add(e.name);
+      names.add(key);
     }
   }
   for (const r of refused) problems.push(`${r.name}: ${r.reason}`);
@@ -905,7 +1103,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     }
     return 0;
   }
-  log(`archive-pull: ${opts.dryRun ? `would pull ${out.wouldPull.length}` : `pulled ${out.pulled.length}`} (${out.bytes} bytes), recovered ${out.recovered.length}, quarantined ${out.quarantined.length}, already had ${out.already}, failed ${out.failed.length}${out.complete ? '' : ', list incomplete'}`);
+  log(`archive-pull: ${opts.dryRun ? `would pull ${out.wouldPull.length}` : `pulled ${out.pulled.length}`} (${out.bytes} bytes), recovered ${out.recovered.length}, quarantined ${out.quarantined.length}, refused as not ours ${out.foreign.length}, already had ${out.already}, failed ${out.failed.length}${out.complete ? '' : ', list incomplete'}`);
   if (opts.dryRun) return out.failed.length || !out.complete ? 1 : 0;
   if (out.quarantined.length) {
     alerts.push(`${out.quarantined.length} ingest artifact(s) quarantined in ${join(opts.dest, QUARANTINE)}: ${out.quarantined.map((q) => q.name).join(', ')}.`);
@@ -920,10 +1118,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     recovered: out.recovered.length,
     quarantined: out.quarantined.length,
     already: out.already,
+    refused_foreign: out.foreign.length,
     failed: 0,
     listed: out.listed,
   };
-  writeFileSync(join(opts.dest, LAST_OK), `${JSON.stringify(counts)}\n`);
+  replaceFile(join(opts.dest, LAST_OK), `${JSON.stringify(counts)}\n`);
   if (opts.heartbeat && !ci) {
     try {
       const how = await setHeartbeat({ repo: opts.repo, token, fetch: deps.fetch, apiUrl: deps.apiUrl, now, sleep: deps.sleep, value: JSON.stringify(counts) });
