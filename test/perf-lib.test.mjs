@@ -213,3 +213,14 @@ test('plan: one server at one exact version; anything else is refused whole', as
 test('plan: a bad version from the registry stops the run', async () => {
   await assert.rejects(plan({ servers: SERVERS, env: {}, hasBaseline: () => false, latest: async () => '1.0.0 && curl x' }), /bad version/);
 });
+
+import { manifest } from '../perf/prepare-install.mjs';
+
+test('prepare-install writes one pinned dependency and refuses a loose name or version', () => {
+  assert.deepEqual(manifest('@mcp-write-safety/tiny-tracker', '0.3.0').dependencies, { '@mcp-write-safety/tiny-tracker': '0.3.0' });
+  assert.throws(() => manifest('sea-lite', '^0.7.0'));
+  assert.throws(() => manifest('sea-lite', 'latest'));
+  assert.throws(() => manifest('sea-lite@0.7.1', '0.7.1'));
+  assert.throws(() => manifest('github:evil/repo', '1.0.0'));
+  assert.throws(() => manifest('sea-lite', '0.7.1\n'));
+});

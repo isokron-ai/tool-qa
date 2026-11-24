@@ -29,9 +29,9 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   noisy_spread: 3,
 });
 
-/** Parse "1.2.3" or "1.2.3-rc.1" into a comparable form; null when not a version. */
+/** Parse "1.2.3" or "1.2.3-rc.1" into a comparable form; null when not a version. Whole string: no trimming. */
 export function parseVersion(text) {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(text ?? '').trim());
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(text ?? ''));
   if (!m) return null;
   return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre: m[4] ? m[4].split('.') : [] };
 }
