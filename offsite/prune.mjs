@@ -19,7 +19,10 @@
 // never deleted; they are the record of what was copied when.
 //
 // If deleting every candidate still leaves the bucket over the target, the
-// run says so (the rest is still under the lock) and exits 1.
+// run says so (the rest is still under the lock) and exits 1. Apply deletes
+// nothing, and exits 1, when the listing looks cut short: a page marked
+// truncated with no continuation token, or the newest cursor or run manifest
+// (each listed on its own) missing from it.
 //
 // Environment: the same R2_* settings as offsite/backup.mjs, OFFSITE_MAX_BYTES,
 // OFFSITE_PRUNE_AT_BYTES, OFFSITE_PRUNE_TO_BYTES, OFFSITE_PRUNE_KEEP_SNAPSHOTS,
@@ -89,11 +92,30 @@ export function planPrune(objects, { now, at, to, keepSnapshots = KEEP_SNAPSHOTS
   return plan;
 }
 
-/** List, plan, and (in apply mode) delete. */
+/**
+ * Why the full listing cannot be trusted to delete from, or null: the newest
+ * cursor and the newest run manifest, each listed on its own, must both be in
+ * it (a listing cut short loses its tail, and `manifest/` sorts late).
+ */
+export async function listingProblem(m, inv) {
+  for (const prefix of [PREFIX.cursor, PREFIX.manifest]) {
+    const own = await inventory(m, prefix);
+    if (!own.objects.length) return `no ${prefix} object in the bucket: the backup has not run yet, nothing to protect against`;
+    const newest = own.objects.map((o) => o.key).sort().at(-1);
+    if (!inv.byKey.has(newest)) return `the full listing lacks the newest ${prefix} key ${newest}: it looks cut short`;
+  }
+  return null;
+}
+
+/** List, plan, and (in apply mode) delete. Apply refuses a listing that looks cut short. */
 export async function runPrune({ store, mode, limits, now = Date.now, log = () => {} }) {
   const m = meter(store, { maxClassA: Infinity, maxClassB: Infinity });
   const inv = await inventory(m);
   const plan = planPrune(inv.objects, { now: now(), ...limits });
+  if (mode === 'apply' && plan.delete.length) {
+    const problem = await listingProblem(m, inv);
+    if (problem) return { mode, plan, deleted: [], failed: [], refused: problem, ops: m.counts() };
+  }
   const deleted = [];
   const failed = [];
   if (mode === 'apply') {
@@ -152,11 +174,12 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       r.plan.needed ? `- ${verb} ${r.plan.delete.length} object(s), ${gb(r.plan.freed)}; left: ${gb(r.plan.after)}` : '- nothing to do',
       ...(r.plan.needed && !r.plan.reachesTarget ? [`- the rest is still under the 30-day lock or protected (${r.plan.kept.locked} locked, ${r.plan.kept.protected} protected)`] : []),
       ...r.failed.map((f) => `- FAILED ${f.key}: ${f.error}`),
-    ];
+      ...(r.refused ? [`- REFUSED to delete: ${r.refused}`] : []),
+    ].map((l) => scrubText(l, secrets));
     for (const o of r.plan.delete) say(`offsite-prune: ${verb} ${o.key} (${o.size} bytes, written ${o.lastModified})`);
     say(lines.slice(2).join('\n'));
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
-    return r.failed.length || (r.plan.needed && !r.plan.reachesTarget) ? 1 : 0;
+    return r.refused || r.failed.length || (r.plan.needed && !r.plan.reachesTarget) ? 1 : 0;
   } catch (err) {
     say(`offsite-prune: ${err?.message ?? err}`);
     return 1;

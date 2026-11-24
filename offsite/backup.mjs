@@ -188,7 +188,11 @@ export function readConfig(env) {
  * Count operations as R2 bills them (Class A: LIST, PUT; Class B: HEAD, GET;
  * DELETE is free) and refuse one past the run's cap with OpsCapError.
  */
-export function meter(store, { maxClassA = DEFAULTS.maxClassA, maxClassB = DEFAULTS.maxClassB } = {}) {
+/** Worth trying again: a network error, 429 or 5xx; never a refusal such as 412 ('exists') or 4xx. */
+export const retryable = (err) => err?.code !== 'exists' && (err?.status == null || err.status === 429 || err.status >= 500);
+export const STORE_ATTEMPTS = 3;
+
+export function meter(store, { maxClassA = DEFAULTS.maxClassA, maxClassB = DEFAULTS.maxClassB, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), attempts = STORE_ATTEMPTS } = {}) {
   const ops = { list: 0, put: 0, head: 0, get: 0, delete: 0 };
   const classA = () => ops.list + ops.put;
   const classB = () => ops.head + ops.get;
@@ -203,14 +207,26 @@ export function meter(store, { maxClassA = DEFAULTS.maxClassA, maxClassB = DEFAU
     if ((op === 'head' || op === 'get') && classB() >= maxClassB) throw new OpsCapError(`this run reached its cap of ${maxClassB} Class B operations (OFFSITE_MAX_CLASS_B)`);
     ops[op] += 1;
   };
+  // The store does not retry; each attempt here is taken from the caps, so retries count.
+  const call = async (op, essential, fn) => {
+    for (let i = 1; ; i++) {
+      take(op, essential);
+      try {
+        return await fn();
+      } catch (err) {
+        if (i >= attempts || !retryable(err)) throw err;
+        await sleep(1000 * 2 ** (i - 1));
+      }
+    }
+  };
   return {
     ops,
     counts: () => ({ ...ops, class_a: classA(), class_b: classB() }),
-    list: (o) => (take('list'), store.list(o)),
-    head: (k, essential) => (take('head', essential), store.head(k)),
-    put: (k, b, o) => (take('put', o?.essential), store.put(k, b, o)),
-    get: (k) => (take('get'), store.get(k)),
-    delete: (k) => (take('delete'), store.delete(k)),
+    list: (o) => call('list', false, () => store.list(o)),
+    head: (k, essential) => call('head', essential, () => store.head(k)),
+    put: (k, b, o) => call('put', o?.essential, () => store.put(k, b, o)),
+    get: (k) => call('get', false, () => store.get(k)),
+    delete: (k) => call('delete', false, () => store.delete(k)),
   };
 }
 
@@ -221,6 +237,8 @@ export async function inventory(store, prefix = '') {
   for (let page = 0; page < 100_000; page++) {
     const res = await store.list({ prefix, token });
     objects.push(...res.items);
+    // Truncated with no way to go on: the sum (and anything judged from it) would be short.
+    if (res.truncated && !res.next) throw new Error(`the bucket listing${prefix ? ` of ${prefix}` : ''} was cut short (truncated, no continuation token)`);
     token = res.next;
     if (!token) break;
   }
@@ -291,7 +309,7 @@ export function verifyProblem(head, { size, sha256, md5 }, putEtag) {
  * @returns {Promise<object>} the heartbeat (see the header)
  */
 export async function runBackup({ store, gh, repo, runId = 'local', limits = DEFAULTS, sendSha256 = true, now = Date.now, log = () => {}, maxRunMs = DEFAULT_MAX_RUN_MS }) {
-  const m = meter(store, limits);
+  const m = meter(store, { ...limits, ...(gh?.sleep ? { sleep: gh.sleep } : {}) });
   const startedAt = new Date(now()).toISOString();
   const deadline = Date.parse(startedAt) + maxRunMs;
   const out = {
@@ -372,7 +390,11 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
     try {
       res = await m.put(key, data, { md5: digests.md5, sha256: digests.sha256, sendSha256, contentType });
     } catch (err) {
-      if (err?.code !== 'exists') throw err;
+      if (err?.code !== 'exists') {
+        // Every attempt failed, but one may have been stored: count it against the cap.
+        possiblyStored(digests.size);
+        throw err;
+      }
       // Made since we listed (another run, or a PUT whose answer was lost): judge what is there.
       inv.byKey.set(key, { key, size: null });
       return put(key, data, digests, line, { contentType, afterExists: true }, depth + 1);
@@ -387,6 +409,10 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
 
   const digestsOf = (data) => ({ size: data.length, sha256: hash('sha256', data), md5: hash('md5', data) });
   const startKeys = new Set(inv.byKey.keys());
+  function possiblyStored(size) {
+    state.total += size;
+    out.possibly_stored_bytes = (out.possibly_stored_bytes ?? 0) + size;
+  }
   function account(size) {
     state.total += size;
     state.runBytes += size;
@@ -671,6 +697,7 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
       res = await m.put(key, body, { md5: d.md5, sha256: d.sha256, sendSha256, contentType, essential: true });
     } catch (err) {
       // A retried PUT whose first try was stored: fine if the bytes are ours.
+      if (err?.code !== 'exists') possiblyStored(d.size);
       if (err?.code !== 'exists' || !sameObject(await m.head(key, true), d)) throw err;
       return;
     }

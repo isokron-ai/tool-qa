@@ -9,7 +9,7 @@
 // The store is the small interface offsite/backup.mjs and offsite/prune.mjs
 // use (the tests' fake in offsite/test/fake-s3.mjs has the same shape):
 //
-//   list({ prefix, token })  one page (up to 1,000 keys): { items: [{ key, size, etag, lastModified }], next }
+//   list({ prefix, token })  one page (up to 1,000 keys): { items: [{ key, size, etag, lastModified }], next, truncated }
 //   head(key)                { size, etag, sha256, checksumSha256 } or null if there is no such key
 //   put(key, body, { md5, sha256, sendSha256, contentType })
 //                            a new object only (If-None-Match: *): { etag }, or
@@ -44,7 +44,9 @@ const unquote = (etag) => String(etag ?? '').replace(/^W\//, '').replace(/^"|"$/
  * @param {{ accountId: string, bucket: string, accessKeyId: string, secretAccessKey: string,
  *   endpoint?: string, sdk?: object, maxAttempts?: number }} opts
  */
-export async function createR2Store({ accountId, bucket, accessKeyId, secretAccessKey, endpoint, sdk, maxAttempts = 3 }) {
+// maxAttempts 1: the SDK does not retry on its own; offsite/backup.mjs meter() retries, and counts
+// every attempt against the run's operation caps.
+export async function createR2Store({ accountId, bucket, accessKeyId, secretAccessKey, endpoint, sdk, maxAttempts = 1 }) {
   const S3 = sdk ?? (await import('@aws-sdk/client-s3'));
   const secrets = [accessKeyId, secretAccessKey, accountId].filter((s) => s && String(s).length >= 4);
   const scrub = (text) => secrets.reduce((t, s) => t.split(s).join('***'), String(text ?? ''));
@@ -76,7 +78,7 @@ export async function createR2Store({ accountId, bucket, accessKeyId, secretAcce
           etag: unquote(o.ETag),
           lastModified: o.LastModified ? new Date(o.LastModified).toISOString() : null,
         }));
-        return { items, next: res.IsTruncated ? res.NextContinuationToken ?? null : null };
+        return { items, next: res.IsTruncated ? res.NextContinuationToken ?? null : null, truncated: Boolean(res.IsTruncated) };
       } catch (err) {
         throw fail(`LIST ${prefix ?? ''}`, err);
       }

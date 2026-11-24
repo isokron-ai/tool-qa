@@ -4,7 +4,8 @@
 //   s3.objects   Map key -> { data, sha256, md5, etag, lastModified }
 //   s3.calls     [{ op, key }]
 //   s3.faults    { headSize: Set<key>, headEtag: Set<key>, headSha: Set<key>, dropMeta: bool,
-//                  putError: (key) => Error|null, lostAnswer: Set<key prefix> }
+//                  putError: (key) => Error|null, lostAnswer: Set<key prefix>,
+//                  truncateAt: n (the unprefixed listing stops after n keys, marked truncated, no token) }
 //
 // Like R2: a PUT with a Content-MD5 that does not match the body is refused;
 // If-None-Match: * on an existing key is refused (code 'exists'); a DELETE of an
@@ -17,7 +18,7 @@ const hash = (alg, data) => createHash(alg).update(data).digest('hex');
 export function fakeS3({ now = Date.now, pageSize = 1000, lockDays = 30 } = {}) {
   const objects = new Map();
   const calls = [];
-  const faults = { headSize: new Set(), headEtag: new Set(), headSha: new Set(), dropMeta: false, putError: () => null, lostAnswer: new Set() };
+  const faults = { headSize: new Set(), headEtag: new Set(), headSha: new Set(), dropMeta: false, putError: () => null, lostAnswer: new Set(), truncateAt: null };
   const error = (message, code = 'error') => Object.assign(new Error(message), { code });
   return {
     objects,
@@ -33,10 +34,10 @@ export function fakeS3({ now = Date.now, pageSize = 1000, lockDays = 30 } = {}) 
       const keys = [...objects.keys()].filter((k) => k.startsWith(prefix)).sort();
       const start = token ? Number(token) : 0;
       const page = keys.slice(start, start + pageSize);
-      return {
-        items: page.map((k) => ({ key: k, size: objects.get(k).data.length, etag: objects.get(k).etag, lastModified: objects.get(k).lastModified })),
-        next: start + pageSize < keys.length ? String(start + pageSize) : null,
-      };
+      const items = page.map((k) => ({ key: k, size: objects.get(k).data.length, etag: objects.get(k).etag, lastModified: objects.get(k).lastModified }));
+      // A page cut short: marked truncated, with no continuation token.
+      if (!prefix && faults.truncateAt != null) return { items: items.slice(0, faults.truncateAt), next: null, truncated: faults.truncateAt < keys.length };
+      return { items, next: start + pageSize < keys.length ? String(start + pageSize) : null, truncated: start + pageSize < keys.length };
     },
     async head(key) {
       calls.push({ op: 'head', key });

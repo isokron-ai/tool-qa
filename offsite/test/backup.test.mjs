@@ -324,11 +324,11 @@ test('R-OFF-07: missing R2 settings: exit 0, an unconfigured heartbeat, no store
   assert.match(yml, /\npermissions: \{\}\n/);
   assert.match(yml, /concurrency:\n {2}group: offsite-backup\n/);
   assert.match(yml, /contents: read[^\n]*\n {6}actions: read/);
-  // GitHub prints a step's env in its public log: the account ID comes from a secret when one is set.
-  assert.equal((yml.match(/R2_ACCOUNT_ID: \$\{\{ secrets\.R2_ACCOUNT_ID \|\| vars\.R2_ACCOUNT_ID \}\}/g) ?? []).length, 2);
-  assert.ok(!/R2_ACCOUNT_ID: \$\{\{ vars\./.test(yml));
+  // GitHub prints a step's env in its public log: the account ID comes only from a secret (R-OFF-13).
+  assert.equal((yml.match(/R2_ACCOUNT_ID: \$\{\{ secrets\.R2_ACCOUNT_ID \}\}/g) ?? []).length, 2);
+  assert.ok(!yml.includes('vars.R2_ACCOUNT_ID'));
   assert.match(yml, /runs-on: ubuntu-24\.04\n {4}timeout-minutes: 40/);
-  assert.match(yml, /if: >-\n {6}!cancelled\(\) && \(/);
+  assert.match(yml, /if: >-\n {6}!cancelled\(\) && github\.ref == 'refs\/heads\/main' && \(/);
   // The guard runs before anything else that does work, in both jobs.
   for (const job of yml.split(/\n {2}[a-z]+:\n {4}name: /).slice(1)) {
     const names = job.split(/\n\s+- name: /).slice(1).map((s) => s.split('\n')[0]);
@@ -339,7 +339,7 @@ test('R-OFF-07: missing R2 settings: exit 0, an unconfigured heartbeat, no store
 
 test('R-OFF-08: a failed bucket read is an error heartbeat, not a crash, and the credentials never reach the heartbeat', async () => {
   const w = world();
-  const failing = { ...w.s3, list: async () => { throw new Error('R2 LIST failed: AccessDenied for AKIA_SYNTHETIC_KEY in bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'); } };
+  const failing = { ...w.s3, list: async () => { throw Object.assign(new Error('R2 LIST failed: AccessDenied for AKIA_SYNTHETIC_KEY in bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'), { status: 403 }); } };
   const dir = mkdtempSync(join(tmpdir(), 'offsite-'));
   try {
     const file = join(dir, 'hb.json');
@@ -425,4 +425,50 @@ test('R-OFF-12: a PUT stored but answered "exists" on retry counts as copied wit
   assert.match(ht.deferred_reason, /time limit/);
   assert.equal(keys(t.s3, '_state/cursor/').length, 1);
   assert.equal(JSON.parse(t.s3.objects.get(keys(t.s3, '_state/cursor/')[0]).data).by_kind.ingest, undefined);
+});
+
+test('R-OFF-13: the account ID only from a secret, both jobs only on main; retries count against the operation caps; a PUT that failed every attempt counts as possibly stored; a truncated listing is an error', async () => {
+  const yml = readFileSync(new URL('../../.github/workflows/offsite-backup.yml', import.meta.url), 'utf8');
+  assert.ok(!yml.includes('vars.R2_ACCOUNT_ID'));
+  const jobs = yml.split(/\n {2}(?=[a-z]+:\n {4}name: )/).slice(1);
+  assert.equal(jobs.length, 2);
+  for (const job of jobs) assert.match(job, /\n {4}if: (>-\n\s+!cancelled\(\) && )?github\.ref == 'refs\/heads\/main'/, job.split('\n')[0]);
+
+  // One failed attempt, then success: two PUTs counted.
+  const w = world();
+  w.addArtifact(1, 'ingest-111-1', ingestZip('x'));
+  let fails = 1;
+  w.s3.faults.putError = (key) => (key.startsWith('ingest/') && fails-- > 0 ? Object.assign(new Error('R2 PUT failed: InternalError (HTTP 500)'), { status: 500 }) : null);
+  const hb = await w.run();
+  assert.equal(hb.status, 'ok', JSON.stringify(hb.failures));
+  assert.equal(w.s3.ops('put').filter((c) => c.key.startsWith('ingest/')).length, 2);
+  assert.equal(hb.ops.put, w.s3.ops('put').length);
+
+  // Every attempt fails: the bytes count against the cap as possibly stored, and the cap sees them.
+  const v = world();
+  const ing = ingestZip('y');
+  v.addArtifact(1, 'ingest-111-1', ing, { hoursAgo: 2 });
+  v.addArtifact(2, 'ingest-222-1', ingestZip('z'), { hoursAgo: 1 });
+  v.s3.faults.putError = (key) => (key.includes('ingest-111-1') ? Object.assign(new Error('R2 PUT failed: InternalError (HTTP 500)'), { status: 500 }) : null);
+  const hv = await v.run({ limits: { ...DEFAULTS, maxBytes: 1_000_000 + ing.length + 10 } });
+  assert.equal(v.s3.ops('put').filter((c) => c.key.includes('ingest-111-1')).length, 3);
+  assert.equal(hv.possibly_stored_bytes, ing.length);
+  assert.equal(hv.status, 'over_cap', 'the second artifact no longer fits once the first may be stored');
+  // A 4xx refusal is not retried.
+  const u = world();
+  u.addArtifact(1, 'ingest-111-1', ingestZip('q'));
+  u.s3.faults.putError = (key) => (key.startsWith('ingest/') ? Object.assign(new Error('R2 PUT failed: AccessDenied (HTTP 403)'), { status: 403 }) : null);
+  await u.run();
+  assert.equal(u.s3.ops('put').filter((c) => c.key.startsWith('ingest/')).length, 1);
+
+  // A listing marked truncated with no token: an error, nothing copied.
+  const t = world();
+  t.s3.seed('history/a', Buffer.from('a'));
+  t.s3.seed('history/b', Buffer.from('b'));
+  t.s3.faults.truncateAt = 1;
+  t.addArtifact(1, 'ingest-111-1', ingestZip('t'));
+  const ht = await t.run();
+  assert.equal(ht.status, 'error');
+  assert.match(ht.reason, /cut short/);
+  assert.equal(t.s3.ops('put').length, 0);
 });

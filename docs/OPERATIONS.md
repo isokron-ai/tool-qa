@@ -1030,12 +1030,12 @@ package's integrity hash. The rest of tool-qa stays free of dependencies.
    permission **Object Read & Write**, applied to the bucket
    `isokron-loop-backup` only. Copy the Access Key ID and the Secret Access Key
    (the S3 credentials, not the token value).
-2. Add them as repository secrets, the bucket as a repository variable, and
-   the account ID as a secret too. The account ID is not a credential and may
-   be a variable instead (`gh variable set R2_ACCOUNT_ID ...`; the workflow
-   reads the secret first, then the variable), but GitHub prints each step's
-   environment in the run log, which is public here, and only a secret is
-   masked there:
+2. Add them as repository secrets, the account ID as a secret too, and the
+   bucket as a repository variable. The account ID is read only from the
+   secret: GitHub prints each step's environment in the run log, which is
+   public here, and masks only secrets. Delete any repository variable
+   `R2_ACCOUNT_ID` (`gh variable delete R2_ACCOUNT_ID --repo isokron-ai/tool-qa`);
+   the workflow does not read it:
 
    ```sh
    gh secret set R2_ACCESS_KEY_ID --repo isokron-ai/tool-qa       # paste the Access Key ID
@@ -1048,7 +1048,8 @@ package's integrity hash. The rest of tool-qa stays free of dependencies.
 
 Until all four are set, each run exits 0 with a notice ("not configured
 yet") and the health item is amber. Only the `Back up` step (and the opt-in
-`Prune` step) gets the secrets. Optional variables:
+`Prune` step) gets the secrets, and both jobs run only on `main`: a dispatch
+from another branch skips them. Optional variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -1072,8 +1073,21 @@ and there is no spending cap on Cloudflare's side. So the run enforces one:
   for the run's own manifest and cursor). A run that hits the cap fails, its
   heartbeat says `over_cap`, and the health item is red until room is made;
 - from 85% of the cap the health item is amber ("near the cap");
-- each run counts its operations, refuses any past its per-run caps, and
-  reports them in the run summary and the heartbeat.
+- each run counts its operations, retries included (the S3 client does not
+  retry on its own; the run retries a network error, 429 or 5xx up to three
+  times and counts each attempt), refuses any past its per-run caps, and
+  reports them in the run summary and the heartbeat;
+- a PUT whose every attempt failed may still have been stored, so its bytes
+  count against the cap (`possibly_stored_bytes` in the heartbeat);
+- a bucket listing marked truncated with no continuation token is an error:
+  the run copies nothing on a short sum.
+
+**Operations per month.** At four runs a day the per-run caps bound a month
+at 2,000 × 4 × 30 = 240,000 Class A operations (24% of the free tier) and
+20,000 × 4 × 30 = 2.4 million Class B (24%), even if every run used its full
+caps. The stand-in scheduler does not add runs: it dispatches only when no run
+started in the last 330 minutes. Typical use is far below that (next
+paragraph).
 
 At the rate measured on 24 Nov 2026 (about 590 MB a day of ingest outputs, 45
 MB of state snapshots, 6 MB of history; about 240 objects a day), a month is
@@ -1097,7 +1111,11 @@ each: `history/`, old cursors (the newest 10 kept), old snapshot manifests (the
 newest 10 kept), `ingest/`, then `snapshots/`, never the newest
 `OFFSITE_PRUNE_KEEP_SNAPSHOTS` (48). The run manifests under `manifest/` are
 never deleted. It fails when it cannot reach the target because the rest is
-still locked.
+still locked. In apply mode it deletes nothing, and fails, when the listing
+looks cut short: a page marked truncated with no continuation token, or the
+newest cursor or newest run manifest (each listed on its own) missing from
+the full listing; it also refuses when there is no cursor yet. Its run summary
+is scrubbed of the credentials and the account ID.
 
 - Dry run, any time: `gh workflow run offsite-backup.yml --repo isokron-ai/tool-qa -f prune=dry-run` (lists what it would delete in the run summary).
 - To let it delete: `gh variable set OFFSITE_PRUNE_ENABLED --repo isokron-ai/tool-qa --body true`. It then runs after every scheduled backup (not after a cancelled one), and on a dispatch with `-f prune=apply`; the stand-in scheduler dispatches with `-f prune=apply` while the variable is `true`.
