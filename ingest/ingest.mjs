@@ -254,7 +254,7 @@ export async function openAttempt(input, deps) {
     let ciphertext = null;
     let manifestBytes = null;
     let files = null;
-    let resultOutcome = null; // 'skips_only' for an accepted result with skips and no records (R-SUB-06)
+    let resultOutcome = null; // 'skips_only': accepted, a retryable skip, no records (R-SUB-06)
 
     // `total` is the number of problems before `problems` was capped.
     async function finish(outcome, reason, problems = [], total = problems.length) {
@@ -424,9 +424,11 @@ export async function openAttempt(input, deps) {
     } catch (err) {
       return reject('ingest_error', [{ reason: 'ingest_error', detail: `reading the accepted bundle failed: ${errorText(err)}` }]);
     }
-    // Skips and no records: nothing was measured. The due list looks again
-    // after skips_only_max_age_days (pump/tiers.json), not the tier max age.
-    if (Number(report.bundle?.skips) > 0 && Number(report.observations?.records) === 0) resultOutcome = 'skips_only';
+    // Skips, at least one of them retryable (its retries ran out), and no
+    // records: nothing was measured for a passing reason. The due list looks
+    // again after skips_only_max_age_days (pump/tiers.json), not the tier max
+    // age. Only permanent skips keep the tier max age.
+    if (Number(report.bundle?.retryable_skips) > 0 && Number(report.observations?.records) === 0) resultOutcome = 'skips_only';
     return finish('accepted', null);
   }
 

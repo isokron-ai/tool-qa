@@ -295,10 +295,13 @@ and 90 days for T1 to T4. Without it, T0 would never be scanned again after
 its first result. A new tool version in `pump/workflows.json` still makes
 every subject due at once.
 
-**Skips only (R-SUB-06).** An accepted result whose bundle held skips and no
-observation records measured nothing. It is stored with outcome `skips_only`
-and is due again after `skips_only_max_age_days` (1 day, reason `skips_only`)
-instead of the tier max age (up to 30 days).
+**Skips only (R-SUB-06).** An accepted result whose bundle held no
+observation records and at least one retryable skip (its retries ran out)
+measured nothing for a passing reason. It is stored with outcome
+`skips_only` and is due again after `skips_only_max_age_days` (1 day, reason
+`skips_only`) instead of the tier max age (up to 30 days). A result whose
+skips are all permanent (`remote_only`, `no_runnable_artifact`,
+`policy_excluded`, ...) keeps the tier max age.
 
 **Throttling (R-SUB-04).** A result whose every skip is a retryable
 `rate_limited` or `upstream_unavailable` is sent back as `retry_throttled`.

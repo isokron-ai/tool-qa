@@ -640,14 +640,27 @@ test('R-SUB-04: a throttled bundle is sent back as retry_throttled, not counted 
   assert.equal(capped.r.outcome, 'accepted');
 });
 
-test('R-SUB-06: an accepted bundle with skips and no records is recorded with result outcome skips_only', async () => {
+test('R-SUB-06: an accepted bundle with a retryable skip and no records is recorded as skips_only; permanent skips are not', async () => {
   const files = defaultFiles();
   delete files['observations/check.ndjson'];
-  const only = await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'scan', reason: 'no_runnable_artifact' }]), files }) });
-  assert.equal(only.r.outcome, 'accepted');
-  assert.equal(only.ledger.records[0].resultOutcome, 'skips_only');
+  // Retries ran out: retryable skips, nothing measured.
+  const exhausted = await run({ bundle: makeBundle({ meta: retryMeta([START_TIMEOUT]), files }), ledger: fakeLedger([expectedRow({ retries: 3 })]) });
+  assert.equal(exhausted.r.outcome, 'accepted');
+  assert.equal(exhausted.ledger.records[0].resultOutcome, 'skips_only');
+  const throttled = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED]), files }), ledger: fakeLedger([expectedRow({ throttled: 40, throttled_since: new Date(NOW().getTime() - 8 * 86_400_000).toISOString() })]) });
+  assert.equal(throttled.r.outcome, 'accepted');
+  assert.equal(throttled.ledger.records[0].resultOutcome, 'skips_only');
+  // One retryable skip among permanent ones still counts.
+  const mixed = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED, { stage: 'start', reason: 'remote_only' }]), files }) });
+  assert.equal(mixed.ledger.records[0].resultOutcome, 'skips_only');
+  // Only permanent skips: an ordinary result, kept for the tier max age.
+  for (const reason of ['remote_only', 'no_runnable_artifact', 'policy_excluded']) {
+    const permanent = await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'scan', reason }]), files }) });
+    assert.equal(permanent.r.outcome, 'accepted', reason);
+    assert.equal(permanent.ledger.records[0].resultOutcome, undefined, reason);
+  }
   // Records, or no skips at all, are an ordinary result.
-  const measured = await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'scan', reason: 'no_runnable_artifact' }]) }) });
+  const measured = await run({ bundle: makeBundle({ meta: retryMeta([START_TIMEOUT]) }), ledger: fakeLedger([expectedRow({ retries: 3 })]) });
   assert.equal(measured.ledger.records[0].resultOutcome, undefined);
   const empty = await run({ bundle: makeBundle({ files }) });
   assert.equal(empty.ledger.records[0].resultOutcome, undefined);

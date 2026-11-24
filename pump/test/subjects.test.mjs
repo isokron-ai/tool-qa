@@ -395,11 +395,12 @@ test('R-SUB-04: retry_throttled is not counted towards parking or MAX_RETRIES, a
   }
 });
 
-test('R-SUB-06: an accepted result with only skips and no records is due again after a day, not the tier max age', () => {
+test('R-SUB-06: a skips_only result (retries ran out) is due again after a day; a permanent skip keeps the tier max age', () => {
   const cfg = scanStaticConfig();
   assert.equal(cfg.tiers.skips_only_max_age_days, 1);
   const db = openState(':memory:');
-  const s = tmpSeed([row('o/skipped'), row('o/measured')]);
+  // o/permanent: accepted with only permanent skips, which ingest records as an ordinary result.
+  const s = tmpSeed([row('o/skipped'), row('o/measured'), row('o/permanent')]);
   try {
     syncSeedSubjects(db, { now: T, file: s.file });
     for (const d of dispatchAll(db, cfg, T)) {
@@ -409,7 +410,8 @@ test('R-SUB-06: an accepted result with only skips and no records is due again a
     const at = (days) => dueFromState(db, { now: T + days * DAY, tiers: cfg.tiers, workflows: cfg.workflows }).map((d) => `${d.subject} ${d.reasons.join(',')}`);
     assert.deepEqual(at(0.9), []);
     assert.deepEqual(at(1.1), ['o/skipped skips_only']);
-    assert.deepEqual(at(30.1), ['o/measured stale', 'o/skipped stale']);
+    assert.deepEqual(at(29.9), ['o/skipped skips_only']);
+    assert.deepEqual(at(30.1), ['o/measured stale', 'o/permanent stale', 'o/skipped stale']);
   } finally {
     s.cleanup();
     db.close();

@@ -653,8 +653,8 @@ export class StateDb {
    *   verdict?: 'accepted'|'rejected', accepted?: boolean, reason?: string,
    *   digest?: string, resultOutcome?: string, now?: number|string|Date}} args
    *   resultOutcome: what the results row stores as its outcome when accepted
-   *   (default: outcome); ingest passes 'skips_only' for a result with skips
-   *   and no records (R-SUB-06).
+   *   (default: outcome); ingest passes 'skips_only' for a result with no
+   *   records and a retryable skip (R-SUB-06).
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
   recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, now } = {}) {

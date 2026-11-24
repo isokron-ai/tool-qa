@@ -192,7 +192,8 @@ decisions since then (`db.retryThrottled(runKey)`).
 
 `recordResult` also takes `resultOutcome`, what the results row stores as its
 outcome when the result is accepted (default: `outcome`). Ingest passes
-`skips_only` for a bundle with skips and no observation records; the due list
+`skips_only` for a bundle with no observation records and at least one
+retryable skip (its retries ran out); the due list
 looks at such a result again after `skips_only_max_age_days` (R-SUB-06).
 
 `index` is the item's 0-based position in the `items` input the worker got,
