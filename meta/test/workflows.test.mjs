@@ -61,7 +61,7 @@ test('meta-fixture.yml runs on pull requests only, dry-run, and judges the bundl
   assert.deepEqual(Object.keys(w.on), ['pull_request']);
   assert.deepEqual(w.permissions, {});
   const steps = w.jobs.fixture.steps;
-  const kit = steps.filter((s) => s.uses === './worker-kit');
+  const kit = steps.filter((s) => s.uses === PINS.workerKit.split(' ')[0]);
   assert.equal(kit.length, SLOTS);
   assert.ok(kit.every((s) => s.with['dry-run'] === 'true'));
   assert.match(steps.at(-1).run, /meta\/fixture\.mjs judge/);

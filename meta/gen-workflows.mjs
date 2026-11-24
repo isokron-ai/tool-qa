@@ -199,7 +199,7 @@ export function workerWorkflow(lane) {
 export function fixtureWorkflow() {
   return [
     '# Fixture run of the metadata lanes on every pull request that touches them: the real APIs, three of our own',
-    '# repositories, the same script and the same 100 worker-kit slots as the workers, with the kit in dry-run mode',
+    '# repositories, the same script and the same 100 worker-kit slots (the same pinned kit) as the workers, with the kit in dry-run mode',
     '# (built and checked, never encrypted or uploaded). meta/fixture.mjs then judges every bundle with ingest\'s own',
     '# checks against the pinned field registry, and the job fails unless each one is accepted.',
     '#',
@@ -259,7 +259,7 @@ export function fixtureWorkflow() {
     '        run: |',
     ...inputChecks(10),
     '          node meta/run.mjs "$LANE" "$RUNNER_TEMP/meta-out"',
-    ...kitSteps({ uses: './worker-kit', dryRun: true, attemptExpr: '${{ steps.items.outputs.attempt_id }}', outDir: 'meta-out' }),
+    ...kitSteps({ uses: PINS.workerKit, dryRun: true, attemptExpr: '${{ steps.items.outputs.attempt_id }}', outDir: 'meta-out' }),
     '      - name: Judge every bundle with ingest\'s checks',
     '        env:',
     '          LANE: ${{ matrix.lane }}',

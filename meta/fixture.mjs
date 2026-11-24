@@ -38,6 +38,7 @@ export async function judge({ lane, bundleDir, outDir, env = process.env, regist
   const wf = workflowFromEnv(env);
   const reg = registry ?? await loadRegistry();
   let ok = true;
+  let lastApi = null;
   for (const item of input.items) {
     let tar;
     try {
@@ -55,13 +56,16 @@ export async function judge({ lane, bundleDir, outDir, env = process.env, regist
     const obs = readFileSync(join(outDir, String(item.index), 'bundle', 'observations', `${lane}.ndjson`), 'utf8')
       .split('\n').filter(Boolean).map((l) => JSON.parse(l));
     const fields = [...new Set(obs.map((r) => r.field))].sort();
+    const report = JSON.parse(readFileSync(join(outDir, String(item.index), 'bundle', 'results', `${lane}.json`), 'utf8'));
+    lastApi = report.shard_api;
     const nulls = obs.filter((r) => r.value === null).map((r) => r.field);
-    write(`item ${item.index} ${item.subject}: ${v.outcome}${v.reason ? ` (${v.reason})` : ''}; ${obs.length} records; fields ${fields.join(',')}; null ${nulls.join(',') || 'none'}; skips ${JSON.stringify(meta.skips)}; controls ${meta.controls.map((c) => `${c.kind}=${c.observed}`).join(',')}\n`);
+    write(`item ${item.index} ${item.subject}: ${v.outcome}${v.reason ? ` (${v.reason})` : ''}; ${obs.length} records; fields ${fields.join(',')}; null ${nulls.join(',') || 'none'}; stages ${JSON.stringify(report.stages)}; skips ${JSON.stringify(meta.skips)}; controls ${meta.controls.map((c) => `${c.kind}=${c.observed}`).join(',')}\n`);
     if (v.outcome !== 'accepted') {
       ok = false;
       write(`  problems: ${JSON.stringify(v.problems.slice(0, 5))}\n`);
     }
   }
+  write(`${lane}: API use ${JSON.stringify(lastApi)}\n`);
   write(ok ? `${lane}: every bundle accepted\n` : `${lane}: not every bundle was accepted\n`);
   return ok ? 0 : 1;
 }
