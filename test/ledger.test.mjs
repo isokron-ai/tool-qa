@@ -483,7 +483,7 @@ test('R-LED-08: the refresh commit is made through the API so GitHub signs it, n
   // A new branch: tree, commit and ref are created through the API, in that order.
   const fresh = runPublish();
   assert.equal(fresh.status, 0, fresh.out);
-  const writes = fresh.calls.split('\n').filter((l) => /^gh api -X/.test(l));
+  const writes = fresh.calls.split('\n').filter((l) => /^gh api -X \S+ repos\/isokron-ai\/tool-qa\/git\//.test(l));
   assert.deepEqual(writes, [
     'gh api -X POST repos/isokron-ai/tool-qa/git/trees --input - --jq .sha',
     'gh api -X POST repos/isokron-ai/tool-qa/git/commits --input - --jq [.sha, (.verification.verified | tostring)] | join(" ")',
@@ -533,25 +533,53 @@ test('R-LED-08: the refresh commit is made through the API so GitHub signs it, n
   assert.match(stale.calls, /git\/refs\/heads\/ledger\/refresh -f sha=/);
 });
 
-test('R-LED-09: after a new refresh commit the workflow dispatches test.yml and lint.yml on ledger/refresh', () => {
-  for (const f of ['test.yml', 'lint.yml']) {
+test('R-LED-09: after a new refresh commit the workflow dispatches test.yml and lint.yml on ledger/refresh, and their results show on the pull request as commit statuses', () => {
+  // The dispatched workflows: they can be dispatched, still run on pull requests, and a dispatched run reports its
+  // result as a commit status (a dispatched run's check runs do not show on a pull request).
+  for (const [f, need, ctx] of [['test.yml', 'node', 'dispatched/test'], ['lint.yml', 'workflows', 'dispatched/lint']]) {
     const wf = parseYaml(readFileSync(fileURLToPath(new URL(`../.github/workflows/${f}`, import.meta.url)), 'utf8'));
     assert.ok('workflow_dispatch' in wf.on, `${f} can be dispatched`);
     assert.ok('pull_request' in wf.on, `${f} still runs on pull requests`);
+    const { report } = wf.jobs;
+    assert.deepEqual(report.needs, [need], f);
+    assert.equal(report.if, "${{ !cancelled() && github.event_name == 'workflow_dispatch' }}", f);
+    assert.deepEqual(report.permissions, { statuses: 'write' }, f);
+    assert.ok(report.steps.every((st) => !st.uses), `${f}: the report job checks out nothing`);
+    assert.equal(report.steps[0].env.RESULT, `\${{ needs.${need}.result }}`);
+    assert.equal(report.steps[0].env.SHA, '${{ github.sha }}');
+    for (const [result, state] of [['success', 'success'], ['failure', 'failure'], ['skipped', 'failure'], ['cancelled', 'failure']]) {
+      const dir = mkdtempSync(join(tmpdir(), 'ledger-report-'));
+      try {
+        writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\necho "gh $*" >> '${dir}/calls'\n`);
+        chmodSync(join(dir, 'gh'), 0o755);
+        const r = spawnSync('bash', ['-e', '-c', report.steps[0].run], { encoding: 'utf8',
+          env: { PATH: `${dir}:${process.env.PATH}`, REPO: 'isokron-ai/tool-qa', SHA: NEW, RESULT: result, RUN_URL: 'https://example.test/run' } });
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(readFileSync(join(dir, 'calls'), 'utf8').trim(),
+          `gh api -X POST repos/isokron-ai/tool-qa/statuses/${NEW} -f state=${state} -f context=${ctx} -f description=${report.steps[0].run.match(/description="([^:]+):/)[1]}: ${result} -f target_url=https://example.test/run --silent`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
   }
   assert.equal(WF.jobs.publish.permissions.actions, 'write');
+  assert.equal(WF.jobs.publish.permissions.statuses, 'write');
 
   const fresh = runPublish();
   assert.equal(fresh.status, 0, fresh.out);
   const lines = fresh.calls.trim().split('\n');
   const ref = lines.findIndex((l) => /git\/refs/.test(l));
   const pr = lines.findIndex((l) => /^gh pr create/.test(l));
+  const pending = lines.map((l, i) => [l, i]).filter(([l]) => /\/statuses\//.test(l));
+  assert.deepEqual(pending.map(([l]) => l), ['test', 'lint'].map((w) =>
+    `gh api -X POST repos/isokron-ai/tool-qa/statuses/${NEW} -f state=pending -f context=dispatched/${w} -f description=${w}.yml dispatched on ledger/refresh --silent`));
   const runs = lines.map((l, i) => [l, i]).filter(([l]) => /^gh workflow run/.test(l));
   assert.deepEqual(runs.map(([l]) => l), [
     'gh workflow run test.yml -R isokron-ai/tool-qa --ref ledger/refresh',
     'gh workflow run lint.yml -R isokron-ai/tool-qa --ref ledger/refresh',
   ]);
-  assert.ok(runs.every(([, i]) => i > ref && i > pr), 'dispatched after the branch moved and the pull request exists');
+  assert.ok(pending.every(([, i]) => i > ref && i > pr), 'statuses go on the commit the branch now holds');
+  assert.ok(runs.every(([, i]) => pending.every(([, j]) => i > j)), 'pending is set before the dispatch, so it never overwrites a result');
 
   const updated = runPublish({ prList: [{ number: 12, isCrossRepository: false, headRepositoryOwner: { login: 'isokron-ai' } }],
     branch: { sha: OLD, tree: { sha: 'a'.repeat(40) }, parents: [{ sha: BASE }], verification: { verified: true } } });
@@ -560,7 +588,7 @@ test('R-LED-09: after a new refresh commit the workflow dispatches test.yml and 
   assert.equal((updated.calls.match(/^gh workflow run/gm) ?? []).length, 2, 'an updated pull request gets checks on its new head too');
 
   const failed = runPublish({ apiTree: 'a'.repeat(40) });
-  assert.doesNotMatch(failed.calls, /gh workflow run/, 'no dispatch when nothing was published');
+  assert.doesNotMatch(failed.calls, /gh workflow run|\/statuses\//, 'no dispatch when nothing was published');
 });
 
 test('R-LED-03: a Fix cell yields commit SHAs only, not dates, pull request numbers or hex-looking words', () => {
@@ -600,7 +628,7 @@ test('R-LED-05: generate holds a read-only token; only publish can write, and it
   const { generate, publish } = WF.jobs;
   assert.deepEqual(Object.keys(WF.jobs), ['generate', 'publish']);
   assert.deepEqual(generate.permissions, { contents: 'read' });
-  assert.deepEqual(publish.permissions, { actions: 'write', contents: 'write', 'pull-requests': 'write' });
+  assert.deepEqual(publish.permissions, { actions: 'write', contents: 'write', 'pull-requests': 'write', statuses: 'write' });
   assert.equal(publish.needs, 'generate');
   for (const job of [generate, publish]) {
     const guard = job.steps[1];
