@@ -157,7 +157,7 @@ concurrency group.
 Every GitHub call made by the pump and the watchdog goes through
 [`pump/budgets.mjs`](../pump/budgets.mjs). Calls are grouped into families
 (dispatch, actions, artifacts, contents, issues, graphql, search, auth), each
-with an hourly and a per-minute cap, and all together stay under 1,500 calls an
+with an hourly and a per-minute cap, and all together stay under 2,500 calls an
 hour. Dispatches are spaced 1 to 2 seconds apart. The budget honours
 `retry-after`, backs off at least a minute on a secondary rate limit (longer if
 it repeats), waits for the reset when a primary limit is spent, and keeps a
