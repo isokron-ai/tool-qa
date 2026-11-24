@@ -726,7 +726,7 @@ every bundle and every sealed ingest output encrypted to it, and every copy
 of the state asset encrypted to it.
 
 **Reading ingest outputs.** Each pump run that sealed any outputs uploads one
-artifact `ingest-<run id>-<run attempt>` (kept 30 days) holding one
+artifact `ingest-<run id>-<run attempt>` (kept 90 days, the most GitHub allows) holding one
 age-encrypted tar per judged item, `ingest-<attempt>-<index>.tar.age`
 (`<index>` is the item's position in the shard, from 0), and
 `ingest-<attempt>.tar.age` for an attempt refused before any item was judged.
