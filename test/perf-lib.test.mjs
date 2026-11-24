@@ -54,7 +54,7 @@ test('summariseSteps gives each scenario step its own median', () => {
   assert.equal(s.a.requests, 30);
 });
 
-test('R-PERF-03: session churn is read from the Inspector\'s `churn` object (the first build read `connections` and reported 0 sessions)', () => {
+test('R-PERF-03: session churn is read from the churn object the Inspector prints, not from connections', () => {
   // The shape the Inspector 2.16.0 prints for --load --load-churn.
   const run = (opened, p95) => ({ churn: { callsPerSession: 3, opened, failed: 0, closeFailed: 0, connectMs: { p50: 1.9, p95 } }, latencyMs: { p95: 3.4 }, elapsedMs: 4000 });
   const c = summariseChurn([run(4000, 4), run(5000, 6), { error: 'x' }, null]);
