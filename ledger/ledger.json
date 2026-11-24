@@ -1,0 +1,2035 @@
+{
+  "schema": 1,
+  "sources": [
+    {
+      "repo": "isokron-ai/tool-qa",
+      "ref": "main",
+      "path": "REGRESSIONS.md",
+      "status": "ok",
+      "sha256": "ae2ac68470019a2bd0006ca6b98c46cc0de8662ae62dc74f4f6e1bf450360a9d",
+      "header": [
+        "ID",
+        "What it was",
+        "Pinned by",
+        "Fix"
+      ],
+      "test_forms": [
+        "`file` › `name`"
+      ],
+      "normalised": []
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "ref": "main",
+      "path": "REGRESSIONS.md",
+      "status": "ok",
+      "sha256": "251d4acf5e80920b229c033f0c74f108c8c6f53521184517fc35eb21e6051a1c",
+      "header": [
+        "ID",
+        "What it was",
+        "Pinned by",
+        "Fix"
+      ],
+      "test_forms": [
+        "`file` › `name`"
+      ],
+      "normalised": []
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "ref": "main",
+      "path": "REGRESSIONS.md",
+      "status": "ok",
+      "sha256": "df9434689c87b72c20c656a52f172719123305585e19d5f98276f2a2e953bf1d",
+      "header": [
+        "ID",
+        "What it was",
+        "Pinned by",
+        "Fix"
+      ],
+      "test_forms": [
+        "`file` `name`"
+      ],
+      "normalised": [
+        "test references written `file` `name` read as `file` › `name`"
+      ]
+    },
+    {
+      "repo": "isokron-ai/mcp-writecheck-action",
+      "ref": "main",
+      "path": "REGRESSIONS.md",
+      "status": "absent"
+    },
+    {
+      "repo": "isokron-ai/mcp-write-safety",
+      "ref": "main",
+      "path": "REGRESSIONS.md",
+      "status": "absent"
+    }
+  ],
+  "counts": {
+    "total": 62,
+    "isokron-ai/tool-qa": 21,
+    "isokron-ai/mcp-check": 11,
+    "isokron-ai/mcp-surface-corpus": 30,
+    "isokron-ai/mcp-writecheck-action": 0,
+    "isokron-ai/mcp-write-safety": 0
+  },
+  "unresolved": [],
+  "records": [
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-01",
+      "title": "The email and JWT redaction patterns backtracked from every position of a long run: scanning was quadratic (80 KB of `a.` took 3.2 s, 1 MB about 8 minutes).",
+      "description": "The email and JWT redaction patterns backtracked from every position of a long run: scanning was quadratic (80 KB of `a.` took 3.2 s, 1 MB about 8 minutes). One crafted bundle held the pump past its job timeout.",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/redact.test.mjs",
+          "name": "R-ING-01: every redaction rule scans 1 MiB of crafted text in linear time",
+          "found": true
+        },
+        {
+          "file": "ingest/test/redact.test.mjs",
+          "name": "R-ING-01: the bounded patterns still find what they found before",
+          "found": true
+        }
+      ],
+      "fix_commit": "70d658a",
+      "fix_commits": [
+        "70d658a"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-02",
+      "title": "`findIdentityClaims` counted newlines from the start of the file for every claim (`lineAt`): 66 s on 1 MB of `attempt_id=x` lines.",
+      "description": "`findIdentityClaims` counted newlines from the start of the file for every claim (`lineAt`): 66 s on 1 MB of `attempt_id=x` lines.",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/forgery.test.mjs",
+          "name": "R-ING-02: identity claims in a 1 MiB text file are found in linear time",
+          "found": true
+        }
+      ],
+      "fix_commit": "70d658a",
+      "fix_commits": [
+        "70d658a"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-03",
+      "title": "No per-file size cap, a 1 GiB bundle cap and a 512 MiB artifact cap: far more than one tick on a single-CPU runner can judge.",
+      "description": "No per-file size cap, a 1 GiB bundle cap and a 512 MiB artifact cap: far more than one tick on a single-CPU runner can judge.",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-03: a file over the per-file cap is rejected as file_too_large; the caps are the contract's",
+          "found": true
+        },
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-03: a full-size bundle of crafted text is judged well inside the time limit",
+          "found": true
+        },
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-03: an artifact over 65 MiB is rejected without a download",
+          "found": true
+        },
+        {
+          "file": "worker-kit/test/contract.test.mjs",
+          "name": "R-ING-03: collectFiles refuses a file over 8 MiB and a bundle over 64 MiB; the schema caps listed sizes",
+          "found": true
+        }
+      ],
+      "fix_commit": "d3e101f",
+      "fix_commits": [
+        "d3e101f"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-04",
+      "title": "Judging ran synchronously inside the item's state transaction, so the tick deadline never fired and a slow judge held the pump until the job was killed.",
+      "description": "Judging ran synchronously inside the item's state transaction, so the tick deadline never fired and a slow judge held the pump until the job was killed.",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/age.test.mjs",
+          "name": "R-ING-04: age is killed at its time limit and fails as timeout",
+          "found": true
+        },
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-04: a judge that hangs is stopped at its time limit and the item is recorded as ingest_timeout",
+          "found": true
+        },
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-04: a judge that throws, or dies, records ingest_error instead of failing the tick",
+          "found": true
+        },
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-04: the judge thread gets no environment",
+          "found": true
+        }
+      ],
+      "fix_commit": "5426adf",
+      "fix_commits": [
+        "5426adf"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-05",
+      "title": "An item whose judging kept failing with an error of ours was retried on every tick, for as long as its dispatch was awaited.",
+      "description": "An item whose judging kept failing with an error of ours was retried on every tick, for as long as its dispatch was awaited.",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-05: a count left by an earlier run is honoured: the item is recorded as ingest_error without a download",
+          "found": true
+        },
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-05: an item that keeps failing is counted in the state and recorded as ingest_error on the third failure",
+          "found": true
+        }
+      ],
+      "fix_commit": "4a56d2a",
+      "fix_commits": [
+        "4a56d2a"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-06",
+      "title": "Ingest ran before the reap, and open dispatches were awaited whatever their expiry, so an item that could not be judged was first in line on every later tick.",
+      "description": "Ingest ran before the reap, and open dispatches were awaited whatever their expiry, so an item that could not be judged was first in line on every later tick.",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-06: a poison item is decided in its own tick and the items after it are still judged",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-ING-06: expired dispatches are reaped before ingest looks at them",
+          "found": true
+        }
+      ],
+      "fix_commit": "20a0fa4",
+      "fix_commits": [
+        "20a0fa4",
+        "5426adf"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-07",
+      "title": "JSON nested 200,000 deep threw `RangeError` in the recursive walks (`scanValue`, `walkJson`), and the item was retried every tick with a fresh download.",
+      "description": "JSON nested 200,000 deep threw `RangeError` in the recursive walks (`scanValue`, `walkJson`), and the item was retried every tick with a fresh download.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/forgery.test.mjs",
+          "name": "R-ING-07: identity claims inside JSON nested 200,000 deep are still found, from the text",
+          "found": true
+        },
+        {
+          "file": "ingest/test/redact.test.mjs",
+          "name": "R-ING-07: a JSON document nested 200,000 deep is scanned as text, not walked into a stack overflow",
+          "found": true
+        }
+      ],
+      "fix_commit": "e5bb984",
+      "fix_commits": [
+        "e5bb984"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-08",
+      "title": "Any unexpected error after the download was retried, with a full re-download each time, instead of being a recorded decision; transient errors were not told apart.",
+      "description": "Any unexpected error after the download was retried, with a full re-download each time, instead of being a recorded decision; transient errors were not told apart.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-08: a bundle that makes the judge throw is a recorded rejection, never downloaded again",
+          "found": true
+        },
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-08: transient download errors are retried and never counted",
+          "found": true
+        },
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-04: a judge that throws, or dies, records ingest_error instead of failing the tick",
+          "found": true
+        }
+      ],
+      "fix_commit": "5426adf",
+      "fix_commits": [
+        "5426adf",
+        "4a56d2a"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-09",
+      "title": "A failed state push only logged and set `ok=false`; the run went on dispatching for up to 11 minutes, work the saved state would not know.",
+      "description": "A failed state push only logged and set `ok=false`; the run went on dispatching for up to 11 minutes, work the saved state would not know.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-ING-09: a failed push makes the run fail; nothing is sent and the run ends after one housekeeping tick",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-ING-09: a push that fails after dispatching stops dispatching for the rest of the run",
+          "found": true
+        }
+      ],
+      "fix_commit": "e027a30",
+      "fix_commits": [
+        "e027a30"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-10",
+      "title": "Dispatches were sent before the state that records them was saved, so a killed job left worker runs outside the slot ledger and fences that would be handed out again.",
+      "description": "Dispatches were sent before the state that records them was saved, so a killed job left worker runs outside the slot ledger and fences that would be handed out again.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-ING-10: dispatches are in the saved state before they are sent",
+          "found": true
+        }
+      ],
+      "fix_commit": "e027a30",
+      "fix_commits": [
+        "e027a30"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-11",
+      "title": "Every pump run built a fresh API budget, so the hourly caps reset about five times an hour (the 200/h artifacts cap was really about 1,000/h).",
+      "description": "Every pump run built a fresh API budget, so the hourly caps reset about five times an hour (the 200/h artifacts cap was really about 1,000/h).",
+      "severity": "low-medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/budgets.test.mjs",
+          "name": "R-ING-11: a restored snapshot carries the hourly caps into a new budget",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-ING-11: the API budget is saved with the state and seeds the next run",
+          "found": true
+        }
+      ],
+      "fix_commit": "7f9f504",
+      "fix_commits": [
+        "7f9f504"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-12",
+      "title": "`setDispatchRun` stored the found run's own `head_sha` as the expected commit, so ingest compared the run with itself.",
+      "description": "`setDispatchRun` stored the found run's own `head_sha` as the expected commit, so ingest compared the run with itself. Also documented: workers must keep untrusted servers away from `ACTIONS_RUNTIME_TOKEN`, which can upload a sibling item's result.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-12: a run found by its name is checked against the commit recorded at dispatch, not its own",
+          "found": true
+        },
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-12: setDispatchRun never sets the expected commit, and markDispatched never replaces it",
+          "found": true
+        },
+        {
+          "file": "pump/test/tick.test.mjs",
+          "name": "R-ING-12: a ref that cannot be resolved is not dispatched this tick",
+          "found": true
+        },
+        {
+          "file": "pump/test/tick.test.mjs",
+          "name": "R-ING-12: the dispatch records the commit its ref points to before sending, not what the run reports",
+          "found": true
+        }
+      ],
+      "fix_commit": "7706adf",
+      "fix_commits": [
+        "7706adf"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-13",
+      "title": "A scheduled pump run cancels a manual re-ingest waiting in the `pump` group, and the re-ingest did not check the kill switch or the pump lane again after waiting.",
+      "description": "A scheduled pump run cancels a manual re-ingest waiting in the `pump` group, and the re-ingest did not check the kill switch or the pump lane again after waiting.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/ingest-workflow.test.mjs",
+          "name": "R-ING-13: the ingest job checks the kill switch and the pump lane again before anything else",
+          "found": true
+        }
+      ],
+      "fix_commit": "c8bb49c",
+      "fix_commits": [
+        "c8bb49c"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-14",
+      "title": "`readZip` had no cap on entries or on the inflated total.",
+      "description": "`readZip` had no cap on entries or on the inflated total.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/unzip.test.mjs",
+          "name": "R-ING-14: the default caps are in place",
+          "found": true
+        },
+        {
+          "file": "test/unzip.test.mjs",
+          "name": "R-ING-14: too many entries, or too many bytes once inflated, are refused before inflating",
+          "found": true
+        }
+      ],
+      "fix_commit": "99f6817",
+      "fix_commits": [
+        "99f6817"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-15",
+      "title": "The state database was a plaintext release asset in a public repository, readable by anyone (attempts with quarantine reasons, leases, results before publication; canaries once injected).",
+      "description": "The state database was a plaintext release asset in a public repository, readable by anyone (attempts with quarantine reasons, leases, results before publication; canaries once injected).",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/state-asset.test.mjs",
+          "name": "R-ING-15: migrate replaces a plaintext asset with an encrypted one, once",
+          "found": true
+        },
+        {
+          "file": "test/state-asset.test.mjs",
+          "name": "R-ING-15: pull refuses an asset that is not age ciphertext and writes nothing",
+          "found": true
+        },
+        {
+          "file": "test/state-asset.test.mjs",
+          "name": "R-ING-15: push never uploads plaintext, whatever the encrypter returns",
+          "found": true
+        },
+        {
+          "file": "test/state-asset.test.mjs",
+          "name": "R-ING-15: the committed state.pub lists the ingest key, so the pump can read what it pushes",
+          "found": true
+        },
+        {
+          "file": "test/state-asset.test.mjs",
+          "name": "R-ING-15: with the real age binary: round trip, no identity no read, and no push a writer could not read back",
+          "found": true
+        }
+      ],
+      "fix_commit": "d5aa83b",
+      "fix_commits": [
+        "d5aa83b"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-16",
+      "title": "Items skipped for a passing reason (rate limit, upstream outage) could only be accepted as skipped and were never retried, and had no skip code of their own.",
+      "description": "Items skipped for a passing reason (rate limit, upstream outage) could only be accepted as skipped and were never retried, and had no skip code of their own.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-16: a bundle whose every skip is retryable is sent back as retry_later; the retries are bounded",
+          "found": true
+        },
+        {
+          "file": "ingest/test/ingest.test.mjs",
+          "name": "R-ING-16: one skip that is not retryable, or no skips at all, is accepted as before",
+          "found": true
+        },
+        {
+          "file": "test/state-ingest.test.mjs",
+          "name": "R-ING-16: retry_later frees the lease and slot, is not counted towards parking, and backs off before the work is due again",
+          "found": true
+        },
+        {
+          "file": "test/state-ingest.test.mjs",
+          "name": "R-ING-16: the due list skips a run_key sent back as retry_later until its backoff ends",
+          "found": true
+        },
+        {
+          "file": "worker-kit/test/contract.test.mjs",
+          "name": "R-ING-16: rate_limited and upstream_unavailable are skip reasons, and a skip may be marked retryable",
+          "found": true
+        }
+      ],
+      "fix_commit": "3137349",
+      "fix_commits": [
+        "3137349"
+      ],
+      "fix_pr": 3,
+      "fix_prs": [
+        3
+      ],
+      "merged_at": "2026-11-24T00:16:57Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-17",
+      "title": "`apiGet` and the other ingest GitHub calls were bounded only by their own time limits (60 s, up to four tries), not by the ingest deadline, so a stalled API could hold a pump tick past it.",
+      "description": "`apiGet` and the other ingest GitHub calls were bounded only by their own time limits (60 s, up to four tries), not by the ingest deadline, so a stalled API could hold a pump tick past it.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-17: a GitHub call that hangs is cut off at collect()'s deadline plus its grace",
+          "found": true
+        },
+        {
+          "file": "ingest/test/github.test.mjs",
+          "name": "R-ING-17: no request is sent once the caller's deadline has passed, and a hanging one is cut off by it",
+          "found": true
+        }
+      ],
+      "fix_commit": "31c3fdd",
+      "fix_commits": [
+        "31c3fdd"
+      ],
+      "fix_pr": 4,
+      "fix_prs": [
+        4
+      ],
+      "merged_at": "2026-11-24T00:35:13Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-18",
+      "title": "`run_sha_mismatch` counted towards parking a run_key, though a moved worker branch or someone else's run says nothing about that work.",
+      "description": "`run_sha_mismatch` counted towards parking a run_key, though a moved worker branch or someone else's run says nothing about that work.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/state-ingest.test.mjs",
+          "name": "R-ING-18: run_sha_mismatch does not count towards parking the run_key",
+          "found": true
+        }
+      ],
+      "fix_commit": "e21324f",
+      "fix_commits": [
+        "e21324f"
+      ],
+      "fix_pr": 4,
+      "fix_prs": [
+        4
+      ],
+      "merged_at": "2026-11-24T00:35:13Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-19",
+      "title": "`resolveRef` reads the worker branch with an actions-only token, which works only because worker repositories are public; a private one would have failed with no hint.",
+      "description": "`resolveRef` reads the worker branch with an actions-only token, which works only because worker repositories are public; a private one would have failed with no hint. Kept, documented, and made to fail closed with what to do.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/dispatch.test.mjs",
+          "name": "R-ING-19: the branch is read with the actions-only dispatch token; a private worker repo fails closed with what to do",
+          "found": true
+        }
+      ],
+      "fix_commit": "9b6f971",
+      "fix_commits": [
+        "9b6f971"
+      ],
+      "fix_pr": 4,
+      "fix_prs": [
+        4
+      ],
+      "merged_at": "2026-11-24T00:35:13Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-SUB-01",
+      "title": "The pump had no production source of subjects: only tests called `setSubjectVersion`, so a lane switched on would have found nothing due.",
+      "description": "The pump had no production source of subjects: only tests called `setSubjectVersion`, so a lane switched on would have found nothing due. The pump now loads `history/seed-v1.json` at start-up (`pump/subjects.mjs`).",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "unknown",
+      "test": [
+        {
+          "file": "pump/test/subjects.test.mjs",
+          "name": "R-SUB-01: the real seed loads into an empty state: 997 github subjects, sha left null, all due for scan-static",
+          "found": true
+        },
+        {
+          "file": "pump/test/subjects.test.mjs",
+          "name": "R-SUB-01: with scan-static on and LOOP_SLOTS=3 the first tick sends three full 25-item shards, T0 and T1 first",
+          "found": true
+        },
+        {
+          "file": "pump/test/subjects.test.mjs",
+          "name": "R-SUB-01: the pump loads the seed at start-up, before the first tick, and only once per seed file",
+          "found": true
+        }
+      ],
+      "fix_commit": "9ca820c",
+      "fix_commits": [
+        "9ca820c"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T01:08:45Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-SUB-02",
+      "title": "A subject with no sha has a run_key that never moves, so in a tier cell with no max age (T0 scan-static, \"every push\") it would never have run again after its first result.",
+      "description": "A subject with no sha has a run_key that never moves, so in a tier cell with no max age (T0 scan-static, \"every push\") it would never have run again after its first result. Such subjects now fall back to `unversioned_max_age_days` (T0 daily).",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "unknown",
+      "test": [
+        {
+          "file": "pump/test/subjects.test.mjs",
+          "name": "R-SUB-02: a subject with no sha is refreshed on its tier cadence, even where the cell has no age limit",
+          "found": true
+        }
+      ],
+      "fix_commit": "9ca820c",
+      "fix_commits": [
+        "9ca820c"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T01:08:45Z",
+      "released_in": "state",
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-01",
+      "title": "raw/ had no size cap: a constant shared by every tool turned about 70 KB of source into a 23 MB `raw/subject/tools.json`, over tool-qa's 8 MiB per file, and enough tools threw `RangeError: Invalid st…",
+      "description": "raw/ had no size cap: a constant shared by every tool turned about 70 KB of source into a 23 MB `raw/subject/tools.json`, over tool-qa's 8 MiB per file, and enough tools threw `RangeError: Invalid string length`. `buildBundle` and `writeItem` were outside the never-throw guard, so the run exited 3 and none of the 25 items got a bundle, on every re-dispatch.",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-01: 5,000 tools sharing a constant: no RangeError, the raw file is cut, nothing over the caps",
+          "found": true
+        },
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-01: a bundle that cannot be built or written falls back to a minimal one, and the shard goes on",
+          "found": true
+        },
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-01: a constant shared by every tool gives a raw/ file cut to the cap, marked raw_truncated, and a bundle tool-qa accepts",
+          "found": true
+        }
+      ],
+      "fix_commit": "0866426",
+      "fix_commits": [
+        "0866426"
+      ],
+      "fix_pr": 16,
+      "fix_prs": [
+        16
+      ],
+      "merged_at": "2026-11-24T00:54:51Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-02",
+      "title": "Step outputs were written only at the end, the 90 s subject timer could not interrupt synchronous work, and the uploads needed the scan step to succeed: a stopped scan uploaded nothing.",
+      "description": "Step outputs were written only at the end, the 90 s subject timer could not interrupt synchronous work, and the uploads needed the scan step to succeed: a stopped scan uploaded nothing.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-02: a control that fails says controls_failed=true before the harness error",
+          "found": true
+        },
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-02: a subject stuck in synchronous work is stopped by terminating its thread",
+          "found": true
+        },
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-02: each item's outputs go out as soon as its bundle is written, after controls_ok",
+          "found": true
+        },
+        {
+          "file": "test/workflows.test.mjs",
+          "name": "scan-static: dispatch only, the pump's three inputs, kill switch first, inputs checked whole, one pinned worker-kit step per item",
+          "found": true
+        }
+      ],
+      "fix_commit": "0866426",
+      "fix_commits": [
+        "0866426"
+      ],
+      "fix_pr": 16,
+      "fix_prs": [
+        16
+      ],
+      "merged_at": "2026-11-24T00:54:51Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-03",
+      "title": "The forgery control built its own output instead of going through `resultOf` and `buildBundle`, so it did not check what a real bundle holds outside raw/.",
+      "description": "The forgery control built its own output instead of going through `resultOf` and `buildBundle`, so it did not check what a real bundle holds outside raw/.",
+      "severity": "low-medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-03: the forgery control is reported through resultOf and buildBundle, and every file outside raw/ is checked",
+          "found": true
+        }
+      ],
+      "fix_commit": "0866426",
+      "fix_commits": [
+        "0866426"
+      ],
+      "fix_pr": 16,
+      "fix_prs": [
+        16
+      ],
+      "merged_at": "2026-11-24T00:54:51Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-04",
+      "title": "The known-answer control read its fixture only with `fromDirectory`, not with `fromGitHub`, the reader the subjects go through.",
+      "description": "The known-answer control read its fixture only with `fromDirectory`, not with `fromGitHub`, the reader the subjects go through.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-04: the known-answer fixture is also read through fromGitHub, from a stub with no network",
+          "found": true
+        }
+      ],
+      "fix_commit": "0866426",
+      "fix_commits": [
+        "0866426"
+      ],
+      "fix_pr": 16,
+      "fix_prs": [
+        16
+      ],
+      "merged_at": "2026-11-24T00:54:51Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-05",
+      "title": "The workflow test did not check that each worker-kit step seals its own item's `meta.json`.",
+      "description": "The workflow test did not check that each worker-kit step seals its own item's `meta.json`.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/workflows.test.mjs",
+          "name": "R-SS-05: each of the 25 worker-kit steps seals the bundle and the meta file of its own item",
+          "found": true
+        },
+        {
+          "file": "test/workflows.test.mjs",
+          "name": "scan-static: dispatch only, the pump's three inputs, kill switch first, inputs checked whole, one pinned worker-kit step per item",
+          "found": true
+        }
+      ],
+      "fix_commit": "0866426",
+      "fix_commits": [
+        "0866426"
+      ],
+      "fix_pr": 16,
+      "fix_prs": [
+        16
+      ],
+      "merged_at": "2026-11-24T00:54:51Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-06",
+      "title": "The scan job did not check `LOOP_ENABLED` and `LANE_SCAN_STATIC_ENABLED` again after the guard job.",
+      "description": "The scan job did not check `LOOP_ENABLED` and `LANE_SCAN_STATIC_ENABLED` again after the guard job.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/workflows.test.mjs",
+          "name": "R-SS-06: the scan job checks LOOP_ENABLED and the lane switch again, before anything else",
+          "found": true
+        },
+        {
+          "file": "test/workflows.test.mjs",
+          "name": "scan-static: dispatch only, the pump's three inputs, kill switch first, inputs checked whole, one pinned worker-kit step per item",
+          "found": true
+        }
+      ],
+      "fix_commit": "0866426",
+      "fix_commits": [
+        "0866426"
+      ],
+      "fix_pr": 16,
+      "fix_prs": [
+        16
+      ],
+      "merged_at": "2026-11-24T00:54:51Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-07",
+      "title": "A shard read on until GitHub refused, rather than stopping while API calls were left, and every 403 counted as a (retryable) rate limit, a forbidden repository included.",
+      "description": "A shard read on until GitHub refused, rather than stopping while API calls were left, and every 403 counted as a (retryable) rate limit, a forbidden repository included.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-07: a 403 is a rate limit only when GitHub says so; a repository the API refuses is refused for good",
+          "found": true
+        },
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-07: a shard stops before the API budget runs dry, with retryable skips for the rest",
+          "found": true
+        }
+      ],
+      "fix_commit": "0866426",
+      "fix_commits": [
+        "0866426"
+      ],
+      "fix_pr": 16,
+      "fix_prs": [
+        16
+      ],
+      "merged_at": "2026-11-24T00:54:51Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-08",
+      "title": "A subject's thread posted its whole result, the uncapped raw/ value included: 5,000 tools sharing a constant threw `RangeError` inside the thread (memory near 3 GB) and the item was recorded as `read…",
+      "description": "A subject's thread posted its whole result, the uncapped raw/ value included: 5,000 tools sharing a constant threw `RangeError` inside the thread (memory near 3 GB) and the item was recorded as `reader_error`.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-08: a subject's thread caps its raw/ texts before posting them, and runs under a heap limit",
+          "found": true
+        }
+      ],
+      "fix_commit": "cd85233",
+      "fix_commits": [
+        "cd85233"
+      ],
+      "fix_pr": 18,
+      "fix_prs": [
+        18
+      ],
+      "merged_at": "2026-11-24T01:04:13Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-09",
+      "title": "A 403 from the reader without rate-limit headers (GitHub's secondary limits) became a permanent `repo_unavailable`, and the early stop skipped the rest of a shard whenever fewer than 3 calls per rema…",
+      "description": "A 403 from the reader without rate-limit headers (GitHub's secondary limits) became a permanent `repo_unavailable`, and the early stop skipped the rest of a shard whenever fewer than 3 calls per remaining subject were left.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-09: a 403 from the reader is a rate limit when its body says so; an unexplained one is retryable",
+          "found": true
+        },
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-09: the shard stops only when fewer than one subject's calls plus a reserve are left",
+          "found": true
+        }
+      ],
+      "fix_commit": "cd85233",
+      "fix_commits": [
+        "cd85233"
+      ],
+      "fix_pr": 18,
+      "fix_prs": [
+        18
+      ],
+      "merged_at": "2026-11-24T01:04:13Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-10",
+      "title": "A subject's thread held the token and could ask for any host.",
+      "description": "A subject's thread held the token and could ask for any host.",
+      "severity": "low",
+      "severity_note": "hardening",
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-10: the token stays in the parent, goes to api.github.com only, and a thread reaches no other host",
+          "found": true
+        }
+      ],
+      "fix_commit": "cd85233",
+      "fix_commits": [
+        "cd85233"
+      ],
+      "fix_pr": 18,
+      "fix_prs": [
+        18
+      ],
+      "merged_at": "2026-11-24T01:04:13Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-11",
+      "title": "A list too large to grade was recorded as `reader_error`: `readList` built the whole JSON text before checking its size, and 5,000 tools sharing a large object threw `RangeError`.",
+      "description": "A list too large to grade was recorded as `reader_error`: `readList` built the whole JSON text before checking its size, and 5,000 tools sharing a large object threw `RangeError`.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-11: a list too large to hold as one string is list_rejected (too_large), measured without building it",
+          "found": true
+        }
+      ],
+      "fix_commit": "fc172b5",
+      "fix_commits": [
+        "fc172b5"
+      ],
+      "fix_pr": 19,
+      "fix_prs": [
+        19
+      ],
+      "merged_at": "2026-11-24T01:12:08Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-01",
+      "title": "A target could end its own telemetry with one bad record (`CONNECT a.b:99999` made a port the schema refused; the error dropped the install's DNS and sinkhole lines), and control bytes in traced path…",
+      "description": "A target could end its own telemetry with one bad record (`CONNECT a.b:99999` made a port the schema refused; the error dropped the install's DNS and sinkhole lines), and control bytes in traced paths could push a trace summary past 256 KiB.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/telemetry.test.mjs",
+          "name": "R-SBX-01 a container cannot stop the telemetry: its numbers are clamped, a refused record is counted and left out",
+          "found": true
+        },
+        {
+          "file": "test/telemetry.test.mjs",
+          "name": "R-SBX-01 a trace summary is cut to fit a record, least telling lists first, by its JSON size",
+          "found": true
+        },
+        {
+          "file": "test/check-selftest.test.mjs",
+          "name": "R-SBX-01 check-selftest: evidence the schema refused and left out fails the run",
+          "found": true
+        }
+      ],
+      "fix_commit": "197c19f",
+      "fix_commits": [
+        "197c19f"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-02",
+      "title": "runsc's traces had no size limit and sat on the root filesystem: a target could fill the runner's disk and lose the shard.",
+      "description": "runsc's traces had no size limit and sat on the root filesystem: a target could fill the runner's disk and lose the shard.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/sandbox-run.test.mjs",
+          "name": "R-SBX-02 a trace that grows past its limit, or a trace filesystem running short, stops the containers",
+          "found": true
+        },
+        {
+          "file": "test/sandbox-run.test.mjs",
+          "name": "R-SBX-02 the trace folder must be its own filesystem of the pinned size, and a target needs room to run",
+          "found": true
+        }
+      ],
+      "fix_commit": "168ebd5",
+      "fix_commits": [
+        "168ebd5"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-03",
+      "title": "The corpus did not fail closed: an unreadable kernel log was a skip, and a container with no trace still counted.",
+      "description": "The corpus did not fail closed: an unreadable kernel log was a skip, and a container with no trace still counted.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/driver-sandbox.test.mjs",
+          "name": "R-SBX-03 the ci lane fails closed: a kernel log it cannot read stops the shard before any target runs",
+          "found": true
+        },
+        {
+          "file": "test/driver-sandbox.test.mjs",
+          "name": "R-SBX-03 the ci lane fails closed: a target with no syscall trace, or no firewall log, is a harness error and its row is left out",
+          "found": true
+        }
+      ],
+      "fix_commit": "ecd2147",
+      "fix_commits": [
+        "ecd2147"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-04",
+      "title": "A target could forge trace lines (runsc prints paths unquoted) or hide real ones behind floods and caps, and nothing said when a log or rate limit was hit.",
+      "description": "A target could forge trace lines (runsc prints paths unquoted) or hide real ones behind floods and caps, and nothing said when a log or rate limit was hit.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/trace.test.mjs",
+          "name": "R-SBX-04 a file name with a line break cannot pass for a trace line unnoticed",
+          "found": true
+        },
+        {
+          "file": "test/trace.test.mjs",
+          "name": "R-SBX-04 a flood of refused calls cannot push out the one that worked",
+          "found": true
+        },
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-SBX-04 a trace a target may have shaped, or one cut short, cannot carry a verdict",
+          "found": true
+        },
+        {
+          "file": "test/sandbox-run.test.mjs",
+          "name": "R-SBX-04 limits that cut evidence short are reported: firewall rate limit, logger line limit, a trace cut to fit",
+          "found": true
+        },
+        {
+          "file": "test/check-selftest.test.mjs",
+          "name": "R-SBX-04 check-selftest: a case whose evidence a log or rate limit cut short fails",
+          "found": true
+        }
+      ],
+      "fix_commit": "1411417",
+      "fix_commits": [
+        "1411417",
+        "6d10237",
+        "0f0f83c"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-05",
+      "title": "The preflight never checked that the firewall was live, or that the daemon's runsc was the pinned one.",
+      "description": "The preflight never checked that the firewall was live, or that the daemon's runsc was the pinned one.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/sandbox-net.test.mjs",
+          "name": "R-SBX-05 the firewall is checked live: every chain net-guard.sh makes, and every jump to it",
+          "found": true
+        },
+        {
+          "file": "test/sandbox-run.test.mjs",
+          "name": "R-SBX-05 the strict preflight checks the host live: the pinned runsc in its place, the trace filesystem, the firewall",
+          "found": true
+        },
+        {
+          "file": "test/check-selftest.test.mjs",
+          "name": "R-SBX-05 check-selftest: the host firewall must have been checked live at the preflight",
+          "found": true
+        }
+      ],
+      "fix_commit": "0f0f83c",
+      "fix_commits": [
+        "0f0f83c",
+        "fb8e8e9"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-06",
+      "title": "The self test gated nothing: corpus shards never ran it.",
+      "description": "The self test gated nothing: corpus shards never ran it.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/workflows.test.mjs",
+          "name": "R-SBX-06 corpus: each shard installs gVisor, guards the networks, passes the self test, then decrypts the list and runs",
+          "found": true
+        }
+      ],
+      "fix_commit": "75622b3",
+      "fix_commits": [
+        "75622b3"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-07",
+      "title": "The egress proxy ran under runc, so a bug in Node's HTTP parser would have given a target a runc container with a way out.",
+      "description": "The egress proxy ran under runc, so a bug in Node's HTTP parser would have given a target a runc container with a way out.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/docker.test.mjs",
+          "name": "R-SBX-07 gVisor everywhere: every sandbox container gets --runtime runsc, with no way to ask for another",
+          "found": true
+        },
+        {
+          "file": "test/docker.test.mjs",
+          "name": "R-SBX-07 the egress proxy gets registry names as fixed host entries: DNS names, public IPv4 addresses only",
+          "found": true
+        },
+        {
+          "file": "test/driver-sandbox.test.mjs",
+          "name": "R-SBX-07 a shard in the sandbox: runsc for every container, the egress proxy too, fixed addresses, our resolv.conf, and the run telemetry",
+          "found": true
+        }
+      ],
+      "fix_commit": "26c75bb",
+      "fix_commits": [
+        "26c75bb"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-08",
+      "title": "Some self test checks proved less than they said: the canaries never sat where a runner keeps tokens, check-selftest re-read verdicts instead of recomputing them, and a connect cut short by the targe…",
+      "description": "Some self test checks proved less than they said: the canaries never sat where a runner keeps tokens, check-selftest re-read verdicts instead of recomputing them, and a connect cut short by the target's own alarm counted as blocked.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/check-selftest.test.mjs",
+          "name": "R-SBX-08 check-selftest: the verdict comes from the evidence; a harness that says pass cannot make one",
+          "found": true
+        },
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-SBX-08 an outside address counts as blocked only on a definite refusal, never on a cut-short call",
+          "found": true
+        }
+      ],
+      "fix_commit": "6d10237",
+      "fix_commits": [
+        "6d10237"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-09",
+      "title": "The live firewall check confirmed our jumps existed in DOCKER-USER, INPUT and the IPv6 chains, not where they sat: an ACCEPT above them would have passed.",
+      "description": "The live firewall check confirmed our jumps existed in DOCKER-USER, INPUT and the IPv6 chains, not where they sat: an ACCEPT above them would have passed.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/sandbox-net.test.mjs",
+          "name": "R-SBX-09 our jumps must come before any rule that could let a packet past them: an ACCEPT above them is refused",
+          "found": true
+        }
+      ],
+      "fix_commit": "5d1f859",
+      "fix_commits": [
+        "5d1f859"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-23T23:45:04Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-10",
+      "title": "Two mutations proved less than their names said: one detail string covered \"got through\" and \"no definite refusal\" alike, and a missing `--cap-drop ALL` was caught by the settings comparison only, no…",
+      "description": "Two mutations proved less than their names said: one detail string covered \"got through\" and \"no definite refusal\" alike, and a missing `--cap-drop ALL` was caught by the settings comparison only, not by anything the target could do. Each case now says which way it failed, `internal-net` must show \"no definite refusal\", and `cap-drop` must also show the target's own report of a capability left in its bounding set (a report can fail a case, never pass it).",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-SBX-10 a case says which way it failed: got through, nothing tried, or no definite refusal",
+          "found": true
+        },
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-SBX-10 raw-socket fails when the target reports any capability left, the bounding set included; the report cannot pass it",
+          "found": true
+        },
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-SBX-10 a datagram sent and not refused is no definite refusal, not a connection made",
+          "found": true
+        }
+      ],
+      "fix_commit": "30d8c31",
+      "fix_commits": [
+        "30d8c31",
+        "ef98121"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-23T23:45:04Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-11",
+      "title": "When the schema refused a target's `trace_summary`, `tryWrite` counted it, but the target still counted as having its trace and kept its row.",
+      "description": "When the schema refused a target's `trace_summary`, `tryWrite` counted it, but the target still counted as having its trace and kept its row.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/driver-sandbox.test.mjs",
+          "name": "R-SBX-11 the ci lane fails closed when the schema refuses a trace summary: that target counts as missing its trace",
+          "found": true
+        }
+      ],
+      "fix_commit": "9310ce4",
+      "fix_commits": [
+        "9310ce4"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-23T23:45:04Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-01",
+      "title": "direct-ip: a connection to an outside address by IP.",
+      "description": "direct-ip: a connection to an outside address by IP.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-01 direct-ip: a connection to an outside address by IP is refused and traced",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-02",
+      "title": "doh-ip: DNS over HTTPS by address or by name.",
+      "description": "doh-ip: DNS over HTTPS by address or by name.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-02 doh-ip: DNS over HTTPS by address or by name reaches no resolver, and is logged",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-03",
+      "title": "raw-socket: a raw or packet socket.",
+      "description": "raw-socket: a raw or packet socket.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-03 raw-socket: no raw or packet socket opens",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-04",
+      "title": "ipv6: a way out over IPv6.",
+      "description": "ipv6: a way out over IPv6.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-04 ipv6: nothing gets out over IPv6",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-05",
+      "title": "icmp: an echo out, or to the host.",
+      "description": "icmp: an echo out, or to the host.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-05 icmp: no echo leaves the sandbox network, and one to the host is dropped and logged",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-06",
+      "title": "docker-host: the host, its Docker API, its sockets.",
+      "description": "docker-host: the host, its Docker API, its sockets.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-06 docker-host: the host, its Docker API and its sockets are out of reach",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-07",
+      "title": "metadata: cloud instance metadata and the host agent.",
+      "description": "metadata: cloud instance metadata and the host agent.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-07 metadata: no cloud metadata or host agent address answers",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-08",
+      "title": "env-token: a runner or Actions token in the target's environment.",
+      "description": "env-token: a runner or Actions token in the target's environment.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-08 env-token: no runner or Actions token reaches the target",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014",
+        "6d10237"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-09",
+      "title": "write-outside: a write outside the work folder and /tmp.",
+      "description": "write-outside: a write outside the work folder and /tmp.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-09 write-outside: nothing is written outside the work folder and /tmp",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-10",
+      "title": "fork-bomb: a fork bomb.",
+      "description": "fork-bomb: a fork bomb.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-10 fork-bomb: the process limit refuses forks below the limit",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014",
+        "531f46b",
+        "fc45fde"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-11",
+      "title": "output-forgery: forged results and telemetry on stdout and in files.",
+      "description": "output-forgery: forged results and telemetry on stdout and in files.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-11 output-forgery: forged results and telemetry stay target output",
+          "found": true
+        }
+      ],
+      "fix_commit": "1b16014",
+      "fix_commits": [
+        "1b16014"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CI-01",
+      "title": "Every case failed at \"work volume failed (exit 1)\": the helper ran chown and then chmod, and root without CAP_FOWNER may not chmod what 65534 now owns.",
+      "description": "Every case failed at \"work volume failed (exit 1)\": the helper ran chown and then chmod, and root without CAP_FOWNER may not chmod what 65534 now owns.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "CI",
+      "test": [
+        {
+          "file": "test/docker.test.mjs",
+          "name": "R-CI-01 the work volume is chmod-ed before it is chown-ed: root without CAP_FOWNER cannot chmod what it no longer owns",
+          "found": true
+        }
+      ],
+      "fix_commit": "40770fc",
+      "fix_commits": [
+        "40770fc"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CI-02",
+      "title": "A failed harness step said only \"exit 1\": Docker's stderr went to a log nobody saw.",
+      "description": "A failed harness step said only \"exit 1\": Docker's stderr went to a log nobody saw.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "CI",
+      "test": [
+        {
+          "file": "test/docker.test.mjs",
+          "name": "R-CI-02 a failed harness step says why: the tail of its stderr, bounded and printable",
+          "found": true
+        }
+      ],
+      "fix_commit": "40770fc",
+      "fix_commits": [
+        "40770fc"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CI-03",
+      "title": "The fork bomb ran to the memory limit: under gVisor `--pids-limit` does not count the processes inside the sandbox; gVisor enforces RLIMIT_NPROC instead.",
+      "description": "The fork bomb ran to the memory limit: under gVisor `--pids-limit` does not count the processes inside the sandbox; gVisor enforces RLIMIT_NPROC instead.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "CI",
+      "test": [
+        {
+          "file": "test/docker.test.mjs",
+          "name": "R-CI-03 the process limit a target meets inside gVisor is RLIMIT_NPROC, set on every target container",
+          "found": true
+        }
+      ],
+      "fix_commit": "531f46b",
+      "fix_commits": [
+        "531f46b"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CI-04",
+      "title": "With `--pids-limit 512` the fork bomb crashed the sandbox (exit 2, no output) at about 240 processes: gVisor spends host tasks per sandboxed process.",
+      "description": "With `--pids-limit 512` the fork bomb crashed the sandbox (exit 2, no output) at about 240 processes: gVisor spends host tasks per sandboxed process.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "CI",
+      "test": [
+        {
+          "file": "test/docker.test.mjs",
+          "name": "R-CI-04 the host pids limit stays above what nproc lets a target make (gVisor spends about two host tasks a process)",
+          "found": true
+        }
+      ],
+      "fix_commit": "fc45fde",
+      "fix_commits": [
+        "fc45fde"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CI-05",
+      "title": "The example job's s005 server ran past the driver test's 6 s probe limit: node starts in about 3 s under gVisor with tracing on.",
+      "description": "The example job's s005 server ran past the driver test's 6 s probe limit: node starts in about 3 s under gVisor with tracing on.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "CI",
+      "test": [
+        {
+          "file": "test/driver.test.mjs",
+          "name": "R-CI-05 sandbox, end to end: stdio, a server that needs an env value, http, static only, no network, a hang",
+          "found": true
+        }
+      ],
+      "fix_commit": "90f2699",
+      "fix_commits": [
+        "90f2699",
+        "0e5a2af"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CI-06",
+      "title": "runsc writes a block of its own without log headers as the sandbox starts (about 85 lines), which the forgery check first took for injected lines.",
+      "description": "runsc writes a block of its own without log headers as the sandbox starts (about 85 lines), which the forgery check first took for injected lines.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "CI",
+      "test": [
+        {
+          "file": "test/trace.test.mjs",
+          "name": "R-CI-06 runsc's own headerless block as the sandbox starts, before any call, is not taken for forgery",
+          "found": true
+        }
+      ],
+      "fix_commit": "6d10237",
+      "fix_commits": [
+        "6d10237"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CI-07",
+      "title": "The live firewall check refused every LOG chain on the runner: `iptables -S` leaves out `--log-level` when it is the default.",
+      "description": "The live firewall check refused every LOG chain on the runner: `iptables -S` leaves out `--log-level` when it is the default.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "CI",
+      "test": [
+        {
+          "file": "test/sandbox-net.test.mjs",
+          "name": "R-CI-07 iptables -S prints a LOG rule without --log-level when it is the default: that is still net-guard.sh's chain",
+          "found": true
+        }
+      ],
+      "fix_commit": "fb8e8e9",
+      "fix_commits": [
+        "fb8e8e9"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-MUT-00",
+      "title": "Nothing showed the self test could fail.",
+      "description": "Nothing showed the self test could fail. Each protection is now turned off in turn (`--disable`, selftest-mutation lane only) in the `mutation` job, which passes only when the run fails for the reason that protection explains.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "mutation",
+      "test": [
+        {
+          "file": "test/mutation.test.mjs",
+          "name": "R-MUT-00 a mutated run counts only when it failed for the reason its protection explains",
+          "found": true
+        },
+        {
+          "file": "test/workflows.test.mjs",
+          "name": "R-MUT-00 sandbox-selftest: a mutation job turns off each protection in turn and must see the self test fail for that reason",
+          "found": true
+        }
+      ],
+      "fix_commit": "3598cbb",
+      "fix_commits": [
+        "3598cbb"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-23T23:34:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    }
+  ]
+}

@@ -72,6 +72,7 @@ Details, and what to do in an emergency: [docs/OPERATIONS.md](docs/OPERATIONS.md
 | `worker-kit/` | Result contract (manifest schema), bundle builder and sealing action for workers, ingest public key |
 | `ingest/` | Trusted ingest: decrypts a worker's sealed result and checks it before anything is recorded; the pump runs it every tick |
 | `.github/workflows/ingest.yml` | Manual re-ingest of one attempt the pump did not judge (only while the pump is paused) |
+| `scripts/ledger.mjs`, `ledger/`, `.github/workflows/ledger.yml` | The cross-repo regression ledger: every tool repository's `REGRESSIONS.md` in one place ([`docs/LEDGER.md`](docs/LEDGER.md), `ledger/ledger.json`), refreshed daily by a pull request |
 | `.github/workflows/lint-workflows.yml` | Reusable workflow lint (actionlint, zizmor, policy check) |
 | `.github/workflows/lint.yml`, `test.yml` | Lint and unit tests on push and pull request |
 | `docs/` | Architecture, operations, and the interfaces between pump, workers and ingest |
