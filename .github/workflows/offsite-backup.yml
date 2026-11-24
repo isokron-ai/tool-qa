@@ -29,8 +29,11 @@ concurrency:
 jobs:
   backup:
     name: backup
-    runs-on: ubuntu-slim
-    timeout-minutes: 45
+    # Not ubuntu-slim: its jobs stop at 15 minutes, and a first backfill paces
+    # itself under the API budget. The run itself stops taking items after 30
+    # minutes, so it always writes its manifest part and cursor in time.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     permissions:
       contents: read # checkout and the public state-snapshots release
       actions: read # list and download the ingest and history artifacts
@@ -62,7 +65,9 @@ jobs:
         if: steps.guard.outputs.proceed == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          # A secret if set (masked in the log), else the variable: GitHub prints
+          # a step's env in its log, and the repository is public.
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -100,7 +105,7 @@ jobs:
     # Opt-in: apply only with OFFSITE_PRUNE_ENABLED=true (on the schedule, or a
     # dispatch with prune=apply); a dispatch with prune=dry-run only lists.
     if: >-
-      always() && (
+      !cancelled() && (
         (vars.OFFSITE_PRUNE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.prune == 'apply')) ||
         (github.event_name == 'workflow_dispatch' && inputs.prune == 'dry-run')
       )
@@ -134,7 +139,9 @@ jobs:
         if: steps.guard.outputs.proceed == 'true'
         env:
           MODE: ${{ (vars.OFFSITE_PRUNE_ENABLED == 'true' && inputs.prune != 'dry-run') && 'apply' || 'dry-run' }}
-          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          # A secret if set (masked in the log), else the variable: GitHub prints
+          # a step's env in its log, and the repository is public.
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

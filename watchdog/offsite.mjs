@@ -8,7 +8,8 @@
 // permission at all. The watchdog reads it with the token it already has:
 // the newest finished runs of offsite-backup.yml (made on main, in this
 // repository, by schedule or dispatch, at that path), then the heartbeat
-// artifact of the newest one that has it. Three or four API calls a run.
+// artifact of the newest one that has it (and, when that one is an error with
+// no last good time, older ones until one has it). Usually three API calls.
 //
 //   offsite-backup   green while the last good run is at most 12 hours old;
 //                    amber up to 24 hours, when the backup is not configured
@@ -31,6 +32,8 @@ export const OFFSITE_THRESHOLDS = Object.freeze({ greenMs: 12 * HOUR, redMs: 24 
 export const OFFSITE_WORKFLOW = 'offsite-backup.yml';
 export const HEARTBEAT_PREFIX = 'offsite-heartbeat-';
 const MAX_RUNS = 3;
+// Older heartbeats read for the last good time when the newest has none.
+const MAX_OLDER = 6;
 const MAX_HEARTBEAT_BYTES = 64 * 1024;
 
 const ago = (ms) => (ms < 2 * HOUR ? `${Math.round(ms / MIN)} minutes` : `${(ms / HOUR).toFixed(1)} hours`);
@@ -88,8 +91,24 @@ export async function offsiteCheck({ client, repo, now, env = {}, fetch = global
   const lane = laneVariable('offsite');
   const raw = env[lane];
   if (raw !== undefined && raw !== '' && raw !== 'true') return { id, status: 'off', summary: `the off-site backup is switched off (${lane} is not "true")` };
+  /** The run's heartbeat: { hb }, { problem } or null when it left none. */
+  const readHeartbeat = async (run) => {
+    const name = `${HEARTBEAT_PREFIX}${run.id}-${run.run_attempt ?? 1}.json`;
+    const list = await client.request('GET', `/repos/${repo}/actions/runs/${run.id}/artifacts`, { query: { name, per_page: 5 } });
+    const art = (list.data?.artifacts ?? []).find((a) => a.name === name && !a.expired && a.workflow_run?.id === run.id);
+    if (!art) return null;
+    if (Number(art.size_in_bytes) > MAX_HEARTBEAT_BYTES) return { problem: `the heartbeat of run ${run.id} is too large to be one` };
+    let hb;
+    try {
+      hb = JSON.parse((await download(client, fetch, repo, art, sleep)).toString('utf8'));
+    } catch {
+      return { problem: `the heartbeat of run ${run.id} is not JSON` };
+    }
+    if (!hb || typeof hb !== 'object' || hb.version !== 1 || typeof hb.status !== 'string') return { problem: `the heartbeat of run ${run.id} is not one of ours` };
+    return { hb };
+  };
   try {
-    const res = await client.request('GET', `/repos/${repo}/actions/workflows/${OFFSITE_WORKFLOW}/runs`, { allow: [404], query: { per_page: 10, branch: 'main', exclude_pull_requests: true } });
+    const res = await client.request('GET', `/repos/${repo}/actions/workflows/${OFFSITE_WORKFLOW}/runs`, { allow: [404], query: { per_page: 20, branch: 'main', exclude_pull_requests: true } });
     if (res.status === 404) return { id, status: 'amber', summary: `${OFFSITE_WORKFLOW} is not on main yet` };
     const runs = (res.data?.workflow_runs ?? [])
       .filter(trustedRun)
@@ -97,24 +116,28 @@ export async function offsiteCheck({ client, repo, now, env = {}, fetch = global
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     const latest = runs[0] ?? null;
     let hb = null;
+    let at = -1;
     let laterFailed = 0;
-    for (const run of runs.slice(0, MAX_RUNS)) {
-      const name = `${HEARTBEAT_PREFIX}${run.id}-${run.run_attempt ?? 1}.json`;
-      const list = await client.request('GET', `/repos/${repo}/actions/runs/${run.id}/artifacts`, { query: { name, per_page: 5 } });
-      const art = (list.data?.artifacts ?? []).find((a) => a.name === name && !a.expired && a.workflow_run?.id === run.id);
-      if (!art) {
-        if (run.conclusion === 'failure') laterFailed += 1;
-        continue;
+    for (let i = 0; i < Math.min(runs.length, MAX_RUNS); i++) {
+      const r = await readHeartbeat(runs[i]);
+      if (r?.problem) return { id, status: 'amber', summary: r.problem };
+      if (r?.hb) {
+        hb = r.hb;
+        at = i;
+        break;
       }
-      if (Number(art.size_in_bytes) > MAX_HEARTBEAT_BYTES) return { id, status: 'amber', summary: `the heartbeat of run ${run.id} is too large to be one` };
-      const bytes = await download(client, fetch, repo, art, sleep);
-      try {
-        hb = JSON.parse(bytes.toString('utf8'));
-      } catch {
-        return { id, status: 'amber', summary: `the heartbeat of run ${run.id} is not JSON` };
+      if (runs[i].conclusion === 'failure') laterFailed += 1;
+    }
+    // A run that failed before it could read the bucket, or died, carries no last good time:
+    // take it from the newest older heartbeat that has one, so one bad run is not red at once.
+    if (hb && hb.status === 'error' && !hb.last_ok_at) {
+      for (const run of runs.slice(at + 1, at + 1 + MAX_OLDER)) {
+        const r = await readHeartbeat(run);
+        if (r?.hb?.last_ok_at) {
+          hb = { ...hb, last_ok_at: r.hb.last_ok_at };
+          break;
+        }
       }
-      if (!hb || typeof hb !== 'object' || hb.version !== 1 || typeof hb.status !== 'string') return { id, status: 'amber', summary: `the heartbeat of run ${run.id} is not one of ours` };
-      break;
     }
     return judgeOffsite({ now, hb, latest, laterFailed });
   } catch (err) {

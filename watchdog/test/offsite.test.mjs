@@ -89,3 +89,13 @@ test('R-OFF-09: the watchdog run pushes the offsite item and watchdog.yml passes
   const yml = readFileSync(new URL('../../.github/workflows/watchdog.yml', import.meta.url), 'utf8');
   assert.match(yml, /\n\s+LANE_OFFSITE_ENABLED: \$\{\{ vars\.LANE_OFFSITE_ENABLED \}\}\n/);
 });
+
+test('R-OFF-12: a run that failed before reading the bucket takes its last good time from an older heartbeat: amber, not red', async () => {
+  const fallback = { version: 1, status: 'error', at: '2026-03-02T11:00:00Z', reason: 'the backup step ended without a heartbeat' };
+  const w = world([{ run: run(7, 1, { conclusion: 'failure' }), hb: fallback }, { run: run(6, 3, { conclusion: 'failure' }) }, { run: run(5, 6), hb: hb('ok', 6) }]);
+  const item = await w.check();
+  assert.equal(item.status, 'amber');
+  assert.match(item.summary, /the last run failed/);
+  const old = world([{ run: run(7, 1, { conclusion: 'failure' }), hb: fallback }, { run: run(5, 30), hb: hb('ok', 30) }]);
+  assert.equal((await old.check()).status, 'red');
+});

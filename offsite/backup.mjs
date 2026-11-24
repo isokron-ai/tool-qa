@@ -40,10 +40,16 @@
 // Cost guard. The run first lists the whole bucket and sums its size. It
 // uploads nothing that would take the bucket past OFFSITE_MAX_BYTES (default
 // 8 GB, at most the 10 GB free tier): the run fails and the watchdog item is
-// red. Each run also stops (and the next run carries on) after
-// OFFSITE_MAX_RUN_BYTES (default 2 GB) or OFFSITE_MAX_CLASS_A operations
-// (LIST and PUT; default 2,000) or OFFSITE_MAX_CLASS_B (HEAD and GET; default
-// 20,000), and reports what it used.
+// red. A kind stops for this run (and the next run carries on) once a phase
+// (snapshots, then artifacts) has copied OFFSITE_MAX_RUN_BYTES (default 2 GB);
+// the whole run stops after OFFSITE_MAX_CLASS_A operations (LIST and PUT;
+// default 2,000), OFFSITE_MAX_CLASS_B (HEAD and GET; default 20,000), or 30
+// minutes. It reports what it used. The run's own manifest part and cursor are
+// always written, past those caps.
+//
+// A run that died before writing its manifest part leaves objects without a
+// line; the next run that finds one of them (written after the last cursor)
+// writes its line, marked `recovered`.
 //
 // Not configured yet (any of R2_ACCOUNT_ID, R2_BUCKET, R2_ACCESS_KEY_ID,
 // R2_SECRET_ACCESS_KEY missing): exit 0 with a notice and an `unconfigured`
@@ -87,6 +93,10 @@ export const DEFAULTS = Object.freeze({
   nearCapRatio: 0.85,
 });
 export const OVERLAP_MS = HOUR;
+// A run stops taking new items after this long and leaves them to the next
+// run, so it always has time to write its manifest part and cursor before the
+// job's timeout.
+export const DEFAULT_MAX_RUN_MS = 30 * MIN;
 // Room kept under the cap for each run's manifest part and cursor.
 export const BOOKKEEPING_BYTES = 1_000_000;
 export const REQUIRED = Object.freeze(['R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']);
@@ -123,6 +133,7 @@ export class OpsCapError extends Error {
   }
 }
 class RunBudgetError extends Error {}
+class DeadlineError extends Error {}
 class VerifyError extends Error {}
 
 // ---- configuration ----
@@ -279,9 +290,10 @@ export function verifyProblem(head, { size, sha256, md5 }, putEtag) {
  * `gh` is { client, release, fetch, sleep } for this repository.
  * @returns {Promise<object>} the heartbeat (see the header)
  */
-export async function runBackup({ store, gh, repo, runId = 'local', limits = DEFAULTS, sendSha256 = true, now = Date.now, log = () => {} }) {
+export async function runBackup({ store, gh, repo, runId = 'local', limits = DEFAULTS, sendSha256 = true, now = Date.now, log = () => {}, maxRunMs = DEFAULT_MAX_RUN_MS }) {
   const m = meter(store, limits);
   const startedAt = new Date(now()).toISOString();
+  const deadline = Date.parse(startedAt) + maxRunMs;
   const out = {
     version: 1,
     at: startedAt,
@@ -304,7 +316,9 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
     cursor: null,
   };
   const lines = [];
-  const state = { total: 0, runBytes: 0, stop: null };
+  // phaseBytes: bytes copied in this phase (snapshots, then artifacts), for OFFSITE_MAX_RUN_BYTES,
+  // so the snapshots never starve the artifacts. deferrals: why kinds were left for the next run.
+  const state = { total: 0, runBytes: 0, phaseBytes: 0, stop: null, deferrals: [] };
   let inv;
   let previous = null;
   try {
@@ -325,11 +339,21 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
   const present = (key) => inv.byKey.has(key);
 
   /** Upload one object unless it is there already. Returns 'copied' | 'already' | 'conflict'. */
-  async function put(key, data, digests, line, { contentType } = {}, depth = 0) {
+  async function put(key, data, digests, line, { contentType, afterExists = false } = {}, depth = 0) {
     if (depth > 2) throw new Error(`${key}: the key exists but cannot be read back; not copied`);
     if (present(key)) {
       const head = await m.head(key);
-      if (sameObject(head, digests)) return 'already';
+      if (sameObject(head, digests)) {
+        // Refused as existing during this run, but not there when it started: our own PUT whose
+        // answer was lost (the client retried). It is this run's copy: count it and record it.
+        if (afterExists && !startKeys.has(key)) {
+          account(digests.size);
+          lines.push({ ...line, key, bytes: digests.size, sha256: digests.sha256, md5: digests.md5, copied_at: new Date(now()).toISOString(), run: runId });
+          return 'copied';
+        }
+        recordRecovered(key, head, line);
+        return 'already';
+      }
       if (head) {
         const alt = altKey(key, digests.sha256);
         log(`offsite: ${key} already holds other bytes; it is never overwritten, the copy goes to ${alt}`);
@@ -341,8 +365,8 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
     if (state.total + digests.size > limits.maxBytes - BOOKKEEPING_BYTES) {
       throw new CapError(`${key} (${digests.size} bytes) would take the bucket to ${state.total + digests.size} bytes, over the cap of ${limits.maxBytes} (OFFSITE_MAX_BYTES)`);
     }
-    if (state.runBytes + digests.size > limits.maxRunBytes && state.runBytes > 0) {
-      throw new RunBudgetError(`this run has copied ${state.runBytes} bytes; ${key} would pass OFFSITE_MAX_RUN_BYTES (${limits.maxRunBytes}); the next run carries on`);
+    if (state.phaseBytes + digests.size > limits.maxRunBytes && state.phaseBytes > 0) {
+      throw new RunBudgetError(`this run has copied ${state.phaseBytes} bytes in this phase; ${key} would pass OFFSITE_MAX_RUN_BYTES (${limits.maxRunBytes}); the next run carries on`);
     }
     let res;
     try {
@@ -351,12 +375,10 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
       if (err?.code !== 'exists') throw err;
       // Made since we listed (another run, or a PUT whose answer was lost): judge what is there.
       inv.byKey.set(key, { key, size: null });
-      return put(key, data, digests, line, { contentType }, depth + 1);
+      return put(key, data, digests, line, { contentType, afterExists: true }, depth + 1);
     }
     inv.byKey.set(key, { key, size: digests.size });
-    state.total += digests.size;
-    state.runBytes += digests.size;
-    out.copied_bytes += digests.size;
+    account(digests.size);
     const problem = verifyProblem(await m.head(key), digests, res?.etag);
     if (problem) throw new VerifyError(`${key}: ${problem}`);
     lines.push({ ...line, key, bytes: digests.size, sha256: digests.sha256, md5: digests.md5, copied_at: new Date(now()).toISOString(), run: runId });
@@ -364,16 +386,38 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
   }
 
   const digestsOf = (data) => ({ size: data.length, sha256: hash('sha256', data), md5: hash('md5', data) });
+  const startKeys = new Set(inv.byKey.keys());
+  function account(size) {
+    state.total += size;
+    state.runBytes += size;
+    state.phaseBytes += size;
+    out.copied_bytes += size;
+  }
+  // Written after the last finished run wrote its cursor: copied by a run that died before
+  // writing its manifest part. The line is written now, marked recovered.
+  const previousEnd = Date.parse(previous?.finished_at ?? '');
+  function recordRecovered(key, head, line) {
+    const o = inv.byKey.get(key);
+    const t = Date.parse(o?.lastModified ?? '');
+    if (!Number.isFinite(t) || (Number.isFinite(previousEnd) && t <= previousEnd) || (!Number.isFinite(previousEnd) && previous)) return;
+    lines.push({ ...line, key, bytes: head.size, sha256: head.sha256, md5: head.etag, copied_at: o.lastModified, run: runId, recovered: true });
+  }
 
   /** Is it there already, with this sha256, under its key or a conflict key? HEADs only. */
-  async function alreadyThere(key, sha, size) {
+  async function alreadyThere(key, sha, size, line) {
     for (const k of [key, sha ? altKey(key, sha) : null]) {
       if (!k || !present(k)) continue;
       const head = await m.head(k);
-      if (head && sha && head.sha256 === sha && (size == null || head.size === size)) return true;
+      if (head && sha && head.sha256 === sha && (size == null || head.size === size)) {
+        recordRecovered(k, head, line);
+        return true;
+      }
     }
     return false;
   }
+  const checkDeadline = () => {
+    if (now() > deadline) throw new DeadlineError(`this run reached its time limit of ${Math.round(maxRunMs / MIN)} minutes; the next run carries on`);
+  };
 
   // Each kind's items in time order; the cursor moves to the newest one done,
   // held back before the first that was not.
@@ -394,10 +438,20 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
     log(`offsite: ${what}: ${message}`);
   };
   /** Handle an error from one item; true if the run must stop copying. */
+  // OFFSITE_MAX_RUN_BYTES leaves the rest of that kind to the next run, and the other kinds go
+  // on; the cost cap, the operation caps, the GitHub API budget and the time limit stop the run.
+  const skip = new Set();
   const stopOn = (kind, what, err) => {
-    if (err instanceof CapError || err instanceof RunBudgetError || err instanceof OpsCapError || err instanceof BudgetExceededError) {
+    if (err instanceof RunBudgetError) {
+      blocked(kind);
+      skip.add(kind);
+      state.deferrals.push(err.message);
+      return false;
+    }
+    if (err instanceof CapError || err instanceof OpsCapError || err instanceof BudgetExceededError || err instanceof DeadlineError) {
       blocked(kind);
       state.stop = err;
+      if (!(err instanceof CapError)) state.deferrals.push(err.message);
       return true;
     }
     fail(kind, what, err);
@@ -435,10 +489,15 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
     const since = sinceOf('snapshots');
     const { entries } = reconcile(manifest, assets);
     const wanted = entries.filter((e) => since === null || Date.parse(e.created) >= since).sort((a, b) => a.created.localeCompare(b.created) || a.name.localeCompare(b.name));
+    const snapLine = (entry) => ({
+      kind: 'snapshot',
+      source: { repo, release: SNAPSHOT_TAG, asset: entry.name, asset_id: entry.asset_id, created: entry.created, manifest_sha256: manifestSha },
+    });
     for (const entry of wanted) {
       const key = snapshotKey(entry);
       try {
-        if (await alreadyThere(key, entry.sha256, entry.size)) {
+        checkDeadline();
+        if (await alreadyThere(key, entry.sha256, entry.size, snapLine(entry))) {
           out.already += 1;
           done('snapshots', entry.created);
           continue;
@@ -446,18 +505,16 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
         const bytes = await gh.release.download({ id: entry.asset_id, name: entry.name });
         const v = verifySnapshot(bytes, entry);
         if (!v.ok) throw new Error(`the release copy fails its manifest entry: ${v.reason}; not copied`);
-        const r = await put(key, bytes, digestsOf(bytes), {
-          kind: 'snapshot',
-          source: { repo, release: SNAPSHOT_TAG, asset: entry.name, asset_id: entry.asset_id, created: entry.created, manifest_sha256: manifestSha },
-        });
+        const r = await put(key, bytes, digestsOf(bytes), snapLine(entry));
         if (r === 'copied') out.copied.snapshots += 1;
         else if (r === 'already') out.already += 1;
         else fail('snapshots', entry.name, new VerifyError(`${key} held other bytes; copied beside it`));
         if (r !== 'conflict') done('snapshots', entry.created);
       } catch (err) {
-        if (stopOn('snapshots', entry.name, err)) return;
+        if (stopOn('snapshots', entry.name, err) || skip.has('snapshots')) break;
       }
     }
+    if (state.stop) return;
     // The manifest itself, once per version.
     const updated = typeof manifest.updated === 'string' && Number.isFinite(Date.parse(manifest.updated)) ? manifest.updated : startedAt;
     const mkey = snapshotManifestKey(updated, manifestSha);
@@ -506,10 +563,13 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
       });
     const runs = new Map();
     await prefetchRuns(gh.client, repo, wanted, runs);
+    state.phaseBytes = 0;
     for (const a of wanted) {
       const kind = kindOf(a.name);
       if (state.stop) break;
+      if (skip.has(kind)) continue;
       try {
+        checkDeadline();
         const origin = await provenanceProblem(gh.client, repo, a, runs);
         if (origin?.ours) throw new Error(`held, not copied: ${origin.why}; add the workflow to SOURCES in scripts/archive-pull.mjs`);
         if (origin) {
@@ -519,20 +579,8 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
           continue;
         }
         const digest = /^sha256:([0-9a-f]{64})$/.exec(String(a.digest ?? ''))?.[1] ?? null;
-        if (digest && (await alreadyThere(artifactKey(a, expectZip(a)), digest, null))) {
-          out.already += 1;
-          done(kind, a.created_at);
-          continue;
-        }
-        const data = await download(gh.client, gh.fetch, repo, a, gh.sleep);
-        const d = digestsOf(data);
-        if (digest && digest !== d.sha256) throw new Error(`download sha256 ${d.sha256} does not match the artifact digest ${digest}; tried again next run`);
-        const declared = Number(a.size_in_bytes);
-        if (!digest && Number.isFinite(declared) && declared !== data.length) throw new Error(`downloaded ${data.length} bytes but the artifact is ${declared}, and there is no digest to check; tried again next run`);
-        const zip = isZipBytes(data);
-        const contents = describe(a, data, zip);
         const run = runs.get(a.workflow_run?.id) ?? null;
-        const r = await put(artifactKey(a, zip), data, d, {
+        const artLine = (zip, contents) => ({
           kind,
           source: {
             repo,
@@ -546,8 +594,21 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
             workflow: run?.path ? String(run.path).split('@')[0] : null,
             ...(kind === 'ingest' ? ingestRun(a) : {}),
           },
-          contents,
-        }, { contentType: zip ? 'application/zip' : 'application/octet-stream' });
+          ...(contents ? { contents } : {}),
+        });
+        if (digest && (await alreadyThere(artifactKey(a, expectZip(a)), digest, null, artLine(expectZip(a))))) {
+          out.already += 1;
+          done(kind, a.created_at);
+          continue;
+        }
+        const data = await download(gh.client, gh.fetch, repo, a, gh.sleep);
+        const d = digestsOf(data);
+        if (digest && digest !== d.sha256) throw new Error(`download sha256 ${d.sha256} does not match the artifact digest ${digest}; tried again next run`);
+        const declared = Number(a.size_in_bytes);
+        if (!digest && Number.isFinite(declared) && declared !== data.length) throw new Error(`downloaded ${data.length} bytes but the artifact is ${declared}, and there is no digest to check; tried again next run`);
+        const zip = isZipBytes(data);
+        const contents = describe(a, data, zip);
+        const r = await put(artifactKey(a, zip), data, d, artLine(zip, contents), { contentType: zip ? 'application/zip' : 'application/octet-stream' });
         if (r === 'copied') out.copied[kind] += 1;
         else if (r === 'already') out.already += 1;
         else fail(kind, a.name, new VerifyError(`${artifactKey(a, zip)} held other bytes; copied beside it`));
@@ -560,16 +621,15 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
     // A kind with nothing in a complete listing starts from now (less the overlap) next time,
     // not from the beginning again.
     for (const kind of ['ingest', 'history']) {
-      if (listing.complete && !state.stop && !cursor[kind] && !progress[kind].last) done(kind, startedAt);
+      if (listing.complete && !state.stop && !skip.has(kind) && !cursor[kind] && !progress[kind].last) done(kind, startedAt);
     }
   }
 
   // The manifest part and the cursor.
-  const deferredErr = state.stop && !(state.stop instanceof CapError) ? state.stop : null;
-  if (deferredErr) {
-    out.deferred += 1;
-    out.deferred_reason = String(deferredErr.message).slice(0, 300);
-    log(`offsite: stopped early: ${out.deferred_reason}`);
+  if (state.deferrals.length) {
+    out.deferred = state.deferrals.length;
+    out.deferred_reason = state.deferrals.join('; ').slice(0, 300);
+    log(`offsite: left for the next run: ${out.deferred_reason}`);
   }
   if (state.stop instanceof CapError) {
     out.status = 'over_cap';
@@ -591,7 +651,7 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
     }
     const ok = out.status === 'ok';
     out.last_ok_at = ok ? startedAt : out.last_ok_at;
-    const c = { version: 1, at: startedAt, run_id: runId, status: out.status, last_ok_at: out.last_ok_at, by_kind: cursor };
+    const c = { version: 1, at: startedAt, finished_at: new Date(now()).toISOString(), run_id: runId, status: out.status, last_ok_at: out.last_ok_at, by_kind: cursor };
     await putSmall(`${PREFIX.cursor}${runStamp}-${segment(runId)}.json`, Buffer.from(`${JSON.stringify(c)}\n`), 'application/json');
     out.cursor = cursor;
   } catch (err) {
@@ -606,7 +666,14 @@ export async function runBackup({ store, gh, repo, runId = 'local', limits = DEF
     // The cap still applies; these are a few hundred bytes.
     const d = digestsOf(body);
     if (state.total + d.size > limits.maxBytes) throw new CapError(`${key} would take the bucket over the cap`);
-    const res = await m.put(key, body, { md5: d.md5, sha256: d.sha256, sendSha256, contentType, essential: true });
+    let res;
+    try {
+      res = await m.put(key, body, { md5: d.md5, sha256: d.sha256, sendSha256, contentType, essential: true });
+    } catch (err) {
+      // A retried PUT whose first try was stored: fine if the bytes are ours.
+      if (err?.code !== 'exists' || !sameObject(await m.head(key, true), d)) throw err;
+      return;
+    }
     state.total += d.size;
     const problem = verifyProblem(await m.head(key, true), d, res?.etag);
     if (problem) throw new VerifyError(`${key}: ${problem}`);

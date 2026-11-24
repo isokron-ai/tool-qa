@@ -4,7 +4,7 @@
 //   s3.objects   Map key -> { data, sha256, md5, etag, lastModified }
 //   s3.calls     [{ op, key }]
 //   s3.faults    { headSize: Set<key>, headEtag: Set<key>, headSha: Set<key>, dropMeta: bool,
-//                  putError: (key) => Error|null }
+//                  putError: (key) => Error|null, lostAnswer: Set<key prefix> }
 //
 // Like R2: a PUT with a Content-MD5 that does not match the body is refused;
 // If-None-Match: * on an existing key is refused (code 'exists'); a DELETE of an
@@ -17,7 +17,7 @@ const hash = (alg, data) => createHash(alg).update(data).digest('hex');
 export function fakeS3({ now = Date.now, pageSize = 1000, lockDays = 30 } = {}) {
   const objects = new Map();
   const calls = [];
-  const faults = { headSize: new Set(), headEtag: new Set(), headSha: new Set(), dropMeta: false, putError: () => null };
+  const faults = { headSize: new Set(), headEtag: new Set(), headSha: new Set(), dropMeta: false, putError: () => null, lostAnswer: new Set() };
   const error = (message, code = 'error') => Object.assign(new Error(message), { code });
   return {
     objects,
@@ -56,6 +56,8 @@ export function fakeS3({ now = Date.now, pageSize = 1000, lockDays = 30 } = {}) 
       if (objects.has(key)) throw error(`R2 PUT ${key}: the key already exists`, 'exists');
       if (md5 !== hash('md5', body)) throw error(`R2 PUT ${key} failed: BadDigest`);
       objects.set(key, { data: Buffer.from(body), sha256, md5, etag: hash('md5', body), lastModified: new Date(now()).toISOString() });
+      // Stored, but the answer was lost and the client's retry was refused as existing.
+      if ([...faults.lostAnswer].some((k) => key.startsWith(k))) throw error(`R2 PUT ${key}: the key already exists`, 'exists');
       return { etag: hash('md5', body) };
     },
     async get(key) {

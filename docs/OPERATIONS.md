@@ -976,7 +976,9 @@ source (artifact id and name, run id, head commit, workflow path, or the
 release asset), and for artifacts the files inside with their sizes and
 sha256s. The bucket's lock rule keeps every object for 30 days, so nothing is
 rewritten: each run writes its own manifest part and its own cursor (the
-newest cursor wins).
+newest cursor wins). A run that died before writing its manifest part leaves
+objects without a line; the next run that meets one of them (written after the
+last cursor) writes its line then, marked `"recovered": true`.
 
 **Integrity.** Every upload is a new object only (`If-None-Match: *`) with
 `Content-MD5` (R2 refuses a body that does not match),
@@ -1002,14 +1004,17 @@ package's integrity hash. The rest of tool-qa stays free of dependencies.
    permission **Object Read & Write**, applied to the bucket
    `isokron-loop-backup` only. Copy the Access Key ID and the Secret Access Key
    (the S3 credentials, not the token value).
-2. Add them as repository secrets, and the account ID and bucket as
-   repository variables (the account ID stays out of committed files; the
-   workflow masks it in logs):
+2. Add them as repository secrets, the bucket as a repository variable, and
+   the account ID as a secret too. The account ID is not a credential and may
+   be a variable instead (`gh variable set R2_ACCOUNT_ID ...`; the workflow
+   reads the secret first, then the variable), but GitHub prints each step's
+   environment in the run log, which is public here, and only a secret is
+   masked there:
 
    ```sh
    gh secret set R2_ACCESS_KEY_ID --repo isokron-ai/tool-qa       # paste the Access Key ID
    gh secret set R2_SECRET_ACCESS_KEY --repo isokron-ai/tool-qa   # paste the Secret Access Key
-   gh variable set R2_ACCOUNT_ID --repo isokron-ai/tool-qa --body '<32-hex account id>'
+   gh secret set R2_ACCOUNT_ID --repo isokron-ai/tool-qa          # paste the 32-hex account ID
    gh variable set R2_BUCKET --repo isokron-ai/tool-qa --body isokron-loop-backup
    ```
 
@@ -1023,7 +1028,7 @@ yet") and the health item is amber. Only the `Back up` step (and the opt-in
 |---|---|---|
 | `LANE_OFFSITE_ENABLED` | on | `false` stops the backup (and shows `off` on the health issue). `LOOP_ENABLED` and `LOOP_PAUSE_UNTIL` stop it too. |
 | `OFFSITE_MAX_BYTES` | 8000000000 (8 GB) | The cost cap; at most 10000000000, the free tier. |
-| `OFFSITE_MAX_RUN_BYTES` | 2000000000 | Bytes one run uploads before it stops and leaves the rest to the next. |
+| `OFFSITE_MAX_RUN_BYTES` | 2000000000 | Bytes one phase of a run (snapshots, then artifacts) uploads; past it, the rest of that kind waits for the next run and the other kinds go on. A run also stops taking new items after 30 minutes. |
 | `OFFSITE_MAX_CLASS_A` | 2000 | LIST and PUT operations one run may use. |
 | `OFFSITE_MAX_CLASS_B` | 20000 | HEAD and GET operations one run may use. |
 | `OFFSITE_SHA256_HEADER` | on | `off` stops sending `x-amz-checksum-sha256`. |
@@ -1069,7 +1074,7 @@ never deleted. It fails when it cannot reach the target because the rest is
 still locked.
 
 - Dry run, any time: `gh workflow run offsite-backup.yml --repo isokron-ai/tool-qa -f prune=dry-run` (lists what it would delete in the run summary).
-- To let it delete: `gh variable set OFFSITE_PRUNE_ENABLED --repo isokron-ai/tool-qa --body true`. It then runs after every scheduled backup, and on a dispatch with `-f prune=apply`.
+- To let it delete: `gh variable set OFFSITE_PRUNE_ENABLED --repo isokron-ai/tool-qa --body true`. It then runs after every scheduled backup (not after a cancelled one), and on a dispatch with `-f prune=apply`; the stand-in scheduler dispatches with `-f prune=apply` while the variable is `true`.
 
 An R2 lifecycle rule ("delete objects older than N days" on a prefix) would
 do the same for one prefix without code, but it cannot keep the newest
@@ -1084,7 +1089,9 @@ job's `GITHUB_TOKEN` cannot write a repository variable such as
 `OFFSITE_LAST_OK`, and handing the job the loop App's key or a second R2 token
 only for a heartbeat would widen what it holds; an artifact needs no
 permission. The watchdog reads the newest heartbeat of a finished
-`offsite-backup.yml` run on `main` ([`watchdog/offsite.mjs`](../watchdog/offsite.mjs)):
+`offsite-backup.yml` run on `main` ([`watchdog/offsite.mjs`](../watchdog/offsite.mjs));
+when that run failed before it could read the bucket, it takes the last good
+time from an older heartbeat, so one failed run is amber, not red:
 
 | Check | Amber or red means | What to do |
 |---|---|---|

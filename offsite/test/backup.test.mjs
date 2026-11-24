@@ -324,6 +324,11 @@ test('R-OFF-07: missing R2 settings: exit 0, an unconfigured heartbeat, no store
   assert.match(yml, /\npermissions: \{\}\n/);
   assert.match(yml, /concurrency:\n {2}group: offsite-backup\n/);
   assert.match(yml, /contents: read[^\n]*\n {6}actions: read/);
+  // GitHub prints a step's env in its public log: the account ID comes from a secret when one is set.
+  assert.equal((yml.match(/R2_ACCOUNT_ID: \$\{\{ secrets\.R2_ACCOUNT_ID \|\| vars\.R2_ACCOUNT_ID \}\}/g) ?? []).length, 2);
+  assert.ok(!/R2_ACCOUNT_ID: \$\{\{ vars\./.test(yml));
+  assert.match(yml, /runs-on: ubuntu-24\.04\n {4}timeout-minutes: 40/);
+  assert.match(yml, /if: >-\n {6}!cancelled\(\) && \(/);
   // The guard runs before anything else that does work, in both jobs.
   for (const job of yml.split(/\n {2}[a-z]+:\n {4}name: /).slice(1)) {
     const names = job.split(/\n\s+- name: /).slice(1).map((s) => s.split('\n')[0]);
@@ -359,4 +364,65 @@ test('R-OFF-01: snapshot keys and artifact keys are by kind and UTC day', () => 
   assert.equal(artifactKey({ name: 'ingest-45312591667-1', created_at: '2026-11-24T02:48:55Z' }, true), 'ingest/2026-11-24/ingest-45312591667-1/ingest-45312591667-1.zip');
   assert.equal(artifactKey({ name: 'ingest-abc.tar.age', created_at: '2026-11-24T23:59:59Z' }, false), 'ingest/2026-11-24/ingest-abc.tar.age/ingest-abc.tar.age');
   assert.equal(artifactKey({ name: 'history-packages-9', created_at: '2026-11-25T00:00:00Z' }, true), 'history/2026-11-25/history-packages-9/history-packages-9.zip');
+});
+
+test('R-OFF-12: a PUT stored but answered "exists" on retry counts as copied with its manifest line; a run that died before its manifest part is recovered next run; one kind past its run bytes does not stop the others; the time limit defers', async () => {
+  // Lost answers, for an artifact and for the run's own cursor.
+  const w = world();
+  const ing = ingestZip('x');
+  w.addArtifact(1, 'ingest-111-1', ing, { hoursAgo: 1 });
+  w.s3.faults.lostAnswer.add('ingest/');
+  w.s3.faults.lostAnswer.add('_state/cursor/');
+  const hb = await w.run();
+  assert.equal(hb.status, 'ok', JSON.stringify(hb));
+  assert.equal(hb.copied.ingest, 1);
+  assert.equal(hb.copied_bytes, ing.length);
+  assert.ok(hb.bucket_bytes >= ing.length);
+  assert.equal(manifestLines(w.s3).filter((l) => l.kind === 'ingest').length, 1);
+
+  // A run that copied but could not write its manifest part or cursor.
+  const v = world();
+  assert.equal((await v.run()).status, 'ok');
+  v.c.t += HOUR;
+  v.addArtifact(2, 'ingest-222-1', ingestZip('y'), { hoursAgo: 0.5 });
+  v.s3.faults.putError = (key) => (key.startsWith('manifest/') ? new Error('R2 PUT failed: InternalError (HTTP 500)') : null);
+  const crashed = await v.run();
+  assert.equal(crashed.status, 'error');
+  assert.equal(manifestLines(v.s3).length, 0);
+  v.s3.faults.putError = () => null;
+  v.c.t += HOUR;
+  const next = await v.run();
+  assert.equal(next.status, 'ok');
+  const lines = manifestLines(v.s3);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].recovered, true);
+  assert.equal(lines[0].source.artifact, 'ingest-222-1');
+  // and only once: the run after that does not write it again.
+  v.c.t += HOUR;
+  await v.run();
+  assert.equal(manifestLines(v.s3).length, 1);
+
+  // Ingest past its run bytes; history still goes.
+  const u = world();
+  const ia = ingestZip('a');
+  const rz = makeZip([{ name: 'x.ndjson', data: '1' }]);
+  u.addArtifact(1, 'ingest-111-1', ia, { hoursAgo: 3 });
+  u.addArtifact(2, 'ingest-222-1', ingestZip('b'), { hoursAgo: 2 });
+  u.addArtifact(3, 'registry-delta-x', rz, { hoursAgo: 1 });
+  assert.ok(ia.length > rz.length + 1);
+  const hu = await u.run({ limits: { ...DEFAULTS, maxRunBytes: ia.length + rz.length + 1 } });
+  assert.equal(hu.status, 'ok');
+  assert.equal(hu.copied.ingest, 1);
+  assert.equal(hu.copied.history, 1);
+  assert.equal(hu.deferred, 1);
+
+  // The time limit: nothing new is taken, the cursor is still written.
+  const t = world();
+  t.addArtifact(1, 'ingest-111-1', ingestZip('a'));
+  const ht = await t.run({ maxRunMs: -1 });
+  assert.equal(ht.status, 'ok');
+  assert.equal(ht.copied.ingest, 0);
+  assert.match(ht.deferred_reason, /time limit/);
+  assert.equal(keys(t.s3, '_state/cursor/').length, 1);
+  assert.equal(JSON.parse(t.s3.objects.get(keys(t.s3, '_state/cursor/')[0]).data).by_kind.ingest, undefined);
 });
