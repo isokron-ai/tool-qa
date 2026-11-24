@@ -63,4 +63,7 @@ jobs:
           AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
           AGE_BIN: ${{ runner.temp }}/age/age
           AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
+          # The Mac archive pull's heartbeat (watchdog/archive.mjs). Read here, not
+          # through the API: the job token cannot read repository variables.
+          ARCHIVE_LAST_OK: ${{ vars.ARCHIVE_LAST_OK }}
         run: node watchdog/run.mjs

@@ -6,7 +6,7 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
-import { archivePull, canNotify, main, notifyMac, resolveToken } from '../scripts/archive-pull.mjs';
+import { SOURCES, acquireLock, archivePull, canNotify, commandOf, kindOf, main, notifyMac, resolveToken } from '../scripts/archive-pull.mjs';
 import { API, fakeApi, fakeClock } from './lib/fake-api.mjs';
 import { makeZip } from './lib/zip.mjs';
 
@@ -43,13 +43,14 @@ function world() {
   const runs = new Map();
   const workflowFor = (name) => (name.startsWith('ingest-') ? 'pump.yml' : name.startsWith('registry-') ? 'history-registry.yml'
     : name.startsWith('history-packages-') ? 'history-packages.yml' : name.startsWith('history-popularity-') ? 'history-popularity.yml' : 'test.yml');
-  const add = (id, name, zip, { hoursAgo = 1, expired = false, digest, size, createdAt, runId = id * 10, branch = 'main', headRepo = 1, workflow, runGone = false } = {}) => {
+  const add = (id, name, zip, { hoursAgo = 1, expired = false, digest, size, createdAt, runId = id * 10, branch = 'main', headRepo = 1, workflow, runGone = false, inRunList = true } = {}) => {
     artifacts.unshift({
       id, name, created_at: createdAt ?? ago(hoursAgo), expired, size_in_bytes: size ?? zip?.length ?? 0,
       workflow_run: { id: runId, repository_id: 1, head_repository_id: headRepo, head_branch: branch, head_sha: 'abc' },
       ...(digest ? { digest } : {}),
     });
-    if (!runGone) runs.set(runId, { id: runId, path: `.github/workflows/${workflow ?? workflowFor(name)}`, repository: { id: 1 }, head_repository: { id: headRepo } });
+    const runAt = new Date((Number.isFinite(Date.parse(createdAt)) ? Date.parse(createdAt) : c.t - hoursAgo * HOUR) - 60_000).toISOString();
+    if (!runGone) runs.set(runId, { id: runId, created_at: runAt, inRunList, path: `.github/workflows/${workflow ?? workflowFor(name)}`, repository: { id: 1 }, head_repository: { id: headRepo } });
     if (zip) zips.set(id, zip);
   };
   // Repository variables, for the heartbeat; `varStatus` forces an error answer.
@@ -71,6 +72,12 @@ function world() {
       const per = Number(req.query.get('per_page') ?? 30);
       const page = Number(req.query.get('page') ?? 1);
       return { body: { total_count: artifacts.length, artifacts: artifacts.slice((page - 1) * per, page * per) } };
+    }],
+    ['GET', `/repos/${REPO}/actions/runs`, (req) => {
+      const per = Number(req.query.get('per_page') ?? 30);
+      const page = Number(req.query.get('page') ?? 1);
+      const list = [...runs.values()].filter((r) => r.inRunList).sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return { body: { total_count: list.length, workflow_runs: list.slice((page - 1) * per, page * per) } };
     }],
     ['GET', /^\/repos\/isokron-ai\/tool-qa\/actions\/runs\/\d+$/, (req) => {
       const run = runs.get(Number(req.path.split('/').pop()));
@@ -978,29 +985,26 @@ test('R-ARC-16: an artifact not made by our own workflow on main is refused unre
   const w = world();
   w.add(1, 'ingest-1-1', ingestZip('fork', 1), { hoursAgo: 6, headRepo: 999 });
   w.add(2, 'ingest-2-1', ingestZip('branch', 1), { hoursAgo: 5, branch: 'feature' });
-  w.add(3, 'ingest-3-1', ingestZip('test', 1), { hoursAgo: 4, workflow: 'test.yml' });
-  w.add(4, 'registry-delta-x', registryZip('a'), { hoursAgo: 3, workflow: 'history-packages.yml' });
-  w.add(5, 'ingest-5-1', ingestZip('gone', 1), { hoursAgo: 2, runGone: true });
+  w.add(4, 'registry-delta-x', registryZip('a'), { hoursAgo: 1.5, headRepo: 999, workflow: 'evil.yml' });
   w.add(6, 'ingest-6-1', ingestZip('ok', 1), { hoursAgo: 1, runId: 777 });
   w.add(7, 'ingest-manual.tar.age', AGE('manual'), { hoursAgo: 1, runId: 777, workflow: 'ingest.yml' });
   const logs = [];
   const r = await runMain(w, ['--no-heartbeat'], { log: (l) => logs.push(l) });
   assert.equal(r.code, 0);
+  assert.deepEqual(r.notes, [], 'a fork or another branch is not ours: nothing to tell');
   const out = await archivePull(w.opts);
   // the next run checks again those still inside its look-back, and still refuses them
-  assert.deepEqual(out.foreign.map((f) => f.name), ['registry-delta-x', 'ingest-5-1']);
+  assert.deepEqual(out.foreign.map((f) => f.name), ['registry-delta-x']);
   assert.deepEqual(out.failed, []);
   assert.deepEqual(index(w.dest).map((e) => e.id), [6, 7]);
   assert.equal(downloads(w.api).length, 2, 'only the two of ours were downloaded');
   assert.deepEqual(quarantineFiles(w.dest), []);
   const refused = logs.filter((l) => /REFUSED, not from our own workflow on main/.test(l));
-  assert.equal(refused.length, 5);
+  assert.equal(refused.length, 3);
   assert.match(refused[0], /ingest-1-1: .*another repository \(head repository 999\)/);
   assert.match(refused[1], /ingest-2-1: .*branch "feature"/);
-  assert.match(refused[2], /ingest-3-1: .*"\.github\/workflows\/test\.yml", not pump\.yml or ingest\.yml/);
-  assert.match(refused[3], /registry-delta-x: .*not history-registry\.yml/);
-  assert.match(refused[4], /ingest-5-1: .*run 50 is gone/);
-  assert.match(logs.at(-1), /refused as not ours 5/);
+  assert.match(refused[2], /registry-delta-x: .*another repository/);
+  assert.match(logs.at(-1), /refused as not ours 3/);
   // one run, one lookup, however many artifacts it made
   assert.equal(w.api.calls.filter((c) => c.path.endsWith('/actions/runs/777')).length, 1);
   w.cleanup();
@@ -1036,4 +1040,113 @@ test('R-ARC-18: an artifact whose created_at is not a date keeps failing visibly
   assert.equal(r.code, 1, 'with a cursor in place it is still listed, and still fails');
   assert.match(r.notes[0], /Archive pull failed: 1 artifact\(s\) \(ingest-1-1: created_at "not-a-date" is not a date\)/);
   w.cleanup();
+});
+
+// ---- R-ARC-19..21: follow-up to #27 ----
+
+test('R-ARC-19: a lock on this host from an earlier boot, or whose pid now runs another program, is taken over', () => {
+  const dest = mkdtempSync(join(tmpdir(), 'archive-lock-'));
+  const host = 'mac';
+  const boot = '2026-03-02T08:00:00.000Z';
+  const lock = (owner) => {
+    rmSync(join(dest, '.lock'), { recursive: true, force: true });
+    mkdirSync(join(dest, '.lock'));
+    writeFileSync(join(dest, '.lock', 'owner.json'), JSON.stringify({ host, started_at: '2026-03-02T09:00:00.000Z', ...owner }));
+  };
+  const take = (o) => acquireLock(dest, { host, boot, alive: () => true, command: () => null, now: () => Date.parse('2026-03-02T12:00:00Z'), ...o });
+  // after a reboot the pid may be anything, even pid 1, and alive
+  lock({ pid: 1, boot: '2026-03-01T08:00:00.000Z' });
+  let l = take();
+  assert.equal(l.holder, undefined, 'taken over');
+  assert.equal(JSON.parse(readFileSync(join(dest, '.lock', 'owner.json'), 'utf8')).boot, boot, 'our lock records our boot');
+  l.release();
+  // the same boot, read a minute apart, is the same boot
+  lock({ pid: 4242, boot: '2026-03-02T08:01:00.000Z' });
+  assert.ok(take().holder);
+  // the pid is alive but runs something else now
+  lock({ pid: 4242, boot });
+  assert.ok(take({ command: () => 'node /Users/x/isokron-archive/tool-qa-code/scripts/archive-pull.mjs --dest /x' }).holder, 'still the archive pull');
+  l = take({ command: () => '/usr/libexec/some-daemon' });
+  assert.equal(l.holder, undefined);
+  l.release();
+  // a lock from before boot times were recorded is judged by its pid as before
+  lock({ pid: 4242 });
+  assert.ok(take().holder);
+  // commandOf reads ps, and says null when it cannot
+  assert.equal(commandOf(7, () => ({ status: 0, stdout: 'node archive-pull.mjs\n' })), 'node archive-pull.mjs');
+  assert.equal(commandOf(7, () => ({ status: 1, stdout: '' })), null);
+  assert.equal(commandOf(7, () => ({ error: new Error('ENOENT') })), null);
+  rmSync(dest, { recursive: true, force: true });
+});
+
+test('R-ARC-20: our own artifact from a workflow SOURCES does not list is held, retried and notified, not passed over', async () => {
+  const w = world();
+  w.add(1, 'ingest-1-1', ingestZip('renamed', 1), { hoursAgo: 3, workflow: 'pump-v2.yml' });
+  w.add(2, 'registry-delta-x', registryZip('a'), { hoursAgo: 2.5, workflow: 'history-packages.yml' });
+  w.add(3, 'ingest-3-1', ingestZip('gone', 1), { hoursAgo: 2, runGone: true });
+  w.add(4, 'ingest-4-1', ingestZip('ok', 1), { hoursAgo: 1 });
+  const r = await runMain(w, ['--no-heartbeat']);
+  assert.equal(r.code, 1);
+  assert.match(r.notes[0], /^Archive pull failed: 3 artifact\(s\) \(ingest-1-1: held, not pulled: it was made on main by "\.github\/workflows\/pump-v2\.yml", which SOURCES does not list for this name \(it lists pump\.yml or ingest\.yml\); add the workflow to SOURCES/);
+  const out = await archivePull(w.opts);
+  assert.deepEqual(out.failed.map((f) => f.name), ['ingest-1-1', 'registry-delta-x', 'ingest-3-1']);
+  assert.match(out.failed[2].error, /run 30 is gone/);
+  assert.deepEqual(out.foreign, []);
+  const cursor = JSON.parse(readFileSync(join(w.dest, '.last-pull.json'), 'utf8'));
+  assert.equal(cursor.by_kind.ingest, '2026-03-02T09:00:00.000Z', 'held at the oldest held artifact');
+  assert.equal(cursor.by_kind.history, '2026-03-02T09:30:00.000Z');
+  assert.equal(downloads(w.api).length, 1, 'held artifacts are not downloaded');
+  // once SOURCES lists the workflow (here: the run turns out to be from pump.yml), the next run pulls it
+  w.runs.get(10).path = '.github/workflows/pump.yml';
+  const fixed = await archivePull(w.opts);
+  assert.deepEqual(fixed.pulled, ['ingest-1-1']);
+  w.cleanup();
+});
+
+test('R-ARC-20: every artifact a workflow here uploads under an archived prefix is mapped in SOURCES to that workflow', () => {
+  const dir = new URL('../.github/workflows/', import.meta.url);
+  const found = [];
+  for (const file of readdirSync(dir).filter((f) => f.endsWith('.yml'))) {
+    const lines = readFileSync(new URL(file, dir), 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      if (!/uses:\s*actions\/upload-artifact@/.test(line)) return;
+      const nameLine = lines.slice(i + 1, i + 12).find((l) => /^\s+name:\s*\S/.test(l));
+      assert.ok(nameLine, `${file}: an upload-artifact step with no name:`);
+      const name = nameLine.replace(/^\s+name:\s*/, '').replace(/^['"]|['"]$/g, '');
+      const prefix = name.split('${{')[0];
+      if (!kindOf(prefix)) return;
+      found.push(`${prefix} ${file}`);
+      const allowed = SOURCES.find(([p]) => prefix.startsWith(p))?.[1] ?? [];
+      assert.ok(allowed.includes(file), `${file} uploads ${name}, but SOURCES lists ${allowed.join(', ') || 'nothing'} for ${prefix}: its artifacts would be held`);
+    });
+  }
+  assert.deepEqual(found.sort(), [
+    'history-packages- history-packages.yml',
+    'history-popularity- history-popularity.yml',
+    'ingest- ingest.yml',
+    'ingest- pump.yml',
+    'registry- history-registry.yml',
+  ]);
+  const files = new Set(readdirSync(dir));
+  for (const [, wfs] of SOURCES) for (const f of wfs) assert.ok(files.has(f), `SOURCES names ${f}, which does not exist`);
+});
+
+test('R-ARC-21: many runs are looked up from the run list a page at a time, with one GET for each run it does not find', async () => {
+  const w = world();
+  for (let i = 1; i <= 30; i++) w.add(i, `ingest-${i}-1`, ingestZip(`b${i}`, 1), { hoursAgo: 40 - i });
+  w.add(31, 'ingest-31-1', ingestZip('late', 1), { hoursAgo: 0.5, inRunList: false });
+  const out = await archivePull(w.opts);
+  assert.deepEqual(out.failed, []);
+  assert.equal(out.pulled.length, 31);
+  const runCalls = w.api.calls.filter((c) => /\/actions\/runs(\/\d+)?$/.test(c.path));
+  assert.equal(runCalls.filter((c) => c.path.endsWith('/actions/runs')).length, 1, 'one page of the run list');
+  assert.deepEqual(runCalls.filter((c) => /\/runs\/\d+$/.test(c.path)).map((c) => c.path.split('/').pop()), ['310'], 'one GET, for the run not in the list');
+  // a few runs: one GET each, no listing
+  const v = world();
+  for (let i = 1; i <= 3; i++) v.add(i, `ingest-${i}-1`, ingestZip(`s${i}`, 1));
+  await archivePull(v.opts);
+  assert.equal(v.api.calls.filter((c) => c.path.endsWith('/actions/runs')).length, 0);
+  assert.equal(v.api.calls.filter((c) => /\/actions\/runs\/\d+$/.test(c.path)).length, 3);
+  w.cleanup();
+  v.cleanup();
 });
