@@ -949,8 +949,9 @@ test('R-ING-24: the shards a merge overtook (all recorded at the old commit) cou
   };
   const OLD = '3'.repeat(40);
   const NEW = '2'.repeat(40);
+  // One tick reserves its shards in one loop: created seconds apart.
   for (const [i, a] of ['m1', 'm2', 'm3'].entries()) {
-    const s = await run(a, NEW, T0 + i * MIN, OLD);
+    const s = await run(a, NEW, T0 + i * 2_000, OLD);
     assert.deepEqual(s.outcomes, { rejected: 1 });
   }
   assert.deepEqual(db.pausedWorkflows({ now: T0 + 10 * MIN }), [], 'a normal merge pauses nothing');
@@ -973,5 +974,22 @@ test('R-ING-25: the same recorded commit in separate ticks keeps counting, and p
   for (const at of [T0 + 100 * MIN, T0 + 100 * MIN + 2_000, T0 + 100 * MIN + 4_000]) db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + 5 * MIN });
   assert.equal(db.getKv('pump.sha_mismatch:qa').count, 1);
   assert.deepEqual(db.pausedWorkflows({ now: T0 + 106 * MIN }), []);
+  db.close();
+});
+
+test('R-ING-26: same-commit mismatches from separate ticks only ~130 s apart still count, and pause at three', async () => {
+  const { SHA_BURST_MS } = await import('../../state/db.mjs');
+  const db = openState(':memory:');
+  const SHA = '3'.repeat(40);
+  // Ticks start 150 s apart; a long ingest in one and a short one in the next puts their dispatches ~130 s apart.
+  const created = [T0, T0 + 130_000, T0 + 260_000];
+  created.forEach((at, i) => assert.equal(db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + MIN }).count, i + 1));
+  assert.equal(db.pausedWorkflows({ now: T0 + 6 * MIN })[0]?.workflow, 'qa');
+  // A burst's start never moves: repeats 20 s apart do not chain past it.
+  db.deleteKv('pump.paused:qa');
+  const chain = [T0 + 60 * MIN, T0 + 60 * MIN + 20_000, T0 + 60 * MIN + 40_000, T0 + 60 * MIN + 60_000];
+  const counts = chain.map((at) => db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + MIN }).count);
+  assert.deepEqual(counts, [1, 1, 2, 2], 'the third is 40 s after the burst began: a new one');
+  assert.ok(SHA_BURST_MS < 150_000);
   db.close();
 });

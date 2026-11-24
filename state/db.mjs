@@ -25,6 +25,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const SCHEMA_VERSION = 5;
 export const MAX_SLOTS = 15;
+/** How far apart one tick's dispatches may be created and still count as one burst (R-ING-26). */
+export const SHA_BURST_MS = 30_000;
 
 const MIGRATIONS = [
   { version: 1, sql: () => readFileSync(new URL('./schema.sql', import.meta.url), 'utf8') },
@@ -782,29 +784,34 @@ export class StateDb {
    * One more dispatch of `workflow` rejected as run_sha_mismatch. `sha` is the
    * commit recorded with that dispatch and `created` when the dispatch was
    * made. The shards of one tick that a merge overtook (all recorded at the old
-   * commit within one tick, all run at the new one) are one burst and count
-   * once (R-ING-24): a mismatch is a repeat only when it has the same recorded
-   * commit as the previous one AND its dispatch was made within `burstMs` (one
-   * pump tick) of that one's. The same commit in a later tick counts again, so
-   * a cause that persists at a fixed commit (someone taking the run names, a
-   * ref GitHub resolves differently) still pauses the workflow (R-ING-25).
+   * commit, all run at the new one) are one burst and count once (R-ING-24).
+   * A mismatch belongs to the current burst only when it has the burst's
+   * recorded commit AND its dispatch was made within `burstMs` of the burst's
+   * FIRST dispatch (R-ING-26). One tick reserves all its shards in one loop of
+   * local writes, so their `created` times lie within seconds; ticks start 150 s
+   * apart, but how long ingest runs first varies, so two ticks' dispatches can
+   * be as little as ~2 minutes apart. 30 s separates the two with a wide margin
+   * either way, and since the burst's start never moves, repeats cannot chain
+   * from tick to tick. The same commit in a later tick therefore counts again,
+   * and a cause that persists at a fixed commit (someone taking the run names,
+   * a ref GitHub resolves differently) still pauses the workflow (R-ING-25).
    * Returns {count, paused}.
    */
-  noteShaMismatch(workflow, { sha = null, created = null, now, limit = 3, pauseMs = 6 * 3_600_000, burstMs = 150_000 } = {}) {
+  noteShaMismatch(workflow, { sha = null, created = null, now, limit = 3, pauseMs = 6 * 3_600_000, burstMs = SHA_BURST_MS } = {}) {
     const key = `pump.sha_mismatch:${workflow}`;
     const prev = this.getKv(key);
     const before = Number.isSafeInteger(prev?.count) ? prev.count : 0;
     const at = created === null || created === undefined ? NaN : toMs(created);
-    const prevAt = prev?.last_created ? Date.parse(prev.last_created) : NaN;
-    const sameBurst = Number.isFinite(at) && Number.isFinite(prevAt) && Math.abs(at - prevAt) <= burstMs;
+    const burstAt = prev?.burst_created ? Date.parse(prev.burst_created) : NaN;
+    const sameBurst = Number.isFinite(at) && Number.isFinite(burstAt) && Math.abs(at - burstAt) <= burstMs;
     if (before > 0 && sha !== null && prev.last_sha === sha && sameBurst) {
-      this.setKv(key, { ...prev, last: iso(now), last_created: iso(Math.max(at, prevAt)) }, { now });
+      this.setKv(key, { ...prev, last: iso(now) }, { now }); // the burst's start stays where it was
       return { count: before, paused: false };
     }
     const count = before + 1;
     if (count < limit) {
       this.setKv(key, {
-        count, first: prev?.first ?? iso(now), last: iso(now), last_sha: sha, last_created: Number.isFinite(at) ? iso(at) : null,
+        count, first: prev?.first ?? iso(now), last: iso(now), last_sha: sha, burst_created: Number.isFinite(at) ? iso(at) : null,
       }, { now });
       return { count, paused: false };
     }
