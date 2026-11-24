@@ -86,6 +86,9 @@ export function planPrune(objects, { now, at, to, keepSnapshots = KEEP_SNAPSHOTS
   const gone = new Set();
   const under = (prefix) => objects.filter((o) => o.key.startsWith(prefix));
   const keepNames = new Set(under(PREFIX.keep).map((o) => artifactOfKey(o.key)));
+  // ingest-keepgap-<run>-<attempt>: the pump could not write some item's keep-forever file in that run, so the
+  // keep artifact does not cover every full bundle of it. Such a run's bundles are treated as having no copy.
+  const gapNames = new Set(under(PREFIX.ingest).map((o) => /^ingest-keepgap-(\d+-\d+)$/.exec(artifactOfKey(o.key) ?? '')?.[1]).filter(Boolean).map((id) => `ingest-keep-${id}`));
   const protectedKeys = new Set();
   for (const o of newestFirst(under(PREFIX.cursor)).slice(0, KEEP_CURSORS)) protectedKeys.add(o.key);
   for (const o of newestFirst(under(PREFIX.snapshotManifests)).slice(0, KEEP_SNAPSHOT_MANIFESTS)) protectedKeys.add(o.key);
@@ -101,9 +104,12 @@ export function planPrune(objects, { now, at, to, keepSnapshots = KEEP_SNAPSHOTS
   /** Why an object may not go now, or null. */
   const refusal = (o) => {
     if (protectedKeys.has(o.key)) return 'protected';
+    if (/^ingest-keepgap-/.test(artifactOfKey(o.key) ?? '')) return 'protected'; // the marker outlives the bundles it guards
     if (isHeld(o.key, holds, now)) return 'held';
     if (!Number.isFinite(time(o)) || time(o) > cutoff) return 'locked';
-    if (o.key.startsWith(PREFIX.ingest) && !keepNames.has(pairedKeepName(o.key)) && !legacy && /^ingest-\d+-\d+$/.test(artifactOfKey(o.key) ?? '')) return 'unpaired';
+    const pump = o.key.startsWith(PREFIX.ingest) && /^ingest-\d+-\d+$/.test(artifactOfKey(o.key) ?? '');
+    if (pump && gapNames.has(pairedKeepName(o.key))) return 'unpaired'; // never taken, not even with `legacy`
+    if (pump && !keepNames.has(pairedKeepName(o.key)) && !legacy) return 'unpaired';
     return null;
   };
   const count = (why) => { plan.kept[why] += 1; };

@@ -216,7 +216,7 @@ function readCursors(dest) {
 export function ingestRun(artifact) {
   const runId = artifact.workflow_run?.id ?? null;
   const name = String(artifact.name);
-  const m = /^ingest-(?:keep-)?(\d+)-(\d+)$/.exec(name);
+  const m = /^ingest-(?:keep-|keepgap-)?(\d+)-(\d+)$/.exec(name);
   if (m && (runId === null || String(runId) === m[1])) return { run_id: Number(m[1]), run_attempt: Number(m[2]), attempt_id: null };
   const attempt = name.replace(/^ingest-/, '').replace(/\.tar\.age$/, '');
   return { run_id: runId, run_attempt: null, attempt_id: attempt || null };
@@ -238,6 +238,7 @@ export function ingestKind(name) {
   const n = String(name);
   if (/^ingest-state-archive-\d+-\d+$/.test(n)) return 'state-archive';
   if (/^ingest-keep-\d+-\d+$/.test(n)) return 'keep';
+  if (/^ingest-keepgap-\d+-\d+$/.test(n)) return 'keep-gap';
   if (/^ingest-\d+-\d+$/.test(n)) return 'pump';
   return 're-ingest';
 }

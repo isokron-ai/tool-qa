@@ -15,8 +15,8 @@ import { constants, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
 export const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 /** Level 12: within 7% of level 19 on a typical bundle, and fast enough for the pump tick on the largest one the contract allows. */
 export const ZSTD_LEVEL = 12;
-/** The most a bundle may inflate to; the contract's cap is 64 MiB of files, a tar adds headers. */
-export const DEFAULT_MAX_TAR_BYTES = 1024 ** 3;
+/** The most a bundle may inflate to: the contract's cap is 64 MiB of files, and headers and padding add a little. */
+export const DEFAULT_MAX_TAR_BYTES = 256 * 1024 ** 2;
 
 export class BundleCodecError extends Error {
   constructor(message) {

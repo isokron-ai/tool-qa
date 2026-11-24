@@ -106,6 +106,16 @@ jobs:
           path: ${{ runner.temp }}/keep-out/
           retention-days: 90
           if-no-files-found: ignore
+      # Marks the runs whose keep-forever file could not be written for some item
+      # (keep-gap-*.tar.age): the off-site prune then keeps that run's full bundles.
+      - name: Upload the keep-forever gap markers (90 days)
+        if: always() && steps.guard.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ingest-keepgap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/keep-gap-out/
+          retention-days: 90
+          if-no-files-found: ignore
       # The state archive this run staged (state-archive-<run id>-<attempt>.tar.age,
       # readable only with AGE_IDENTITY): rows moved out of the live state.
       # A later pump run deletes them from the state only once it finds this

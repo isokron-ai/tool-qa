@@ -130,6 +130,7 @@ function isoSeconds(ms) {
  * @param {number} [o.retries]        retries per GitHub call (ingest/github.mjs)
  * @param {string} [o.outDir]         where sealed outputs go (default $RUNNER_TEMP/ingest-out)
  * @param {string} [o.keepDir]        where the keep-forever files go (default keep-out beside outDir)
+ * @param {string} [o.gapDir]         where a keep-forever gap marker goes (default keep-gap-out beside outDir)
  * @param {(tar: Buffer) => Buffer} [o.compress]  zstd for a tar before it is sealed (default worker-kit/bundle.mjs packBundle)
  * @param {string} [o.sealTo]         recipients file (default worker-kit/ingest.pub)
  * @param {object} [o.registry]       a loaded field registry (default: the pinned one, fetched once)
@@ -152,6 +153,7 @@ export function createCollector({
   retries = 3,
   outDir = join(env.RUNNER_TEMP || tmpdir(), 'ingest-out'),
   keepDir = join(dirname(outDir), 'keep-out'),
+  gapDir = join(dirname(outDir), 'keep-gap-out'),
   compress = packBundle,
   sealTo = SEAL_TO,
   registry = null,
@@ -271,6 +273,15 @@ export function createCollector({
       }
     } catch (err) {
       failures.push({ kind: 'keep', what: `keep-${attemptId}`, error: String(err?.message ?? err).slice(0, 200) });
+      // The artifact of keep files may still exist, so the prune cannot tell from it that this item has no
+      // keep-forever file. The marker (uploaded as ingest-keepgap-<run>-<attempt>) tells it to keep this run's
+      // full bundles. If even the marker cannot be written the item is not recorded: it is judged again next tick.
+      try {
+        const gap = writeTar([{ path: 'gap.json', data: Buffer.from(`${JSON.stringify({ attempt: attemptId, error: failures.at(-1).error })}\n`) }]);
+        writeSealed(gapDir, `keep-gap-${attemptId}.tar.age`, encrypt(gap, recipients));
+      } catch (gapErr) {
+        throw new Error(`the keep-forever file of ${attemptId} could not be written (${failures.at(-1).error}) and neither could its gap marker (${String(gapErr?.message ?? gapErr).slice(0, 120)}); not recorded`);
+      }
     }
     if (db) noteSeal(db, { bytesIn: tar.length, bytesOut: body.length, keptBytes, failures, at });
     return file;

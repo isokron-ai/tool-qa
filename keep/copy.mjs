@@ -54,6 +54,7 @@ const KEEP_REVISIONS = 2;
 const USER_AGENT = 'isokron-tool-qa-keep-forever';
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');
+const catalogOf = (path) => /^ingest-keep\/[^/]+\/catalog-([0-9a-f]{64})\.tar\.age$/.exec(path)?.[1] ?? null;
 const month = (iso) => new Date(iso).toISOString().slice(0, 7);
 
 /** Whether an artifact belongs to the keep-forever set. */
@@ -142,7 +143,7 @@ export async function runKeepCopy({ gh, release, repo, now = Date.now, log = () 
   await prefetchRuns(gh.client, repo, list, runs);
 
   const staged = new Map(); // month -> { files: [{path, data, sha256}], artifacts: {name: entry} }
-  const newCatalogs = new Set();
+  const committed = new Set(); // catalogs written by a month of this run, so far
   const pending = [];
   let runBytes = 0;
   for (const a of list) {
@@ -185,18 +186,21 @@ export async function runKeepCopy({ gh, release, repo, now = Date.now, log = () 
           }
           const c = KEEP_FILE.exec(e.name.split('/').at(-1))[2];
           if (c) {
-            if (catalogs.has(c) || newCatalogs.has(c)) {
+            if (catalogs.has(c) || staged.get(m)?.catalogs.has(c)) {
               out.skipped_catalogs += 1;
               continue;
             }
-            newCatalogs.add(c);
           }
           files.push({ path: `ingest-keep/${a.name}/${e.name}`, data: e.data, sha256: sha256(e.data) });
         }
       }
       entry.files = files.map((f) => ({ path: f.path, bytes: f.data.length, sha256: f.sha256 }));
-      if (!staged.has(m)) staged.set(m, { files: [], artifacts: {} });
+      if (!staged.has(m)) staged.set(m, { files: [], artifacts: {}, catalogs: new Set() });
       const s = staged.get(m);
+      for (const f of files) {
+        const c = catalogOf(f.path);
+        if (c) s.catalogs.add(c);
+      }
       s.files.push(...files);
       s.artifacts[a.name] = entry;
       if (entry.refused.length) log(`keep: ${a.name}: copied, with files refused: ${entry.refused.slice(0, 3).join('; ')}`);
@@ -208,7 +212,13 @@ export async function runKeepCopy({ gh, release, repo, now = Date.now, log = () 
   }
 
   // Parts first, then the manifests that name them, then the indexes.
-  for (const [m, s] of [...staged].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [m, st] of [...staged].sort(([a], [b]) => a.localeCompare(b))) {
+    // A catalog an earlier month of this run has written is not written again; one whose month failed
+    // is still in this month's files, so it is not lost (R-RET-23).
+    const drop = (f) => { const c = catalogOf(f.path); return c !== null && committed.has(c); };
+    const s = { ...st, files: st.files.filter((f) => !drop(f)) };
+    out.skipped_catalogs += st.files.length - s.files.length;
+    for (const entry of Object.values(st.artifacts)) entry.files = entry.files.filter((f) => !drop(f));
     if (s.files.length === 0 && Object.keys(s.artifacts).length === 0) continue;
     try {
       let partName = null;
@@ -231,18 +241,18 @@ export async function runKeepCopy({ gh, release, repo, now = Date.now, log = () 
       man.rev += 1;
       out.copied.artifacts += Object.keys(s.artifacts).length;
       out.copied.files += s.files.length;
+      for (const f of s.files) {
+        const c = catalogOf(f.path);
+        if (c) committed.add(c);
+      }
     } catch (err) {
       out.failures.push({ name: `month ${m}`, error: scrub(String(err?.message ?? err), []).slice(0, 200) });
       for (const name of Object.keys(s.artifacts)) pending.push(list.find((a) => a.name === name));
-      for (const f of s.files) {
-        const c = /^ingest-keep\/[^/]+\/catalog-([0-9a-f]{64})\.tar\.age$/.exec(f.path)?.[1];
-        if (c) newCatalogs.delete(c);
-      }
     }
   }
-  if (newCatalogs.size) {
+  if (committed.size) {
     try {
-      await writeRevision(release, rel, assets, 'catalogs', cat.rev, { version: 1, updated: startedAt, catalogs: [...catalogs, ...newCatalogs].sort() });
+      await writeRevision(release, rel, assets, 'catalogs', cat.rev, { version: 1, updated: startedAt, catalogs: [...catalogs, ...committed].sort() });
     } catch (err) {
       out.failures.push({ name: 'catalogs', error: scrub(String(err?.message ?? err), []).slice(0, 200) });
     }

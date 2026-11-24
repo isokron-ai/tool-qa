@@ -1435,8 +1435,20 @@ selected for raw keeping. A hold is a line in
 `for` is `dispute`, `disclosure` (90 days from `from`) or `raw` (548 days). A
 hold is by artifact, so it keeps the whole artifact. It stops the prune on R2;
 it cannot keep what GitHub already deleted (90 days), so add it early. A hold
-list the prune cannot read stops the prune. Window changes belong in
+list the prune cannot read stops the prune. **File a dispute or disclosure hold
+within 30 days** of the data being made: after that the prune has deleted the
+full bundle, the keep-forever set holds no raw data, and a hold cannot bring it
+back. Window changes belong in
 `HOLD_DAYS` and `FULL_RAW_DAYS` in `ingest/retention.mjs`.
+
+**A keep-forever gap.** If the pump cannot write one item's keep-forever file
+(`retention-seal` turns amber), it seals a marker `keep-gap-<attempt>-<index>.tar.age`,
+uploaded as the artifact `ingest-keepgap-<run>-<attempt>`. The prune never
+expires any full bundle of that run (not even with `OFFSITE_PRUNE_LEGACY_INGEST`),
+since the run's keep artifact does not cover every item. If the marker cannot be
+written either, the item is not recorded and is judged again next tick. To
+release such a run after fixing it by hand, delete its `ingest-keepgap-*`
+object from R2.
 
 **R2.** The bucket lock stays at 30 days and no bucket setting is changed. The
 off-site backup copies `ingest-keep-*` to `keep/` and everything else as
@@ -1471,6 +1483,11 @@ every 6 hours, but only when no run started in the last 330 minutes, like the
 off-site backup. GitHub keeps the artifacts it copies 90 days, so a copy that
 stops for more than a few weeks starts to lose data: the `keep-forever` health
 item turns amber at 30 days of waiting and red at 60.
+
+**Keep this repository private.** The release assets are age ciphertext (the
+keep and catalog files) plus the public history zips. Making the repository
+public would publish the ciphertext for good; anyone who later obtained the key
+could read all of it.
 
 **Restore.** Download `keep-<month>-<id>.tar` from the release, `tar -xf` it,
 check each file against the month's `manifest-<month>.r<N>.json`, then

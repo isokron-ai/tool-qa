@@ -1160,3 +1160,34 @@ test('R-RET-06: the note of a seal is written with the time of the tick (the sea
     db.close();
   }
 });
+
+test('R-RET-23: when one item\'s keep-forever file cannot be written, a gap marker is sealed for the run; if the marker cannot be written either, the item is not recorded', async () => {
+  for (const failCalls of [[2], [2, 3]]) {
+    const keys = shardKeys(2);
+    const { db, items } = setup({ runKeys: keys });
+    let calls = 0;
+    // Item 0 seals its full bundle (call 1), its keep file (2) and, after a failure, its marker (3).
+    const encrypt = (plaintext) => {
+      calls += 1;
+      if (failCalls.includes(calls)) throw new Error('disk full');
+      return fakeEncrypt(plaintext);
+    };
+    const h = harness({ api: shardWorker(shardArtifacts(items)), crypto: { decrypt: fakeDecrypt, encrypt, publicKey: () => PUBKEY } });
+    try {
+      const s = await h.collect(db);
+      const gapDir = join(h.dir, 'keep-gap-out');
+      if (failCalls.length === 1) {
+        assert.equal(s.recorded, 2);
+        assert.deepEqual(readdirSync(gapDir), ['keep-gap-att-1-0.tar.age']);
+        assert.equal(db.getKv(SEAL_KEY).failures.keep, 1);
+      } else {
+        assert.equal(s.recorded, 1, 'item 0 waits for the next tick');
+        assert.equal(s.errors, 1);
+        assert.equal(existsSync(gapDir), false);
+      }
+    } finally {
+      h.cleanup();
+      db.close();
+    }
+  }
+});

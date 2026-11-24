@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ZSTD_MAGIC, BundleCodecError, bundleFormat, packBundle, unpackBundle, zstdAvailable } from '../bundle.mjs';
+import { DEFAULT_MAX_TAR_BYTES, ZSTD_MAGIC, BundleCodecError, bundleFormat, packBundle, unpackBundle, zstdAvailable } from '../bundle.mjs';
 import { readTar, writeTar } from '../tar.mjs';
 
 const sampleTar = () => writeTar([
@@ -32,4 +32,10 @@ test('R-RET-01: a zstd bundle that inflates past the cap, or is damaged, is refu
   const bad = Buffer.from(packed);
   bad[bad.length - 2] ^= 0xff; // the frame carries a checksum
   assert.throws(() => unpackBundle(bad), BundleCodecError);
+});
+
+test('R-RET-25: the default cap on an inflated bundle is 256 MiB: that many bytes open, one more is refused', () => {
+  assert.equal(DEFAULT_MAX_TAR_BYTES, 256 * 1024 ** 2);
+  assert.equal(unpackBundle(packBundle(Buffer.alloc(DEFAULT_MAX_TAR_BYTES))).length, DEFAULT_MAX_TAR_BYTES);
+  assert.throws(() => unpackBundle(packBundle(Buffer.alloc(DEFAULT_MAX_TAR_BYTES + 1))), BundleCodecError);
 });

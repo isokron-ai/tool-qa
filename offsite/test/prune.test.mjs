@@ -199,3 +199,17 @@ test('R-RET-09: the checked-in hold list is valid, and the backup does not send 
   assert.equal(readConfig({ ...env, OFFSITE_SHA256_HEADER: 'on' }).sendSha256, true);
   assert.equal(readConfig({ ...env, OFFSITE_SHA256_HEADER: 'off' }).sendSha256, false);
 });
+
+test('R-RET-23: a run with a keep-forever gap marker keeps all its full bundles, even past 30 days, under the cap, and with OFFSITE_PRUNE_LEGACY_INGEST', () => {
+  // Item 0 of run 1 has no keep file, but the keep artifact of run 1 exists (item 1's), so pairing by artifact says "covered".
+  const gap = obj('ingest/2026-04-01/ingest-keepgap-1-1/ingest-keepgap-1-1.zip', 5, 40);
+  const objects = [FULL(1, 40, 500), KEEP(1, 40), gap, FULL(2, 40, 500), KEEP(2, 40)];
+  for (const over of [{ at: 1e9, to: 1e9 }, { at: 1, to: 1 }, { at: 1e9, to: 1e9, legacy: true }, { at: 1, to: 1, legacy: true }]) {
+    const p = planPrune(objects, { now: NOW, ...over });
+    const gone = p.delete.map((o) => o.key);
+    assert.ok(!gone.includes(FULL(1, 40).key), `the gapped bundle stays (${JSON.stringify(over)})`);
+    assert.ok(!gone.includes(gap.key), 'and so does its marker');
+    assert.ok(gone.includes(FULL(2, 40).key), 'a run without a marker still expires');
+    assert.ok(p.kept.unpaired >= 1);
+  }
+});

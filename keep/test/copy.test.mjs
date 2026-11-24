@@ -206,3 +206,28 @@ test('partId names the contents, not the order; newestRevision takes the highest
   assert.notEqual(partId([a]), partId([a, b]));
   assert.equal(newestRevision([{ name: 'status.r0002.json' }, { name: 'status.r0010.json' }, { name: 'statusx.r0099.json' }], 'status').rev, 10);
 });
+
+test('R-RET-24: a tool list also staged for an earlier month whose write fails is still copied with the later month', async () => {
+  const w = world();
+  w.add(1, 'ingest-keep-111-1', keepZip(1, ['A']), { ago: 40 * DAY }); // October
+  w.add(2, 'ingest-keep-112-1', keepZip(2, ['A']), { ago: HOUR }); // November
+  const real = w.rel.gh.upload;
+  let failed = false;
+  w.rel.gh.upload = async (rel, name, data, label) => {
+    if (name.startsWith('manifest-2026-10') && !failed) {
+      failed = true;
+      throw new Error('GitHub 502');
+    }
+    return real(rel, name, data, label);
+  };
+  const first = await w.run();
+  assert.equal(first.status, 'error');
+  const nov = parts(w).filter((p) => p.startsWith('keep-2026-11-'));
+  assert.equal(nov.length, 1);
+  assert.ok([...w.part(nov[0]).keys()].some((k) => k.endsWith(catalogName('A'))), 'catalog A is in the November part');
+  assert.deepEqual(JSON.parse(w.read('catalogs.r0001.json')).catalogs, [sha(Buffer.from('A'))]);
+  const second = await w.run();
+  assert.equal(second.status, 'ok');
+  const count = (p) => [...w.part(p).keys()].filter((k) => k.endsWith(catalogName('A'))).length;
+  assert.equal(parts(w).reduce((n, p) => n + count(p), 0), 2, 'once in each part that holds it; none new after the November write succeeded');
+});

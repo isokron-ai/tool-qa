@@ -547,7 +547,11 @@ export class Sim {
         ingestOptions: {
           crypto: {
             decrypt: (ct) => openWith(this.identity, ct),
-            encrypt: (pt, recipients) => sealTo(recipients, pt),
+            encrypt: (pt, recipients) => {
+              this.sealCalls = (this.sealCalls ?? 0) + 1;
+              if (this.sealFault?.(this.sealCalls)) throw new Error('injected: disk full while sealing');
+              return sealTo(recipients, pt);
+            },
             publicKey: () => this.ingestPub,
           },
           registry: this.registry,
@@ -564,6 +568,9 @@ export class Sim {
         crypto: fakeStateCrypto({ identity: this.identity, recipients: this.statePub }),
       });
     } finally {
+      // pump.yml: "Upload the keep-forever gap markers", if: always().
+      const gaps = join(dir, 'keep-gap-out');
+      if (existsSync(gaps)) (this.keepGaps ??= []).push(...readdirSync(gaps));
       // pump.yml: "Upload the staged state archive", if: always().
       this.uploadArchive(run, join(dir, 'state-archive'), say);
     }
