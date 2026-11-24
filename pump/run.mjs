@@ -66,6 +66,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { createCollector, IngestSetupError } from '../ingest/collect.mjs';
+import { sleepUnless } from '../ingest/github.mjs';
 import { openState } from '../state/db.mjs';
 import { pullState, pushState } from '../scripts/state-asset.mjs';
 import { appTokenMinter } from './app-token.mjs';
@@ -98,7 +99,7 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
 export async function runPump({
   env = process.env,
   now = Date.now,
-  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  sleep = sleepUnless,
   fetch = globalThis.fetch,
   log = (line) => process.stderr.write(`${line}\n`),
   stateFile = DEFAULT_STATE,
@@ -218,6 +219,7 @@ export async function runPump({
   // After any failed push nothing more is dispatched: work sent now could be
   // missing from the saved state. The run ends after one housekeeping tick.
   let pushFailed = false;
+  const warnedPaused = new Set();
   const save = async (why, { open = true } = {}) => {
     if (open) keepBudget();
     try {
@@ -279,6 +281,15 @@ export async function runPump({
       summary.reapedSlots += early.slots;
       dispatched += summary.dispatched;
       failed += summary.failed;
+      // R-ING-22: a paused workflow fails the run, so the health issue shows it.
+      if (summary.paused?.length) {
+        ok = false;
+        for (const p of db.pausedWorkflows({ now: now() })) {
+          if (warnedPaused.has(p.workflow)) continue;
+          warnedPaused.add(p.workflow);
+          say(`pump: ${p.workflow} is paused until ${p.until}: ${p.count} dispatches in a row ran at another commit than the one recorded at dispatch (run_sha_mismatch). Check that its worker branch is not moving and that no one else dispatches its workflow; the pause ends on its own`);
+        }
+      }
       const ingestNote = ingested
         ? { checked: ingested.checked, judged: ingested.judged, recorded: ingested.recorded, outcomes: ingested.outcomes, errors: ingested.errors, stopped: ingested.stopped }
         : null;

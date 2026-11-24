@@ -873,3 +873,123 @@ test('R-ING-17: a GitHub call that hangs is cut off at collect()\'s deadline plu
     db.close();
   }
 });
+
+test('R-ING-21: a deadline further off than a timer can wait is no deadline, not one that fires at once', async () => {
+  const { db, fence } = setup();
+  const api = worker({ bundle: makeBundle({ identity: { fence } }) });
+  const h = harness({ api });
+  try {
+    const s = await h.collect(db, { deadline: h.clock.t + 2 ** 32 });
+    assert.deepEqual(s.outcomes, { accepted: 1 }, 'the GitHub calls were not cut off');
+    assert.equal(s.errors, 0);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-ING-22: three dispatches in a row at the wrong commit pause the workflow; a run that passes resets the count', async () => {
+  const db = openState(':memory:');
+  const run = async (attemptId, headSha, at, recorded = WORKFLOW_SHA) => {
+    db.acquireSlot(attemptId, { budget: 5, ttlMs: 30 * MIN, now: at });
+    const l = db.acquireLease(RUN_KEY, attemptId, { ttlMs: 30 * MIN, now: at });
+    db.createDispatch({
+      attemptId, shardId: 's1', workflow: 'qa', repo: WORKER_REPO, workflowFile: 'qa-worker.yml', ref: 'main',
+      expires: at + 30 * MIN, items: [{ run_key: RUN_KEY, subject: 'repo:1', fence: l.fence }], workflowSha: recorded, now: at,
+    });
+    db.markDispatched(attemptId, { runId: RUN_ID });
+    const art = artifactEntry({ name: `result-${attemptId}-0.tar.age` });
+    const api = worker({ bundle: makeBundle({ identity: { attempt_id: attemptId, fence: l.fence } }), run: defaultRun({ head_sha: headSha }), artifacts: [art] });
+    const h = harness({ api });
+    h.clock.t = at + MIN;
+    try {
+      return await h.collect(db);
+    } finally {
+      h.cleanup();
+    }
+  };
+  // Each dispatch recorded at another commit (a branch that keeps moving), each run at yet another.
+  const wrong = '2'.repeat(40);
+  await run('a1', wrong, T0, '3'.repeat(40));
+  await run('a2', wrong, T0 + 60 * MIN, '4'.repeat(40));
+  await run('a3', WORKFLOW_SHA, T0 + 120 * MIN); // passed: the count starts again
+  assert.equal(db.getKv('pump.sha_mismatch:qa'), undefined);
+  await run('a4', wrong, T0 + 180 * MIN, '5'.repeat(40));
+  await run('a5', wrong, T0 + 240 * MIN, '6'.repeat(40));
+  assert.deepEqual(db.pausedWorkflows({ now: T0 + 241 * MIN }), []);
+  await run('a6', wrong, T0 + 300 * MIN, '7'.repeat(40));
+  const [p] = db.pausedWorkflows({ now: T0 + 302 * MIN });
+  assert.equal(p.workflow, 'qa');
+  assert.equal(p.reason, 'run_sha_mismatch');
+  assert.equal(p.count, 3);
+  assert.equal(p.until, new Date(T0 + 301 * MIN + 6 * 60 * MIN).toISOString());
+  assert.deepEqual(db.pausedWorkflows({ now: T0 + 301 * MIN + 6 * 60 * MIN }), [], 'the pause ends on its own');
+  db.close();
+});
+
+test('R-ING-24: the shards a merge overtook (all recorded at the old commit) count once and do not pause the workflow', async () => {
+  const db = openState(':memory:');
+  const run = async (attemptId, headSha, at, recorded) => {
+    db.acquireSlot(attemptId, { budget: 5, ttlMs: 30 * MIN, now: at });
+    const l = db.acquireLease(RUN_KEY, attemptId, { ttlMs: 30 * MIN, now: at });
+    db.createDispatch({
+      attemptId, shardId: 's1', workflow: 'qa', repo: WORKER_REPO, workflowFile: 'qa-worker.yml', ref: 'main',
+      expires: at + 30 * MIN, items: [{ run_key: RUN_KEY, subject: 'repo:1', fence: l.fence }], workflowSha: recorded, now: at,
+    });
+    db.markDispatched(attemptId, { runId: RUN_ID });
+    const art = artifactEntry({ name: `result-${attemptId}-0.tar.age` });
+    const api = worker({ bundle: makeBundle({ identity: { attempt_id: attemptId, fence: l.fence } }), run: defaultRun({ head_sha: headSha }), artifacts: [art] });
+    const h = harness({ api });
+    h.clock.t = at + MIN;
+    try {
+      return await h.collect(db);
+    } finally {
+      h.cleanup();
+    }
+  };
+  const OLD = '3'.repeat(40);
+  const NEW = '2'.repeat(40);
+  // One tick reserves its shards in one loop: created seconds apart.
+  for (const [i, a] of ['m1', 'm2', 'm3'].entries()) {
+    const s = await run(a, NEW, T0 + i * 2_000, OLD);
+    assert.deepEqual(s.outcomes, { rejected: 1 });
+  }
+  assert.deepEqual(db.pausedWorkflows({ now: T0 + 10 * MIN }), [], 'a normal merge pauses nothing');
+  assert.deepEqual([db.getKv('pump.sha_mismatch:qa').count, db.getKv('pump.sha_mismatch:qa').last_sha], [1, OLD]);
+  db.close();
+});
+
+test('R-ING-25: the same recorded commit in separate ticks keeps counting, and pauses at three', () => {
+  const db = openState(':memory:');
+  const SHA = '3'.repeat(40);
+  // A cause that persists at a fixed commit: every run lands elsewhere, one dispatch per tick.
+  for (const [i, at] of [T0, T0 + 10 * MIN, T0 + 20 * MIN].entries()) {
+    const r = db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + 5 * MIN });
+    assert.equal(r.count, i + 1);
+  }
+  const [p] = db.pausedWorkflows({ now: T0 + 26 * MIN });
+  assert.equal(p?.workflow, 'qa', 'paused');
+  // One burst (dispatches made within one tick) still counts once.
+  db.deleteKv('pump.paused:qa');
+  for (const at of [T0 + 100 * MIN, T0 + 100 * MIN + 2_000, T0 + 100 * MIN + 4_000]) db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + 5 * MIN });
+  assert.equal(db.getKv('pump.sha_mismatch:qa').count, 1);
+  assert.deepEqual(db.pausedWorkflows({ now: T0 + 106 * MIN }), []);
+  db.close();
+});
+
+test('R-ING-26: same-commit mismatches from separate ticks only ~130 s apart still count, and pause at three', async () => {
+  const { SHA_BURST_MS } = await import('../../state/db.mjs');
+  const db = openState(':memory:');
+  const SHA = '3'.repeat(40);
+  // Ticks start 150 s apart; a long ingest in one and a short one in the next puts their dispatches ~130 s apart.
+  const created = [T0, T0 + 130_000, T0 + 260_000];
+  created.forEach((at, i) => assert.equal(db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + MIN }).count, i + 1));
+  assert.equal(db.pausedWorkflows({ now: T0 + 6 * MIN })[0]?.workflow, 'qa');
+  // A burst's start never moves: repeats 20 s apart do not chain past it.
+  db.deleteKv('pump.paused:qa');
+  const chain = [T0 + 60 * MIN, T0 + 60 * MIN + 20_000, T0 + 60 * MIN + 40_000, T0 + 60 * MIN + 60_000];
+  const counts = chain.map((at) => db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + MIN }).count);
+  assert.deepEqual(counts, [1, 1, 2, 2], 'the third is 40 s after the burst began: a new one');
+  assert.ok(SHA_BURST_MS < 150_000);
+  db.close();
+});

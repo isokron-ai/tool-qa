@@ -22,6 +22,25 @@ const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const ID_RE = /^[1-9]\d{0,19}$/;
 const WORKFLOW_FILE_RE = /^(?:\.github\/workflows\/)?([A-Za-z0-9_.-]{1,100}\.ya?ml)$/;
 
+/** setTimeout as a promise, ended early (and its timer cleared) when `signal` aborts. */
+export function sleepUnless(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', stop);
+      resolve();
+    }, ms);
+    const stop = () => {
+      clearTimeout(t);
+      resolve();
+    };
+    signal?.addEventListener('abort', stop, { once: true });
+  });
+}
+
 export class GithubError extends Error {
   constructor(message, { status = 0, transient = false, code = null } = {}) {
     super(message);
@@ -76,7 +95,7 @@ async function readCapped(res, max) {
  */
 export function makeGithub({
   token, fetch = globalThis.fetch, apiUrl = 'https://api.github.com',
-  sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retries = 3, maxDownloadBytes = MAX_ARTIFACT_BYTES,
+  sleep = sleepUnless, retries = 3, maxDownloadBytes = MAX_ARTIFACT_BYTES,
   downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS, deadlineSignal = () => null,
 } = {}) {
   if (!token) throw new GithubError('a GitHub token is required');
@@ -93,6 +112,20 @@ export function makeGithub({
   const limit = (ms) => {
     const d = deadlineSignal();
     return d ? AbortSignal.any([AbortSignal.timeout(ms), d]) : AbortSignal.timeout(ms);
+  };
+  // sleep(ms, signal), cut short when the deadline fires, also for a sleep that ignores the signal.
+  const waitUnlessDeadline = (ms) => {
+    const d = deadlineSignal();
+    if (!d) return sleep(ms);
+    if (d.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        d.removeEventListener('abort', done);
+        resolve();
+      };
+      d.addEventListener('abort', done, { once: true });
+      Promise.resolve(sleep(ms, d)).then(done, done);
+    });
   };
   const pastDeadline = (label) => {
     if (deadlineSignal()?.aborted) throw new GithubError(`${label}: past the deadline; not sent`, { transient: true, code: 'deadline' });
@@ -120,7 +153,7 @@ export function makeGithub({
         if (attempt >= retries) throw new GithubError(`${label}: HTTP ${res.status}`, { status: res.status, transient: true });
       }
       pastDeadline(label);
-      await sleep(wait);
+      await waitUnlessDeadline(wait); // a retry-after of up to 60 s ends at the deadline (R-ING-20)
       delay = Math.min(delay * 2, 30_000);
     }
   }
