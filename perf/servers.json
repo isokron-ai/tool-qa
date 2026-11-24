@@ -61,7 +61,7 @@
       "repo": "isokron-ai/mcp-write-safety",
       "rebuild": [],
       "profiles": ["http"],
-      "note": "0.3.0 serves Streamable HTTP only; its usage text lists a stdio mode that does not exist (R-PERF-01).",
+      "note": "0.3.0 serves Streamable HTTP only; its usage text listed a stdio mode that does not exist (R-TT-01 in isokron-ai/mcp-write-safety).",
       "http_args": ["all", "--port", "{port}"],
       "seed": {
         "tool": "create_ticket",
@@ -75,7 +75,7 @@
       ]
     },
     "fixture": {
-      "_comment": "Control, not a product: a dependency-free stdio server with a settable delay. Proves the harness sees a slowdown (R-PERF-02).",
+      "_comment": "Control, not a product: a dependency-free stdio server with a settable delay. Proves the harness sees a slowdown (test/perf-harness.test.mjs).",
       "local_script": "fixture-server.mjs",
       "repo": null,
       "profiles": ["stdio"],

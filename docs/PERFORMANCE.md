@@ -46,6 +46,8 @@ Things the Inspector cannot do that this design works around:
 | mcp-check | `@isokron/mcp-check` (`mcp-check-server`) | stdio | `check_tools_list` on a 6-tool list (3), `explain_check` (3), `compare_tools_lists` (1) |
 | tiny-tracker | `@mcp-write-safety/tiny-tracker` | HTTP | `list_projects` (2), `list_tickets` (3), `get_ticket` (3) over 24 seeded tickets |
 
+tiny-tracker 0.3.0 has no stdio mode (its usage text said it had; fixed in isokron-ai/mcp-write-safety, R-TT-01), so it is measured over HTTP only.
+
 `strapi-plugin-writesafe-mcp` is not measured: no such repository or package exists (the public repo is `strapi-plugin-writesafe`, a Strapi
 plugin that needs a running Strapi and database, so it cannot start over stdio without a project around it).
 
@@ -101,6 +103,7 @@ error). Shared runners are noisy, so the limits are generous and apply to median
 - **Both a ratio and a millisecond margin must be exceeded**, so a sub-millisecond server cannot go red on a 0.3 ms wobble.
 - **Calibration.** Each run times a fixed CPU job (`calibration_ms`). The baseline is scaled by the ratio of the two, when the ratio is between 0.5 and 2,
   so a slower runner does not read as a regression. Outside that band the raw numbers are compared and the report says so.
+- **Run-to-run noise is real.** The same four releases measured a second time, on other runner machines, differed from the first baselines by up to 1.4x in raw p95 (kronicle-lite over stdio: 46.5 ms, then 32.7 ms) and by 40 percent in throughput. After calibration all four compared as ok, and the limits above sit well outside that spread. Do not tighten them without more runs.
 - **Noise.** If the run's own repeats disagree by more than 3x (p95 spread), red is shown as amber and the report says to run it again.
 - **A first baseline must be clean**: failed calls above 2 percent, or a profile that did not complete, is red even with nothing to compare.
 - Amber prints a GitHub warning annotation. Red fails the job (the artifact is still kept).
