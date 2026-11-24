@@ -13,7 +13,7 @@
       "setup_minutes": 3,
       "minutes_per_subject": 1,
       "slots_max": 3,
-      "versions": { "tool": { "mcp-check": "e3bd089" }, "oracle": {}, "probe": {} },
+      "versions": { "tool": { "mcp-check": "bf748b9" }, "oracle": {}, "probe": {} },
       "image_digest": null,
       "settings_state": "default"
     },
