@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { classifyFamily, foundByOf, main, parseLedger, parseTestRef, splitRow } from '../scripts/ledger.mjs';
+import { classifyFamily, foundByOf, main, parseLedger, parseTestRef, resolveCommit, splitRow } from '../scripts/ledger.mjs';
 
 const FIX = fileURLToPath(new URL('./fixtures/ledger/', import.meta.url));
 const fixture = (repo) => readFileSync(join(FIX, `isokron-ai__${repo}.md`), 'utf8');
@@ -88,6 +88,17 @@ test('classifyFamily', () => {
   assert.equal(classifyFamily('the hostile self test cases'), 'self-test');
   assert.equal(classifyFamily('findings of the security review'), 'review');
   assert.equal(classifyFamily('something else'), null);
+  assert.equal(classifyFamily('the dispatch inputs of the T0 workers (`selftest.yml`, `dogfood-*.yml`)'), null, 'file names in code spans do not count');
+});
+
+test('a cached commit pushed with no pull request counts only for the branch it was found on', async () => {
+  const cache = { commits: {
+    'o/r@aaaaaaa': { sha: 'aaaaaaa', pr: null, merged_at: '2026-11-21T00:00:00Z', state: 'pushed', branch: 'rel' },
+    'o/r@bbbbbbb': { sha: 'bbbbbbb', pr: 5, merged_at: '2026-11-21T00:00:00Z', state: 'merged' },
+  }, contains: {} };
+  assert.equal((await resolveCommit('o/r', 'aaaaaaa', null, cache, 'rel')).state, 'pushed');
+  assert.match((await resolveCommit('o/r', 'aaaaaaa', null, cache, 'main')).error, /not looked up/);
+  assert.equal((await resolveCommit('o/r', 'bbbbbbb', null, cache, 'main')).pr, 5);
 });
 
 // ---- the whole run, against a fake GitHub
@@ -157,7 +168,7 @@ function fakeGitHub({ rateLimit = false } = {}) {
     m = /^\/repos\/([^/]+\/[^/]+)\/compare\/([^/]+)\.\.\.(.+)$/.exec(u.pathname);
     if (m) {
       const [, repo, base, head] = m;
-      if (base === 'main') return json(200, { status: 'behind' });
+      if (base === 'main' || base === 'state' || base === 'nightly') return json(200, { status: 'behind' });
       if (repo === 'isokron-ai/mcp-check' && base === 'v1.4.0' && head.startsWith('m3')) return json(200, { status: 'behind' });
       return json(200, { status: 'diverged' });
     }
@@ -169,6 +180,13 @@ function fakeGitHub({ rateLimit = false } = {}) {
           { tag_name: 'v1.3.9', published_at: '2026-11-23T12:00:00Z', draft: false, prerelease: false },
           { tag_name: 'v1.3.0', published_at: '2026-11-22T00:00:00Z', draft: false, prerelease: false },
           { tag_name: 'v2.0.0-draft', published_at: null, draft: true, prerelease: false },
+        ]);
+      }
+      // tool-qa keeps its state database on a prerelease named state; neither it nor a tag that is not a version counts.
+      if (m[1] === 'isokron-ai/tool-qa') {
+        return json(200, [
+          { tag_name: 'state', published_at: '2026-11-30T00:00:00Z', draft: false, prerelease: true },
+          { tag_name: 'nightly', published_at: '2026-11-30T00:00:00Z', draft: false, prerelease: false },
         ]);
       }
       return json(200, []);
@@ -209,6 +227,8 @@ test('a full run: every repo read, rows resolved to pull requests, merges and re
     assert.deepEqual([rec('R-SS-01').fix_pr, rec('R-SS-01').merged_at, rec('R-SS-01').released_in], [3, '2026-11-23T10:00:00Z', 'v1.4.0']);
     assert.equal(rec('R-SS-10').severity_note, 'hardening');
     assert.equal(rec('R-ING-01').found_by, 'review');
+    assert.equal(rec('R-ING-01').released_in, null, 'the state prerelease and a non-version tag are not tool releases');
+    assert.ok(!gh.calls.some((c) => /compare\/(state|nightly)\.\.\./.test(c)));
     assert.equal(rec('R-ING-20').found_by, 'CI');
     assert.equal(rec('R-MUT-00').found_by, 'mutation');
     assert.equal(rec('R-WC-01').found_by, 'unknown');

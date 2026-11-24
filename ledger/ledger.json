@@ -6,7 +6,7 @@
       "ref": "main",
       "path": "REGRESSIONS.md",
       "status": "ok",
-      "sha256": "ae2ac68470019a2bd0006ca6b98c46cc0de8662ae62dc74f4f6e1bf450360a9d",
+      "sha256": "e55cc5dfd14457553ab9ef09e0da14563457017c71f2afc5c552f9f3f62473f5",
       "header": [
         "ID",
         "What it was",
@@ -23,7 +23,7 @@
       "ref": "main",
       "path": "REGRESSIONS.md",
       "status": "ok",
-      "sha256": "251d4acf5e80920b229c033f0c74f108c8c6f53521184517fc35eb21e6051a1c",
+      "sha256": "8dda76b14e7995584ace0955475256155aeaf139462fdfb9a03b4cd6ea4a4c29",
       "header": [
         "ID",
         "What it was",
@@ -40,7 +40,7 @@
       "ref": "main",
       "path": "REGRESSIONS.md",
       "status": "ok",
-      "sha256": "df9434689c87b72c20c656a52f172719123305585e19d5f98276f2a2e953bf1d",
+      "sha256": "60e28c21d66e334d9dfa9e8e7590e7c37d4c7a38fb225460a548ff3e347846e1",
       "header": [
         "ID",
         "What it was",
@@ -68,10 +68,10 @@
     }
   ],
   "counts": {
-    "total": 62,
-    "isokron-ai/tool-qa": 21,
-    "isokron-ai/mcp-check": 11,
-    "isokron-ai/mcp-surface-corpus": 30,
+    "total": 101,
+    "isokron-ai/tool-qa": 49,
+    "isokron-ai/mcp-check": 12,
+    "isokron-ai/mcp-surface-corpus": 40,
     "isokron-ai/mcp-writecheck-action": 0,
     "isokron-ai/mcp-write-safety": 0
   },
@@ -106,7 +106,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -133,7 +133,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -175,7 +175,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -217,7 +217,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -249,7 +249,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -282,7 +282,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -314,7 +314,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -352,7 +352,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -384,7 +384,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -411,7 +411,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -443,7 +443,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -485,7 +485,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -512,7 +512,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -544,7 +544,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -591,7 +591,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -638,7 +638,7 @@
         3
       ],
       "merged_at": "2026-11-24T00:16:57Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -670,7 +670,7 @@
         4
       ],
       "merged_at": "2026-11-24T00:35:13Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -697,7 +697,7 @@
         4
       ],
       "merged_at": "2026-11-24T00:35:13Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -724,7 +724,184 @@
         4
       ],
       "merged_at": "2026-11-24T00:35:13Z",
-      "released_in": "state",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-20",
+      "title": "The wait before a retry in `withRetries` ignored the deadline, so a `retry-after` of up to 60 s ran on past it.",
+      "description": "The wait before a retry in `withRetries` ignored the deadline, so a `retry-after` of up to 60 s ran on past it.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/github.test.mjs",
+          "name": "R-ING-20: the wait before a retry ends at the deadline, even a retry-after of 60 s",
+          "found": true
+        }
+      ],
+      "fix_commit": "fd2fc57",
+      "fix_commits": [
+        "fd2fc57"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-24T01:27:09Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-21",
+      "title": "`AbortSignal.timeout(ms)` fires after 1 ms when ms is over 2^31 − 1, so a far-off ingest deadline cut every GitHub call off at once.",
+      "description": "`AbortSignal.timeout(ms)` fires after 1 ms when ms is over 2^31 − 1, so a far-off ingest deadline cut every GitHub call off at once.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-21: a deadline further off than a timer can wait is no deadline, not one that fires at once",
+          "found": true
+        }
+      ],
+      "fix_commit": "fd2fc57",
+      "fix_commits": [
+        "fd2fc57"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-24T01:27:09Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-22",
+      "title": "Once `run_sha_mismatch` stopped counting towards parking (R-ING-18), nothing bounded a workflow whose every run was at the wrong commit.",
+      "description": "Once `run_sha_mismatch` stopped counting towards parking (R-ING-18), nothing bounded a workflow whose every run was at the wrong commit.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-22: three dispatches in a row at the wrong commit pause the workflow; a run that passes resets the count",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-ING-22: while a workflow is paused the pump run fails, once said why",
+          "found": true
+        },
+        {
+          "file": "pump/test/tick.test.mjs",
+          "name": "R-ING-22: a paused workflow gets no dispatch, and the tick says it is paused",
+          "found": true
+        }
+      ],
+      "fix_commit": "dd55000",
+      "fix_commits": [
+        "dd55000"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-24T01:27:09Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-23",
+      "title": "The branch-read 404 message named only a private repository, not a missing or misspelt branch.",
+      "description": "The branch-read 404 message named only a private repository, not a missing or misspelt branch.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/dispatch.test.mjs",
+          "name": "R-ING-23: a branch that cannot be read names both causes: a missing branch, or a private repository",
+          "found": true
+        }
+      ],
+      "fix_commit": "8dda8c8",
+      "fix_commits": [
+        "8dda8c8"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-24T01:27:09Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-24",
+      "title": "A merge to a worker's main between the tick's one ref read and its sends made every shard of the tick a `run_sha_mismatch`, so the R-ING-22 count reached three and paused a healthy workflow for six h…",
+      "description": "A merge to a worker's main between the tick's one ref read and its sends made every shard of the tick a `run_sha_mismatch`, so the R-ING-22 count reached three and paused a healthy workflow for six hours.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-24: the shards a merge overtook (all recorded at the old commit) count once and do not pause the workflow",
+          "found": true
+        },
+        {
+          "file": "pump/test/tick.test.mjs",
+          "name": "R-ING-24: the ref is read again just before each send; a merge since the tick began moves the expected commit",
+          "found": true
+        }
+      ],
+      "fix_commit": "8346431",
+      "fix_commits": [
+        "8346431"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-24T01:27:09Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-25",
+      "title": "R-ING-24 counted each recorded commit once, so a cause that persists at a fixed commit (run names taken by someone else, a ref resolved differently) never paused the workflow.",
+      "description": "R-ING-24 counted each recorded commit once, so a cause that persists at a fixed commit (run names taken by someone else, a ref resolved differently) never paused the workflow.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-25: the same recorded commit in separate ticks keeps counting, and pauses at three",
+          "found": true
+        }
+      ],
+      "fix_commit": "0f5b765",
+      "fix_commits": [
+        "0f5b765"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-24T01:27:09Z",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -761,7 +938,7 @@
         9
       ],
       "merged_at": "2026-11-24T01:08:45Z",
-      "released_in": "state",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -788,7 +965,714 @@
         9
       ],
       "merged_at": "2026-11-24T01:08:45Z",
-      "released_in": "state",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-26",
+      "title": "The mismatch burst window (150 s, inclusive, measured from the last collapsed dispatch, which moved forward) chained across ticks whose dispatches were ~130 s apart, so a fixed-commit cause still nev…",
+      "description": "The mismatch burst window (150 s, inclusive, measured from the last collapsed dispatch, which moved forward) chained across ticks whose dispatches were ~130 s apart, so a fixed-commit cause still never paused.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "ingest/test/collect.test.mjs",
+          "name": "R-ING-26: same-commit mismatches from separate ticks only ~130 s apart still count, and pause at three",
+          "found": true
+        }
+      ],
+      "fix_commit": "ef72bbc",
+      "fix_commits": [
+        "ef72bbc"
+      ],
+      "fix_pr": 6,
+      "fix_prs": [
+        6
+      ],
+      "merged_at": "2026-11-24T01:27:09Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-01",
+      "title": "Nothing stopped the pump from dispatching lanes that run third-party code when the sandbox had stopped passing its self test on today's runners (runner image, Docker or kernel drift), or when nobody …",
+      "description": "Nothing stopped the pump from dispatching lanes that run third-party code when the sandbox had stopped passing its self test on today's runners (runner image, Docker or kernel drift), or when nobody knew whether it still did. The pump now reads the nightly sandbox conformance status and holds every `runs_untrusted` lane while it is red, older than 36 hours or unreadable; an unmarked lane counts as untrusted; the watchdog shows the breaker on the health issue.",
+      "severity": "high",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-01: workflows.json marks every lane: live-probe, writecheck, build-probe and scan-deep run third-party code; scan-static and meta-* do not",
+          "found": true
+        },
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-01: the breaker is closed only on a well-formed, passing status checked within 36 hours",
+          "found": true
+        },
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-01: the status is fetched without a token, followed through redirects, capped in size, retried once",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-WD-01: a red, stale or unreadable conformance status holds every untrusted workflow; source-only ones still run",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-WD-01: a status that ages past 36 hours during a run trips the breaker on the next tick",
+          "found": true
+        },
+        {
+          "file": "watchdog/test/run.test.mjs",
+          "name": "R-WD-01: the sandbox breaker is on the health issue: red while it holds an enabled lane, amber with none enabled, green when it passed",
+          "found": true
+        },
+        {
+          "file": "watchdog/test/run.test.mjs",
+          "name": "R-WD-01: the watchdog fetches the conformance status itself, with no token",
+          "found": true
+        }
+      ],
+      "fix_commit": "a1b1424",
+      "fix_commits": [
+        "a1b1424",
+        "aecd968"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-02",
+      "title": "The breaker could fail open: it counted a lane as enabled only when `enabled === true`, while the due list dispatched unless `enabled === false` (and the ingest key check used `=== true`).",
+      "description": "The breaker could fail open: it counted a lane as enabled only when `enabled === true`, while the due list dispatched unless `enabled === false` (and the ingest key check used `=== true`). A lane with `runs_untrusted: true` and `enabled` missing, `\"true\"` or `1` was dispatched with no breaker and no key check. Now one `isEnabled` is used everywhere, and `loadConfig` refuses non-boolean `enabled` or `runs_untrusted`.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-02: one isEnabled everywhere: only enabled === true dispatches; loadConfig refuses anything but real booleans",
+          "found": true
+        }
+      ],
+      "fix_commit": "aecd968",
+      "fix_commits": [
+        "aecd968"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-03",
+      "title": "A status for another sandbox commit than the lanes pin still closed the breaker silently.",
+      "description": "A status for another sandbox commit than the lanes pin still closed the breaker silently. Each untrusted lane now names its `sandbox_sha`; a difference is logged, recorded in `pump.breaker` and shown amber on the health issue. Lanes are not held for it: the nightly tests main, which moves with every commit.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-03: lanes pinned at another sandbox commit than the one the nightly tested are named (amber), not held",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-WD-03: a lane pinned at another sandbox commit is logged and recorded, and still dispatched",
+          "found": true
+        },
+        {
+          "file": "watchdog/test/run.test.mjs",
+          "name": "R-WD-03: the health issue shows amber while an enabled lane pins another sandbox commit than the nightly tested",
+          "found": true
+        }
+      ],
+      "fix_commit": "aecd968",
+      "fix_commits": [
+        "aecd968"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-04",
+      "title": "Nothing pinned which lanes are trusted; one flag change could let a lane run third-party code past the breaker.",
+      "description": "Nothing pinned which lanes are trusted; one flag change could let a lane run third-party code past the breaker.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-04: the trusted set is pinned: exactly scan-static, meta-github and meta-registry say runs_untrusted false",
+          "found": true
+        }
+      ],
+      "fix_commit": "aecd968",
+      "fix_commits": [
+        "aecd968"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-05",
+      "title": "The status was read once per pump run, so a red published mid-run took up to 11 minutes to hold the lanes.",
+      "description": "The status was read once per pump run, so a red published mid-run took up to 11 minutes to hold the lanes. It is now read on every tick that may dispatch (one GET each 150 s).",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-WD-05: a fresh green status lets untrusted workflows run; the status is read on every tick that may dispatch, and only when one is enabled",
+          "found": true
+        }
+      ],
+      "fix_commit": "aecd968",
+      "fix_commits": [
+        "aecd968"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-06",
+      "title": "`readConformance` read the whole body before the 16 KiB check.",
+      "description": "`readConformance` read the whole body before the 16 KiB check. It now reads the stream and stops at the cap.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-06: the status body is read with a cap: reading stops at 16 KiB, it is never read whole first",
+          "found": true
+        }
+      ],
+      "fix_commit": "aecd968",
+      "fix_commits": [
+        "aecd968"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-07",
+      "title": "An older status put back on the release (a re-run of an old night) closed the breaker again.",
+      "description": "An older status put back on the release (a re-run of an old night) closed the breaker again. The newest status seen is kept in `pump.conformance`; an older one is unreadable, for the pump and the watchdog.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-07: a status older than one already seen is a rollback: unreadable, whatever it says",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-WD-07: the newest status seen and the verified run are kept in the state; a later run that reads an older status holds the lanes",
+          "found": true
+        },
+        {
+          "file": "watchdog/test/run.test.mjs",
+          "name": "R-WD-07: the watchdog judges with what the pump remembered: a rollback is unreadable, and a run already verified is not looked up again",
+          "found": true
+        }
+      ],
+      "fix_commit": "aecd968",
+      "fix_commits": [
+        "aecd968",
+        "4cb8db2"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-08",
+      "title": "Anyone with write access to mcp-surface-corpus could upload a forged green status.",
+      "description": "Anyone with write access to mcp-surface-corpus could upload a forged green status. A green status now counts only when the public Actions API, with no token, shows its run attempt as a successful `conformance-nightly.yml` run on main (schedule or workflow_dispatch) of the commit it names; looked up once and remembered.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-08: a green status counts only when the Actions API shows its run as a successful nightly on main of that commit; looked up once",
+          "found": true
+        },
+        {
+          "file": "pump/test/run.test.mjs",
+          "name": "R-WD-08: a green status whose run the Actions API does not back holds the lanes",
+          "found": true
+        }
+      ],
+      "fix_commit": "aecd968",
+      "fix_commits": [
+        "aecd968",
+        "4cb8db2"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-09",
+      "title": "The rollback memory could be poisoned: `judgeConformance` advanced `memory.newest` for any well-formed status before its run was checked, so a forged red with `run_id: 9007199254740991` kept the brea…",
+      "description": "The rollback memory could be poisoned: `judgeConformance` advanced `memory.newest` for any well-formed status before its run was checked, so a forged red with `run_id: 9007199254740991` kept the breaker open for good. Nothing is remembered now until the run's identity is verified (a green also needs success).",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-09: a forged red status cannot poison the rollback memory: nothing is remembered before its run's identity is verified",
+          "found": true
+        }
+      ],
+      "fix_commit": "4cb8db2",
+      "fix_commits": [
+        "4cb8db2"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-10",
+      "title": "A verified green replayed with a fresh `checked_at` beat the 36 h check.",
+      "description": "A verified green replayed with a fresh `checked_at` beat the 36 h check. A green is now aged by its verified run's start (kept in `pump.conformance`), and a `checked_at` outside the run's own times is refused.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-10: a green status is aged by its verified run, not its own checked_at: a replay with a fresh date is stale, and a date outside the run is refused",
+          "found": true
+        }
+      ],
+      "fix_commit": "4cb8db2",
+      "fix_commits": [
+        "4cb8db2"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-11",
+      "title": "The provenance lookup was unauthenticated (60/h per shared runner IP) and could be rate-limited into holding the lanes.",
+      "description": "The provenance lookup was unauthenticated (60/h per shared runner IP) and could be rate-limited into holding the lanes. It now sends the job token, to api.github.com only.",
+      "severity": "low-medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-11: the run lookup sends the job token to api.github.com only; the status file is fetched with none",
+          "found": true
+        }
+      ],
+      "fix_commit": "4cb8db2",
+      "fix_commits": [
+        "4cb8db2"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-12",
+      "title": "`head_branch === 'main'` also held for a run dispatched from a tag named main.",
+      "description": "`head_branch === 'main'` also held for a run dispatched from a tag named main. The commit must now be on main (`compare/main...sha` identical or behind). Manual dispatch stays allowed, because it is how a stale status is recovered.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-12: a commit that is not on main (a tag named main, a branch) does not back a status",
+          "found": true
+        }
+      ],
+      "fix_commit": "4cb8db2",
+      "fix_commits": [
+        "4cb8db2"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-WD-13",
+      "title": "One bad `workflows.json` entry made `loadConfig` throw, which stopped the pump (as it should) and also the watchdog, outside any try.",
+      "description": "One bad `workflows.json` entry made `loadConfig` throw, which stopped the pump (as it should) and also the watchdog, outside any try. The watchdog now reports it as a red `config` check; a test loads the committed file.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "pump/test/breaker.test.mjs",
+          "name": "R-WD-13: the committed workflows.json loads under the validation",
+          "found": true
+        },
+        {
+          "file": "watchdog/test/run.test.mjs",
+          "name": "R-WD-13: a workflows.json the pump cannot load is a red config check; the watchdog still writes the issue",
+          "found": true
+        }
+      ],
+      "fix_commit": "4cb8db2",
+      "fix_commits": [
+        "4cb8db2"
+      ],
+      "fix_pr": 5,
+      "fix_prs": [
+        5
+      ],
+      "merged_at": "2026-11-24T01:20:33Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-META-01",
+      "title": "One hostile subject could crash a meta-registry or meta-github shard: answers were read whole with no size cap (an npm full document can run to hundreds of MB, and a spoofed registry entry can name f…",
+      "description": "One hostile subject could crash a meta-registry or meta-github shard: answers were read whole with no size cap (an npm full document can run to hundreds of MB, and a spoofed registry entry can name five such packages), and an error that was not a fetch problem escaped the subject and failed the shard, so no item got a bundle.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-01: a body over the cap is not read past it and is a too_large problem",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-01: an npm package over the cap is a skip that is not retried; the subject's other stages still run",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-01: npm is read through the abbreviated document and the latest version, never the full document",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-01: one subject whose data makes the lane throw is that subject's own skip, never a failed shard (meta-github)",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-01: one subject whose data makes the lane throw is that subject's own skip, never a failed shard (meta-registry)",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-01: an error thrown while reading one subject is recorded as its non-retryable skip",
+          "found": true
+        }
+      ],
+      "fix_commit": "1a4c274",
+      "fix_commits": [
+        "1a4c274"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:26:27Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-META-02",
+      "title": "A rate limit or outage during the live known-answer read failed the control, so the shard uploaded nothing and every item was rejected as no_artifact, counted toward parking.",
+      "description": "A rate limit or outage during the live known-answer read failed the control, so the shard uploaded nothing and every item was rejected as no_artifact, counted toward parking.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-02: a known-answer read stopped by an outage reads no subject; every item is a retryable skip with the forgery control",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-02: a real known-answer mismatch is still a hard failure",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-02: a GitHub rate limit on the known-answer read makes the control unavailable, not failed",
+          "found": true
+        }
+      ],
+      "fix_commit": "1a4c274",
+      "fix_commits": [
+        "1a4c274"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:26:27Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-META-03",
+      "title": "The GitHub reserve was a fixed 200 requests whatever the token's limit, and requests already in flight (four subjects at a time) were not counted, so a shard could go below the reserve the other work…",
+      "description": "The GitHub reserve was a fixed 200 requests whatever the token's limit, and requests already in flight (four subjects at a time) were not counted, so a shard could go below the reserve the other workflows sharing the job token rely on.",
+      "severity": "low-medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-03: the reserve is a quarter of the reported limit, at least 300, and requests in flight count against it",
+          "found": true
+        }
+      ],
+      "fix_commit": "1a4c274",
+      "fix_commits": [
+        "1a4c274"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:26:27Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-META-04",
+      "title": "meta-github checked the shard deadline only between GraphQL batches, so a batch of 10 started just before it ran on; nothing showed that a shard of 100 fits the job time.",
+      "description": "meta-github checked the shard deadline only between GraphQL batches, so a batch of 10 started just before it ran on; nothing showed that a shard of 100 fits the job time.",
+      "severity": "low-medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-04: the deadline is checked per subject: a batch that starts in time does not run past it",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-04: a full shard of 100 items is read and written well inside the job time (mocked APIs)",
+          "found": true
+        }
+      ],
+      "fix_commit": "1a4c274",
+      "fix_commits": [
+        "1a4c274"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:26:27Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-META-05",
+      "title": "A registry entry in someone else's io.github namespace that names the subject's repository was recorded like the subject's own entry.",
+      "description": "A registry entry in someone else's io.github namespace that names the subject's repository was recorded like the subject's own entry.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-05: a registry entry in someone else's io.github namespace is flagged",
+          "found": true
+        }
+      ],
+      "fix_commit": "1a4c274",
+      "fix_commits": [
+        "1a4c274"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:26:27Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-META-06",
+      "title": "The conditional-request cache stored upstream free text (PyPI licence texts and summaries, the whole crates.io crate object with its description).",
+      "description": "The conditional-request cache stored upstream free text (PyPI licence texts and summaries, the whole crates.io crate object with its description).",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-06: the request cache holds no upstream free text (licence texts, summaries, crate descriptions)",
+          "found": true
+        }
+      ],
+      "fix_commit": "1a4c274",
+      "fix_commits": [
+        "1a4c274"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:26:27Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-META-07",
+      "title": "Anyone could publish a registry entry claiming isokron-ai/mcp-check and break the meta-registry known-answer control for good: the facts used every claiming entry, a bogus npm name turned npm_stage i…",
+      "description": "Anyone could publish a registry entry claiming isokron-ai/mcp-check and break the meta-registry known-answer control for good: the facts used every claiming entry, a bogus npm name turned npm_stage into \"ok,not_found\", and a flood could push our entry or package out of the pages and slots read. Every shard would then upload nothing.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-07: entries others publish for our repository cannot break the meta-registry known-answer control",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-07: a spoofed package that npm answers with an outage does not make the control unavailable",
+          "found": true
+        },
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-07: a search crowded past three pages, or failing, still finds the subject's own entry by its exact name",
+          "found": true
+        }
+      ],
+      "fix_commit": "dbecb6f",
+      "fix_commits": [
+        "dbecb6f"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:26:27Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-META-08",
+      "title": "For every subject, entries others publish could crowd the subject's own packages out of the five read per ecosystem.",
+      "description": "For every subject, entries others publish could crowd the subject's own packages out of the five read per ecosystem.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "meta/test/review.test.mjs",
+          "name": "R-META-08: five spoofed entries cannot push a subject's own package out of the ones read",
+          "found": true
+        }
+      ],
+      "fix_commit": "dbecb6f",
+      "fix_commits": [
+        "dbecb6f"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:26:27Z",
+      "released_in": null,
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
@@ -1130,6 +2014,33 @@
         19
       ],
       "merged_at": "2026-11-24T01:12:08Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-SS-12",
+      "title": "The R-SS-11 backstop mapped every `RangeError` from grading to `list_rejected` / `too_large`, a stack overflow included.",
+      "description": "The R-SS-11 backstop mapped every `RangeError` from grading to `list_rejected` / `too_large`, a stack overflow included.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/scan-static.test.mjs",
+          "name": "R-SS-12: only a RangeError about size is a too-large list; a stack overflow while grading stays reader_error",
+          "found": true
+        }
+      ],
+      "fix_commit": "d43b435",
+      "fix_commits": [
+        "d43b435"
+      ],
+      "fix_pr": 20,
+      "fix_prs": [
+        20
+      ],
+      "merged_at": "2026-11-24T01:23:25Z",
       "released_in": null,
       "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
     },
@@ -1506,6 +2417,307 @@
         6
       ],
       "merged_at": "2026-11-23T23:45:04Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-12",
+      "title": "The firewall order check (`jumpOrderProblems`) treated only `-j` targets as a way past our jumps: a `-g` (goto) to a chain that accepts, above them in DOCKER-USER, INPUT or the IPv6 FORWARD (or above…",
+      "description": "The firewall order check (`jumpOrderProblems`) treated only `-j` targets as a way past our jumps: a `-g` (goto) to a chain that accepts, above them in DOCKER-USER, INPUT or the IPv6 FORWARD (or above the jump to DOCKER-USER in FORWARD), passed the live check. A new mutation, `firewall-order-goto`, puts one there on the runner and must see the preflight refuse it.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/sandbox-net.test.mjs",
+          "name": "R-SBX-12 a goto (-g) above our jumps is a way past too, in every shared chain and in FORWARD",
+          "found": true
+        },
+        {
+          "file": "test/mutation.test.mjs",
+          "name": "R-SBX-12 the firewall-order-goto mutation puts a goto above our jumps, and only the preflight refusing for it counts",
+          "found": true
+        }
+      ],
+      "fix_commit": "4106543",
+      "fix_commits": [
+        "4106543",
+        "c4d82a6"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-13",
+      "title": "The self test ran only on pull requests and by hand, so drift GitHub makes under us (runner image, Docker, kernel) went unseen until a lane ran third-party code on it, and nothing outside this reposi…",
+      "description": "The self test ran only on pull requests and by hand, so drift GitHub makes under us (runner image, Docker, kernel) went unseen until a lane ran third-party code on it, and nothing outside this repository could read a result without a token. Now `conformance-nightly.yml` runs it with the mutation matrix every night, whatever the loop's switches, and publishes `conformance-status.json` (red results too) on the `conformance` release for tool-qa's breaker; every lane shares one check (`sandbox-conformance.yml`, `sandbox-guard`).",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-13 the conformance status is ok only when the call succeeded and both verdicts passed; anything missing counts against it",
+          "found": true
+        },
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-13 conformance-status.mjs writes red and green alike (a red one must be published), from the evidence and its own environment",
+          "found": true
+        },
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-13 the runner facts are short plain tokens or unknown, whatever the commands print",
+          "found": true
+        }
+      ],
+      "fix_commit": "c4d82a6",
+      "fix_commits": [
+        "c4d82a6"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-14",
+      "title": "Nothing noticed when gVisor, age or a pinned action had a newer release.",
+      "description": "Nothing noticed when gVisor, age or a pinned action had a newer release. `pin-drift.yml` now proposes new pins weekly as a pull request, checking every hash, through a token that cannot touch workflow files: action pins live in `pins/actions.json`, which the workflows must match.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-14 pin drift: nothing behind proposes nothing; a newer gVisor, age or action is found, hashed and written into its own file only",
+          "found": true
+        },
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-14 pin drift trusts nothing it cannot check: a bundle whose sha512 differs from the published one, or an odd tag, stops it",
+          "found": true
+        },
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-14 pin drift opens one pull request through the API (tree, commit, branch, pull request), never twice for the same pins",
+          "found": true
+        },
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-14 publish-conformance.sh refuses anything but a well-formed status file, before touching a release",
+          "found": true
+        }
+      ],
+      "fix_commit": "c4d82a6",
+      "fix_commits": [
+        "c4d82a6"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-15",
+      "title": "The nightly publish job built its status from the outputs of the jobs that ran the hostile targets: a target that got out of its sandbox could write `verdict=pass` in one line and publish a forged gr…",
+      "description": "The nightly publish job built its status from the outputs of the jobs that ran the hostile targets: a target that got out of its sandbox could write `verdict=pass` in one line and publish a forged green. The publish job now never reads those outputs; it downloads the telemetry and recomputes both verdicts with its own checkout's checkers (`scripts/verify-conformance.mjs`), and `sandbox-selftest.yml`'s `evidence` job does the same on every pull request.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-15 the published verdict is recomputed from the evidence in a job that ran no target; the self test jobs' outputs are never read",
+          "found": true
+        }
+      ],
+      "fix_commit": "b5cd6a6",
+      "fix_commits": [
+        "b5cd6a6"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-16",
+      "title": "An older run could republish green over a newer red: a re-run of a night whose publish failed replayed its pass and `--clobber` put it back, and a re-run of an old run tested an old commit and publis…",
+      "description": "An older run could republish green over a newer red: a re-run of a night whose publish failed replayed its pass and `--clobber` put it back, and a re-run of an old run tested an old commit and published a fresh green. `publish-conformance.sh` now refuses a status that is not for main's head, or that does not supersede the published one (a later run or attempt, evidence no older).",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-16 a status replaces the published one only when it is later and for main's head: a re-run never republishes an old green",
+          "found": true
+        }
+      ],
+      "fix_commit": "b5cd6a6",
+      "fix_commits": [
+        "b5cd6a6"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-17",
+      "title": "A caller could use `sandbox-guard` at a branch or tag, so the sandbox under it could change without review.",
+      "description": "A caller could use `sandbox-guard` at a branch or tag, so the sandbox under it could change without review. The action now fails unless it runs at a full commit SHA; a local checkout only with `allow-local-checkout`, set by this repository's `sandbox-conformance.yml` alone.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-17 sandbox-guard runs only at a full commit SHA; a local checkout only with this repository's own switch",
+          "found": true
+        }
+      ],
+      "fix_commit": "b5cd6a6",
+      "fix_commits": [
+        "b5cd6a6"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-18",
+      "title": "Pin drift's hashes were trust on first use and nothing said so.",
+      "description": "Pin drift's hashes were trust on first use and nothing said so. The age tarball is now verified against its release attestation (`gh attestation verify`) before it is proposed; the pull request says plainly that the gVisor and action pins are trust on first use.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-18 pin drift proposes no age without a valid release attestation, and says the gVisor and action pins are trust on first use",
+          "found": true
+        }
+      ],
+      "fix_commit": "b5cd6a6",
+      "fix_commits": [
+        "b5cd6a6"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-19",
+      "title": "A red night was never published when main moved during the run: `publish-conformance.sh` refused any status whose `sandbox_sha` was not main's head, so an older green stayed up for up to 36 hours.",
+      "description": "A red night was never published when main moved during the run: `publish-conformance.sh` refused any status whose `sandbox_sha` was not main's head, so an older green stayed up for up to 36 hours. A red status that supersedes is now always published; a green for another commit goes up as not ok (`result` `main_moved`).",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-19 a red status is always published when it supersedes, whatever main's head; a green for another commit goes up as not ok",
+          "found": true
+        }
+      ],
+      "fix_commit": "8cea11f",
+      "fix_commits": [
+        "8cea11f"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-20",
+      "title": "Pin drift stopped altogether when an age release had no valid attestation, so no gVisor or action pin moved either.",
+      "description": "Pin drift stopped altogether when an age release had no valid attestation, so no gVisor or action pin moved either. Age now keeps its pin, the rest go on, and the pull request lists the skip.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-20 an age release without a valid attestation is skipped, not fatal: gVisor and action pins still move, and the pull request lists the skip",
+          "found": true
+        }
+      ],
+      "fix_commit": "8cea11f",
+      "fix_commits": [
+        "8cea11f"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-SBX-21",
+      "title": "The comments on the recompute claimed more than it gives.",
+      "description": "The comments on the recompute claimed more than it gives. They now say it catches wiring bugs between jobs and keeps the verdict in a job that ran no target, but is not a defence against a compromised self test runner (which writes the telemetry); signed provenance would be the fix.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/conformance.test.mjs",
+          "name": "R-SBX-21 the recompute says plainly what it does not defend against: a compromised self test runner",
+          "found": true
+        }
+      ],
+      "fix_commit": "8cea11f",
+      "fix_commits": [
+        "8cea11f"
+      ],
+      "fix_pr": 7,
+      "fix_prs": [
+        7
+      ],
+      "merged_at": "2026-11-24T01:16:36Z",
       "released_in": null,
       "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
     },
@@ -2015,7 +3227,7 @@
         },
         {
           "file": "test/workflows.test.mjs",
-          "name": "R-MUT-00 sandbox-selftest: a mutation job turns off each protection in turn and must see the self test fail for that reason",
+          "name": "R-MUT-00 sandbox-conformance: a mutation job turns off each protection in turn and must see the self test fail for that reason",
           "found": true
         }
       ],

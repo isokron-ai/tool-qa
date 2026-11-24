@@ -83,7 +83,8 @@ export function splitRow(line) {
 export const prefixOf = (id) => id.replace(/-\d+$/, '');
 
 /** Classify a ledger's own description of an ID family ("- `R-CI-*`: ..."). */
-export function classifyFamily(text) {
+export function classifyFamily(raw) {
+  const text = String(raw).replace(/`[^`]*`/g, ''); // file names such as `selftest.yml` say nothing about how
   if (/mutation|can fail/i.test(text)) return 'mutation';
   if (/\bCI\b|runners/.test(text)) return 'CI';
   if (/self[ -]?test|hostile/i.test(text)) return 'self-test';
@@ -256,7 +257,9 @@ export function makeGitHub({ fetch = globalThis.fetch, token = '', budget = 300,
  */
 export async function resolveCommit(repo, sha, gh, cache, branch = 'main') {
   const key = `${repo}@${sha}`;
-  if (cache.commits[key]) return cache.commits[key];
+  const hit = cache.commits[key];
+  // A merged pull request holds on any branch; a commit pushed without one only for the branch it was found on.
+  if (hit && (hit.state === 'merged' || hit.branch === branch)) return hit;
   if (!gh) return { error: `${sha}: not looked up (offline, or the API stopped) and not in the cache` };
   const { status, body } = await gh.get(`/repos/${repo}/commits/${sha}/pulls?per_page=100`);
   if (status === 404 || status === 422 || !Array.isArray(body)) return { error: `commit ${sha} not found in ${repo}` };
@@ -275,16 +278,23 @@ export async function resolveCommit(repo, sha, gh, cache, branch = 'main') {
   const cmp = await gh.get(`/repos/${repo}/compare/${encodeURIComponent(branch)}...${full}`);
   const onMain = cmp.body && (cmp.body.status === 'behind' || cmp.body.status === 'identical');
   if (!onMain) return { sha, pr: null, merged_at: null, merge_commit_sha: null, state: 'not merged, no pull request' };
-  const out = { sha, pr: null, merged_at: c.body.commit?.committer?.date ?? null, merge_commit_sha: full, state: 'pushed' };
+  const out = { sha, pr: null, merged_at: c.body.commit?.committer?.date ?? null, merge_commit_sha: full, state: 'pushed', branch };
   cache.commits[key] = out;
   return out;
 }
 
-/** Published, non-draft releases, oldest first (by publish time, then tag). */
-export async function listReleases(repo, gh) {
+/** Tags that name a tool release: v1.2.3, 1.2, tiny-tracker-v0.4.0. Not, for example, tool-qa's `state` release. */
+export const RELEASE_TAG = '^(?:[A-Za-z0-9_.-]+-)?v?\\d+\\.\\d+(?:\\.\\d+)?$';
+
+/**
+ * Published releases of the tool, oldest first (by publish time, then tag): not drafts, not prereleases unless
+ * the source sets include_prereleases, and only tags that match the source's release_tags (default RELEASE_TAG).
+ */
+export async function listReleases(repo, gh, source = {}) {
   const { body } = await gh.get(`/repos/${repo}/releases?per_page=100`);
+  const tagRe = new RegExp(source.release_tags ?? RELEASE_TAG);
   return (Array.isArray(body) ? body : [])
-    .filter((r) => !r.draft && r.published_at)
+    .filter((r) => !r.draft && r.published_at && (source.include_prereleases || !r.prerelease) && tagRe.test(r.tag_name))
     .map((r) => ({ tag: r.tag_name, published_at: r.published_at, prerelease: !!r.prerelease }))
     .sort((a, b) => a.published_at.localeCompare(b.published_at) || a.tag.localeCompare(b.tag, 'en', { numeric: true }));
 }
@@ -423,7 +433,7 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
           rec.merged_at = last.merged_at;
           // released_in: the first release, published after the last merge, that contains every fix.
           try {
-            if (!releases && gh && !out.api_stopped) releases = await listReleases(repo, gh);
+            if (!releases && gh && !out.api_stopped) releases = await listReleases(repo, gh, source);
             for (const rel of releases ?? []) {
               if (rel.published_at < rec.merged_at) continue;
               let all = true;
