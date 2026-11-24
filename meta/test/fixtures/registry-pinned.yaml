@@ -180,8 +180,10 @@ fields:
   # pinned by version and git commit, runs the read-only server scenarios of each frozen requirement set (spec
   # revisions 2025-11-25 and 2026-07-28) through a stdio-to-HTTP bridge, so its results are payload-level only.
   # sdk_client_results: one entry per client: client, sdk, sdk_version, outcome (listed | init_failed | list_failed
-  # | timeout | client_error | unavailable | skipped), stage, protocol_negotiated, tool_count, catalog_sha256 (the
-  # checker engine's catalog hash of what the client listed), names_sha256, pages, ms. conformance_suite: package,
+  # | timeout | client_error | unavailable | skipped), stage, protocol_negotiated (a spec revision, or other),
+  # tool_count, catalog_sha256 (the checker engine's catalog hash of what the client listed),
+  # catalog_defaults_sha256 (the same with annotations that only state the spec default left out),
+  # catalog_vs_reader (same | same_but_annotation_defaults | different), names_sha256, pages, ms. conformance_suite: package,
   # version, git_commit, integrity, requirement_sets_sha256, bridge (name, version, counts). conformance_summary:
   # per spec revision, the counts of pass | fail | expected_fail | warning | info | skipped | bridge_excluded |
   # not_applicable, the scenarios run, and every scenario of the frozen set not run, with why (calls_tool,
@@ -339,6 +341,12 @@ fields:
   - {id: contributor_logins, layer: repo_ecosystem, type: array, unit: none, source: meta-github, class: X, redaction: [R3], status: planned}
   - {id: commit_cadence_weekly, layer: repo_ecosystem, type: array, unit: count, source: meta-github, class: P, redaction: null, status: planned}
   - {id: releases_summary, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
+  # Release tags and their targets, so a force-pushed tag can be seen between two observations (git_tag_moves).
+  # git_tag_targets: the newest tags by commit date (at most 100), each with the commit it points to (an annotated tag
+  # peeled once), the tag object for an annotated tag, and the commit and tagger dates. git_tag_map_sha256: sha256 of
+  # the canonical JSON of that tag -> target list, a cheap "did any tag change" value.
+  - {id: git_tag_targets, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
+  - {id: git_tag_map_sha256, layer: repo_ecosystem, type: hash, unit: none, source: meta-github, class: P, redaction: null, status: planned}
   - {id: issues_prs_summary, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
   - {id: issue_details, layer: repo_ecosystem, type: array, unit: none, source: meta-github, class: X, redaction: [R3], status: planned}
   - {id: security_posture, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
@@ -363,6 +371,10 @@ fields:
   - {id: crates_publisher_identities, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: X, redaction: [R3], status: planned}
   - {id: go_module_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: nuget_maven_oci_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  # The digest each OCI tag a registry entry declares resolves to, read with a registry HEAD (or manifest) request on
+  # the allowlisted hosts only; no layer is pulled. One element per image reference and tag; an empty list means the
+  # subject declares no OCI package. A tag that resolves to a new digest is an oci_tag_moves event.
+  - {id: oci_tag_digests, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
   - {id: depsdev_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: scorecard_result, layer: repo_ecosystem, type: object, unit: none, source: scan-deep, class: P, redaction: null, status: planned}
   - {id: scorecard_api_result, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
@@ -462,6 +474,15 @@ fields:
   - {id: schema_change_classification, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: description_drift, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: annotation_flips, layer: longitudinal, type: array, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
+  # Drift at an unchanged release, derived by comparing a subject's successive observations (tool-qa longitudinal/).
+  # git_tag_moves: a version-like git tag (semver, optionally v-prefixed or package-prefixed) whose target commit
+  # changed. oci_tag_moves: a version-like image tag that resolves to a new digest. Floating tags (latest, v1, 1.2) are
+  # expected to move and are never events. A move within an hour of the release is kept but ranked low (a fix-up).
+  # catalog_drift_same_version: the tool list hash changed while the package version, image digest, tag and commit did
+  # not; a change explained by a new version of our own tools is excluded, and a same-version change of an npm or PyPI
+  # package is never an event (a published version's content cannot change there).
+  - {id: git_tag_moves, layer: longitudinal, type: array, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
+  - {id: oci_tag_moves, layer: longitudinal, type: array, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: catalog_drift_same_version, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P-h, redaction: null, status: planned}
   - {id: protocol_upgrade_timeline, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: sdk_adoption_timeline, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
