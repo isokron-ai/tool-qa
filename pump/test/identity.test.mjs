@@ -395,27 +395,112 @@ test('R-SUBJ-16: scripts/subject-accept.mjs accepts a conflict: the next pass bi
     db.close();
 
     assert.deepEqual(acceptConflict({ file, key: 'acme/other' }), { ok: false, why: 'acme/other is not in conflict (id_status ok)' });
-    const lines = [];
-    assert.equal(main(['acme/server', '--state', file], (l) => lines.push(l)), 0);
-    assert.match(lines[0], /^accepted: acme\/server/);
     assert.equal(main([], () => {}), 2);
+    assert.equal(main(['acme/nope', '--state', file], () => {}), 1);
+    const acceptedAt = T + 2 * DAY + 30_000;
+    assert.equal(acceptConflict({ file, key: 'acme/server', now: acceptedAt }).ok, true);
 
     db = openState(file);
-    const out = await refreshIdentities(db, { client: g.client, now: () => T + 2 * DAY + 60_000 });
+    const out = await refreshIdentities(db, { client: g.client, now: () => acceptedAt + 60_000 });
     assert.equal(out.conflicts, 0);
     const s = db.getSubject('acme/server');
     assert.deepEqual([s.repo_id, s.id_status], [51, 'ok']);
-    assert.equal(db.listSubjectEvents('acme/server').at(-1).detail.accepted, true);
+    assert.deepEqual(db.listSubjectEvents('acme/server').at(-1).detail.accepted, { at: new Date(acceptedAt).toISOString(), repo_id: 51, created_at: new Date(T + DAY).toISOString() });
     assert.equal(db.getKv('subjects.identity.accept:acme/server'), undefined, 'used once');
     assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'green');
 
     // An id another subject holds is refused even when accepted.
-    db.raw.prepare("UPDATE subjects SET id_status = 'conflict' WHERE id = 'acme/other'").run();
-    db.acceptIdentityConflict('acme/other', { now: T + 3 * DAY });
+    const held = { status: 'ok', via: 'id', node: { databaseId: 51, id: 'R_51', nameWithOwner: 'acme/server', createdAt: new Date(T + DAY).toISOString() } };
+    db.applyIdentityLookup('acme/other', held, { now: T + 3 * DAY - 1 }); // its id answers 51: conflict
+    assert.equal(db.acceptIdentityConflict('acme/other', { now: T + 3 * DAY }).ok, true);
     db.applyIdentityLookup('acme/other', { status: 'ok', via: 'id', node: { databaseId: 51, id: 'R_51', nameWithOwner: 'acme/server', createdAt: new Date(T + DAY).toISOString() } }, { now: T + 3 * DAY + 1 });
     assert.deepEqual([db.getSubject('acme/other').repo_id, db.getSubject('acme/other').id_status], [52, 'conflict']);
     assert.equal(db.getSubjectByRepoId(51).id, 'acme/server');
     db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-SUBJ-17: an acceptance binds only the repository accepted, is used up by the next lookup whatever it answers, and lapses after 48 hours', () => {
+  const later = new Date(T + DAY).toISOString(); // created after the subject was first seen: a squatter to the guard
+  const node = (id) => ({ status: 'ok', via: 'name', node: { databaseId: id, id: `R_${id}`, nameWithOwner: 'acme/server', createdAt: later } });
+  const fresh = () => {
+    const db = openState(':memory:');
+    seedSubjects(db, ['acme/server']);
+    db.applyIdentityLookup('acme/server', node(51), { now: T + 2 * DAY }); // conflict: got 51
+    return db;
+  };
+  // Accept, then NOT_FOUND, then an error, then an unrelated repository: nothing binds.
+  let db = fresh();
+  const acc = db.acceptIdentityConflict('acme/server', { now: T + 3 * DAY });
+  assert.deepEqual([acc.ok, acc.repo_id, acc.created_at], [true, 51, later]);
+  db.applyIdentityLookup('acme/server', { status: 'not_found', via: 'name' }, { now: T + 3 * DAY + 1 });
+  assert.equal(db.getKv('subjects.identity.accept:acme/server'), undefined, 'used up by not_found');
+  db.applyIdentityLookup('acme/server', { status: 'error', via: 'name' }, { now: T + 3 * DAY + 2 });
+  db.applyIdentityLookup('acme/server', node(99), { now: T + 3 * DAY + 3 });
+  assert.deepEqual([db.getSubject('acme/server').repo_id, db.getSubject('acme/server').id_status], [null, 'conflict']);
+  assert.ok(!db.listSubjectEvents('acme/server').some((e) => e.kind === 'id_bound'));
+  db.close();
+  // Accept, then straight away an unrelated repository: refused, and the acceptance is gone.
+  db = fresh();
+  db.acceptIdentityConflict('acme/server', { now: T + 3 * DAY });
+  db.applyIdentityLookup('acme/server', node(99), { now: T + 3 * DAY + 1 });
+  assert.deepEqual([db.getSubject('acme/server').repo_id, db.getSubject('acme/server').id_status], [null, 'conflict']);
+  db.applyIdentityLookup('acme/server', node(51), { now: T + 3 * DAY + 2 });
+  assert.equal(db.getSubject('acme/server').repo_id, null, 'not even the accepted one afterwards: used up');
+  db.close();
+  // Accept, then an error: the conflict stands and the acceptance is gone.
+  db = fresh();
+  db.acceptIdentityConflict('acme/server', { now: T + 3 * DAY });
+  db.applyIdentityLookup('acme/server', { status: 'error', via: 'name' }, { now: T + 3 * DAY + 1 });
+  assert.equal(db.getSubject('acme/server').id_status, 'conflict');
+  assert.equal(db.getKv('subjects.identity.accept:acme/server'), undefined);
+  db.close();
+  // Past 48 hours the accepted repository is not bound either.
+  db = fresh();
+  db.acceptIdentityConflict('acme/server', { now: T + 3 * DAY });
+  db.applyIdentityLookup('acme/server', node(51), { now: T + 5 * DAY + 1 });
+  assert.equal(db.getSubject('acme/server').repo_id, null);
+  db.close();
+  // Within them it is, and the bind event says when and what was accepted.
+  db = fresh();
+  db.acceptIdentityConflict('acme/server', { now: T + 3 * DAY });
+  db.applyIdentityLookup('acme/server', node(51), { now: T + 4 * DAY });
+  assert.equal(db.getSubject('acme/server').repo_id, 51);
+  assert.deepEqual(db.listSubjectEvents('acme/server').at(-1).detail.accepted, { at: new Date(T + 3 * DAY).toISOString(), repo_id: 51, created_at: later });
+  // A subject whose conflict event names no repository cannot be accepted.
+  db.raw.prepare("UPDATE subjects SET id_status = 'conflict' WHERE id = 'acme/server'").run();
+  db.recordSubjectEvent({ subject: 'acme/server', kind: 'id_conflict', detail: { via: 'name' }, now: T + 4 * DAY + 1 });
+  assert.equal(db.acceptIdentityConflict('acme/server', { now: T + 4 * DAY + 2 }).ok, false);
+  db.close();
+});
+
+test('R-SUBJ-18: with the lookups switched off the subject-ids item is off, not the last pass\'s colour; switched on again, it follows the next pass', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ids-off-'));
+  try {
+    const stateFile = join(dir, 'state.sqlite');
+    const db = openState(stateFile);
+    seedSubjects(db, ['acme/server']);
+    db.setKv(IDENTITY_KV_KEY, { stopped: 'mass_not_found', mass_not_found_at: new Date(T).toISOString(), active: 1 }, { now: T });
+    db.close();
+    assert.equal(identityCheck({ stopped: 'mass_not_found', active: 1 }).status, 'red');
+    const g = fakeGraph({ 'acme/server': { databaseId: 5 } });
+    const c = fakeClock(T + DAY);
+    const run = (extra) => runPump({
+      env: { GITHUB_REPOSITORY: 'isokron-ai/tool-qa', GITHUB_TOKEN: 'ghs_synthetic', LOOP_SLOTS: '0', GITHUB_API_URL: API, ...extra },
+      now: c.now, sleep: c.sleep, log: () => {}, stateFile, seedFile: null, config: scanStatic(), fetch: g.api().fetch,
+      budget: new ApiBudget({ now: c.now, sleep: c.sleep }), pull: async () => ({ status: 'pulled' }), push: async () => ({ status: 'pushed' }), ingest: null,
+    });
+    await run({ LANE_SUBJECT_IDS_ENABLED: 'false' });
+    let d = openState(stateFile);
+    assert.equal(identityCheck(d.getKv(IDENTITY_KV_KEY)).status, 'off');
+    d.close();
+    await run({});
+    d = openState(stateFile);
+    assert.equal(identityCheck(d.getKv(IDENTITY_KV_KEY)).status, 'green');
+    assert.equal(d.getKv(IDENTITY_KV_KEY).off, undefined);
+    d.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

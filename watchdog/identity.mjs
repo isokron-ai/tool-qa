@@ -8,6 +8,8 @@
 //   amber  any subject in id conflict (an id answering another creation time,
 //          or a newcomer on a subject's old name): look at it by hand
 //   green  otherwise, with the gone, conflict and merged counts
+//   off    the lookups are switched off (LANE_SUBJECT_IDS_ENABLED; the pump
+//          records it in kv pump.identity)
 // Not shown before the first pass.
 
 import { MASS_NOT_FOUND } from '../pump/identity.mjs';
@@ -22,6 +24,7 @@ export function identityCheck(ids) {
   const active = n(ids.active);
   const counts = `${gone} not found, ${conflicts} in conflict, ${merged} merged of ${active} active`;
   const base = { id: 'subject-ids', at: ids.at };
+  if (ids.off === true) return { ...base, status: 'off', summary: `the subject id lookups are switched off (LANE_SUBJECT_IDS_ENABLED); ids already found are still used (${counts})` };
   // mass_not_found_at stays set until a batch is believed again (R-SUBJ-14).
   if (ids.stopped === 'mass_not_found' || ids.mass_not_found_at) {
     return { ...base, status: 'red', summary: `a subject id pass got NOT_FOUND for most of a batch${ids.mass_not_found_at ? ` at ${ids.mass_not_found_at}` : ''} and none has been believed since${ids.error ? ` (${String(ids.error).slice(0, 80)})` : ''}: check the pump's GITHUB_TOKEN; nothing was marked gone (${counts})` };
