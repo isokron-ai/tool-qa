@@ -74,6 +74,10 @@ function observe(db, { now, config, keys, dispatches }) {
     return { id, a, fences: a.items.map((it) => db.checkFence(it.run_key, it.fence, { holder: id, now })) };
   });
   o.kv = all(db, "SELECT key, value FROM kv WHERE key NOT LIKE 'ingest.failures:%' ORDER BY key");
+  // Ingest failure counters of every dispatch left (collect.mjs gives an item up after a few).
+  o.failures = dispatches.flatMap((id) => db.getAttempt(id).items.map((it) => ({ id, index: it.index, f: db.ingestFailures(id, it.index) })));
+  o.failureRows = all(db, "SELECT key, value, updated FROM kv WHERE key LIKE 'ingest.failures:%' ORDER BY key")
+    .filter((r) => dispatches.some((id) => r.key.startsWith(`ingest.failures:${id}:`)));
   return o;
 }
 
@@ -327,6 +331,78 @@ test('R-PRUNE-02: the newest attempt and slot row always stay, so their ids are 
     const slot = db.acquireSlot('later', { budget: 15, ttlMs: MIN, now: now + 31 * DAY });
     assert.notEqual(slot, null);
     assert.ok(db.raw.prepare('SELECT MAX(id) AS m FROM slot_ledger').get().m > maxSlot);
+  } finally {
+    db.close();
+  }
+});
+
+/**
+ * A dispatch that straddles the cutoff: created, one item reported and an
+ * ingest failure noted before it; closed after it. Plus an older dispatch
+ * wholly before the cutoff, and a newer attempt so none of these is the
+ * highest id. Returns { db, now, cutoff, straddle, old }.
+ */
+function straddleState() {
+  const db = openState(':memory:');
+  const T = Date.parse('2026-10-01T00:00:00Z');
+  const cutoff = T + 2 * DAY;
+  const send = (attemptId, keys, at) => {
+    const items = keys.map((k) => ({ run_key: k, subject: `s-${k[0]}`, fence: db.acquireLease(k, attemptId, { ttlMs: 30 * DAY, now: at }).fence }));
+    db.acquireSlot(attemptId, { budget: 15, ttlMs: 30 * DAY, now: at });
+    for (const it of items) db.recordRunKey(it.run_key, { subject: it.subject, workflow: 'scan-static', fields: { k: it.run_key }, now: at });
+    db.createDispatch({ attemptId, shardId: attemptId, workflow: 'scan-static', repo: 'o/r', workflowFile: 'w.yml', ref: 'main', expires: new Date(at + 30 * DAY).toISOString(), items, now: at });
+    db.markDispatched(attemptId, { runId: '1' });
+    return items;
+  };
+  const [k1, k2, k3, k4, k5] = ['a', 'b', 'c', 'd', 'e'].map((c) => c.repeat(64));
+  // Wholly before the cutoff.
+  const old = send('old', [k1], T);
+  db.noteIngestFailure('old', 0, { error: 'x', now: T + MIN });
+  db.recordResult({ run_key: k1, attempt_id: 'old', fence: old[0].fence, verdict: 'accepted', outcome: 'accepted', now: T + 2 * MIN });
+  // Straddles it: item 0 reports and item 1 fails to ingest before the cutoff; it closes after.
+  const st = send('straddle', [k2, k3], T + HOUR);
+  db.recordResult({ run_key: k2, attempt_id: 'straddle', fence: st[0].fence, verdict: 'accepted', outcome: 'accepted', now: T + HOUR + 10 * MIN });
+  db.noteIngestFailure('straddle', 1, { error: 'judge crashed', now: T + HOUR + 11 * MIN });
+  // A newer attempt and slot, so the straddling rows are not the highest ids.
+  const nw = send('newer', [k4], cutoff + HOUR);
+  db.recordResult({ run_key: k4, attempt_id: 'newer', fence: nw[0].fence, verdict: 'accepted', outcome: 'accepted', now: cutoff + 2 * HOUR });
+  db.closeDispatch('straddle', { reason: 'run_completed', now: cutoff + 3 * HOUR });
+  send('newest', [k5], cutoff + 4 * HOUR);
+  return { db, now: cutoff + 7 * DAY, cutoff, straddleAttempt: db.listAttempts('s-b')[0] };
+}
+
+test('R-PRUNE-04: an attempt received before the cutoff stays while its dispatch closed after it, even when it is not the highest id', () => {
+  const { db, now, cutoff, straddleAttempt } = straddleState();
+  try {
+    assert.ok(straddleAttempt.received < new Date(cutoff).toISOString(), 'received before the cutoff');
+    assert.ok(straddleAttempt.id < db.raw.prepare('SELECT MAX(id) AS m FROM attempts').get().m, 'and not the highest id');
+    const keys = runKeysOf(db);
+    const left = ['newer', 'newest', 'straddle'];
+    const before = observe(db, { now, config: { tiers, workflows: {} }, keys, dispatches: left });
+    const { sel } = pruneAll(db, cutoff);
+    assert.deepEqual(sel.rows.filter((r) => r.table === 'dispatches').map((r) => r.row.attempt_id), ['old'], 'only the dispatch closed before the cutoff goes');
+    assert.ok(db.raw.prepare('SELECT 1 FROM attempts WHERE id = ?').get(straddleAttempt.id), 'the straddling attempt stays');
+    assert.equal(db.getAttempt('straddle').items[0].outcome, 'accepted', 'getAttempt still sees its outcome');
+    // A repeat of that result is still a duplicate, not a second acceptance.
+    const again = db.recordResult({ run_key: 'b'.repeat(64), attempt_id: 'straddle', fence: straddleAttempt.fence, verdict: 'accepted', outcome: 'accepted', now });
+    assert.equal(again.duplicate, true);
+    assert.deepEqual(observe(db, { now, config: { tiers, workflows: {} }, keys, dispatches: left }), before);
+    assert.equal(db.getDispatch('old'), undefined);
+  } finally {
+    db.close();
+  }
+});
+
+test('R-PRUNE-04: ingest failure counters stay with a dispatch that straddles the cutoff and go with one that does not', () => {
+  const { db, now, cutoff } = straddleState();
+  try {
+    const failed = db.ingestFailures('straddle', 1);
+    assert.equal(failed.count, 1);
+    assert.ok(failed.last < new Date(cutoff).toISOString(), 'noted before the cutoff');
+    const { sel } = pruneAll(db, cutoff);
+    assert.deepEqual(sel.rows.filter((r) => r.table === 'kv').map((r) => r.row.key), ['ingest.failures:old:0'], 'only the old dispatch\'s counter is archived');
+    assert.deepEqual(db.ingestFailures('straddle', 1), failed, 'the straddling dispatch keeps its counter');
+    assert.deepEqual(db.ingestFailures('old', 0), { count: 0 });
   } finally {
     db.close();
   }

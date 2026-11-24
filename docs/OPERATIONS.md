@@ -899,8 +899,10 @@ artifact that is not in the folder's `index.ndjson` yet:
   the artifact was made; the pump's are named `ingest-<run id>-<run attempt>`,
   and its state archives `ingest-state-archive-<run id>-<run attempt>`, "State
   pruning and size"), still age-encrypted: nothing is decrypted. Each one gets a line in
-  `<dest>/ingest/manifest.ndjson`: `artifact_id`, `artifact`, `run_id`,
-  `run_attempt` (or `attempt_id` for a manual re-ingest), `created_at`,
+  `<dest>/ingest/manifest.ndjson`: `artifact_id`, `artifact`, `kind` (`pump`,
+  `state-archive` or `re-ingest`; lines written before it have none), `run_id`,
+  `run_attempt` (or `attempt_id` for a manual re-ingest; a state archive also
+  carries `state-archive-<run>-<attempt>` there), `created_at`,
   `date`, `dir`, `artifact_bytes`, `artifact_sha256`, and `files` (each
   `name`, `bytes`, `sha256`).
 
