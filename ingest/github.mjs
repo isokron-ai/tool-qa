@@ -70,11 +70,14 @@ async function readCapped(res, max) {
  * @param {number} [p.retries]           extra attempts after the first (default 3)
  * @param {number} [p.maxDownloadBytes]  default MAX_ARTIFACT_BYTES (worker-kit/contract.mjs)
  * @param {number} [p.downloadTimeoutMs]  one artifact download, all of it (DOWNLOAD_TIMEOUT_MS)
+ * @param {() => AbortSignal|null} [p.deadlineSignal]  the caller's hard deadline (R-ING-17): every
+ *   request is aborted when it fires, and once it has fired nothing more is sent (no retry either);
+ *   the call fails as a transient GithubError with code 'deadline'
  */
 export function makeGithub({
   token, fetch = globalThis.fetch, apiUrl = 'https://api.github.com',
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retries = 3, maxDownloadBytes = MAX_ARTIFACT_BYTES,
-  downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS,
+  downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS, deadlineSignal = () => null,
 } = {}) {
   if (!token) throw new GithubError('a GitHub token is required');
   const api = new URL(apiUrl);
@@ -86,12 +89,22 @@ export function makeGithub({
     'User-Agent': 'tool-qa-ingest',
   };
 
+  // A request's own time limit, cut short by the caller's deadline.
+  const limit = (ms) => {
+    const d = deadlineSignal();
+    return d ? AbortSignal.any([AbortSignal.timeout(ms), d]) : AbortSignal.timeout(ms);
+  };
+  const pastDeadline = (label) => {
+    if (deadlineSignal()?.aborted) throw new GithubError(`${label}: past the deadline; not sent`, { transient: true, code: 'deadline' });
+  };
+
   // One logical request with retries. `send` returns a Response.
   async function withRetries(label, send) {
     let delay = 1000;
     for (let attempt = 0; ; attempt++) {
       let wait = delay;
       let res;
+      pastDeadline(label);
       try {
         res = await send();
       } catch (err) {
@@ -106,6 +119,7 @@ export function makeGithub({
         await res.body?.cancel().catch(() => {});
         if (attempt >= retries) throw new GithubError(`${label}: HTTP ${res.status}`, { status: res.status, transient: true });
       }
+      pastDeadline(label);
       await sleep(wait);
       delay = Math.min(delay * 2, 30_000);
     }
@@ -113,7 +127,7 @@ export function makeGithub({
 
   async function apiGet(path) {
     const url = new URL(path, api);
-    return withRetries(`GET ${url.pathname}`, () => fetch(url, { headers: apiHeaders, redirect: 'manual', signal: AbortSignal.timeout(60_000) }));
+    return withRetries(`GET ${url.pathname}`, () => fetch(url, { headers: apiHeaders, redirect: 'manual', signal: limit(60_000) }));
   }
 
   async function apiJson(path) {
@@ -169,7 +183,7 @@ export function makeGithub({
     /** The artifact's bytes (a zip, or the file itself for archive: false uploads). */
     async downloadArtifact(repo, artifactId) {
       const path = `/repos/${checkRepo(repo)}/actions/artifacts/${checkId('artifact id', artifactId)}/zip`;
-      const signal = AbortSignal.timeout(downloadTimeoutMs); // the whole download, blob body included
+      const signal = limit(downloadTimeoutMs); // the whole download, blob body included
       let res = await apiGet(path);
       for (let hops = 0; res.status >= 300 && res.status < 400; hops++) {
         const location = res.headers.get('location');

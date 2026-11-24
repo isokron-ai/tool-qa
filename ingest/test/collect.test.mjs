@@ -848,3 +848,20 @@ test('R-ING-08: a bundle that makes the judge throw is a recorded rejection, nev
     db.close();
   }
 });
+
+test('R-ING-17: a GitHub call that hangs is cut off at collect()\'s deadline plus its grace', async () => {
+  const { db } = setup();
+  const hanging = async (input, init = {}) => new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(init.signal.reason)));
+  const h = harness({ api: { fetch: hanging, calls: [] }, callGraceMs: 0 });
+  try {
+    const t0 = performance.now();
+    const s = await h.collect(db, { deadline: h.clock.t + 200 });
+    assert.ok(performance.now() - t0 < 5000, 'not the 60 s per-request limit, four times over');
+    assert.equal(s.errors, 1);
+    assert.equal(s.recorded, 0);
+    assert.equal(db.ingestFailures('att-1', 0).count, 0, 'a cut-off call is transient, not counted');
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
