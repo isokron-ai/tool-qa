@@ -77,7 +77,10 @@ function judge({ size, lastRun = null, asset = null, snapshots = null, threshold
   else if (biggest > t.amberBytes) raise('amber', `over ${humanBytes(t.amberBytes)}`);
   const p = size.prune;
   if (p?.status === 'error') raise('amber', `the last prune pass failed: ${String(p.error ?? 'unknown error').slice(0, 120)}`);
-  else if (p?.status === 'abandoned') raise('amber', 'the last prune pass gave up its archive (nothing was deleted; it is staged again)');
+  else if (p?.status === 'abandoned' || p?.complete === 'abandoned' || p?.giveups?.count > 0) {
+    const n = p?.giveups?.count ?? 1;
+    raise('amber', `${n} prune archive${n === 1 ? ' was' : 's were'} given up since rows were last deleted${p?.giveups?.why ? ` (last: ${String(p.giveups.why).slice(0, 120)})` : ''}; nothing is lost, the rows are staged again`);
+  }
   const rows = size.rows && typeof size.rows === 'object' ? size.rows : {};
   const main = ['attempts', 'dispatch_items', 'results', 'run_keys'].filter((k) => Number.isFinite(rows[k])).map((k) => `${k} ${rows[k]}`).join(', ');
   const parts = [

@@ -38,6 +38,11 @@
 //                   retryLaterWaiting: the retry budget and backoff). Those are
 //                   kept however old they are.
 //   slot_ledger     open rows are never touched; released ones go after cutoff.
+//   attempts, slot_ledger  the row with the highest id always stays: both use
+//                   INTEGER PRIMARY KEY without AUTOINCREMENT, so pruning the
+//                   newest would let SQLite hand its id out again, and two
+//                   different attempts would share an id in the archives
+//                   (R-PRUNE-02).
 //   run_keys        kept for the run_key(s) of each (subject, workflow)'s newest
 //                   result (the due list reads its fields), for any run_key a
 //                   kept dispatch item names, and while it has a lease row.
@@ -120,9 +125,10 @@ const RULES = Object.freeze({
   kv: `substr(x.key, 1, ${FAILURES_PREFIX.length}) = ${quote(FAILURES_PREFIX)} AND x.updated < $cutoff
     AND NOT EXISTS (SELECT 1 FROM dispatches d WHERE substr(x.key, ${FAILURES_PREFIX.length + 1}, length(d.attempt_id) + 1) = d.attempt_id || ':')`,
   attempts: `x.received < $cutoff
+    AND x.id < (SELECT MAX(id) FROM attempts)
     AND (x.attempt_id IS NULL OR NOT EXISTS (SELECT 1 FROM dispatches d WHERE d.attempt_id = x.attempt_id))
     AND NOT (${ATTEMPT_NEEDED})`,
-  slot_ledger: 'x.released IS NOT NULL AND x.released < $cutoff',
+  slot_ledger: 'x.released IS NOT NULL AND x.released < $cutoff AND x.id < (SELECT MAX(id) FROM slot_ledger)',
   leases: `x.acquired < $cutoff
     AND ((x.holder IS NULL AND COALESCE(x.released, '') < $cutoff) OR (x.holder IS NOT NULL AND x.expires < $cutoff))
     AND NOT EXISTS (SELECT 1 FROM dispatch_items i WHERE i.run_key = x.subject)`,

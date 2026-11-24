@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  ABANDON_MS, LAST_KEY, SIZE_KEY, STAGED_KEY, artifactFetcher, archiveNames, pruneEnabled, pruneStep, recordStateSize,
+  ABANDON_MS, ArchiveUnusableError, GIVEUPS_KEY, LAST_KEY, MAX_FETCH_ERRORS, SIZE_KEY, STAGED_KEY, artifactFetcher, archiveNames, pruneEnabled, pruneStep, recordStateSize,
 } from '../prune.mjs';
 import { PRUNE_MIN_AGE_MS, readArchive, stateSize } from '../../state/prune.mjs';
 import { fakeDecrypt, fakeEncrypt } from '../../ingest/testkit.mjs';
@@ -15,6 +15,7 @@ import { ApiBudget } from '../budgets.mjs';
 import { API, fakeApi } from '../../test/lib/fake-api.mjs';
 import { makeZip } from '../../test/lib/zip.mjs';
 import { DAY, HOUR, MIN, buildHistory } from '../../test/lib/state-history.mjs';
+import { sizeCheck } from '../../watchdog/size.mjs';
 
 const CRYPTO = { encrypt: (b) => fakeEncrypt(b), decrypt: (b) => fakeDecrypt(b) };
 const REPO = 'isokron-ai/tool-qa';
@@ -128,7 +129,7 @@ test('a failing download is an error result, never a throw, and keeps the staged
     const r = await step({ db, now: () => now + MIN, env: { GITHUB_RUN_ID: '42' }, archiveDir: join(dir, 'b'), fetchArchive: async () => { throw new Error('HTTP 502'); } });
     assert.equal(r.status, 'error');
     assert.match(r.error, /HTTP 502/);
-    assert.deepEqual(db.getKv(STAGED_KEY), staged);
+    assert.deepEqual(db.getKv(STAGED_KEY), { ...staged, errors: 1 });
     assert.equal(db.getKv(LAST_KEY).status, 'error');
   } finally {
     done();
@@ -173,7 +174,7 @@ test('recordStateSize keeps the size, rows, asset size and the last prune result
     assert.equal(v.asset_bytes, 1234);
     assert.equal(v.bytes, stateSize(db).bytes);
     assert.ok(v.rows.attempts > 0);
-    assert.deepEqual(v.prune, { status: 'pruned', at: 'x', error: null, deleted: 9, staged: 3 });
+    assert.deepEqual(v.prune, { status: 'pruned', at: 'x', error: null, deleted: 9, staged: 3, complete: null, giveups: null });
   } finally {
     done();
   }
@@ -243,4 +244,53 @@ test('the archive pull and the off-site backup take a staged archive as an inges
   assert.ok(SOURCES.find(([p]) => artifact.startsWith(p))[1].includes('pump.yml'));
   assert.equal(ingestEntryProblem({ name: file, data: fakeEncrypt(Buffer.from('x')) }), null);
   assert.deepEqual(ingestRun({ name: artifact, workflow_run: { id: 45333001390 } }), { run_id: 45333001390, run_attempt: null, attempt_id: 'state-archive-45333001390-1' });
+});
+
+test('R-PRUNE-01: an archive given up and staged again in the same run keeps the state-size item amber until a pass deletes again', async () => {
+  const { db, now, dir, done } = setup();
+  try {
+    await step({ db, now: () => now, env: { GITHUB_RUN_ID: '41' }, archiveDir: dir, fetchArchive: async () => null });
+    const later = now + ABANDON_MS + MIN;
+    const r = await step({ db, now: () => later, env: { GITHUB_RUN_ID: '42' }, archiveDir: join(dir, 'b'), fetchArchive: async () => null });
+    assert.equal(r.complete.status, 'abandoned');
+    assert.equal(r.status, 'staged', 'the run staged again');
+    const size = recordStateSize(db, { now: later, prune: r });
+    assert.equal(size.prune.complete, 'abandoned');
+    assert.equal(size.prune.giveups.count, 1);
+    assert.equal(sizeCheck({ size }).status, 'amber');
+    // The next run: still waiting for the new archive; still amber.
+    const w = await step({ db, now: () => later + 15 * MIN, env: { GITHUB_RUN_ID: '43' }, archiveDir: join(dir, 'c'), fetchArchive: async () => null });
+    assert.equal(w.status, 'waiting');
+    assert.equal(sizeCheck({ size: recordStateSize(db, { now: later + 15 * MIN, prune: w }) }).status, 'amber');
+    // The archive shows up and the rows go: green again.
+    const p = await step({ db, now: () => later + 30 * MIN, env: { GITHUB_RUN_ID: '44' }, archiveDir: join(dir, 'd'), fetchArchive: async (s) => served(join(dir, 'b'), s) });
+    assert.equal(p.complete.status, 'pruned');
+    assert.equal(db.getKv(GIVEUPS_KEY), undefined);
+    assert.equal(sizeCheck({ size: recordStateSize(db, { now: later + 30 * MIN, prune: p }) }).status, 'green');
+  } finally {
+    done();
+  }
+});
+
+test('R-PRUNE-03: an archive too big to read is given up at once, and one whose fetch keeps failing is given up after a few runs', async () => {
+  const { db, now, dir, done } = setup();
+  try {
+    await step({ db, now: () => now, env: { GITHUB_RUN_ID: '41' }, archiveDir: dir, fetchArchive: async () => null });
+    const big = await step({ db, now: () => now + MIN, env: { GITHUB_RUN_ID: '42' }, archiveDir: join(dir, 'b'), fetchArchive: async () => { throw new ArchiveUnusableError('the archive artifact is 999999999999 bytes'); } });
+    assert.equal(big.complete.status, 'abandoned');
+    assert.equal(big.stage.status, 'staged', 'staged again at once');
+    let t = now + 2 * MIN;
+    for (let i = 1; i < MAX_FETCH_ERRORS; i++) {
+      const r = await step({ db, now: () => (t += MIN), env: { GITHUB_RUN_ID: String(50 + i) }, archiveDir: join(dir, `e${i}`), fetchArchive: async () => { throw new Error('HTTP 403'); } });
+      assert.equal(r.status, 'error');
+      assert.equal(db.getKv(STAGED_KEY).errors, i);
+    }
+    const last = await step({ db, now: () => (t += MIN), env: { GITHUB_RUN_ID: '60' }, archiveDir: join(dir, 'z'), fetchArchive: async () => { throw new Error('HTTP 403'); } });
+    assert.equal(last.complete.status, 'abandoned');
+    assert.match(last.complete.why, new RegExp(`${MAX_FETCH_ERRORS} failed tries`));
+    assert.equal(last.stage.status, 'staged');
+    assert.equal(db.getKv(GIVEUPS_KEY).count, 2);
+  } finally {
+    done();
+  }
 });

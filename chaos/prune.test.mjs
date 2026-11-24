@@ -140,6 +140,8 @@ test('a staged archive that never reaches the artifact store: nothing is deleted
     await sim.runFor(ABANDON_MS + HOUR);
     assert.equal(logLines(sim, /prune: deleted/).length, 0, 'nothing is deleted while its archive is missing');
     assert.ok(logLines(sim, /prune: gave up the staged archive/).length >= 1);
+    await sim.runFor(20 * MIN); // a watchdog run after the give-up
+    assert.equal(healthOf(sim, 'state-size'), 'amber', 'a given-up archive shows (R-PRUNE-01)');
     // The rows are all still there.
     const live = new Set(sim.readLive().attempts.map((a) => a.id));
     for (const id of attemptsEverSeen(sim).keys()) assert.ok(live.has(id));

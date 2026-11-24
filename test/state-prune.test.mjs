@@ -310,3 +310,24 @@ test('VACUUM after a prune gives the space back; stateSize reports pages and row
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('R-PRUNE-02: the newest attempt and slot row always stay, so their ids are never handed out again', () => {
+  const { db, now } = buildHistory({ seed: 12, days: 12 });
+  try {
+    const maxAttempt = db.raw.prepare('SELECT MAX(id) AS m FROM attempts').get().m;
+    const maxSlot = db.raw.prepare('SELECT MAX(id) AS m FROM slot_ledger').get().m;
+    // A loop idle for weeks: everything is old, the newest rows too.
+    const { sel } = pruneAll(db, now + 30 * DAY);
+    assert.ok(sel.counts.attempts > 10);
+    assert.ok(db.raw.prepare('SELECT 1 FROM attempts WHERE id = ?').get(maxAttempt), 'the newest attempt stays');
+    assert.ok(db.raw.prepare('SELECT 1 FROM slot_ledger WHERE id = ?').get(maxSlot), 'the newest slot row stays');
+    const archivedIds = new Set(sel.rows.filter((r) => r.table === 'attempts').map((r) => r.row.id));
+    const fresh = db.recordResult({ run_key: 'e'.repeat(64), attempt_id: 'nobody', fence: 1, verdict: 'rejected', outcome: 'rejected', now: now + 31 * DAY });
+    assert.ok(fresh.id > maxAttempt && !archivedIds.has(fresh.id), `a new attempt gets a new id (${fresh.id})`);
+    const slot = db.acquireSlot('later', { budget: 15, ttlMs: MIN, now: now + 31 * DAY });
+    assert.notEqual(slot, null);
+    assert.ok(db.raw.prepare('SELECT MAX(id) AS m FROM slot_ledger').get().m > maxSlot);
+  } finally {
+    db.close();
+  }
+});

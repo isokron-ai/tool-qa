@@ -44,6 +44,10 @@ import {
 
 const HOUR = 3_600_000;
 export const STAGED_KEY = 'state.prune.staged';
+/** Archives given up since the last prune that deleted rows: {count, last_at, why}. */
+export const GIVEUPS_KEY = 'state.prune.giveups';
+/** Failed attempts to fetch a staged archive (an error, not "not there yet") before it is given up. */
+export const MAX_FETCH_ERRORS = 6;
 export const LAST_KEY = 'state.prune.last';
 export const SIZE_KEY = 'state.size';
 export const PRUNE_LANE = 'state-prune';
@@ -54,6 +58,14 @@ export const ABANDON_MS = 6 * HOUR;
 export const MAX_ARCHIVE_BYTES = 256 * 1024 ** 2;
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
+
+/** Thrown by a fetcher for an archive that can never be read (too big): give it up at once. */
+export class ArchiveUnusableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ArchiveUnusableError';
+  }
+}
 const iso = (ms) => new Date(ms).toISOString();
 
 /** The artifact and file names of the archive a run stages. */
@@ -94,7 +106,7 @@ export function artifactFetcher({ repo, mintToken, fetch, apiUrl, budget, now, s
     const res = await client.request('GET', `/repos/${repo}/actions/runs/${staged.run_id}/artifacts`, { query: { name: staged.artifact, per_page: 100 } });
     const a = (res.data?.artifacts ?? []).find((x) => x.name === staged.artifact && !x.expired && Number(x.workflow_run?.id) === Number(staged.run_id));
     if (!a) return null;
-    if (Number(a.size_in_bytes) > MAX_ARCHIVE_BYTES) throw new Error(`the archive artifact is ${a.size_in_bytes} bytes, more than ${MAX_ARCHIVE_BYTES}`);
+    if (Number(a.size_in_bytes) > MAX_ARCHIVE_BYTES) throw new ArchiveUnusableError(`the archive artifact is ${a.size_in_bytes} bytes, more than ${MAX_ARCHIVE_BYTES}`);
     const r = await client.request('GET', `/repos/${repo}/actions/artifacts/${a.id}/zip`, { redirect: 'manual' });
     const location = r.headers?.get?.('location');
     if (r.status < 300 || r.status >= 400 || !location) throw new Error(`expected a redirect to the archive, got HTTP ${r.status}`);
@@ -102,7 +114,7 @@ export function artifactFetcher({ repo, mintToken, fetch, apiUrl, budget, now, s
     const blob = await fetch(location, { headers: { 'user-agent': 'isokron-tool-qa' }, redirect: 'follow' });
     if (!blob.ok) throw new Error(`the archive download returned HTTP ${blob.status}`);
     const buf = Buffer.from(await blob.arrayBuffer());
-    if (buf.length > MAX_ARCHIVE_BYTES) throw new Error('the archive download is too large');
+    if (buf.length > MAX_ARCHIVE_BYTES) throw new ArchiveUnusableError('the archive download is too large');
     return buf;
   };
 }
@@ -115,10 +127,26 @@ export async function completeStaged({ db, staged, now, fetchArchive, crypto, lo
   const age = now - Date.parse(staged.created);
   const giveUp = (why) => {
     db.deleteKv(STAGED_KEY);
+    // Counted until a pass deletes again, so a loop that gives up and stages
+    // again every six hours shows amber, not the green of "staged" (R-PRUNE-01).
+    const prev = db.getKv(GIVEUPS_KEY);
+    db.setKv(GIVEUPS_KEY, { count: (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1, last_at: iso(now), why: String(why).slice(0, 200) }, { now });
     log(`prune: gave up the staged archive ${staged.artifact} (${why}); nothing was deleted, the rows are staged again later`);
     return { status: 'abandoned', archive: staged.artifact, why };
   };
-  const found = await fetchArchive(staged);
+  let found;
+  try {
+    found = await fetchArchive(staged);
+  } catch (err) {
+    // An archive that can never be read, or one that keeps failing, is given
+    // up rather than retried for ever with nothing new staged (R-PRUNE-03).
+    const message = String(err?.message ?? err).slice(0, 200);
+    if (err instanceof ArchiveUnusableError || err?.name === 'ArchiveUnusableError') return giveUp(message);
+    const errors = (Number.isSafeInteger(staged.errors) ? staged.errors : 0) + 1;
+    if (errors >= MAX_FETCH_ERRORS || !(age <= 4 * ABANDON_MS)) return giveUp(`${errors} failed tries to fetch it, the last: ${message}`);
+    db.setKv(STAGED_KEY, { ...staged, errors }, { now });
+    throw err;
+  }
   if (!found) {
     if (!(age <= ABANDON_MS)) return giveUp(`no artifact ${staged.artifact} on run ${staged.run_id} after ${Math.round(age / 60_000)} minutes`);
     log(`prune: the staged archive ${staged.artifact} is not on its run yet; deleting nothing until it is`);
@@ -140,6 +168,7 @@ export async function completeStaged({ db, staged, now, fetchArchive, crypto, lo
   if (archive.meta.staged_id !== staged.id) return giveUp('the archive belongs to another staging');
   const out = deleteArchived(db, { rows: archive.rows, cutoff: staged.cutoff });
   db.deleteKv(STAGED_KEY);
+  db.deleteKv(GIVEUPS_KEY);
   log(`prune: deleted ${out.total} rows held by ${staged.artifact} (${Object.entries(out.deleted).filter(([, n]) => n).map(([t, n]) => `${t} ${n}`).join(', ') || 'none'})`);
   return { status: 'pruned', archive: staged.artifact, cutoff: staged.cutoff, deleted: out.deleted, kept: out.kept, total: out.total };
 }
@@ -222,7 +251,10 @@ export function recordStateSize(db, { now, assetBytes = null, prune = null } = {
   const value = {
     at: iso(now), bytes: s.bytes, page_size: s.page_size, pages: s.pages, free_pages: s.free_pages, rows: s.rows,
     asset_bytes: Number.isSafeInteger(assetBytes) ? assetBytes : null,
-    prune: prune ? { status: prune.status, at: prune.at, error: prune.error ?? null, deleted: prune.complete?.total ?? 0, staged: prune.stage?.rows ?? 0 } : null,
+    prune: prune ? {
+      status: prune.status, at: prune.at, error: prune.error ?? null, deleted: prune.complete?.total ?? 0, staged: prune.stage?.rows ?? 0,
+      complete: prune.complete?.status ?? null, giveups: db.getKv(GIVEUPS_KEY) ?? null,
+    } : null,
   };
   db.setKv(SIZE_KEY, value, { now });
   return value;
