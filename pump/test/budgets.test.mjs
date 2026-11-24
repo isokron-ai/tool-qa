@@ -6,10 +6,12 @@ import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
 
 const headers = (h) => new Headers(h);
 
-test('default families cover dispatch, artifacts, contents, issues, graphql and search within 1,500/h', () => {
+test('R-ING-27: default families cover dispatch, artifacts, contents, issues, graphql and search within 2,500/h, with 1,200 artifact calls an hour', () => {
   for (const f of ['dispatch', 'actions', 'artifacts', 'contents', 'issues', 'graphql', 'search', 'auth']) assert.ok(DEFAULT_FAMILIES[f], f);
   const b = new ApiBudget();
-  assert.equal(b.totalPerHour, 1500);
+  assert.equal(b.totalPerHour, 2500);
+  // Ingest downloads one artifact per item, so 25-item shards need room for many shards an hour.
+  assert.equal(DEFAULT_FAMILIES.artifacts.perHour, 1200);
   assert.equal(DEFAULT_FAMILIES.dispatch.minIntervalMs, 1000);
   assert.equal(DEFAULT_FAMILIES.dispatch.jitterMs, 1000);
 });
@@ -145,7 +147,8 @@ test('budgetedFetch refuses before sending and learns from responses', async () 
 test('R-ING-11: a restored snapshot carries the hourly caps into a new budget', async () => {
   const c = fakeClock();
   const first = new ApiBudget({ now: c.now, sleep: c.sleep });
-  for (let i = 0; i < 200; i++) {
+  const cap = DEFAULT_FAMILIES.artifacts.perHour;
+  for (let i = 0; i < cap; i++) {
     await first.take('artifacts');
     c.t += 1000; // under the per-minute cap
   }
@@ -155,8 +158,8 @@ test('R-ING-11: a restored snapshot carries the hourly caps into a new budget', 
   // The next pump run: a fresh budget, seeded from the snapshot.
   c.t += 60_000;
   const next = new ApiBudget({ now: c.now, sleep: c.sleep }).restore(snap);
-  assert.equal(next.snapshot().used.artifacts, 200);
-  assert.equal(next.snapshot().totalUsed, 200);
+  assert.equal(next.snapshot().used.artifacts, cap);
+  assert.equal(next.snapshot().totalUsed, cap);
   await assert.rejects(next.take('artifacts'), (err) => err instanceof BudgetExceededError && err.reason === 'hourly');
 
   // A rate-limit block still in force carries over too.
