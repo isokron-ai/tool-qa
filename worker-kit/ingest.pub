@@ -1,0 +1,7 @@
+# age recipient (public key) for tool-qa result bundles.
+#
+# Workers encrypt every result bundle to this key (worker-kit/action.yml reads
+# the one non-comment line below). Only the public key lives here; the matching
+# identity is the AGE_IDENTITY secret in environment `loop`. To rotate it, see
+# docs/OPERATIONS.md, "Result encryption keys".
+age15r4e7val7h8v6745nwvfvq953g4688qwegs4fzvg36atmdnrg58ss39n0e

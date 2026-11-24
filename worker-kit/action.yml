@@ -1,0 +1,146 @@
+# tool-qa result bundle: build manifest.json for one item, encrypt the whole
+# bundle with age and upload it as a 3-day artifact.
+#
+# The pump dispatches `shard_id`, `attempt_id` and `items` (docs/INTERFACES.md):
+# a JSON list of one or more {subject, run_key, fence}. The worker produces one
+# bundle per item and calls this action once per item, pinned to a full commit
+# SHA of tool-qa, passing the item's 0-based position in `items`:
+#
+#   - uses: isokron-ai/tool-qa/worker-kit@<sha> # <tag or branch>
+#     with:
+#       bundle-dir: out/0/bundle
+#       meta-file: out/0/meta.json
+#       attempt-id: ${{ inputs.attempt_id }}
+#       item-index: 0
+#       fence: ${{ fromJSON(inputs.items)[0].fence }}
+#       run-key: ${{ fromJSON(inputs.items)[0].run_key }}
+#
+# Each call uploads result-<attempt-id>-<item-index>.tar.age. Ingest judges
+# every item on its own; an item whose bundle is missing is rejected
+# (no_artifact) without holding back the others.
+#
+# The worker job needs no secrets and no token permissions (`permissions: {}`
+# is enough; artifact upload uses the runner's own upload token). Node 20 or
+# newer must be on PATH (GitHub-hosted Ubuntu runners have it).
+# See worker-kit/README.md for the bundle layout and the meta file.
+name: tool-qa result bundle
+description: Build the result manifest, age-encrypt the bundle and upload it as a 3-day artifact.
+
+inputs:
+  bundle-dir:
+    description: Directory with the result files (observations/, results/, controls/, raw/, logs/).
+    required: true
+  meta-file:
+    description: JSON file with subject, tools, oracles, settings_manifest_digest, started_at, skips and controls.
+    required: true
+  attempt-id:
+    description: Attempt ID from the dispatch.
+    required: true
+  item-index:
+    description: >-
+      0-based position of this item in the dispatched `items` list. Names the
+      artifact result-<attempt-id>-<item-index>.tar.age.
+    required: false
+    default: '0'
+  fence:
+    description: Fencing number of this item, from the dispatch.
+    required: true
+  run-key:
+    description: run_key (sha256 hex) of this item, from the dispatch.
+    required: true
+  recipient:
+    description: >-
+      age public key (age1...) to encrypt to. Empty means the key in worker-kit/ingest.pub
+      at the pinned commit of this action.
+    required: false
+    default: ''
+  dry-run:
+    description: "'true' builds and checks the bundle only: no age download, no encryption, no upload."
+    required: false
+    default: 'false'
+
+outputs:
+  artifact-name:
+    description: Name of the uploaded artifact (result-<attempt-id>-<item-index>.tar.age).
+    value: ${{ steps.build.outputs.artifact_name }}
+  manifest-sha256:
+    description: sha256 of manifest.json inside the bundle.
+    value: ${{ steps.build.outputs.manifest_sha256 }}
+  bundle-path:
+    description: Dry run only. Path of the unencrypted tar on the runner (it is never uploaded).
+    value: ${{ steps.build.outputs.bundle_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        case "$DRY_RUN" in
+          true | false) ;;
+          *) echo "::error::dry-run must be 'true' or 'false'"; exit 1 ;;
+        esac
+
+    - name: Build manifest and bundle
+      id: build
+      shell: bash
+      env:
+        BUNDLE_DIR: ${{ inputs.bundle-dir }}
+        META_FILE: ${{ inputs.meta-file }}
+        ATTEMPT_ID: ${{ inputs.attempt-id }}
+        ITEM_INDEX: ${{ inputs.item-index }}
+        FENCE: ${{ inputs.fence }}
+        RUN_KEY: ${{ inputs.run-key }}
+      run: |
+        node "$GITHUB_ACTION_PATH/build-bundle.mjs" \
+          --dir "$BUNDLE_DIR" --meta "$META_FILE" \
+          --attempt-id "$ATTEMPT_ID" --fence "$FENCE" --run-key "$RUN_KEY" \
+          --item-index "$ITEM_INDEX" \
+          --out "$RUNNER_TEMP/tool-qa-result"
+
+    - name: Install age (pinned version, sha256 checked)
+      if: inputs.dry-run != 'true'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/install-age.sh" "$RUNNER_TEMP/tool-qa-age"
+
+    - name: Encrypt bundle
+      if: inputs.dry-run != 'true'
+      shell: bash
+      env:
+        RECIPIENT: ${{ inputs.recipient }}
+        BUNDLE: ${{ steps.build.outputs.bundle_path }}
+        ENCRYPTED: ${{ steps.build.outputs.encrypted_path }}
+      run: |
+        set -euo pipefail
+        if [ -z "$RECIPIENT" ]; then
+          RECIPIENT="$(grep -Ev '^[[:space:]]*(#|$)' "$GITHUB_ACTION_PATH/ingest.pub" || true)"
+        fi
+        if [ -z "$RECIPIENT" ]; then
+          rm -f "$BUNDLE"
+          echo "::error::worker-kit/ingest.pub has no key yet and no recipient was given; nothing was uploaded"
+          exit 1
+        fi
+        if [ "$(printf '%s\n' "$RECIPIENT" | wc -l)" -ne 1 ] || ! printf '%s' "$RECIPIENT" | grep -Eq '^age1[02-9ac-hj-np-z]{58}$'; then
+          rm -f "$BUNDLE"
+          echo "::error::recipient must be exactly one age X25519 public key (age1...)"
+          exit 1
+        fi
+        "$RUNNER_TEMP/tool-qa-age/age" --encrypt --recipient "$RECIPIENT" --output "$ENCRYPTED" "$BUNDLE"
+        rm -f "$BUNDLE"
+
+    - name: Upload encrypted bundle (3 days)
+      if: inputs.dry-run != 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.build.outputs.artifact_name }}
+        path: ${{ steps.build.outputs.encrypted_path }}
+        archive: false
+        retention-days: 3
+        if-no-files-found: error
+
+    - name: Dry run summary
+      if: inputs.dry-run == 'true'
+      shell: bash
+      run: echo "::notice title=tool-qa result bundle::dry run, the bundle was built and checked but not encrypted or uploaded"

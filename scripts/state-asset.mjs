@@ -23,12 +23,31 @@
 // Only one writer may push at a time (the pump runs in a single concurrency
 // group). The token is only ever sent to the API host, never logged, and is
 // scrubbed from any error text.
+//
+// The asset is age ciphertext (R-ING-15). The repository is public, so anyone
+// can download the asset; the database it holds is for the loop only. push
+// encrypts the database to every recipient in state/state.pub and never
+// uploads anything that is not age ciphertext. pull decrypts with the age
+// identity it is given (AGE_IDENTITY) and refuses an asset that is not age
+// ciphertext. The one exception is `migrate`, run once by an operator to
+// replace a plaintext asset from before encryption with an encrypted one
+// (docs/OPERATIONS.md, "State encryption"). The sha256 label and the
+// stale-writer check are over the uploaded bytes, the ciphertext.
+//
+//   node scripts/state-asset.mjs migrate [--file state/state.sqlite] [--repo owner/name]
+//
+// Environment for encryption: AGE_IDENTITY (pull of an encrypted asset),
+// AGE_BIN and AGE_KEYGEN_BIN (default: age and age-keygen on PATH).
 
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { tmpdir } from 'node:os';
+
+import { ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from '../ingest/age.mjs';
+import { isAgeCiphertext } from '../ingest/container.mjs';
 
 export const TAG = 'state';
 export const ASSET_NAME = 'state.sqlite';
@@ -39,6 +58,38 @@ const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
 const USER_AGENT = 'isokron-tool-qa-state-asset';
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
+
+/** Who the state asset is encrypted to (committed; public keys only). */
+export const STATE_RECIPIENTS = fileURLToPath(new URL('../state/state.pub', import.meta.url));
+const MAX_STATE_BYTES = 1024 ** 3;
+
+/**
+ * Encryption of the state asset with the age binary.
+ * encrypt(plaintext) encrypts to every recipient in `recipientsFile`; when
+ * `identity` is given it first checks that the identity belongs to one of
+ * them, so a writer can never lock itself out of the state it pushes.
+ * decrypt(ciphertext) needs `identity`.
+ */
+export function stateCrypto({ identity, ageBin = 'age', keygenBin = 'age-keygen', tmpDir = tmpdir(), recipientsFile = STATE_RECIPIENTS } = {}) {
+  let checked = false;
+  return {
+    encrypt(plaintext) {
+      const recipients = readSealRecipients(recipientsFile);
+      if (identity && !checked) {
+        const pub = agePublicKey({ identity, keygenBin });
+        if (!recipients.includes(pub)) {
+          throw new Error(`AGE_IDENTITY is not one of the recipients in ${recipientsFile}; refusing to push a state it could not read back`);
+        }
+        checked = true;
+      }
+      return ageEncrypt({ plaintext, recipients, ageBin, maxBytes: MAX_STATE_BYTES });
+    },
+    decrypt(ciphertext) {
+      if (!identity) throw new Error('the state asset is encrypted and AGE_IDENTITY is not set, so it cannot be read');
+      return ageDecrypt({ ciphertext, identity, ageBin, tmpDir, maxBytes: MAX_STATE_BYTES });
+    },
+  };
+}
 
 function assertSqlite(buf, where) {
   if (buf.length < 100 || !buf.subarray(0, 16).equals(SQLITE_MAGIC)) {
@@ -201,8 +252,17 @@ function assertUnchanged(release, expected, ignoreId = null) {
   if (cur.updated_at && expected.updated_at && cur.updated_at !== expected.updated_at) fail('updated_at differs');
 }
 
-/** Download the state asset to `file`. Returns { status: 'absent' } if there is none yet. */
-export async function pullState({ repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep } = {}) {
+/**
+ * Download the state asset, decrypt it and write the database to `file`.
+ * Returns { status: 'absent' } if there is none yet. Refuses an asset that is
+ * not age ciphertext unless `allowPlaintext` (the one-time migration only).
+ * `crypto` defaults to stateCrypto({ identity, ageBin, keygenBin, tmpDir }).
+ */
+export async function pullState({
+  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep,
+  identity, ageBin, keygenBin, tmpDir, crypto, allowPlaintext = false,
+} = {}) {
+  const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
   const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log });
   const release = await gh.getRelease();
   const asset = release && pickAsset(release);
@@ -213,15 +273,25 @@ export async function pullState({ repo, token, file = DEFAULT_FILE, fetch = glob
     return { status: 'absent' };
   }
   if (asset.name !== ASSET_NAME) log(`${ASSET_NAME} is missing; using interrupted upload ${asset.name}`);
-  const data = await gh.download(asset);
-  assertSqlite(data, `asset ${asset.name}`);
-  const digest = sha256(data);
+  const blob = await gh.download(asset);
+  const digest = sha256(blob);
   const m = /^sha256:([0-9a-f]{64})$/.exec(asset.label || '');
   if (m && m[1] !== digest) throw new Error(`asset ${asset.name} checksum mismatch (label ${m[1]}, got ${digest})`);
   if (!m) log(`asset ${asset.name} has no sha256 label; checksum not verified`);
+  const encrypted = isAgeCiphertext(blob);
+  let data;
+  if (encrypted) {
+    data = await box.decrypt(blob);
+  } else if (allowPlaintext) {
+    log(`asset ${asset.name} is plaintext (from before the state was encrypted); reading it for the one-time migration`);
+    data = blob;
+  } else {
+    throw new Error(`asset ${asset.name} is not age ciphertext; refusing to use it. The state asset must be encrypted (docs/OPERATIONS.md, "State encryption")`);
+  }
+  assertSqlite(data, `asset ${asset.name}`);
   mkdirSync(dirname(file), { recursive: true });
   const partial = `${file}.download`;
-  writeFileSync(partial, data);
+  writeFileSync(partial, data, { mode: 0o600 });
   try {
     quickCheck(partial);
     renameSync(partial, file);
@@ -229,14 +299,21 @@ export async function pullState({ repo, token, file = DEFAULT_FILE, fetch = glob
     rmSync(partial, { force: true });
     throw err;
   }
-  writeFileSync(recordPath(file), JSON.stringify(describe(asset, digest)));
-  log(`pulled ${asset.name} (${data.length} bytes, sha256 ${digest})`);
-  return { status: 'pulled', bytes: data.length, sha256: digest, asset: asset.name };
+  writeFileSync(recordPath(file), JSON.stringify({ ...describe(asset, digest), encrypted }));
+  log(`pulled ${asset.name} (${blob.length} bytes${encrypted ? ' encrypted' : ', plaintext'}, sha256 ${digest})`);
+  return { status: 'pulled', bytes: blob.length, sha256: digest, asset: asset.name, encrypted };
 }
 
-/** Upload `file` as the state asset, replacing the previous one. */
-export async function pushState({ repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, now = Date.now(), expected, force = false } = {}) {
+/**
+ * Encrypt `file` and upload it as the state asset, replacing the previous one.
+ * Never uploads anything that is not age ciphertext.
+ */
+export async function pushState({
+  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, now = Date.now(), expected, force = false,
+  identity, ageBin, keygenBin, tmpDir, crypto,
+} = {}) {
   if (!token) throw new Error('GITHUB_TOKEN is required to push the state asset');
+  const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
   const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log });
   expected = expected ?? readRecord(file);
   if (!expected && !force) {
@@ -245,7 +322,9 @@ export async function pushState({ repo, token, file = DEFAULT_FILE, fetch = glob
   // quickCheck opens and closes its own handle, so no connection is open while we read and hash the file.
   assertSqlite(readFileSync(file), file);
   quickCheck(file);
-  const data = readFileSync(file);
+  const data = await box.encrypt(readFileSync(file));
+  // Fail closed: whatever encrypt returned, only age ciphertext is uploaded.
+  if (!Buffer.isBuffer(data) || !isAgeCiphertext(data)) throw new Error('refusing to push the state: the encrypted copy is not age ciphertext');
   const digest = sha256(data);
   const label = `sha256:${digest}`;
 
@@ -276,8 +355,34 @@ export async function pushState({ repo, token, file = DEFAULT_FILE, fetch = glob
   const after = await gh.getRelease();
   const mine = after && (after.assets || []).find((a) => a.id === uploaded.id);
   writeFileSync(recordPath(file), JSON.stringify({ id: uploaded.id, name: ASSET_NAME, sha256: digest, updated_at: mine?.updated_at ?? null }));
-  log(`pushed ${ASSET_NAME} (${data.length} bytes, sha256 ${digest})`);
+  log(`pushed ${ASSET_NAME} (${data.length} bytes encrypted, sha256 ${digest})`);
   return { status: 'pushed', bytes: data.length, sha256: digest, assetId: uploaded.id };
+}
+
+/**
+ * One-time migration: replace a plaintext state asset (from before the state
+ * was encrypted) with an encrypted one. Needs a token that can write the
+ * release and the age binary, but no identity: it encrypts to state/state.pub.
+ * Does nothing if the asset is already encrypted or absent.
+ */
+export async function migrateState(opts = {}) {
+  const log = opts.log ?? console.error;
+  const gh = makeClient({ repo: opts.repo, token: opts.token, fetch: opts.fetch ?? globalThis.fetch, apiUrl: opts.apiUrl, sleep: opts.sleep, log });
+  const release = await gh.getRelease();
+  const asset = release && pickAsset(release);
+  if (!asset) {
+    log('no state asset; nothing to migrate');
+    return { status: 'absent' };
+  }
+  const blob = await gh.download(asset);
+  if (isAgeCiphertext(blob)) {
+    log(`${asset.name} is already encrypted; nothing to migrate`);
+    return { status: 'already_encrypted' };
+  }
+  await pullState({ ...opts, log, allowPlaintext: true });
+  const pushed = await pushState({ ...opts, log });
+  log('migrated: the state asset is now encrypted to state/state.pub');
+  return { ...pushed, status: 'migrated' };
 }
 
 function parseArgs(argv) {
@@ -292,7 +397,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--repo=')) opts.repo = a.slice(7);
     else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
-  if (command !== 'pull' && command !== 'push') throw new Error('command must be "pull" or "push"');
+  if (!['pull', 'push', 'migrate'].includes(command)) throw new Error('command must be "pull", "push" or "migrate"');
   if (!opts.file) throw new Error('--file needs a path');
   return opts;
 }
@@ -304,7 +409,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     opts.repo = opts.repo || env.GITHUB_REPOSITORY;
     if (!opts.repo) throw new Error('set GITHUB_REPOSITORY or pass --repo owner/name');
   } catch (err) {
-    process.stderr.write(`state-asset: ${err.message}\nusage: node scripts/state-asset.mjs pull|push [--file path] [--repo owner/name] [--force]\n`);
+    process.stderr.write(`state-asset: ${err.message}\nusage: node scripts/state-asset.mjs pull|push|migrate [--file path] [--repo owner/name] [--force]\n`);
     return 2;
   }
   const args = {
@@ -314,13 +419,21 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     force: opts.force,
     apiUrl: env.GITHUB_API_URL,
     log: (m) => process.stderr.write(`${m}\n`),
+    identity: env.AGE_IDENTITY || undefined,
+    ageBin: env.AGE_BIN || undefined,
+    keygenBin: env.AGE_KEYGEN_BIN || undefined,
+    tmpDir: env.RUNNER_TEMP || undefined,
   };
+  // Nothing started from here (age, age-keygen) needs it in its environment.
+  if (env === process.env) delete process.env.AGE_IDENTITY;
   try {
     if (opts.command === 'pull') await pullState(args);
-    else await pushState(args);
+    else if (opts.command === 'push') await pushState(args);
+    else await migrateState(args);
     return 0;
   } catch (err) {
-    const msg = args.token ? String(err.message).split(args.token).join('***') : err.message;
+    let msg = args.token ? String(err.message).split(args.token).join('***') : err.message;
+    if (args.identity) msg = String(msg).split(args.identity.trim()).join('[identity]');
     process.stderr.write(`state-asset: ${msg}\n`);
     return 1;
   }

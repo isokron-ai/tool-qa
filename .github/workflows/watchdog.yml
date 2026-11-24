@@ -1,0 +1,66 @@
+name: watchdog
+
+# Checks that the loop is alive and keeps the "Loop health" issue up to date.
+# Dispatches the pump if no pump run started for 20 minutes and re-enables loop
+# workflows GitHub disabled for inactivity. It reads the state asset but never
+# writes it. See docs/OPERATIONS.md.
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    name: watchdog
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    environment: loop
+    permissions:
+      contents: read # checkout and a read-only copy of the state asset
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Kill switch
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_WATCHDOG_ENABLED: ${{ vars.LANE_WATCHDOG_ENABLED }}
+        run: node scripts/guard.mjs --job watchdog --no-slots
+      - name: Set up Node
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      # The state asset is age ciphertext; the watchdog decrypts its copy with
+      # AGE_IDENTITY (docs/OPERATIONS.md, "State encryption").
+      - name: Install age (pinned version, sha256 checked)
+        if: steps.guard.outputs.proceed == 'true'
+        run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
+      - name: Watchdog
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LOOP_SLOTS: ${{ vars.LOOP_SLOTS }}
+          LANE_PUMP_ENABLED: ${{ vars.LANE_PUMP_ENABLED }}
+          LANE_WATCHDOG_ENABLED: ${{ vars.LANE_WATCHDOG_ENABLED }}
+          LANE_HISTORY_REGISTRY_ENABLED: ${{ vars.LANE_HISTORY_REGISTRY_ENABLED }}
+          LANE_HISTORY_PACKAGES_ENABLED: ${{ vars.LANE_HISTORY_PACKAGES_ENABLED }}
+          LANE_HISTORY_POPULARITY_ENABLED: ${{ vars.LANE_HISTORY_POPULARITY_ENABLED }}
+          APP_ID: ${{ vars.APP_ID }}
+          APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
+        run: node watchdog/run.mjs

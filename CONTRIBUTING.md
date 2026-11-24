@@ -8,6 +8,11 @@ welcome.
   [SECURITY.md](SECURITY.md) instead.
 - **Pull requests:** keep them small and focused. Add or update tests with
   `node:test`, and run `npm test` before you push.
+- **Regressions:** every problem found (a review finding, a bug report, an
+  incident) gets a permanent test named after its row in
+  [REGRESSIONS.md](REGRESSIONS.md) (`R-ING-17: ...`), and a row there: what it
+  was, the tests that pin it, the fix commit. `test/regressions.test.mjs`
+  fails if the two drift apart.
 - **Workflows:** every workflow must pass `npm run check-workflows`, actionlint
   and zizmor. That means top-level `permissions: {}`, explicit permissions and
   `timeout-minutes` on every job, actions pinned to a full commit SHA with the

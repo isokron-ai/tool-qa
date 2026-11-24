@@ -9,7 +9,8 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { pullState, pushState, ASSET_NAME, TAG } from '../scripts/state-asset.mjs';
+import { pullState, pushState, migrateState, ASSET_NAME, TAG } from '../scripts/state-asset.mjs';
+import { fakeDecrypt, fakeEncrypt } from '../ingest/testkit.mjs';
 import { openState } from '../state/db.mjs';
 
 const TOKEN = 'ghs_SYNTHETICtokenFORtests0000000000000';
@@ -115,8 +116,13 @@ function fakeGitHub({ release = null, failFirst = {} } = {}) {
   return { fetch, state };
 }
 
-function asset(id, name, data, label = `sha256:${sha256(data)}`) {
-  return { id, name, label, data: Buffer.from(data) };
+// Stand-in for age (ingest/testkit.mjs): a fixed age header in front of the bytes.
+const FAKE = { encrypt: fakeEncrypt, decrypt: fakeDecrypt };
+
+/** A release asset as the pump stores it: encrypted (unless `plain`), labelled with the sha256 of what was uploaded. */
+function asset(id, name, data, label, { plain = false } = {}) {
+  const bytes = plain ? Buffer.from(data) : fakeEncrypt(Buffer.from(data));
+  return { id, name, label: label ?? `sha256:${sha256(bytes)}`, data: bytes };
 }
 
 function collectLog() {
@@ -126,15 +132,20 @@ function collectLog() {
 
 const noSleep = async () => {};
 
+const AGE = process.env.AGE_BIN || 'age';
+const KEYGEN = process.env.AGE_KEYGEN_BIN || 'age-keygen';
+const haveAge = spawnSync(AGE, ['--version']).status === 0 && spawnSync(KEYGEN, ['--version']).status === 0;
+
 test('pull downloads state.sqlite, follows the redirect without the token, and verifies it', async () => {
   const src = makeDb(tmp());
   const data = readFileSync(src);
   const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, data)] } });
   const out = join(tmp(), 'sub', 'state.sqlite');
   const { log, lines } = collectLog();
-  const r = await pullState({ repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log, sleep: noSleep });
+  const r = await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log, sleep: noSleep });
   assert.equal(r.status, 'pulled');
-  assert.equal(r.sha256, sha256(data));
+  assert.equal(r.encrypted, true);
+  assert.equal(r.sha256, sha256(fakeEncrypt(data)), 'the digest is of the uploaded ciphertext');
   assert.deepEqual(readFileSync(out), data);
   const storageCall = gh.state.calls.find((c) => c.url.startsWith(STORAGE));
   assert.equal(storageCall.headers.authorization, undefined, 'token must not go to the storage host');
@@ -147,7 +158,7 @@ test('pull works without a token for a public repository', async () => {
   const data = readFileSync(makeDb(tmp()));
   const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, data)] } });
   const out = join(tmp(), 'state.sqlite');
-  const r = await pullState({ repo: REPO, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  const r = await pullState({ crypto: FAKE, repo: REPO, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   assert.equal(r.status, 'pulled');
   assert.ok(gh.state.calls.every((c) => c.headers.authorization === undefined));
 });
@@ -155,14 +166,14 @@ test('pull works without a token for a public repository', async () => {
 test('pull reports absent when there is no state release yet', async () => {
   const gh = fakeGitHub();
   const out = join(tmp(), 'state.sqlite');
-  const r = await pullState({ repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  const r = await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   assert.equal(r.status, 'absent');
   assert.equal(existsSync(out), false);
 });
 
 test('pull reports absent when the release has no state asset', async () => {
   const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, 'other.txt', 'x')] } });
-  const r = await pullState({ repo: REPO, token: TOKEN, file: join(tmp(), 's'), fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  const r = await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: join(tmp(), 's'), fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   assert.equal(r.status, 'absent');
 });
 
@@ -173,7 +184,7 @@ test('pull falls back to an interrupted upload when state.sqlite is missing', as
     asset(2, `${ASSET_NAME}.upload-20261123T110000Z`, data),
   ] } });
   const out = join(tmp(), 'state.sqlite');
-  const r = await pullState({ repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  const r = await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   assert.equal(r.status, 'pulled');
   assert.equal(r.asset, `${ASSET_NAME}.upload-20261123T110000Z`);
   assert.deepEqual(readFileSync(out), data);
@@ -184,7 +195,7 @@ test('pull rejects a checksum mismatch and leaves no file', async () => {
   const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, data, `sha256:${'0'.repeat(64)}`)] } });
   const out = join(tmp(), 'state.sqlite');
   await assert.rejects(
-    pullState({ repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep }),
+    pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep }),
     /checksum/,
   );
   assert.equal(existsSync(out), false);
@@ -194,7 +205,7 @@ test('pull rejects a file that is not SQLite', async () => {
   const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, 'not a database')] } });
   const out = join(tmp(), 'state.sqlite');
   await assert.rejects(
-    pullState({ repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep }),
+    pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep }),
     /not a SQLite/,
   );
   assert.equal(existsSync(out), false);
@@ -206,14 +217,14 @@ test('pull retries a transient server error', async () => {
     release: { id: 7, assets: [asset(1, ASSET_NAME, data)] },
     failFirst: { [`GET /repos/${REPO}/releases/tags/${TAG}`]: 2 },
   });
-  const r = await pullState({ repo: REPO, token: TOKEN, file: join(tmp(), 's'), fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  const r = await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: join(tmp(), 's'), fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   assert.equal(r.status, 'pulled');
 });
 
 test('push creates the state release when missing and uploads state.sqlite', async () => {
   const file = makeDb(tmp());
   const gh = fakeGitHub();
-  const r = await pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z'), force: true });
+  const r = await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z'), force: true });
   assert.equal(r.status, 'pushed');
   assert.equal(gh.state.created.tag_name, TAG);
   assert.equal(gh.state.created.make_latest, 'false');
@@ -221,8 +232,8 @@ test('push creates the state release when missing and uploads state.sqlite', asy
   const names = gh.state.release.assets.map((a) => a.name);
   assert.deepEqual(names, [ASSET_NAME]);
   const stored = gh.state.release.assets[0];
-  assert.deepEqual(stored.data, readFileSync(file));
-  assert.equal(stored.label, `sha256:${sha256(readFileSync(file))}`);
+  assert.deepEqual(stored.data, fakeEncrypt(readFileSync(file)), 'only the encrypted copy is uploaded');
+  assert.equal(stored.label, `sha256:${sha256(stored.data)}`);
 });
 
 test('push replaces the existing asset and removes leftover uploads', async () => {
@@ -233,9 +244,9 @@ test('push replaces the existing asset and removes leftover uploads', async () =
     asset(1, ASSET_NAME, oldData),
     asset(2, `${ASSET_NAME}.upload-20260101T000000Z`, 'stale'),
   ] } });
-  await pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z'), force: true });
+  await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z'), force: true });
   assert.deepEqual(gh.state.release.assets.map((a) => a.name), [ASSET_NAME]);
-  assert.deepEqual(gh.state.release.assets[0].data, readFileSync(file));
+  assert.deepEqual(gh.state.release.assets[0].data, fakeEncrypt(readFileSync(file)));
   // Order: upload under a temporary name first, then delete the old asset, then rename.
   const seq = gh.state.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${new URL(c.url).pathname}`);
   assert.deepEqual(seq.slice(0, 3), [
@@ -246,7 +257,7 @@ test('push replaces the existing asset and removes leftover uploads', async () =
   assert.ok(seq.includes(`DELETE /repos/${REPO}/releases/assets/2`));
   // The round trip gives back the new database.
   const out = join(dir, 'pulled.sqlite');
-  await pullState({ repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   const db = openState(out);
   assert.ok(db.getSubject('new'));
   assert.equal(db.getSubject('old'), undefined);
@@ -256,7 +267,7 @@ test('push replaces the existing asset and removes leftover uploads', async () =
 test('push needs a token and makes no request without one', async () => {
   const gh = fakeGitHub();
   await assert.rejects(
-    pushState({ repo: REPO, file: makeDb(tmp()), fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep }),
+    pushState({ crypto: FAKE, repo: REPO, file: makeDb(tmp()), fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep }),
     /GITHUB_TOKEN/,
   );
   assert.equal(gh.state.calls.length, 0);
@@ -267,7 +278,7 @@ test('push refuses a file that is not SQLite before any request', async () => {
   writeFileSync(file, 'hello');
   const gh = fakeGitHub();
   await assert.rejects(
-    pushState({ repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, force: true }),
+    pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, force: true }),
     /not a SQLite/,
   );
   assert.equal(gh.state.calls.length, 0);
@@ -278,7 +289,7 @@ test('API errors name the status but never the token', async () => {
   const { log, lines } = collectLog();
   let err;
   try {
-    await pushState({ repo: REPO, token: TOKEN, file: makeDb(tmp()), fetch: leaky, apiUrl: API, log, sleep: noSleep, force: true });
+    await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file: makeDb(tmp()), fetch: leaky, apiUrl: API, log, sleep: noSleep, force: true });
   } catch (e) {
     err = e;
   }
@@ -290,7 +301,7 @@ test('API errors name the status but never the token', async () => {
 });
 
 test('repository name is validated', async () => {
-  await assert.rejects(pullState({ repo: 'not a repo', file: 'x', fetch: async () => { throw new Error('no'); } }), /owner\/name/);
+  await assert.rejects(pullState({ crypto: FAKE, repo: 'not a repo', file: 'x', fetch: async () => { throw new Error('no'); } }), /owner\/name/);
 });
 
 test('CLI: unknown command and missing repository are usage errors', () => {
@@ -303,9 +314,9 @@ test('CLI: unknown command and missing repository are usage errors', () => {
 });
 
 const push = (api, file, extra = {}) =>
-  pushState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep, ...extra });
+  pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep, ...extra });
 const pull = (api, file) =>
-  pullState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
 
 test('push without a pull record is refused unless forced', async () => {
   const api = fakeGitHub();
@@ -336,7 +347,7 @@ test('push refuses when the remote asset changed after the pull, and changes not
   api.state.release.assets = [{ ...asset(5, ASSET_NAME, newer), updated_at: '2026-11-23T11:00:00Z' }];
   await assert.rejects(push(api, file), /remote state changed/);
   assert.equal(api.state.release.assets.length, 1);
-  assert.deepEqual(api.state.release.assets[0].data, newer);
+  assert.deepEqual(api.state.release.assets[0].data, fakeEncrypt(newer));
   assert.equal(api.state.calls.some((c) => c.method === 'POST' || c.method === 'DELETE'), false);
 });
 
@@ -393,12 +404,97 @@ test('pull from an empty release then push succeeds (first-ever push)', async ()
   const dir = tmp();
   const api = fakeGitHub();
   const file = join(dir, 'state.sqlite');
-  const r1 = await pullState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  const r1 = await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   assert.equal(r1.status, 'absent');
   makeDb(dir, 'state.sqlite', 'first');
-  const r2 = await pushState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  const r2 = await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   assert.equal(r2.status, 'pushed');
   assert.deepEqual(api.state.release.assets.map((a) => a.name), [ASSET_NAME]);
-  const r3 = await pushState({ repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  const r3 = await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: api.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
   assert.equal(r3.status, 'pushed');
+});
+
+// ---- R-ING-15: the state asset is age ciphertext, and nothing else is used ----
+
+test('R-ING-15: pull refuses an asset that is not age ciphertext and writes nothing', async () => {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir, 'seed.sqlite'));
+  const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, data, undefined, { plain: true })] } });
+  const out = join(dir, 'state.sqlite');
+  await assert.rejects(
+    pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep }),
+    /is not age ciphertext; refusing to use it/,
+  );
+  assert.equal(existsSync(out), false);
+  assert.equal(existsSync(`${out}.pulled.json`), false);
+});
+
+test('R-ING-15: push never uploads plaintext, whatever the encrypter returns', async () => {
+  const gh = fakeGitHub();
+  const leaky = { encrypt: (plaintext) => plaintext, decrypt: fakeDecrypt };
+  await assert.rejects(
+    pushState({ crypto: leaky, repo: REPO, token: TOKEN, file: makeDb(tmp()), fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, force: true }),
+    /refusing to push the state: the encrypted copy is not age ciphertext/,
+  );
+  assert.equal(gh.state.calls.length, 0, 'not a single request');
+});
+
+test('R-ING-15: migrate replaces a plaintext asset with an encrypted one, once', async () => {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir, 'seed.sqlite', 'from-before'));
+  const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, data, undefined, { plain: true })] } });
+  const file = join(dir, 'state.sqlite');
+  const args = { crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep };
+  const r = await migrateState(args);
+  assert.equal(r.status, 'migrated');
+  const [stored] = gh.state.release.assets;
+  assert.deepEqual(stored.data, fakeEncrypt(data));
+  const again = await migrateState(args);
+  assert.equal(again.status, 'already_encrypted');
+  const out = join(dir, 'after.sqlite');
+  await pullState({ ...args, file: out });
+  const db = openState(out);
+  assert.ok(db.getSubject('from-before'));
+  db.close();
+});
+
+test('R-ING-15: with the real age binary: round trip, no identity no read, and no push a writer could not read back', { skip: haveAge ? false : 'age is not installed' }, async () => {
+  const { stateCrypto } = await import('../scripts/state-asset.mjs');
+  const dir = tmp();
+  const key = () => {
+    const identity = spawnSync(KEYGEN, [], { encoding: 'utf8' }).stdout;
+    return { identity, recipient: spawnSync(KEYGEN, ['-y'], { input: identity, encoding: 'utf8' }).stdout.trim() };
+  };
+  const pump = key();
+  const other = key();
+  const recipientsFile = join(dir, 'state.pub');
+  writeFileSync(recipientsFile, `# test\n${pump.recipient}\n`);
+  const crypto = stateCrypto({ identity: pump.identity, ageBin: AGE, keygenBin: KEYGEN, tmpDir: dir, recipientsFile });
+  const gh = fakeGitHub();
+  const file = makeDb(dir, 'state.sqlite', 'real-age');
+  const args = { crypto, repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep };
+  await pushState({ ...args, force: true });
+  const [stored] = gh.state.release.assets;
+  assert.ok(stored.data.subarray(0, 22).toString('latin1') === 'age-encryption.org/v1\n');
+  assert.equal(stored.data.includes(Buffer.from('SQLite format 3')), false);
+  assert.equal(stored.data.includes(Buffer.from('real-age')), false, 'no subject id in the clear');
+
+  const out = join(dir, 'pulled.sqlite');
+  await pullState({ ...args, file: out });
+  const db = openState(out);
+  assert.ok(db.getSubject('real-age'));
+  db.close();
+
+  const noKey = stateCrypto({ ageBin: AGE, keygenBin: KEYGEN, tmpDir: dir, recipientsFile });
+  await assert.rejects(pullState({ ...args, crypto: noKey, file: join(dir, 'x.sqlite') }), /AGE_IDENTITY is not set/);
+
+  const outsider = stateCrypto({ identity: other.identity, ageBin: AGE, keygenBin: KEYGEN, tmpDir: dir, recipientsFile });
+  await assert.rejects(pushState({ ...args, crypto: outsider, force: true }), /is not one of the recipients/);
+});
+
+test('R-ING-15: the committed state.pub lists the ingest key, so the pump can read what it pushes', async () => {
+  const { readSealRecipients } = await import('../ingest/age.mjs');
+  const state = readSealRecipients(fileURLToPath(new URL('../state/state.pub', import.meta.url)));
+  const ingest = readSealRecipients(fileURLToPath(new URL('../worker-kit/ingest.pub', import.meta.url)));
+  assert.ok(ingest.every((k) => state.includes(k)), 'every ingest recipient is a state recipient');
 });

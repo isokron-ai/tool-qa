@@ -27,13 +27,22 @@ Set `LOOP_SLOTS` to 5 or less:
 gh variable set LOOP_SLOTS --body 5 --repo isokron-ai/tool-qa
 ```
 
-`LOOP_SLOTS` is the loop's ceiling on concurrent jobs across all repos. In the
-state store, each slot row carries an expiry (set when it is taken); expired
-rows are reaped the next time a slot is acquired, so a crashed run can't hold a
-slot for good.
+`LOOP_SLOTS` is the number of worker runs the loop may have going at once,
+across all repos. The pump's own job is one more on top (the account runs at
+most 20 jobs at once, and the pump keeps 2 free for ordinary CI, so
+`LOOP_SLOTS=15` gives 14 workers plus the pump). In the state store, each slot
+row carries an expiry (set when it is taken); expired rows are reaped on every
+pump tick and whenever a slot is acquired, so a crashed run can't hold a slot
+for good.
 It is read as a whole number and clamped to 0..15: unset or 0 means slot-based
 jobs do nothing, values above 15 count as 15, and a value that isn't a whole
-number counts as 0.
+number counts as 0. With 0 the pump still runs on its schedule, but only for
+housekeeping: it reaps expired leases and slots, runs ingest, dispatches no
+work and does not start a successor run.
+
+Lowering `LOOP_SLOTS` does not stop workers already running; they finish or
+their leases expire. The pump simply starts no new work until the number of
+open slots is below the new value.
 
 ## Pause until a set time
 
@@ -48,16 +57,21 @@ can't read (no zone, a typo) keeps the loop paused, so a mistake fails safe.
 
 ## Which variable affects which workflow
 
-| Variable | `history-registry` | `history-packages` | `history-popularity` | Workers and pump (later) |
-|---|---|---|---|---|
-| `LOOP_ENABLED` | yes | yes | yes | yes |
-| `LOOP_PAUSE_UNTIL` | yes | yes | yes | yes |
-| `LANE_<JOB>_ENABLED` | `LANE_HISTORY_REGISTRY_ENABLED` | `LANE_HISTORY_PACKAGES_ENABLED` | `LANE_HISTORY_POPULARITY_ENABLED` | their own lane |
-| `LOOP_SLOTS` | no | no | no | yes |
+| Variable | `history-registry` | `history-packages` | `history-popularity` | `pump` | `watchdog` | `ingest` (manual) | Workers (later) |
+|---|---|---|---|---|---|---|---|
+| `LOOP_ENABLED` | yes | yes | yes | yes | yes | yes | yes |
+| `LOOP_PAUSE_UNTIL` | yes | yes | yes | yes | yes | yes | yes |
+| `LANE_<JOB>_ENABLED` | `LANE_HISTORY_REGISTRY_ENABLED` | `LANE_HISTORY_PACKAGES_ENABLED` | `LANE_HISTORY_POPULARITY_ENABLED` | `LANE_PUMP_ENABLED` | `LANE_WATCHDOG_ENABLED` | `LANE_INGEST_ENABLED`; also refuses to run unless `LANE_PUMP_ENABLED` is off | their own lane |
+| `LOOP_SLOTS` | no | no | no | 0 = housekeeping only | 0 = no pump expected | no | yes |
 
 The three history workflows capture public data and don't work in slots, so
 they run the guard with `--no-slots`: `LOOP_SLOTS=0` does not stop them. Use
-`LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` or the lane switch for those.
+`LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` or the lane switch for those. The same goes
+for the manual re-ingest workflow (see "Manual re-ingest").
+
+The watchdog also reads every lane switch above: a lane that is off shows as
+`off` on the health issue instead of red, and the watchdog does not dispatch a
+pump whose lane is off.
 
 ## Stop one job
 
@@ -120,8 +134,8 @@ jobs:
           LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
           LOOP_SLOTS: ${{ vars.LOOP_SLOTS }}
           LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
-          LANE_PUMP_ENABLED: ${{ vars.LANE_PUMP_ENABLED }}
-        run: node scripts/guard.mjs --job pump --slots
+          LANE_META_GITHUB_ENABLED: ${{ vars.LANE_META_GITHUB_ENABLED }}
+        run: node scripts/guard.mjs --job meta-github --slots
 
   work:
     needs: guard
@@ -131,9 +145,11 @@ jobs:
 
 ## State store
 
-The loop's state (subjects, runs, leases, slot ledger, attempts) is one SQLite
-file. Between runs it lives as the asset `state.sqlite` on the release tagged
-`state` in this repo. Only the pump writes it, inside one concurrency group.
+The loop's state (subjects, runs, leases, slot ledger, dispatches, attempts,
+results) is one SQLite file. Between runs it lives as the asset `state.sqlite`
+on the release tagged `state` in this repo. Only the pump writes it, inside the
+`pump` concurrency group; ingest runs inside the pump. The manual re-ingest
+workflow writes it too, but only while the pump is paused.
 
 ```sh
 GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs pull   # -> state/state.sqlite
@@ -147,6 +163,11 @@ state changed" if it is no longer the pulled one, so a stale writer can't
 overwrite newer state. A push with no pull record is refused unless you pass
 `--force`.
 
+The asset is age ciphertext (see "State encryption" below): `push`
+encrypts the database before upload, and `pull` decrypts it with
+`AGE_IDENTITY`, so both need age (`AGE_BIN`, `AGE_KEYGEN_BIN`) and `pull`
+needs the identity.
+
 `push` needs a token with `contents: write`. It uploads under a temporary name,
 then deletes the old asset and renames the new one, so a failed push keeps the
 last good copy. `pull` checks the sha256 in the asset label and that the file
@@ -154,6 +175,406 @@ is a healthy SQLite database before it replaces the local file. To reset state,
 delete `state.sqlite` and any `state.sqlite.upload-*` assets; the next run
 starts empty.
 
+## State encryption
+
+This repository is public, so anyone can download a release asset. The state
+database is for the loop only (attempts with their rejection and quarantine
+reasons, leases, dispatches, results before they are published), so
+[`scripts/state-asset.mjs`](../scripts/state-asset.mjs) keeps the asset
+age-encrypted:
+
+- `push` encrypts the database to every public key in
+  [`state/state.pub`](../state/state.pub) and uploads only age ciphertext. A
+  writer that has an identity (the pump, the manual re-ingest) first checks
+  that its identity is one of those keys, so it never pushes a state it could
+  not read back.
+- `pull` decrypts with `AGE_IDENTITY` and refuses an asset that is not age
+  ciphertext (it fails closed: the pump run fails before it does anything).
+- The sha256 label and the stale-writer check are over the uploaded
+  ciphertext, so they work as before.
+
+`state/state.pub` must list the ingest public key (the one in
+`worker-kit/ingest.pub`): the pump, the watchdog and the manual re-ingest all
+read the state with the `AGE_IDENTITY` secret of environment `loop`. A test
+checks this. You may add a key of your own, on its own line, to read the
+state on your machine:
+
+```sh
+GITHUB_REPOSITORY=isokron-ai/tool-qa AGE_IDENTITY="$(cat my-identity.txt)" \
+  node scripts/state-asset.mjs pull --file state/state.sqlite
+```
+
+Nothing else reads the state asset: the archive pull copies history
+artifacts only and needs no key.
+
+**One-time migration** from the plaintext asset of earlier versions. Pause
+the pump (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going,
+then, with age installed and a token that can write this repository's
+releases:
+
+```sh
+GITHUB_TOKEN=... GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs migrate --file /tmp/state.sqlite
+```
+
+`migrate` downloads the plaintext asset, checks it, encrypts it to
+`state/state.pub` and replaces the asset, with the same stale-writer checks as
+`push`. It needs no identity. If the asset is already encrypted (or absent) it
+says so and changes nothing. Turn the pump back on afterwards. Until the
+migration is done, every pump, watchdog and re-ingest run fails with "is not
+age ciphertext; refusing to use it". Delete the local copy when done.
+
+**Rotation.** Add the new public key to `state/state.pub` (keep the old one),
+merge, and let one pump run push: the asset is then encrypted to both keys.
+Then switch `AGE_IDENTITY` (see "Result encryption keys") and remove the old
+key from `state/state.pub`; the next push drops it.
+
 ## State store: one writer at a time
 
 `scripts/state-asset.mjs push` refuses to overwrite the state asset if it changed since this run pulled it, and re-checks just before replacing it. There is still a short window between that re-check and the swap, so the check is a safety net, not a lock: every workflow that pushes state must run in the same `concurrency` group (one writer at a time). Pull again before every push.
+
+The pump is that one writer (concurrency group `pump`), and it judges worker
+results itself, in the same process, so ingest never needs a second writer. To
+push state by hand or run the manual re-ingest workflow, first switch the pump
+off (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going. The
+watchdog only downloads a copy and never pushes.
+
+## The pump
+
+`.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
+(Actions → pump → Run workflow). Each run works for about 11 minutes, ticking
+every 150 seconds, and first dispatches the next run, which waits for it in the
+`pump` concurrency group. While `LOOP_SLOTS` is above 0 the pump therefore runs
+back to back; the schedule restarts the chain if it breaks. Because only one
+run can wait in a concurrency group, a scheduled run that starts while one is
+already waiting replaces it, and the replaced run shows as cancelled. That is
+normal.
+
+Each tick, in this order:
+
+1. **Reap.** Close dispatches whose lease expired and free their slots, so a
+   dispatch that cannot be judged stops being an open one when its lease
+   ends.
+2. **Ingest.** For every dispatch still waiting for a result, the pump checks
+   whether its worker run has finished. For a finished run it judges each
+   item's result artifact on its own (the checks in
+   [`ingest/README.md`](../ingest/README.md)), records each decision in the
+   state, writes each item's outputs sealed to `worker-kit/ingest.pub`, and,
+   once every item has a decision, closes the dispatch, which frees its slot.
+   One log line per judged item: `ingest: <workflow> shard <shard id>
+   (<attempt id>) item <index>: <outcome> (<reason>), recorded, outputs
+   sealed`. Judging one item is limited to a minute (`ingest_timeout`), and
+   an item the pump fails to judge three times is recorded as `ingest_error`.
+   Ingest stops taking new results about two minutes before the run ends
+   (about minute 9), so everything it judged is in the final push.
+3. **Dispatch.** Record due work for the free slots as pending dispatches,
+   **push the state**, and only then send them. If that push fails, nothing is
+   sent and the pending dispatches are withdrawn.
+4. **Push** the state if anything changed.
+
+If any push fails, the run dispatches nothing more, does one housekeeping
+tick (reap and ingest), tries a final push and fails (red). Look at the
+`pump: state push (...) failed` line; the next run starts from the last state
+that was pushed. Work sent before the failure is in that state (it was pushed
+before it was sent) and holds its slots until it reports or its lease
+expires.
+
+At the end of the job, `pump.yml` uploads the sealed ingest outputs as one
+artifact (see "Reading ingest outputs" below).
+
+Before it dispatches anything, a run checks that results can be judged:
+`worker-kit/ingest.pub` holds the real key, and `AGE_IDENTITY` is set and
+matches it. If either fails, the run logs `pump: ingest is
+not ready, so nothing is dispatched this run: <why>`, still reaps and pushes,
+and fails (red), so no worker is sent out whose result could not be judged.
+
+To start it:
+
+1. Set up the GitHub App and the `loop` environment (below), including the
+   ingest key pair ("Result encryption keys").
+2. Enable a worker workflow in `pump/workflows.json` (`"enabled": true`) once
+   it exists in its repository and uploads one result bundle per item
+   ([`worker-kit/README.md`](../worker-kit/README.md)). Until then the pump
+   has nothing to dispatch.
+3. Set `LOOP_SLOTS` (for example 5) and `LOOP_ENABLED=true`.
+4. Run the pump by hand once, or wait for the schedule.
+
+To see what it would do without dispatching anything, pull the state and run
+the plan:
+
+```sh
+GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs pull
+node pump/run.mjs --plan --state state/state.sqlite
+```
+
+To stop it:
+
+| Do this | Effect |
+|---|---|
+| `LOOP_SLOTS=0` | The pump only does housekeeping on its schedule (one tick: ingest finished worker runs, reap expired leases and slots). No new work, no successor run. Workers already running finish and are still judged. |
+| `LANE_PUMP_ENABLED=false` | The pump does nothing at all, ingest included. Leases and slots are not reaped until it is back; they expire on their own. Results of workers that finish meanwhile are judged once the pump is back; a result whose lease has expired by then is judged as a late result and stored as rejected. The health issue shows the pump as off. |
+| `LOOP_ENABLED=false` | Everything stops, the watchdog too. |
+
+A running pump run notices none of these until its next start; cancel it from
+the Actions tab if it must stop at once. Its dispatches stay in the state, and
+their leases expire as usual.
+
+## The GitHub App and the `loop` environment
+
+The pump and the watchdog use a GitHub App owned by the organisation. They mint
+short-lived tokens from it, each for one repository and only the permissions
+that call needs, and refuse a token that comes back with more.
+
+| What | Where | Value |
+|---|---|---|
+| App permissions | App settings | Repository: Actions read and write, Issues read and write, Metadata read. Nothing else. |
+| App installation | Organisation settings | `tool-qa` and each worker repository (for example `mcp-check`, `mcp-writecheck-action`). |
+| `APP_ID` | Variable (repository or `loop` environment) | The App's id. |
+| `APP_INSTALLATION_ID` | Variable (repository or `loop` environment) | The installation's id. |
+| `APP_PRIVATE_KEY` | Secret in the `loop` environment only | The App's private key (PEM). |
+| `AGE_IDENTITY` | Secret in the `loop` environment only | The ingest identity that decrypts worker results ("Result encryption keys" below). Only the pump's `Pump` step (and the manual re-ingest step) gets it; the pump drops it from its environment at start and scrubs it from its logs. |
+
+The manual re-ingest workflow uses the same `APP_ID` and `APP_PRIVATE_KEY`.
+
+What each token is used for:
+
+| Job | Repository | Permissions | For |
+|---|---|---|---|
+| pump | each worker repository | `actions: write` | dispatching shards and finding their runs; reading the commit the worker workflow's ref points to (no permission needed, the worker repositories are public; a private one would need Contents: read) |
+| pump (ingest) | each worker repository | `actions: read` | finding finished worker runs and downloading their result artifacts |
+| pump (successor) | `tool-qa` | `actions: write` | dispatching the next pump run |
+| pump (successor failed) | `tool-qa` | `issues: write` | marking `pump-successor` red on the health issue |
+| watchdog | `tool-qa` | `issues: write`, `actions: write` | reading runs and artifacts, dispatching the pump, re-enabling workflows, the health issue |
+| ingest (manual) | the one worker repository | `actions: read` | reading that run and its result artifact |
+
+The state asset is pushed with the pump job's own token (`contents: write` on
+this repository only) and read by the watchdog with its job token
+(`contents: read`).
+
+Create the environment under Settings → Environments → `loop`. Limit
+deployment branches to `main`, so no other branch can use the key, and add no
+required reviewers (scheduled runs would wait for approval). Each pump and
+watchdog run shows up as a deployment to `loop`; that is expected.
+
+## The loop health issue
+
+The watchdog runs at minutes 7, 22, 37 and 52 of every hour and keeps one
+pinned issue titled **Loop health** (label `loop-health`) up to date. The body
+is rewritten in place; a comment is added only when the overall status turns
+red or recovers, so subscribe to the issue to be told when something needs a
+person. The issue is not updated while the loop is stopped or paused, because
+the watchdog stops too.
+
+green: fine. amber: late or degraded, the loop is handling it. red: needs a
+person. off: switched off on purpose.
+
+| Check | Amber or red means | What to do |
+|---|---|---|
+| `pump` | No pump run started for 20 minutes (amber; the watchdog dispatches one) or 40 minutes (red). | Look at recent pump runs: are they queued, failing, or skipped by the guard? Check the Actions queue and the App settings. |
+| `pump-dispatch` | The watchdog could not dispatch the pump; the HTTP status is in the details. | 403: the App lacks `actions: write` or is not installed on `tool-qa`. 404 or 422: `pump.yml` is missing or has no `workflow_dispatch`. |
+| `pump-successor` | The pump could not dispatch its next run, so the chain is broken until the next schedule (at most 30 minutes). | Check `APP_ID`, `APP_INSTALLATION_ID`, the private key and the installation. Clears when a later pump run succeeds. |
+| `history-registry-delta` | Newest delta capture is over 45 minutes old (amber), or over 90 (red). | Open the `history-registry` runs. |
+| `history-registry-full`, `history-packages`, `history-popularity` | Newest artifact is over 26 hours old (amber), or over 50 (red). | Open that workflow's runs. |
+| `state` | No state asset yet, or it could not be read (amber; the details say which). | Normal until the first pump run has saved state. Otherwise check the `state` release. |
+| `slots`, `dispatches` | Rows more than 15 minutes past their expiry (red): the pump is not reaping. | See the `pump` check and the latest pump logs. |
+| `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
+| `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
+
+If the issue is missing, the next watchdog run creates it. If pinning fails
+(the App may not be allowed to pin), pin it once by hand.
+
+## Archive of history artifacts
+
+History artifacts are kept by GitHub for 30 days. `scripts/archive-pull.mjs`
+copies them to a folder you keep, on any machine with Node 22.13 or newer:
+
+```sh
+node scripts/archive-pull.mjs --dest /path/to/tool-qa-history            # pull what is new
+node scripts/archive-pull.mjs --dest /path/to/tool-qa-history --dry-run  # list only
+```
+
+It needs a token that can read this repository's Actions artifacts:
+`GITHUB_TOKEN` or `GH_TOKEN` (a fine-grained token with Actions: read on
+`tool-qa` is enough), or else the token of a signed-in GitHub CLI. It copies
+every artifact named `history-*` or `registry-*` that is not in the folder's
+`index.ndjson` yet, checks each file against the sha256 in the artifact's
+manifest, and writes it to `<dest>/<artifact name>/`. It never overwrites or
+deletes anything in the folder. An artifact that fails a check is left out and
+tried again next time, and the command exits 1. `<dest>/.last-pull.json` keeps
+its place; each run looks back one hour before it.
+
+To run it every six hours on a Mac, save this as
+`~/Library/LaunchAgents/ai.isokron.tool-qa.archive-pull.plist` (adjust the
+paths) and load it with `launchctl load` on that file:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.isokron.tool-qa.archive-pull</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/you/src/tool-qa/scripts/archive-pull.mjs</string>
+    <string>--dest</string>
+    <string>/Users/you/archive/tool-qa-history</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>21600</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/you/Library/Logs/tool-qa-archive-pull.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/tool-qa-archive-pull.log</string>
+</dict>
+</plist>
+```
+
+`PATH` is set so the job can find the GitHub CLI for its token. Check the log
+after the first run; a full first pull of 30 days takes a while, because it
+paces itself under the API limits.
+
+## Result encryption keys
+
+Workers encrypt their result bundles with [age](https://age-encryption.org) to
+one public key; ingest decrypts them with the matching identity (secret key).
+Ingest also encrypts its own outputs to that key, so only the identity holder
+can read them.
+
+Create the pair on a trusted machine, not in CI:
+
+```sh
+age-keygen -o ingest-identity.txt   # writes the identity, prints the public key
+age-keygen -y ingest-identity.txt   # prints the public key again
+```
+
+1. Put the public key (`age1...`) on its own line in
+   [`worker-kit/ingest.pub`](../worker-kit/ingest.pub), in place of the
+   current one (lines starting with `#` may stay), and in
+   [`state/state.pub`](../state/state.pub) (see "State encryption"), and
+   merge it. Workers use the key in the tool-qa commit they pin.
+2. Store the identity as the secret `AGE_IDENTITY` in the environment `loop`:
+
+   ```sh
+   gh secret set AGE_IDENTITY --env loop --repo isokron-ai/tool-qa < ingest-identity.txt
+   ```
+
+3. Keep one offline copy of the identity somewhere safe, then delete the file.
+   Never commit it, and never paste it into an issue, a log or a workflow.
+
+`worker-kit/ingest.pub` holds the real key. If it ever holds no key (only
+`#` comment lines, the placeholder it once shipped with), the worker action
+refuses to upload, the pump judges nothing and dispatches no work (each run
+fails with `pump: ingest is not ready ... worker-kit/ingest.pub has no age
+public key yet (it is still the placeholder) ...`), and the manual re-ingest
+exits 1 without judging anything. The same happens, before anything is
+fetched, if `AGE_IDENTITY` is missing or is not the identity of a key in
+`ingest.pub`, so a wrong secret never turns into a series of
+`decrypt_failed` rejections.
+
+**Rotation.** Set `LOOP_SLOTS=0` so no new work goes out, and wait until the
+pump has judged every running worker (no open dispatches: `ingest: checked 0`
+or no `ingest:` lines in the pump log). Create a new pair, add the new public
+key to `state/state.pub` (keep the old one) and merge, and let one pump
+housekeeping run push the state, now encrypted to both keys (see "State
+encryption"). Then set `LOOP_ENABLED=false`, put the new public key in
+`ingest.pub` (and drop the old one from `state/state.pub`) and the new
+identity in `AGE_IDENTITY` together, update the tool-qa pin in every worker
+repo, and turn the loop back on. A bundle encrypted to the old key after that
+is rejected as
+`decrypt_failed`. If the identity may have leaked, rotate at once: it can read
+every bundle and every sealed ingest output encrypted to it, and every copy
+of the state asset encrypted to it.
+
+**Reading ingest outputs.** Each pump run that sealed any outputs uploads one
+artifact `ingest-<run id>-<run attempt>` (kept 30 days) holding one
+age-encrypted tar per judged item, `ingest-<attempt>-<index>.tar.age`
+(`<index>` is the item's position in the shard, from 0), and
+`ingest-<attempt>.tar.age` for an attempt refused before any item was judged.
+To find the run that judged an attempt, search the pump logs for its attempt
+id (the `ingest:` lines). A manual re-ingest uploads `ingest-<attempt>`
+instead, one tar with every item it judged. Download
+it from the run's page (or with `gh run download`; unzip it if it arrives
+zipped), then:
+
+```sh
+age --decrypt -i ingest-identity.txt -o ingest.tar ingest-<attempt>-<index>.tar.age
+tar -tf ingest.tar    # accepted/<attempt>/<index>/..., rejected/<attempt>/<index>/... or quarantine/<attempt>/<index>/...
+```
+
+`ingest.json` in there is the report. For a rejected or quarantined item,
+`result.tar.age` is the worker's bundle as uploaded; it decrypts with the same
+identity. A quarantined bundle holds a secret or a canary in the clear: open it
+only on a trusted machine and never publish it.
+
+The pump uploads the artifact at the end of the job, after it has pushed the
+state, and also when the pump step failed. If the job is lost before the upload
+(a lost runner, a job timeout), decisions it already pushed stay recorded but
+their outputs are gone; judging the attempt again does not bring them back,
+because items that already have a result are skipped.
+
+## Manual re-ingest
+
+The pump judges every finished worker run itself. The workflow
+[`.github/workflows/ingest.yml`](../.github/workflows/ingest.yml) is a tool for
+the attempts it did not judge, for example one whose run it never found (no run
+id came back from the dispatch and no run named `shard <shard id>` turned up
+before the lease expired), one that finished more than six hours after its
+lease expired, or one that kept failing with an error in the pump log. It judges one attempt with the same
+checks (details: [`ingest/README.md`](../ingest/README.md)) and records a
+decision for each of its items that has none yet.
+
+It writes the state, so **pause the pump first**:
+
+1. Set `LANE_PUMP_ENABLED=false` and wait until no pump run is in progress
+   (Actions → pump). The workflow refuses to run (red, "pause the pump first")
+   while the pump lane is on.
+2. Run it with the worker repo, the worker run id and the attempt id:
+
+   ```sh
+   gh workflow run ingest.yml --repo isokron-ai/tool-qa \
+     -f repo=isokron-ai/mcp-check -f run_id=123456789 -f attempt_id=att-1
+   ```
+
+3. Read the notice line of the run, and the sealed outputs it uploaded as
+   `ingest-<attempt>` ("Reading ingest outputs" above).
+4. Set `LANE_PUMP_ENABLED=true` (or delete it). The schedule starts the pump
+   again within 30 minutes, or run it by hand.
+
+The ingest job runs in the `pump` concurrency group, so it never overlaps a
+pump run. GitHub keeps at most one waiting run per group and cancels the older
+one when another queues. The pump's schedule queues a run every 30 minutes,
+even while its lane is off (that run then stops at once), so a re-ingest that
+is still waiting when it fires is cancelled: **if the ingest job shows as
+cancelled, run the workflow again.** Run one attempt at a time. Once the job
+holds the group it checks the kill switches and the pump lane again (they may
+have changed while it waited) and stops, red and having judged nothing, if
+the loop or the ingest lane is now off or the pump is back on.
+
+| Name | Kind | Where | Needed |
+|---|---|---|---|
+| `AGE_IDENTITY` | secret | environment `loop` | yes (see "Result encryption keys") |
+| `APP_ID` | variable | repository or environment `loop` | optional: the run and its artifact are then read with a short-lived GitHub App token for the one worker repo (`actions: read`) |
+| `APP_PRIVATE_KEY` | secret | environment `loop` | with `APP_ID` |
+| `LANE_PUMP_ENABLED` | variable | repository | must be off (set and not `true`) |
+| `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL`, `LANE_INGEST_ENABLED` | variables | repository | kill switches; the workflow runs the guard with `--no-slots`, so `LOOP_SLOTS` does not stop it |
+
+Without `APP_ID` the run's own token reads the artifacts, which can only work
+for public worker repos (not yet tried in CI).
+
+The job pulls the state asset, judges, uploads the sealed outputs, and pushes
+the state only if a result was recorded, after the upload. A run is green for
+every decision (accepted, rejected, quarantined, pending, already recorded):
+see the notice line and the step outputs. It is red for operational errors
+(GitHub unreachable after retries, bad configuration, state problems), and
+then nothing is recorded. `pending` means the worker run is not finished yet:
+run it again later (or let the pump judge it). Running it again for a recorded
+attempt does nothing. A result whose lease has expired is stored as rejected.
+If the dispatch is still open afterwards, the pump closes it on its first tick
+back.
+
