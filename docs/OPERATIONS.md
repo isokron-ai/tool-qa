@@ -205,7 +205,7 @@ GITHUB_REPOSITORY=isokron-ai/tool-qa AGE_IDENTITY="$(cat my-identity.txt)" \
 ```
 
 Nothing else reads the state asset: the archive pull copies history
-artifacts only and needs no key.
+artifacts and the sealed ingest outputs only, and needs no key.
 
 **One-time migration** from the plaintext asset of earlier versions. Pause
 the pump (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going,
@@ -313,21 +313,35 @@ run_key's last result that measured something (`results.measured_at`), so a
 subject that never works gets one window and then a few backed-off looks,
 not a new window every day.
 
-**Coverage gaps (R-COV-02, R-COV-03).** Ingest stores each result's fault
-side and coverage state (`results.fault`, `results.coverage`; see
-`worker-kit/README.md`). A skip caused by our own tools (an unsupported
+**Coverage gaps (R-COV-02, R-COV-03, R-COV-05..07).** Ingest stores each
+result's fault side and coverage state (`results.fault`, `results.coverage`;
+see `worker-kit/README.md`). A skip caused by our own tools (an unsupported
 language or layout, a reader limit, no tool found, a size cap of ours, a
 tool error) is `unassessed_tool`: our limit, never excluded and never the
 server's failure. The due list adds a coverage-gap boost of
-`priority.coverage_gap_share` (0.5) x the tier weight to a due pair that has
-no result yet, whose last result is unassessed by our own limit (tool or
-unknown fault), or that was never assessed and last hit a rate limit or
-outage. So within a tier, gaps go first: for a T3 subject (weight 20) whose
-last scan-static result was a reader limit, the boost is +10. The boost only
-orders due pairs. A tool release moves every run_key (`versions` in
-`pump/workflows.json`), so after one every tool-fault skip is due again with
-reason `tool_version`, ahead of the rest of its tier. Results recorded before
-state schema 7 have no coverage and get no boost until they run again.
+`priority.coverage_gap_share` (0.5) x the tier weight, capped one point under
+the weight gap to the next tier up, to a due pair that:
+
+- has no result yet, or was never assessed and last hit a rate limit or
+  outage (`never_assessed`); or
+- last ended in our own limit (tool or unknown fault) and something moved
+  since: a new tool version, a new subject version or a change event
+  (`our_limit`). A tool-limit skip that is merely stale is not boosted: the
+  same tool on the same version would give the same skip.
+
+With the shipped `tiers.json` the boosts are T0 +50, T1 +30, T2 +19 (0.5 x
+40 = 20 would tie the 20-point gap to T1), T3 +10, T4 +5. With equal reasons
+and age, a boosted pair stays below a bare pair of the tier above; an older
+result or a heavier reason can still lift it over. Example: after an
+mcp-check release, a T3 subject (weight 20) whose last scan-static result was
+a reader limit is due with `tool_version` (+20) and gets +10, ahead of the
+T3 subjects whose results were graded. The boost only orders due pairs. A
+first-sight pair has no reason weight and no age, so it goes ahead of a stale
+pair of its tier only while its boost beats stale's 10 points plus the stale
+result's age: always in T0, in T1 while the stale result is under 20 days
+old, never in T2 to T4. Results recorded before state schema 7 have no
+coverage: they get no `our_limit` boost, and one that was not `skips_only`
+counts as assessed.
 
 **Throttling (R-SUB-04, R-SUB-09).** A result whose every skip is a
 retryable `rate_limited` or `upstream_unavailable` from a third-party stage
@@ -632,29 +646,54 @@ person. off: switched off on purpose.
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
 
-## Archive of history artifacts
+## Archive of history artifacts and ingest outputs
 
-History artifacts are kept by GitHub for 30 days. `scripts/archive-pull.mjs`
-copies them to a folder you keep, on any machine with Node 22.13 or newer:
+GitHub keeps history artifacts for 30 days and the sealed ingest outputs
+(`ingest-*`, "Reading ingest outputs" below) for 90. Those ingest outputs are
+the only copy of the loop's scan results. `scripts/archive-pull.mjs` copies
+both to a folder you keep, on any machine with Node 22.13 or newer:
 
 ```sh
-node scripts/archive-pull.mjs --dest /path/to/tool-qa-history            # pull what is new
-node scripts/archive-pull.mjs --dest /path/to/tool-qa-history --dry-run  # list only
+node scripts/archive-pull.mjs --dest ~/isokron-archive/tool-qa            # pull what is new
+node scripts/archive-pull.mjs --dest ~/isokron-archive/tool-qa --dry-run  # list only
 ```
 
 It needs a token that can read this repository's Actions artifacts:
 `GITHUB_TOKEN` or `GH_TOKEN` (a fine-grained token with Actions: read on
-`tool-qa` is enough), or else the token of a signed-in GitHub CLI. It copies
-every artifact named `history-*` or `registry-*` that is not in the folder's
-`index.ndjson` yet, checks each file against the sha256 in the artifact's
-manifest, and writes it to `<dest>/<artifact name>/`. It never overwrites or
-deletes anything in the folder. An artifact that fails a check is left out and
-tried again next time, and the command exits 1. `<dest>/.last-pull.json` keeps
-its place; each run looks back one hour before it.
+`tool-qa` is enough), or else the token of a signed-in GitHub CLI, read with
+`gh auth token` each run (so no token is written anywhere). It copies every
+artifact that is not in the folder's `index.ndjson` yet:
 
-To run it every six hours on a Mac, save this as
-`~/Library/LaunchAgents/ai.isokron.tool-qa.archive-pull.plist` (adjust the
-paths) and load it with `launchctl load` on that file:
+- `history-*` and `registry-*` into `<dest>/<artifact name>/`, each file
+  checked against the sha256 in the artifact's manifest;
+- `ingest-*` into `<dest>/ingest/<YYYY-MM-DD>/<artifact name>/` (the UTC day
+  the artifact was made; the pump's are named `ingest-<run id>-<run attempt>`),
+  still age-encrypted: nothing is decrypted, and an artifact holding a file
+  that is not an age file is refused. Each one gets a line in
+  `<dest>/ingest/manifest.ndjson`: `artifact_id`, `artifact`, `run_id`,
+  `run_attempt` (or `attempt_id` for a manual re-ingest), `created_at`,
+  `date`, `dir`, `artifact_bytes`, `artifact_sha256`, and `files` (each
+  `name`, `bytes`, `sha256`).
+
+Every download is checked against the artifact's sha256 digest when GitHub
+gives one. It never overwrites or deletes anything in the folder. An artifact
+that fails a check is left out and tried again next time, and the command
+exits 1. `<dest>/.last-pull.json` keeps its place for each kind; each run looks
+back one hour before it. A kind with no place yet (ingest, in a folder made
+before ingest outputs were pulled) is listed in full. If the list of artifacts
+runs past 500 pages, the place is not moved and the command exits 1.
+
+The archived files are the sealed tars themselves; decrypt one with
+`age --decrypt -i ingest-identity.txt -o item.tar <file>`, as in "Reading
+ingest outputs".
+
+**On the archive Mac** it runs every six hours from the LaunchAgent
+`~/Library/LaunchAgents/ai.isokron.tool-qa.archive-pull.plist`, into
+`~/isokron-archive/tool-qa/`, from a checkout of this repository at
+`~/isokron-archive/tool-qa-code/`, logging to
+`~/Library/Logs/tool-qa-archive-pull.log`. The plist holds no token: the job
+runs `gh auth token` when it starts. To install it elsewhere, save this (adjust
+the paths) and load it with `launchctl bootstrap gui/$(id -u)` on that file:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -665,10 +704,10 @@ paths) and load it with `launchctl load` on that file:
   <string>ai.isokron.tool-qa.archive-pull</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/node</string>
-    <string>/Users/you/src/tool-qa/scripts/archive-pull.mjs</string>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/you/isokron-archive/tool-qa-code/scripts/archive-pull.mjs</string>
     <string>--dest</string>
-    <string>/Users/you/archive/tool-qa-history</string>
+    <string>/Users/you/isokron-archive/tool-qa</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -677,6 +716,8 @@ paths) and load it with `launchctl load` on that file:
   </dict>
   <key>StartInterval</key>
   <integer>21600</integer>
+  <key>LowPriorityIO</key>
+  <true/>
   <key>StandardOutPath</key>
   <string>/Users/you/Library/Logs/tool-qa-archive-pull.log</string>
   <key>StandardErrorPath</key>
@@ -685,9 +726,14 @@ paths) and load it with `launchctl load` on that file:
 </plist>
 ```
 
-`PATH` is set so the job can find the GitHub CLI for its token. Check the log
-after the first run; a full first pull of 30 days takes a while, because it
-paces itself under the API limits.
+`PATH` is set so the job can find the GitHub CLI for its token. A Mac that is
+asleep runs a missed interval when it wakes. To run it at once, `launchctl
+kickstart gui/$(id -u)/ai.isokron.tool-qa.archive-pull`. Two pulls into one
+folder at the same time are not guarded against, so start one by hand only
+when the agent is not running. Check the log after the first
+run; a full first pull takes a while, because it paces itself under the API
+limits. To update the code it runs, `git -C ~/isokron-archive/tool-qa-code
+pull --ff-only` after a change to the script is merged.
 
 ## Result encryption keys
 
@@ -742,7 +788,7 @@ every bundle and every sealed ingest output encrypted to it, and every copy
 of the state asset encrypted to it.
 
 **Reading ingest outputs.** Each pump run that sealed any outputs uploads one
-artifact `ingest-<run id>-<run attempt>` (kept 30 days) holding one
+artifact `ingest-<run id>-<run attempt>` (kept 90 days, the most GitHub allows) holding one
 age-encrypted tar per judged item, `ingest-<attempt>-<index>.tar.age`
 (`<index>` is the item's position in the shard, from 0), and
 `ingest-<attempt>.tar.age` for an attempt refused before any item was judged.
