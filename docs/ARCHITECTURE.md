@@ -209,9 +209,16 @@ runs it is kept as the Release asset `state.sqlite` on the release tagged
 `state`. Code: [`state/schema.sql`](../state/schema.sql),
 [`state/db.mjs`](../state/db.mjs), [`scripts/state-asset.mjs`](../scripts/state-asset.mjs).
 Every hour [`state-snapshot.yml`](../.github/workflows/state-snapshot.yml)
-copies that asset, still encrypted, to the release `state-snapshots` (the 48
-newest copies and one a day for 30 days); `snapshot/restore.mjs` checks one and
-puts it back. See [OPERATIONS.md](OPERATIONS.md), "State snapshots".
+copies that asset, still encrypted, to the release `state-snapshots` (the 24
+newest copies, one a day for 14 days and one a week for 8 weeks);
+`snapshot/restore.mjs` checks one and puts it back. See
+[OPERATIONS.md](OPERATIONS.md), "State snapshots". The asset is the database
+gzipped, then encrypted. At the end of each run the pump moves closed history
+(dispatches, items, attempts, leases, slots and old run_key generations no
+decision reads any more) out of the state into sealed archives it uploads as
+artifacts, deleting rows only once their archive reads back
+([`state/prune.mjs`](../state/prune.mjs), [`pump/prune.mjs`](../pump/prune.mjs));
+see OPERATIONS.md, "State pruning and size".
 
 It uses Node's built-in `node:sqlite` module (Node 22.13 or newer), so there is
 no dependency to install. Ubuntu runners get that Node version through

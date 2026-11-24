@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  KEEP_DAYS, KEEP_RECENT, copyStateAsset, isUnchanged, main, parseManifest, parseSnapshotName, reconcile, runSnapshot,
-  selectRetention, snapshotName, verifySnapshot,
+  KEEP_DAYS, KEEP_RECENT, KEEP_WEEKS, copyStateAsset, isUnchanged, main, parseManifest, parseSnapshotName, reconcile, runSnapshot,
+  selectRetention, snapshotName, verifySnapshot, weekOf,
 } from '../snapshot.mjs';
 import { createReleaseClient } from '../github.mjs';
 import { cipher, fakeGh, sha } from './fake-github.mjs';
@@ -28,31 +28,49 @@ test('snapshot names carry the UTC time and the first 8 hex of the sha256, and p
   assert.equal(parseSnapshotName('state-20261124T023507Z-abcdef12.sqlite.age\n'), null);
 });
 
-test('R-SNAP-01: retention keeps the 48 newest and the newest of each UTC day for 30 days, and prunes the rest', () => {
-  // One snapshot an hour for 40 days.
+test('R-SNAP-01: retention keeps the 24 newest, the newest of each UTC day for 14 days and of each UTC week for 8 weeks, and prunes the rest', () => {
+  // One snapshot an hour for 70 days.
   const entries = [];
-  for (let h = 0; h < 40 * 24; h++) entries.push(entry(T0 - h * HOUR, h));
+  for (let h = 0; h < 70 * 24; h++) entries.push(entry(T0 - h * HOUR, h));
   const { keep, prune } = selectRetention(entries, { now: T0 });
   assert.equal(keep.length + prune.length, entries.length);
-  const newest48 = new Set([...entries].sort((a, b) => (a.created < b.created ? 1 : -1)).slice(0, KEEP_RECENT).map((e) => e.name));
-  const cutoff = T0 - KEEP_DAYS * DAY;
-  const dailyNewest = new Map();
-  for (const e of entries) {
-    const t = Date.parse(e.created);
-    if (t < cutoff) continue;
-    const d = e.created.slice(0, 10);
-    if (!dailyNewest.has(d) || dailyNewest.get(d).created < e.created) dailyNewest.set(d, e);
-  }
-  const want = new Set([...newest48, ...[...dailyNewest.values()].map((e) => e.name)]);
+  const byNew = [...entries].sort((a, b) => (a.created < b.created ? 1 : -1));
+  const newest = new Set(byNew.slice(0, KEEP_RECENT).map((e) => e.name));
+  const newestPer = (spanMs, bucket) => {
+    const m = new Map();
+    for (const e of byNew) {
+      const t = Date.parse(e.created);
+      if (t < T0 - spanMs) continue;
+      const b = bucket(t);
+      if (!m.has(b)) m.set(b, e);
+    }
+    return m;
+  };
+  const daily = newestPer(KEEP_DAYS * DAY, (t) => new Date(t).toISOString().slice(0, 10));
+  const weekly = newestPer(KEEP_WEEKS * 7 * DAY, weekOf);
+  const want = new Set([...newest, ...[...daily.values()].map((e) => e.name), ...[...weekly.values()].map((e) => e.name)]);
   assert.deepEqual(new Set(keep.map((e) => e.name)), want);
   for (const p of prune) assert.ok(!want.has(p.name));
-  // 48 newest span today and yesterday; the 30-day window adds one per older day.
-  assert.ok(dailyNewest.size >= 30 && dailyNewest.size <= 31);
-  assert.ok(keep.length <= KEEP_RECENT + 31);
-  // Nothing older than 30 days survives unless it is among the 48 newest.
-  assert.ok(keep.every((e) => Date.parse(e.created) >= cutoff || newest48.has(e.name)));
+  assert.ok(daily.size >= 14 && daily.size <= 15);
+  assert.ok(weekly.size >= 8 && weekly.size <= 9);
+  assert.ok(keep.length <= KEEP_RECENT + 15 + 9);
+  // Nothing older than 8 weeks survives; the newest is always kept.
+  assert.ok(keep.every((e) => Date.parse(e.created) >= T0 - KEEP_WEEKS * 7 * DAY));
+  assert.equal(keep[0].name, byNew[0].name);
   // Newest first.
   assert.deepEqual(keep.map((e) => e.created), [...keep.map((e) => e.created)].sort().reverse());
+  // Every week's kept snapshot is a Monday-to-Sunday week's newest.
+  assert.equal(weekOf(Date.parse('2026-11-23T00:00:00Z')), '2026-11-23');
+  assert.equal(weekOf(Date.parse('2026-11-29T23:59:59Z')), '2026-11-23');
+  assert.equal(weekOf(Date.parse('2026-11-22T23:59:59Z')), '2026-11-16');
+});
+
+test('the newest snapshot is never pruned, whatever the retention settings', () => {
+  const entries = [];
+  for (let i = 0; i < 5; i++) entries.push(entry(T0 - (400 + i) * DAY, i));
+  const { keep, prune } = selectRetention(entries, { now: T0, keepRecent: 0, keepDays: 0, keepWeeks: 0 });
+  assert.deepEqual(keep.map((e) => e.name), [entries[0].name]);
+  assert.equal(prune.length, 4);
 });
 
 test('R-SNAP-01: an idle loop prunes nothing: retention counts snapshots, not hours', () => {
@@ -62,12 +80,13 @@ test('R-SNAP-01: an idle loop prunes nothing: retention counts snapshots, not ho
   const { keep, prune } = selectRetention(entries, { now: T0 });
   assert.equal(keep.length, 10);
   assert.deepEqual(prune, []);
-  // Sixty hourly snapshots: the 12 oldest are pruned, since the newest
-  // snapshot of their day is already among the 48 newest.
+  // Thirty hourly snapshots inside one UTC day: the 6 oldest are pruned,
+  // since the newest snapshot of their day and week is among the 24 newest.
   const many = [];
-  for (let h = 0; h < 60; h++) many.push(entry(T0 - h * HOUR, h));
-  const r = selectRetention(many, { now: T0 });
-  assert.equal(r.prune.length, 60 - KEEP_RECENT);
+  const day = Date.parse('2026-11-25T00:00:00Z');
+  for (let h = 0; h < 30; h++) many.push(entry(day + h * 40 * 60_000, h));
+  const r = selectRetention(many, { now: day + 20 * HOUR });
+  assert.equal(r.prune.length, 30 - KEEP_RECENT);
   assert.ok(r.prune.every((p) => p.created < r.keep.at(-1).created));
 });
 

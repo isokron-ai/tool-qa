@@ -77,7 +77,8 @@ function checkTtl(ttlMs) {
 // because the worker branch moved between the pump reading it and GitHub
 // starting the run, or because someone else's run took the shard's run name.
 // Neither says anything about the run_key's own work.
-const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'", "'retry_later'", "'retry_throttled'", "'run_sha_mismatch'"].join(', ');
+export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch']);
+const NOT_COUNTED = NOT_COUNTED_REASONS.map((r) => `'${r}'`).join(', ');
 
 function plain(row) {
   return row ? { ...row } : undefined;

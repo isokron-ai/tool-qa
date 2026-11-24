@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { drill, inspectDatabase, loopStopped } from '../restore.mjs';
+import { encodeState } from '../../scripts/state-asset.mjs';
 import { createReleaseClient } from '../github.mjs';
 import { runSnapshot } from '../snapshot.mjs';
 import { cipher, fakeGh, sha } from './fake-github.mjs';
@@ -349,3 +350,24 @@ test('R-SNAP-10: the drill can use a snapshot the manifest does not list, checke
   await assert.rejects(drill({ gh: f.gh, decrypt: () => bytes }), /failed verification: sha256/);
 });
 
+
+test('the drill reads both snapshot forms: gzip inside the envelope (since loop upgrade #14) and the plain database from before', async () => {
+  const { bytes, dir } = makeDb({ rows: 50 });
+  rmSync(dir, { recursive: true, force: true });
+  const f = fakeGh();
+  f.pushState(cipher('generation 1'));
+  await runSnapshot({ gh: f.gh, now: () => T0 });
+  const old = await drill({ gh: f.gh, decrypt: () => bytes });
+  assert.equal(old.ok, true);
+  assert.equal(old.compressed, false);
+  assert.equal(old.database_bytes, bytes.length);
+  const packed = encodeState(bytes);
+  const neu = await drill({ gh: f.gh, decrypt: () => packed });
+  assert.equal(neu.ok, true);
+  assert.equal(neu.compressed, true);
+  assert.equal(neu.decrypted_bytes, packed.length);
+  assert.equal(neu.database_bytes, bytes.length);
+  assert.deepEqual(neu.counts, old.counts);
+  // A gzip cut short fails the drill.
+  await assert.rejects(drill({ gh: f.gh, decrypt: () => packed.subarray(0, 60) }), /does not decompress/);
+});
