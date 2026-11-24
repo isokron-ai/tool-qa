@@ -75,6 +75,7 @@ function harness({ slots = '3', subjects = 4, successor, ingest = null } = {}) {
     ingest,
     // The sandbox breaker: a green nightly status from an hour ago (no network).
     readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
+    verifyConformanceRun: async () => ({ ok: true, why: 'test' }),
   };
   if (successor) writeFileSync(opts.successorFile, JSON.stringify(successor));
   return { dir, stateFile, c, calls, lines, opts, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -442,12 +443,17 @@ test('R-WD-01: a red, stale or unreadable conformance status holds every untrust
   }
 });
 
-test('R-WD-01: a fresh green status lets untrusted workflows run; the status is read once per run and only when one is enabled', async () => {
+test('R-WD-05: a fresh green status lets untrusted workflows run; the status is read on every tick that may dispatch, and only when one is enabled', async () => {
   let reads = 0;
+  let verifies = 0;
   const h = withStatic(harness({ slots: '3', subjects: 4 }));
-  h.opts.readConformance = async () => { reads += 1; return { status: greenStatus(h.c.t - 3_600_000) }; };
-  await runPump(h.opts);
-  assert.equal(reads, 1);
+  const at = h.c.t - 3_600_000;
+  h.opts.readConformance = async () => { reads += 1; return { status: greenStatus(at) }; };
+  h.opts.verifyConformanceRun = async () => { verifies += 1; return { ok: true, why: 'test' }; };
+  const out = await runPump(h.opts);
+  assert.equal(reads, out.ticks, 'one GET per tick');
+  assert.ok(out.ticks > 1);
+  assert.equal(verifies, 1, 'the run is looked up once, then remembered');
   assert.ok(h.calls.dispatch.some((d) => d.workflowFile === 'live-probe.yml'));
   const db = openState(h.stateFile);
   assert.equal(db.getKv('pump.breaker').tripped, false);
@@ -475,12 +481,61 @@ test('R-WD-01: a fresh green status lets untrusted workflows run; the status is 
 test('R-WD-01: a status that ages past 36 hours during a run trips the breaker on the next tick', async () => {
   const h = withStatic(harness({ slots: '3', subjects: 30 }));
   // Checked 36 h minus 3 minutes ago: green for the first tick, stale from the third (150 s apart).
-  h.opts.readConformance = async () => ({ status: greenStatus(h.c.t - 36 * 3_600_000 + 3 * 60_000) });
+  const at = h.c.t - 36 * 3_600_000 + 3 * 60_000;
+  h.opts.readConformance = async () => ({ status: greenStatus(at) });
   await runPump(h.opts);
   assert.ok(h.lines.some((l) => l.startsWith('pump: sandbox breaker closed')));
   assert.ok(h.lines.some((l) => l.startsWith('pump: sandbox breaker open (stale)')));
   const db = openState(h.stateFile);
   assert.equal(db.getKv('pump.breaker').reason, 'stale');
+  db.close();
+  h.cleanup();
+});
+
+test('R-WD-07: the newest status seen and the verified run are kept in the state; a later run that reads an older status holds the lanes', async () => {
+  const h = withStatic(harness({ slots: '3', subjects: 4 }));
+  const at = h.c.t - 3_600_000;
+  h.opts.readConformance = async () => ({ status: { ...greenStatus(at), run_id: 500, run_attempt: 1 } });
+  await runPump(h.opts);
+  let db = openState(h.stateFile);
+  assert.deepEqual(db.getKv('pump.conformance'), { newest: { run_id: 500, run_attempt: 1, checked_at: greenStatus(at).checked_at }, verified: { run_id: 500, run_attempt: 1, checked_at: greenStatus(at).checked_at } });
+  db.close();
+  // The next run (same state) is served an older night: a rollback.
+  h.calls.dispatch.length = 0;
+  h.opts.readConformance = async () => ({ status: { ...greenStatus(at), run_id: 400, run_attempt: 1 } });
+  h.opts.verifyConformanceRun = async () => ({ ok: true, why: 'it is a real run' });
+  await runPump(h.opts);
+  assert.ok(h.lines.some((l) => /sandbox breaker open \(unreadable\): not dispatching live-probe: the conformance status went back to run 400/.test(l)));
+  assert.ok(!h.calls.dispatch.some((d) => d.workflowFile === 'live-probe.yml'));
+  db = openState(h.stateFile);
+  assert.equal(db.getKv('pump.conformance').newest.run_id, 500);
+  db.close();
+  h.cleanup();
+});
+
+test('R-WD-08: a green status whose run the Actions API does not back holds the lanes', async () => {
+  const h = withStatic(harness({ slots: '3', subjects: 4 }));
+  const at = h.c.t - 3_600_000;
+  h.opts.readConformance = async () => ({ status: greenStatus(at) });
+  h.opts.verifyConformanceRun = async () => ({ ok: false, why: 'not on main' });
+  h.opts.maxRunMs = 60_000;
+  await runPump(h.opts);
+  assert.ok(h.lines.some((l) => /sandbox breaker open \(unreadable\): not dispatching live-probe: the conformance status is not backed by its run: not on main/.test(l)));
+  assert.deepEqual([...new Set(h.calls.dispatch.map((d) => d.workflowFile))], ['scan-static.yml']);
+  h.cleanup();
+});
+
+test('R-WD-03: a lane pinned at another sandbox commit is logged and recorded, and still dispatched', async () => {
+  const h = withStatic(harness({ slots: '3', subjects: 4 }));
+  const at = h.c.t - 3_600_000;
+  h.opts.config.workflows['live-probe'] = { ...wf, runs_untrusted: true, sandbox_sha: 'b'.repeat(40) };
+  h.opts.readConformance = async () => ({ status: greenStatus(at) });
+  h.opts.maxRunMs = 60_000;
+  await runPump(h.opts);
+  assert.ok(h.lines.some((l) => /sandbox breaker closed: .*; pinned at another sandbox commit than the one tested: live-probe/.test(l)));
+  assert.ok(h.calls.dispatch.some((d) => d.workflowFile === 'live-probe.yml'), 'a mismatch alone holds nothing');
+  const db = openState(h.stateFile);
+  assert.deepEqual(db.getKv('pump.breaker').mismatch, [{ lane: 'live-probe', pins: 'b'.repeat(40), tested: 'a'.repeat(40) }]);
   db.close();
   h.cleanup();
 });

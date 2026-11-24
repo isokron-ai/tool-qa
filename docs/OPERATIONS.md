@@ -332,20 +332,31 @@ public file, readable without a token:
 https://github.com/isokron-ai/mcp-surface-corpus/releases/download/conformance/conformance-status.json
 ```
 
-The pump reads it at the start of each run, when an enabled workflow runs
-third-party code, and judges it again on every tick. The breaker is **open**
-while the status is:
+The pump reads it on every tick that may dispatch a workflow that runs
+third-party code (one GET each 150 seconds). The breaker is **open** while the
+status is:
 
 | Reason | Means |
 |---|---|
 | `red` | The last nightly run failed: `ok` is not true, or the self test or the mutations did not pass. |
 | `stale` | The last pass is more than 36 hours old (or the file claims a time more than 10 minutes ahead). |
-| `unreadable` | The file could not be fetched (after one retry), is over 16 KiB, is not JSON, or is not a well-formed status. |
+| `unreadable` | The file could not be fetched (after one retry), is over 16 KiB (reading stops there), is not JSON, or is not a well-formed status. Also: it names an older run (or attempt) than a status already seen, a rollback; or it is green but the public Actions API does not show its run attempt as a successful `conformance-nightly.yml` run on `main` (scheduled or started by hand) of the very commit the status names. |
+
+The run behind a green status is looked up once, with no token (`GET
+/repos/isokron-ai/mcp-surface-corpus/actions/runs/<id>/attempts/<n>`), and
+remembered with the newest status seen in the state (`pump.conformance`). For a
+minute or so after the nightly publishes, its run is still finishing and the
+breaker reads `unreadable`; it closes on the next tick after the run ends.
 
 While it is open the pump dispatches none of the workflows marked
 `"runs_untrusted": true` in `pump/workflows.json` (today `live-probe`,
 `writecheck`, `build-probe` and `scan-deep`; a workflow that does not say
-`false` counts as `true`). Source-only workflows (`scan-static`,
+`false` counts as `true`). A workflow is enabled only when `enabled` is exactly
+`true`: the due list, the ingest key check, the breaker and the watchdog all
+use the one test (`isEnabled` in `pump/due.mjs`), and the pump refuses to load
+`pump/workflows.json` when `enabled` or `runs_untrusted` is not a real boolean.
+Which lanes are trusted is pinned by a test (`R-WD-04`), so changing a flag
+needs that test changed and a review. Source-only workflows (`scan-static`,
 `meta-github`, `meta-registry`) keep running. The run logs `pump: sandbox
 breaker open (<reason>): not dispatching <lanes>: <why>` once, keeps what it
 saw as `pump.breaker` in the state (and in `pump.last_tick`), and does not
@@ -353,8 +364,16 @@ fail. Work already dispatched is not recalled; each such job runs the sandbox
 self test on its own runner before any target. The breaker closes by itself
 at the next pump run after a passing nightly status.
 
-The watchdog reads the same file and shows it as `sandbox-breaker` on the
-health issue (below).
+Each untrusted lane names the mcp-surface-corpus commit its sandbox is pinned
+at (`sandbox_sha` in `pump/workflows.json`, `null` until it pins one). When the
+nightly tested another commit, the breaker stays closed (the nightly tests
+`main`, which moves with every commit there, so holding on every difference
+would hold the lanes after each unrelated change), the pump logs the lanes and
+records them in `pump.breaker` (`mismatch`), and the watchdog shows amber.
+Bump the lane's pin, and its `sandbox_sha`, to the tested commit.
+
+The watchdog reads the same file, judges it the same way with what the pump
+remembered, and shows it as `sandbox-breaker` on the health issue (below).
 
 To clear it:
 
@@ -431,7 +450,7 @@ person. off: switched off on purpose.
 | `slots`, `dispatches` | Rows more than 15 minutes past their expiry (red): the pump is not reaping. | See the `pump` check and the latest pump logs. |
 | `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
 | `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
-| `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled. | Open the linked `conformance-nightly` run and follow "To clear it" above. |
+| `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.

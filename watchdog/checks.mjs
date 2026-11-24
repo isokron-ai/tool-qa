@@ -24,7 +24,9 @@
 //                        green while it passed within 36 hours; red while it is
 //                        red, stale or unreadable and a lane that runs third-party
 //                        code is enabled (the pump holds those lanes); amber when
-//                        it would hold lanes but none is enabled.
+//                        it would hold lanes but none is enabled, or when it is
+//                        closed but an enabled lane pins another sandbox commit
+//                        than the one the nightly tested.
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -189,9 +191,14 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
  * breakerFrom() plus `untrusted` (every lane that runs third-party code) and
  * `enabled` (those of them that are enabled).
  */
-export function breakerCheck({ tripped, reason, summary, run_url: link, untrusted = [], enabled = [] }) {
+export function breakerCheck({ tripped, reason, summary, run_url: link, untrusted = [], enabled = [], mismatch = [] }) {
   const item = { id: 'sandbox-breaker', status: 'green', summary: `closed: ${summary}` };
   if (link) item.link = link;
+  if (!tripped && mismatch.length) {
+    const short = (v) => (v ? String(v).slice(0, 12) : 'none');
+    item.status = 'amber';
+    item.summary = `closed, but the nightly tested sandbox ${short(mismatch[0].tested)} and ${mismatch.map((m) => `${m.lane} pins ${short(m.pins)}`).join(', ')}: ${summary}`;
+  }
   if (!tripped) return item;
   if (enabled.length) {
     item.status = 'red';

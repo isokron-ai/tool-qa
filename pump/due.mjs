@@ -119,7 +119,7 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
     if (!cells) continue;
     for (const name of names) {
       const wf = workflows[name];
-      if (!wf || wf.enabled === false) continue;
+      if (!isEnabled(wf)) continue;
       const cell = cells[name];
       if (!cell || cell.mode === 'never') continue;
       const pk = pairKey(s.id, name);
@@ -187,9 +187,37 @@ export function dueFromState(db, { now, tiers, workflows, hooks = NO_HOOKS }) {
 }
 
 /** Read pump/tiers.json and pump/workflows.json (or the given paths). */
+/**
+ * Whether a worker workflow may be dispatched: only when `enabled` is exactly
+ * true. The one test of it, used by the due list, the ingest key check, the
+ * sandbox breaker and the watchdog, so they can never disagree (R-WD-02).
+ */
+export const isEnabled = (wf) => wf?.enabled === true;
+
+/**
+ * Problems with pump/workflows.json's workflows: `enabled` and
+ * `runs_untrusted` must be real booleans, and a workflow that runs untrusted
+ * code names the sandbox commit it pins (`sandbox_sha`: a full SHA, or null
+ * until it pins one).
+ */
+export function workflowProblems(workflows) {
+  const p = [];
+  if (!workflows || typeof workflows !== 'object' || Array.isArray(workflows)) return ['workflows is not an object'];
+  for (const [name, wf] of Object.entries(workflows)) {
+    if (!wf || typeof wf !== 'object') { p.push(`${name}: not an object`); continue; }
+    if (typeof wf.enabled !== 'boolean') p.push(`${name}: enabled must be true or false`);
+    if (typeof wf.runs_untrusted !== 'boolean') p.push(`${name}: runs_untrusted must be true or false`);
+    if (wf.runs_untrusted !== false && !(wf.sandbox_sha === null || /^[0-9a-f]{40}$/.test(String(wf.sandbox_sha)))) p.push(`${name}: sandbox_sha must be a full commit SHA or null`);
+  }
+  return p;
+}
+
 export function loadConfig({ tiersPath, workflowsPath } = {}) {
   const read = (p, def) => JSON.parse(readFileSync(p || new URL(def, import.meta.url), 'utf8'));
   const tiers = read(tiersPath, './tiers.json');
   const wf = read(workflowsPath, './workflows.json');
-  return { tiers, workflows: wf.workflows || {} };
+  const workflows = wf.workflows || {};
+  const bad = workflowProblems(workflows);
+  if (bad.length) throw new Error(`pump/workflows.json: ${bad.join('; ')}`);
+  return { tiers, workflows };
 }

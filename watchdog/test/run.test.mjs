@@ -61,6 +61,7 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
     log: () => {},
     stateDir: dir,
     readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
+    verifyConformanceRun: async () => ({ ok: true, why: 'test' }),
     mintToken: async (args) => {
       mints.push(args);
       return { token: 'ghs_synthetic_app_token', expiresAt: c.t + 3_600_000 };
@@ -180,8 +181,8 @@ test('a failed pump dispatch is reported in the issue instead of failing the run
 
 test('R-WD-01: the sandbox breaker is on the health issue: red while it holds an enabled lane, amber with none enabled, green when it passed', async () => {
   const lanes = (enabled) => ({
-    'live-probe': { enabled, runs_untrusted: true },
-    writecheck: { enabled: false, runs_untrusted: true },
+    'live-probe': { enabled, runs_untrusted: true, sandbox_sha: 'a'.repeat(40) },
+    writecheck: { enabled: false, runs_untrusted: true, sandbox_sha: null },
     'scan-static': { enabled: true, runs_untrusted: false },
   });
   // Green.
@@ -218,7 +219,7 @@ test('R-WD-01: the sandbox breaker is on the health issue: red while it holds an
 test('R-WD-01: the watchdog fetches the conformance status itself, with no token', async () => {
   const w = world({ seed: () => {} });
   delete w.opts.readConformance;
-  w.opts.workerWorkflows = { 'live-probe': { enabled: true, runs_untrusted: true } };
+  w.opts.workerWorkflows = { 'live-probe': { enabled: true, runs_untrusted: true, sandbox_sha: 'a'.repeat(40) } };
   const seen = [];
   const inner = w.opts.fetch;
   w.opts.fetch = async (input, init = {}) => {
@@ -231,6 +232,37 @@ test('R-WD-01: the watchdog fetches the conformance status itself, with no token
   };
   const out = await runWatchdog(w.opts);
   assert.deepEqual(seen, [{ url: 'https://github.com/isokron-ai/mcp-surface-corpus/releases/download/conformance/conformance-status.json', auth: null }]);
+  assert.equal(out.checks.find((c) => c.id === 'sandbox-breaker').status, 'green');
+  w.cleanup();
+});
+
+test('R-WD-03: the health issue shows amber while an enabled lane pins another sandbox commit than the nightly tested', async () => {
+  const w = world({ seed: () => {} });
+  w.opts.workerWorkflows = { 'live-probe': { enabled: true, runs_untrusted: true, sandbox_sha: 'b'.repeat(40) }, writecheck: { enabled: true, runs_untrusted: true, sandbox_sha: null } };
+  const out = await runWatchdog(w.opts);
+  const b = out.checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(b.status, 'amber');
+  assert.match(b.summary, /^closed, but the nightly tested sandbox aaaaaaaaaaaa and live-probe pins bbbbbbbbbbbb, writecheck pins none: sandbox conformance passed/);
+  w.cleanup();
+});
+
+test('R-WD-07: the watchdog judges with what the pump remembered: a rollback is unreadable, and a run already verified is not looked up again', async () => {
+  const at = Date.parse('2026-03-02T11:00:00Z');
+  const lanes = { 'live-probe': { enabled: true, runs_untrusted: true, sandbox_sha: 'a'.repeat(40) } };
+  const remembered = { newest: { run_id: 9, run_attempt: 1, checked_at: 'x' }, verified: { run_id: 9, run_attempt: 1, checked_at: 'x' } };
+  // Remembered run 9; the file now says run 1: a rollback.
+  let w = world({ seed: (db, c) => db.setKv('pump.conformance', remembered, { now: c.t }) });
+  w.opts.workerWorkflows = lanes;
+  const rolled = (await runWatchdog(w.opts)).checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(rolled.status, 'red');
+  assert.match(rolled.summary, /open \(unreadable\): the pump holds live-probe: the conformance status went back to run 1 attempt 1, older than run 9 attempt 1/);
+  w.cleanup();
+  // Run 9 itself: verified already, so no lookup.
+  w = world({ seed: (db, c) => db.setKv('pump.conformance', remembered, { now: c.t }) });
+  w.opts.workerWorkflows = lanes;
+  w.opts.readConformance = async () => ({ status: { ...greenStatus(at), run_id: 9, run_attempt: 1 } });
+  w.opts.verifyConformanceRun = async () => { throw new Error('must not be looked up'); };
+  const out = await runWatchdog(w.opts);
   assert.equal(out.checks.find((c) => c.id === 'sandbox-breaker').status, 'green');
   w.cleanup();
 });

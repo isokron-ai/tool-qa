@@ -41,7 +41,7 @@ import { openState } from '../state/db.mjs';
 import { appTokenMinter } from '../pump/app-token.mjs';
 import { ApiBudget } from '../pump/budgets.mjs';
 import { createClient, scrub } from '../pump/github.mjs';
-import { breakerFrom, readConformance as readConformanceStatus, untrustedWorkflows } from '../pump/breaker.mjs';
+import { judgeConformance, pinMismatches, readConformance as readConformanceStatus, untrustedWorkflows, verifyRun } from '../pump/breaker.mjs';
 import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
@@ -71,7 +71,7 @@ export function readState(file) {
       // now: 0 returns every dispatch still waiting, expired or not; the checks
       // decide which are stuck.
       openDispatches: db.openDispatches({ now: 0 }),
-      kv: { 'pump.successor': db.getKv('pump.successor') ?? null },
+      kv: { 'pump.successor': db.getKv('pump.successor') ?? null, 'pump.conformance': db.getKv('pump.conformance') ?? null },
     };
   } finally {
     db.close();
@@ -93,6 +93,7 @@ export async function runWatchdog({
   stateDir,
   expected = loadExpected(),
   readConformance,
+  verifyConformanceRun,
   workerWorkflows,
 } = {}) {
   const repo = env.GITHUB_REPOSITORY;
@@ -148,10 +149,20 @@ export async function runWatchdog({
   } catch (err) {
     conformance = { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) };
   }
+  // The same judgement as the pump's, with what the pump remembered (newest
+  // status seen, run verified); the watchdog itself writes no state.
+  const judged = await judgeConformance({
+    read: conformance,
+    now: now(),
+    memory: state?.kv?.['pump.conformance'] ?? null,
+    verify: verifyConformanceRun ?? ((status) => verifyRun({ fetch, status })),
+  });
+  const { memory: _m, changed: _c, ...verdict } = judged;
   const breaker = {
-    ...breakerFrom({ read: conformance, now: now() }),
+    ...verdict,
     untrusted: untrustedWorkflows(wfs),
     enabled: untrustedWorkflows(wfs, { enabledOnly: true }),
+    mismatch: verdict.tripped ? [] : pinMismatches(wfs, verdict.sandbox_sha),
   };
 
   const { slots } = parseSlots(env.LOOP_SLOTS);
