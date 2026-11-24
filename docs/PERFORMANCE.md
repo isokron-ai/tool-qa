@@ -57,6 +57,18 @@ adds an 8 s churn pass per repeat (each worker connects, makes 3 calls, disconne
 Each server gets a clean environment (`PATH`, a throwaway `HOME`, nothing else), and servers bind `127.0.0.1` on a free port that is never one of
 4710, 4711, 47310 or 47311.
 
+## What may be installed, and what floats
+
+`perf/servers.json` is code a pull request can change, and the install step runs npm on what it names. So the names are limited in code
+(`ALLOWED_PACKAGE` and `ALLOWED_REBUILD` in `perf/lib.mjs`), checked by `plan.mjs`, by `install-server.mjs` and by a test: packages
+`kronicle-lite`, `sea-lite`, `@isokron/*` and `@mcp-write-safety/*`; the only native add-on built (`npm rebuild`, which runs an install script)
+is `better-sqlite3`. Everything else installs with `--ignore-scripts`.
+
+**Transitive dependencies float.** Only the server's own version is exact. There is no lockfile for its dependencies, so each run installs
+whatever their ranges resolve to that day, and a change in a dependency can move a number as well as a change in the server. Each result records
+the tree it measured (`resolved_tree`: every package with version and integrity, from npm's hidden lockfile), so a shift can be traced to a
+dependency after the fact. Pinning the tree per release (a committed lockfile or integrity list) is possible later; it is not done here.
+
 ## Why not the sandbox
 
 Third-party servers run only in the gVisor sandbox (`mcp-surface-corpus`, `sandbox-guard`). These four are ours, the job holds no secret
@@ -106,6 +118,7 @@ error). Shared runners are noisy, so the limits are generous and apply to median
 - **Run-to-run noise is real.** The same four releases measured a second time, on other runner machines, differed from the first baselines by up to 1.4x in raw p95 (kronicle-lite over stdio: 46.5 ms, then 32.7 ms) and by 40 percent in throughput. After calibration all four compared as ok, and the limits above sit well outside that spread. Do not tighten them without more runs.
 - **Noise.** If the run's own repeats disagree by more than 3x (p95 spread), red is shown as amber and the report says to run it again.
 - **A first baseline must be clean**: failed calls above 2 percent, or a profile that did not complete, is red even with nothing to compare.
+- A profile that the baseline has but the result lacks is amber (it was not compared).
 - Amber prints a GitHub warning annotation. Red fails the job (the artifact is still kept).
 
 ## The control

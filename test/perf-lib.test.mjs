@@ -3,11 +3,12 @@
 // turn a run red. See docs/PERFORMANCE.md.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_THRESHOLDS, compareVersions, judgeProfile, judgeResult, median, parseVersion, previousVersion, summariseChurn, summariseRepeats, summariseSteps } from '../perf/lib.mjs';
+import { DEFAULT_THRESHOLDS, isAllowedPackage, isAllowedRebuild, resolvedTree, compareVersions, judgeProfile, judgeResult, median, parseVersion, previousVersion, summariseChurn, summariseRepeats, summariseSteps } from '../perf/lib.mjs';
 import { baselineVersions, loadBaseline } from '../perf/compare.mjs';
 import { buildScenario, fillArgs, loadServers, parseLoadOutput, FORBIDDEN_PORTS, freePort } from '../perf/run.mjs';
 
@@ -223,4 +224,53 @@ test('R-PERF-04: a version with a trailing newline is not a version; install-ser
   assert.throws(() => manifest('sea-lite@0.7.1', '0.7.1'));
   assert.throws(() => manifest('github:evil/repo', '1.0.0'));
   assert.throws(() => manifest('sea-lite', '0.7.1\n'));
+});
+
+test('R-PERF-05: only our own packages, and only better-sqlite3 as a rebuild, can be installed; plan and install-server both refuse the rest', async () => {
+  for (const ok of ['kronicle-lite', 'sea-lite', '@isokron/mcp-check', '@mcp-write-safety/tiny-tracker']) assert.ok(isAllowedPackage(ok), ok);
+  for (const bad of ['left-pad', 'kronicle-lite-evil', 'sea-lite\n', '@isokron/', '@isokron/a/b', '@evil/mcp-check', 'github:x/y', '@mcp-write-safety/Tiny', '', undefined]) assert.ok(!isAllowedPackage(bad), String(bad));
+  assert.ok(isAllowedRebuild('better-sqlite3'));
+  for (const bad of ['esbuild', 'better-sqlite3 esbuild', 'better-sqlite3\n', '']) assert.ok(!isAllowedRebuild(bad), bad);
+  // The plan job refuses a servers.json entry that names anything else.
+  const plan1 = (servers) => plan({ servers, env: {}, hasBaseline: () => false, latest: async () => '1.0.0' });
+  await assert.rejects(plan1({ x: { package: 'left-pad', rebuild: [] } }), /not an allowed package/);
+  await assert.rejects(plan1({ x: { package: 'sea-lite', rebuild: ['esbuild'] } }), /not an allowed rebuild/);
+  assert.equal((await plan1({ x: { package: 'sea-lite', rebuild: ['better-sqlite3'] } })).matrix.include.length, 1);
+  // So does the install step, which does not trust the plan.
+  assert.throws(() => manifest('left-pad', '1.0.0'), /bad package/);
+  const run = spawnSync(process.execPath, [new URL('../perf/install-server.mjs', import.meta.url).pathname, join(tmpdir(), 'perf-never'), 'sea-lite', '0.7.1', 'esbuild'], { encoding: 'utf8' });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /bad add-on/);
+  // And servers.json as committed passes both rules.
+  for (const [id, s] of Object.entries(loadServers())) {
+    if (id === 'fixture') continue;
+    assert.ok(isAllowedPackage(s.package), `${id}: ${s.package}`);
+    for (const r of s.rebuild ?? []) assert.ok(isAllowedRebuild(r), `${id}: rebuild ${r}`);
+  }
+});
+
+test('R-PERF-06: the resolved dependency tree of the measured release is recorded in the result', () => {
+  const lock = { packages: {
+    'node_modules/sea-lite': { version: '0.7.1', integrity: 'sha512-aaa' },
+    'node_modules/@noble/hashes': { version: '2.0.1', integrity: 'sha512-bbb' },
+    'node_modules/sea-lite/node_modules/zod': { version: '4.2.0', integrity: 'sha512-ccc' },
+    'node_modules/linked': { link: true },
+  } };
+  assert.deepEqual(resolvedTree(lock), ['@noble/hashes@2.0.1 sha512-bbb', 'sea-lite@0.7.1 sha512-aaa', 'zod@4.2.0 sha512-ccc']);
+  assert.deepEqual(resolvedTree(null), []);
+  const src = readFileSync(new URL('../perf/run.mjs', import.meta.url), 'utf8');
+  assert.match(src, /resolved_tree: tree/, 'run.mjs writes the tree into the result');
+  assert.match(readFileSync(new URL('../docs/PERFORMANCE.md', import.meta.url), 'utf8'), /transitive dependencies float/i);
+});
+
+test('R-PERF-07: a profile that is in the baseline but missing from the result is amber, not silently skipped', () => {
+  const base = result('s', '1.0.0', { stdio: { summary: summary() }, http: { summary: summary() } });
+  const v = judgeResult(result('s', '1.1.0', { stdio: { summary: summary() } }), base);
+  assert.equal(v.status, 'amber');
+  assert.ok(v.notes.some((n) => n.includes('http') && n.includes('missing')));
+  // A profile the baseline could not measure either is not "missing".
+  const had = result('s', '1.0.0', { stdio: { summary: summary() }, http: { error: 'x' } });
+  assert.equal(judgeResult(result('s', '1.1.0', { stdio: { summary: summary() } }), had).status, 'ok');
+  // And a real regression still wins over amber.
+  assert.equal(judgeResult(result('s', '1.1.0', { stdio: { summary: summary({ p95_ms: 40 }) } }), base).status, 'red');
 });

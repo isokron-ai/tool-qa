@@ -15,7 +15,7 @@ import { appendFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseVersion } from './lib.mjs';
+import { isAllowedPackage, isAllowedRebuild, parseVersion } from './lib.mjs';
 import { SAFE_ID, loadServers } from './run.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -39,14 +39,14 @@ export async function plan({ servers, env, hasBaseline, latest }) {
   const notes = [];
   for (const [id, spec] of Object.entries(servers)) {
     if (id === 'fixture' || (want !== 'all' && id !== want)) continue;
-    if (!PACKAGE_NAME.test(spec.package)) throw new Error(`${id}: bad package name`);
+    if (!PACKAGE_NAME.test(spec.package) || !isAllowedPackage(spec.package)) throw new Error(`${id}: ${JSON.stringify(spec.package).slice(0, 60)} is not an allowed package (kronicle-lite, sea-lite, @isokron/*, @mcp-write-safety/*)`);
     const version = pinned || await latest(spec.package);
     if (!parseVersion(version)) throw new Error(`${id}: the registry returned a bad version ${JSON.stringify(version).slice(0, 40)}`);
     if (!force && hasBaseline(id, version)) {
       notes.push(`${id} ${version}: already has a baseline, skipped`);
       continue;
     }
-    for (const r of spec.rebuild ?? []) if (!PACKAGE_NAME.test(r)) throw new Error(`${id}: bad rebuild name`);
+    for (const r of spec.rebuild ?? []) if (!isAllowedRebuild(r)) throw new Error(`${id}: ${JSON.stringify(r).slice(0, 60)} is not an allowed rebuild (only better-sqlite3)`);
     out.push({ server: id, package: spec.package, version, rebuild: (spec.rebuild ?? []).join(' ') });
   }
   return { matrix: { include: out }, notes };

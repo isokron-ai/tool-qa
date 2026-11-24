@@ -4,6 +4,32 @@
 
 export const RESULT_SCHEMA = 'tool-qa/perf/1';
 
+/**
+ * What this workflow may install. perf/servers.json is code a pull request can change, and the install step runs
+ * npm on what it names (and `npm rebuild` runs an install script), so the names are limited here, in code the
+ * plan job and the install step both enforce, to our own packages and the one native add-on they need.
+ */
+export const ALLOWED_PACKAGE = /^(kronicle-lite|sea-lite|@isokron\/[a-z0-9][a-z0-9-]*|@mcp-write-safety\/[a-z0-9][a-z0-9-]*)$/;
+export const ALLOWED_REBUILD = Object.freeze(['better-sqlite3']);
+export const isAllowedPackage = (name) => typeof name === 'string' && ALLOWED_PACKAGE.test(name);
+export const isAllowedRebuild = (name) => typeof name === 'string' && ALLOWED_REBUILD.includes(name);
+
+/**
+ * The resolved tree an install produced, from npm's hidden lockfile (node_modules/.package-lock.json): every
+ * package with its version and integrity, so a later run can see which transitive dependencies it measured.
+ * The tree is NOT pinned: only the server's own version is exact.
+ */
+export function resolvedTree(lock) {
+  const rows = [];
+  for (const [path, info] of Object.entries(lock?.packages ?? {})) {
+    const m = /(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)$/.exec(path);
+    if (!m || !info?.version) continue;
+    rows.push(`${m[1]}@${info.version}${info.integrity ? ` ${info.integrity}` : ''}`);
+  }
+  rows.sort();
+  return rows;
+}
+
 /** Limits the verdict uses. Generous on purpose: shared runners are noisy. */
 export const DEFAULT_THRESHOLDS = Object.freeze({
   // p95 amber / red: the run's p95 must be above the baseline's (scaled by the
@@ -247,6 +273,12 @@ export function judgeResult(result, baseline, thresholds = DEFAULT_THRESHOLDS) {
   let status = 'ok';
   const profiles = {};
   const notes = [];
+  for (const [name, base] of Object.entries(baseline.profiles ?? {})) {
+    if (base?.summary && !Object.hasOwn(result.profiles, name)) {
+      status = worst(status, 'amber');
+      notes.push(`amber: profile ${name} is in the ${baseline.version} baseline but missing from this result, so it was not compared`);
+    }
+  }
   for (const [name, cur] of Object.entries(result.profiles)) {
     const base = baseline.profiles?.[name];
     if (!base?.summary) {

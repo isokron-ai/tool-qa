@@ -27,7 +27,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-import { RESULT_SCHEMA, calibrate, summariseChurn, summariseRepeats, summariseSteps } from './lib.mjs';
+import { RESULT_SCHEMA, calibrate, resolvedTree, summariseChurn, summariseRepeats, summariseSteps } from './lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const FORBIDDEN_PORTS = new Set([4710, 4711, 47310, 47311]);
@@ -169,11 +169,13 @@ async function main() {
     if (!rel) throw new Error(`${spec.package} has no bin ${binName}`);
     serverCmd = [process.execPath, join(dir, rel)];
     let integrity = null;
+    let tree = null;
     try {
       const lock = JSON.parse(readFileSync(join(resolve(values['srv-dir']), 'node_modules/.package-lock.json'), 'utf8'));
       integrity = lock.packages?.[`node_modules/${spec.package}`]?.integrity ?? null;
+      tree = resolvedTree(lock);
     } catch { /* no lock file: leave null */ }
-    pkgInfo = { package: spec.package, version: pkg.version, integrity };
+    pkgInfo = { package: spec.package, version: pkg.version, integrity, resolved_tree: tree };
   }
   const extra = values['extra-arg'];
 
