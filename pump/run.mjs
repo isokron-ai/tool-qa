@@ -193,7 +193,7 @@ export async function runPump({
     } catch (err) {
       read = { error: String(err?.message ?? err).slice(0, 200) };
     }
-    const verify = verifyConformanceRun ?? ((status) => verifyRun({ fetch, status }));
+    const verify = verifyConformanceRun ?? ((status, o) => verifyRun({ fetch, status, token: stateToken, ...o }));
     const j = await judgeConformance({ read, now: now(), memory: db.getKv(CONFORMANCE_KEY) ?? null, verify });
     if (j.changed) db.setKv(CONFORMANCE_KEY, j.memory, { now: now() });
     const { memory: _m, changed: _c, ...b } = j;

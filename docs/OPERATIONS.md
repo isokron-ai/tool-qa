@@ -340,13 +340,42 @@ status is:
 |---|---|
 | `red` | The last nightly run failed: `ok` is not true, or the self test or the mutations did not pass. |
 | `stale` | The last pass is more than 36 hours old (or the file claims a time more than 10 minutes ahead). |
-| `unreadable` | The file could not be fetched (after one retry), is over 16 KiB (reading stops there), is not JSON, or is not a well-formed status. Also: it names an older run (or attempt) than a status already seen, a rollback; or it is green but the public Actions API does not show its run attempt as a successful `conformance-nightly.yml` run on `main` (scheduled or started by hand) of the very commit the status names. |
+| `unreadable` | The file could not be fetched (after one retry), is over 16 KiB (reading stops there), is not JSON, or is not a well-formed status. Also: it names an older run (or attempt) than the newest verified run, a rollback; or its run does not back it (below). |
 
-The run behind a green status is looked up once, with no token (`GET
-/repos/isokron-ai/mcp-surface-corpus/actions/runs/<id>/attempts/<n>`), and
-remembered with the newest status seen in the state (`pump.conformance`). For a
-minute or so after the nightly publishes, its run is still finishing and the
-breaker reads `unreadable`; it closes on the next tick after the run ends.
+Every status is checked against its run before anything is remembered from
+it: the Actions API must show that run attempt as a `conformance-nightly.yml`
+run in `isokron-ai/mcp-surface-corpus` on `main`, started by `schedule` or by
+hand, of the very commit the status names, with the status's `checked_at`
+inside the run's own times; and that commit must be on `main` (`GET
+/compare/main...<sha>` is `identical` or `behind`), so a tag named `main`
+does not pass. A red status needs that identity; a green one also needs the
+run to have succeeded. Only then does the run become the newest seen (so a
+forged status, red or green, cannot move the rollback memory). A green status
+is aged by its run's start, not its own `checked_at`, so a replay of an old
+green with a fresh date is still stale.
+
+The lookups (`GET .../actions/runs/<id>/attempts/<n>` and the compare) send the
+job token to `api.github.com` only, for its own rate budget; the reads are
+public. A run is looked up once and remembered in the state
+(`pump.conformance`: the newest verified run, and the verified green with its
+start and end times). For a minute or so after the nightly publishes, its run
+is still finishing and the breaker reads `unreadable`; it closes on the next
+tick after the run ends.
+
+**Resetting the memory.** Only verified runs are remembered, so this should
+never be needed. If `pump.conformance` ever holds a run that keeps the breaker
+open wrongly (for example the corpus repository was recreated and its run ids
+started again), delete the key: pause the pump (`LANE_PUMP_ENABLED=false`) and
+wait until no pump run is going, pull the state ("State encryption" above),
+then
+
+```sh
+node -e 'import("./state/db.mjs").then(({ openState }) => { const db = openState("state/state.sqlite"); db.deleteKv("pump.conformance"); db.close(); })'
+GITHUB_TOKEN=... GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs push
+```
+
+and turn the pump lane back on. The next tick verifies the current status
+afresh.
 
 While it is open the pump dispatches none of the workflows marked
 `"runs_untrusted": true` in `pump/workflows.json` (today `live-probe`,
@@ -450,6 +479,7 @@ person. off: switched off on purpose.
 | `slots`, `dispatches` | Rows more than 15 minutes past their expiry (red): the pump is not reaping. | See the `pump` check and the latest pump logs. |
 | `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
 | `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
+| `config` | Red: the pump cannot load `pump/workflows.json` (for example `enabled` or `runs_untrusted` is not a real boolean), so it dispatches nothing. | Fix the file; the details name the entry. |
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails

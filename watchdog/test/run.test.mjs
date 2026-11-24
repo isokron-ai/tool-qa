@@ -8,7 +8,7 @@ import { runWatchdog } from '../run.mjs';
 import { parseBody } from '../health.mjs';
 import { openState } from '../../state/db.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
-import { greenStatus } from '../../test/lib/conformance.mjs';
+import { backed, greenStatus } from '../../test/lib/conformance.mjs';
 
 const REPO = 'isokron-ai/tool-qa';
 const MIN = 60_000;
@@ -61,7 +61,7 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
     log: () => {},
     stateDir: dir,
     readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
-    verifyConformanceRun: async () => ({ ok: true, why: 'test' }),
+    verifyConformanceRun: backed,
     mintToken: async (args) => {
       mints.push(args);
       return { token: 'ghs_synthetic_app_token', expiresAt: c.t + 3_600_000 };
@@ -249,7 +249,8 @@ test('R-WD-03: the health issue shows amber while an enabled lane pins another s
 test('R-WD-07: the watchdog judges with what the pump remembered: a rollback is unreadable, and a run already verified is not looked up again', async () => {
   const at = Date.parse('2026-03-02T11:00:00Z');
   const lanes = { 'live-probe': { enabled: true, runs_untrusted: true, sandbox_sha: 'a'.repeat(40) } };
-  const remembered = { newest: { run_id: 9, run_attempt: 1, checked_at: 'x' }, verified: { run_id: 9, run_attempt: 1, checked_at: 'x' } };
+  const t = new Date(at).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const remembered = { newest: { run_id: 9, run_attempt: 1, checked_at: t, started_at: t, updated_at: t }, verified: { run_id: 9, run_attempt: 1, checked_at: t, started_at: t, updated_at: t } };
   // Remembered run 9; the file now says run 1: a rollback.
   let w = world({ seed: (db, c) => db.setKv('pump.conformance', remembered, { now: c.t }) });
   w.opts.workerWorkflows = lanes;
@@ -264,5 +265,20 @@ test('R-WD-07: the watchdog judges with what the pump remembered: a rollback is 
   w.opts.verifyConformanceRun = async () => { throw new Error('must not be looked up'); };
   const out = await runWatchdog(w.opts);
   assert.equal(out.checks.find((c) => c.id === 'sandbox-breaker').status, 'green');
+  w.cleanup();
+});
+
+test('R-WD-13: a workflows.json the pump cannot load is a red config check; the watchdog still writes the issue', async () => {
+  const w = world({ seed: () => {} });
+  w.opts.workerWorkflows = undefined;
+  w.opts.loadWorkerConfig = () => {
+    throw new Error('pump/workflows.json: live-probe: enabled must be true or false');
+  };
+  const out = await runWatchdog(w.opts);
+  const c = out.checks.find((x) => x.id === 'config');
+  assert.equal(c.status, 'red');
+  assert.match(c.summary, /the pump cannot load its config, so it dispatches nothing: pump\/workflows\.json: live-probe: enabled must be true or false/);
+  assert.equal(out.overall, 'red');
+  assert.equal(w.issues.length, 1, 'the issue is still written');
   w.cleanup();
 });

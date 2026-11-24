@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { BREAKER, CONFORMANCE_URL, allowedWorkflows, breakerFrom, compareRuns, judgeConformance, pinMismatches, readCapped, readConformance, runProblems, runsUntrusted, statusProblems, untrustedWorkflows, verifyRun } from '../breaker.mjs';
-import { greenStatus } from '../../test/lib/conformance.mjs';
+import { backed, greenStatus } from '../../test/lib/conformance.mjs';
 
 const HOUR = 3_600_000;
 const NOW = Date.parse('2026-11-24T12:00:00Z');
@@ -143,11 +143,11 @@ test('R-WD-06: the status body is read with a cap: reading stops at 16 KiB, it i
 
 test('R-WD-07: a status older than one already seen is a rollback: unreadable, whatever it says', async () => {
   const at = NOW - HOUR;
-  const verify = async () => ({ ok: true, why: 't' });
+  const verify = backed;
   const s = (run_id, run_attempt) => ({ ...greenStatus(at), run_id, run_attempt });
   let j = await judgeConformance({ read: { status: s(200, 1) }, now: NOW, memory: null, verify });
   assert.equal(j.tripped, false);
-  assert.deepEqual(j.memory.newest, { run_id: 200, run_attempt: 1, checked_at: s(200, 1).checked_at });
+  assert.deepEqual([j.memory.newest.run_id, j.memory.newest.run_attempt, j.memory.newest.checked_at], [200, 1, s(200, 1).checked_at]);
   assert.equal(j.changed, true);
   for (const [old, why] of [[s(100, 3), 'an older run'], [{ ...s(200, 1), run_attempt: 1, run_id: 199 }, 'an older run id']]) {
     const r = await judgeConformance({ read: { status: old }, now: NOW, memory: j.memory, verify });
@@ -163,10 +163,11 @@ test('R-WD-07: a status older than one already seen is a rollback: unreadable, w
   assert.equal(compareRuns({ run_id: 2, run_attempt: 1 }, { run_id: 1, run_attempt: 9 }), 1);
 });
 
-test('R-WD-08: a green status counts only when the public Actions API shows its run as a successful nightly on main of that commit; looked up once, with no token', async () => {
+test('R-WD-08: a green status counts only when the Actions API shows its run as a successful nightly on main of that commit; looked up once', async () => {
   const at = NOW - HOUR;
   const st = { ...greenStatus(at), run_id: 4242, run_attempt: 2 };
-  const run = { id: 4242, run_attempt: 2, repository: { full_name: 'isokron-ai/mcp-surface-corpus' }, path: '.github/workflows/conformance-nightly.yml', head_branch: 'main', event: 'schedule', status: 'completed', conclusion: 'success', head_sha: st.sandbox_sha };
+  const iso = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const run = { id: 4242, run_attempt: 2, repository: { full_name: 'isokron-ai/mcp-surface-corpus' }, path: '.github/workflows/conformance-nightly.yml', head_branch: 'main', event: 'schedule', status: 'completed', conclusion: 'success', head_sha: st.sandbox_sha, run_started_at: iso(at - 20 * 60_000), updated_at: iso(at + 2 * 60_000) };
   assert.deepEqual(runProblems(run, st), []);
   assert.deepEqual(runProblems({ ...run, event: 'workflow_dispatch' }, st), []);
   for (const [over, want] of [
@@ -179,12 +180,18 @@ test('R-WD-08: a green status counts only when the public Actions API shows its 
     [{ repository: { full_name: 'someone/fork' } }, /another repository/],
     [{ run_attempt: 1 }, /another attempt/],
   ]) assert.match(runProblems({ ...run, ...over }, st).join(', '), want);
+  // A red status needs the identity only.
+  assert.deepEqual(runProblems({ ...run, conclusion: 'failure' }, st, { conclusion: false }), []);
 
-  // verifyRun: the attempts endpoint, no token, no cookie.
-  const f = fakeFetch([new Response(JSON.stringify(run), { status: 200 })]);
-  assert.deepEqual(await verifyRun({ fetch: f.fetch, status: st }), { ok: true, why: 'a successful nightly run on main of that commit' });
-  assert.equal(f.calls[0].url, 'https://api.github.com/repos/isokron-ai/mcp-surface-corpus/actions/runs/4242/attempts/2');
-  assert.equal(new Headers(f.calls[0].init.headers).get('authorization'), null);
+  // verifyRun: the attempt, then the commit is on main.
+  const f = fakeFetch([new Response(JSON.stringify(run), { status: 200 }), new Response(JSON.stringify({ status: 'behind' }), { status: 200 })]);
+  const v = await verifyRun({ fetch: f.fetch, status: st });
+  assert.equal(v.ok, true, v.why);
+  assert.deepEqual(v.run, { started_at: run.run_started_at, updated_at: run.updated_at });
+  assert.deepEqual(f.calls.map((c) => c.url), [
+    'https://api.github.com/repos/isokron-ai/mcp-surface-corpus/actions/runs/4242/attempts/2',
+    `https://api.github.com/repos/isokron-ai/mcp-surface-corpus/compare/main...${st.sandbox_sha}`,
+  ]);
   const nf = fakeFetch([new Response('{}', { status: 404 })]);
   assert.equal((await verifyRun({ fetch: nf.fetch, status: st })).ok, false);
   assert.equal((await verifyRun({ fetch: nf.fetch, status: { ...st, run_id: null } })).ok, false);
@@ -195,15 +202,94 @@ test('R-WD-08: a green status counts only when the public Actions API shows its 
   assert.equal(bad.tripped, true);
   assert.equal(bad.reason, 'unreadable');
   assert.match(bad.summary, /not backed by its run: concluded failure/);
-  const good = await judgeConformance({ read: { status: st }, now: NOW, memory: null, verify: async () => { calls += 1; return { ok: true, why: 't' }; } });
-  assert.equal(good.tripped, false);
-  assert.deepEqual(good.memory.verified, { run_id: 4242, run_attempt: 2, checked_at: st.checked_at });
+  assert.equal(bad.memory.newest, null, 'nothing remembered from an unbacked status');
+  const good = await judgeConformance({ read: { status: st }, now: NOW, memory: null, verify: async (x, o) => { calls += 1; assert.equal(o.conclusion, true); return { ok: true, why: 't', run: v.run }; } });
+  assert.equal(good.tripped, false, good.summary);
+  assert.deepEqual(good.memory.verified, { run_id: 4242, run_attempt: 2, checked_at: st.checked_at, started_at: run.run_started_at, updated_at: run.updated_at });
   const again = await judgeConformance({ read: { status: st }, now: NOW, memory: good.memory, verify: async () => { calls += 1; return { ok: false, why: 'x' }; } });
   assert.equal(again.tripped, false);
   assert.equal(calls, 2, 'the remembered run is not looked up again');
-  // A red status needs no lookup: it trips anyway.
-  const red = await judgeConformance({ read: { status: { ...st, run_id: 5000, ok: false, selftest: 'fail' } }, now: NOW, memory: null, verify: async () => { throw new Error('must not be called'); } });
-  assert.equal(red.reason, 'red');
+});
+
+test('R-WD-09: a forged red status cannot poison the rollback memory: nothing is remembered before its run\'s identity is verified', async () => {
+  const at = NOW - HOUR;
+  const forged = { ...greenStatus(at), run_id: Number.MAX_SAFE_INTEGER, run_attempt: 1, ok: false, selftest: 'fail' };
+  const r = await judgeConformance({ read: { status: forged }, now: NOW, memory: null, verify: async (x, o) => { assert.equal(o.conclusion, false, 'a red needs its identity only'); return { ok: false, why: 'the Actions API answered HTTP 404' }; } });
+  assert.equal(r.tripped, true);
+  assert.equal(r.memory.newest, null);
+  assert.equal(r.changed, false);
+  // The real nightly afterwards still closes the breaker.
+  const real = { ...greenStatus(at), run_id: 500, run_attempt: 1 };
+  const ok = await judgeConformance({ read: { status: real }, now: NOW, memory: r.memory, verify: backed });
+  assert.equal(ok.tripped, false, ok.summary);
+  // A real red (identity verified, conclusion failure) is remembered as the newest.
+  const red = { ...greenStatus(at), run_id: 600, run_attempt: 1, ok: false, selftest: 'fail' };
+  const rr = await judgeConformance({ read: { status: red }, now: NOW, memory: ok.memory, verify: backed });
+  assert.equal(rr.reason, 'red');
+  assert.equal(rr.memory.newest.run_id, 600);
+});
+
+test('R-WD-10: a green status is aged by its verified run, not its own checked_at: a replay with a fresh date is stale, and a date outside the run is refused', async () => {
+  const iso = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const oldStart = NOW - 40 * HOUR;
+  const st = { ...greenStatus(oldStart + 10 * 60_000), run_id: 700, run_attempt: 1 };
+  const runTimes = { started_at: iso(oldStart), updated_at: iso(oldStart + 30 * 60_000) };
+  const first = await judgeConformance({ read: { status: st }, now: oldStart + HOUR, memory: null, verify: async () => ({ ok: true, why: 't', run: runTimes }) });
+  assert.equal(first.tripped, false);
+  // The same run replayed with checked_at = now: the remembered run's start decides.
+  const replay = { ...st, checked_at: iso(NOW - 60_000) };
+  const r = await judgeConformance({ read: { status: replay }, now: NOW, memory: first.memory, verify: async () => { throw new Error('not looked up again'); } });
+  assert.equal(r.tripped, true);
+  assert.equal(r.reason, 'stale');
+  // Looked up fresh, a checked_at outside the run's own times is refused.
+  const run = { id: 700, run_attempt: 1, repository: { full_name: 'isokron-ai/mcp-surface-corpus' }, path: '.github/workflows/conformance-nightly.yml', head_branch: 'main', event: 'schedule', status: 'completed', conclusion: 'success', head_sha: st.sandbox_sha, run_started_at: runTimes.started_at, updated_at: runTimes.updated_at };
+  assert.match(runProblems(run, replay).join(), /checked_at .* is not within the run/);
+  assert.deepEqual(runProblems(run, st), []);
+});
+
+test('R-WD-11: the run lookup sends the job token to api.github.com only; the status file is fetched with none', async () => {
+  const at = NOW - HOUR;
+  const st = { ...greenStatus(at), run_id: 1, run_attempt: 1 };
+  const iso = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const run = { id: 1, run_attempt: 1, repository: { full_name: 'isokron-ai/mcp-surface-corpus' }, path: '.github/workflows/conformance-nightly.yml', head_branch: 'main', event: 'schedule', status: 'completed', conclusion: 'success', head_sha: st.sandbox_sha, run_started_at: iso(at - 60_000), updated_at: iso(at + 60_000) };
+  const f = fakeFetch([new Response(JSON.stringify(run)), new Response(JSON.stringify({ status: 'identical' }))]);
+  await verifyRun({ fetch: f.fetch, status: st, token: 'ghs_job_token' });
+  for (const c of f.calls) {
+    assert.ok(c.url.startsWith('https://api.github.com/'));
+    assert.equal(new Headers(c.init.headers).get('authorization'), 'Bearer ghs_job_token');
+  }
+  const g = fakeFetch([new Response(JSON.stringify(run)), new Response(JSON.stringify({ status: 'identical' }))]);
+  await verifyRun({ fetch: g.fetch, status: st });
+  assert.equal(new Headers(g.calls[0].init.headers).get('authorization'), null, 'no token given, none sent');
+});
+
+test('R-WD-12: a commit that is not on main (a tag named main, a branch) does not back a status', async () => {
+  const at = NOW - HOUR;
+  const st = { ...greenStatus(at), run_id: 1, run_attempt: 1 };
+  const iso = (t) => new Date(t).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const run = { id: 1, run_attempt: 1, repository: { full_name: 'isokron-ai/mcp-surface-corpus' }, path: '.github/workflows/conformance-nightly.yml', head_branch: 'main', event: 'workflow_dispatch', status: 'completed', conclusion: 'success', head_sha: st.sandbox_sha, run_started_at: iso(at - 60_000), updated_at: iso(at + 60_000) };
+  for (const status of ['ahead', 'diverged']) {
+    const f = fakeFetch([new Response(JSON.stringify(run)), new Response(JSON.stringify({ status }))]);
+    const v = await verifyRun({ fetch: f.fetch, status: st });
+    assert.equal(v.ok, false, status);
+    assert.match(v.why, /is not on main/);
+  }
+  for (const status of ['identical', 'behind']) {
+    const f = fakeFetch([new Response(JSON.stringify(run)), new Response(JSON.stringify({ status }))]);
+    assert.equal((await verifyRun({ fetch: f.fetch, status: st })).ok, true, status);
+  }
+  const nf = fakeFetch([new Response(JSON.stringify(run)), new Response('{}', { status: 404 })]);
+  assert.equal((await verifyRun({ fetch: nf.fetch, status: st })).ok, false, 'unknown commit');
+});
+
+test('R-WD-13: the committed workflows.json loads under the validation', async () => {
+  const { loadConfig } = await import('../due.mjs');
+  const cfg = loadConfig();
+  assert.deepEqual(Object.keys(cfg.workflows).sort(), Object.keys(workflows).sort());
+  for (const wf of Object.values(cfg.workflows)) {
+    assert.equal(typeof wf.enabled, 'boolean');
+    assert.equal(typeof wf.runs_untrusted, 'boolean');
+  }
 });
 
 test('R-WD-03: lanes pinned at another sandbox commit than the one the nightly tested are named (amber), not held', () => {

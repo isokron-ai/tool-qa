@@ -95,6 +95,7 @@ export async function runWatchdog({
   readConformance,
   verifyConformanceRun,
   workerWorkflows,
+  loadWorkerConfig = () => loadConfig().workflows,
 } = {}) {
   const repo = env.GITHUB_REPOSITORY;
   if (!repo || !repo.includes('/')) throw new Error('GITHUB_REPOSITORY is required (owner/name)');
@@ -142,7 +143,15 @@ export async function runWatchdog({
   }
 
   // The sandbox breaker, as the pump sees it.
-  const wfs = workerWorkflows ?? loadConfig().workflows;
+  // A pump/workflows.json the pump cannot load is a red `config` check, not a
+  // silent watchdog (R-WD-13).
+  let wfs = {};
+  let configError = null;
+  try {
+    wfs = workerWorkflows ?? loadWorkerConfig();
+  } catch (err) {
+    configError = scrub(String(err?.message ?? err), secrets).slice(0, 300);
+  }
   let conformance;
   try {
     conformance = await (readConformance ?? (() => readConformanceStatus({ fetch, sleep })))();
@@ -155,7 +164,7 @@ export async function runWatchdog({
     read: conformance,
     now: now(),
     memory: state?.kv?.['pump.conformance'] ?? null,
-    verify: verifyConformanceRun ?? ((status) => verifyRun({ fetch, status })),
+    verify: verifyConformanceRun ?? ((status, o) => verifyRun({ fetch, status, token: env.GITHUB_TOKEN || undefined, ...o })),
   });
   const { memory: _m, changed: _c, ...verdict } = judged;
   const breaker = {
@@ -167,6 +176,7 @@ export async function runWatchdog({
 
   const { slots } = parseSlots(env.LOOP_SLOTS);
   const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected, breaker });
+  if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
     c.summary = `could not read the state asset: ${stateError.slice(0, 200)}`;

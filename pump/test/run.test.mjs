@@ -8,7 +8,7 @@ import { runPump } from '../run.mjs';
 import { ApiBudget } from '../budgets.mjs';
 import { openState } from '../../state/db.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
-import { greenStatus } from '../../test/lib/conformance.mjs';
+import { backed, greenStatus } from '../../test/lib/conformance.mjs';
 import { IngestSetupError } from '../../ingest/collect.mjs';
 import { parseRegistry } from '../../ingest/registry.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
@@ -75,7 +75,7 @@ function harness({ slots = '3', subjects = 4, successor, ingest = null } = {}) {
     ingest,
     // The sandbox breaker: a green nightly status from an hour ago (no network).
     readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
-    verifyConformanceRun: async () => ({ ok: true, why: 'test' }),
+    verifyConformanceRun: backed,
   };
   if (successor) writeFileSync(opts.successorFile, JSON.stringify(successor));
   return { dir, stateFile, c, calls, lines, opts, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -449,7 +449,7 @@ test('R-WD-05: a fresh green status lets untrusted workflows run; the status is 
   const h = withStatic(harness({ slots: '3', subjects: 4 }));
   const at = h.c.t - 3_600_000;
   h.opts.readConformance = async () => { reads += 1; return { status: greenStatus(at) }; };
-  h.opts.verifyConformanceRun = async () => { verifies += 1; return { ok: true, why: 'test' }; };
+  h.opts.verifyConformanceRun = async (st) => { verifies += 1; return backed(st); };
   const out = await runPump(h.opts);
   assert.equal(reads, out.ticks, 'one GET per tick');
   assert.ok(out.ticks > 1);
@@ -498,12 +498,13 @@ test('R-WD-07: the newest status seen and the verified run are kept in the state
   h.opts.readConformance = async () => ({ status: { ...greenStatus(at), run_id: 500, run_attempt: 1 } });
   await runPump(h.opts);
   let db = openState(h.stateFile);
-  assert.deepEqual(db.getKv('pump.conformance'), { newest: { run_id: 500, run_attempt: 1, checked_at: greenStatus(at).checked_at }, verified: { run_id: 500, run_attempt: 1, checked_at: greenStatus(at).checked_at } });
+  const memo = db.getKv('pump.conformance');
+  assert.deepEqual([memo.newest.run_id, memo.verified.run_id, memo.verified.started_at], [500, 500, greenStatus(at).checked_at]);
   db.close();
   // The next run (same state) is served an older night: a rollback.
   h.calls.dispatch.length = 0;
   h.opts.readConformance = async () => ({ status: { ...greenStatus(at), run_id: 400, run_attempt: 1 } });
-  h.opts.verifyConformanceRun = async () => ({ ok: true, why: 'it is a real run' });
+  h.opts.verifyConformanceRun = backed;
   await runPump(h.opts);
   assert.ok(h.lines.some((l) => /sandbox breaker open \(unreadable\): not dispatching live-probe: the conformance status went back to run 400/.test(l)));
   assert.ok(!h.calls.dispatch.some((d) => d.workflowFile === 'live-probe.yml'));
