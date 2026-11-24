@@ -21,7 +21,7 @@
 import { readFileSync } from 'node:fs';
 
 import { FetchProblem } from './lib/http.mjs';
-import { bool, githubRepoOf, int, record, str, textDigest, time } from './lib/common.mjs';
+import { bool, githubRepoOf, int, record, skipFor, str, textDigest, time } from './lib/common.mjs';
 
 export const LANE = 'meta-registry';
 export const VERSION = '1.0.0';
@@ -45,6 +45,7 @@ const NPM_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]{0,213}\/)?[a-z0-9-~][a-z0-9-._~]{0
 const PYPI_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$/;
 const CRATE_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const GO_VERSION = /^v[0-9][0-9A-Za-z.+-]{0,100}$/;
+const NPM_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,99}$/;
 
 /** The seed list's declared packages by lower-case subject id. */
 export function loadSeedPackages(path = new URL('../history/seed-v1.json', import.meta.url)) {
@@ -90,6 +91,17 @@ function registryVersion(entry) {
   };
 }
 
+/**
+ * Does a registry server name's namespace belong to the subject's owner?
+ * io.github.<owner>/...: true or false (a false one claims someone else's
+ * repository, R-META-05); any other namespace (a domain): null.
+ */
+export function namespaceMatches(serverName, repo) {
+  const m = /^io\.github\.([^/]+)\//i.exec(String(serverName ?? ''));
+  if (!m) return null;
+  return m[1].toLowerCase() === String(repo).split('/')[0].toLowerCase();
+}
+
 /** Every version of every registry entry whose repository is `repo`. */
 export async function registryEntries(http, repo) {
   const want = repo.toLowerCase();
@@ -133,75 +145,124 @@ export async function registryEntries(http, repo) {
 }
 
 // ---------------------------------------------------------------- npm
+//
+// npm's abbreviated document (application/vnd.npm.install-v1+json) lists the
+// versions with their dist facts and deprecations, without the readme and
+// per-version metadata that make full documents run to hundreds of MB
+// (R-META-01). Two targeted reads fill the rest: the latest version's own
+// document (repository, licence, gitHead, maintainers at that publish) and
+// deps.dev's version list for publish dates (the abbreviated document has
+// none).
 
-export function npmSummary(doc, subjectRepo) {
+const has = (o, k) => o && typeof o === 'object' && Object.hasOwn(o, k);
+
+/** What we keep from the abbreviated document: names, tags and per-version flags, no text. */
+export function npmAbbrevSummary(doc) {
   const versions = doc?.versions && typeof doc.versions === 'object' ? doc.versions : {};
-  const times = doc?.time && typeof doc.time === 'object' ? doc.time : {};
   const tags = doc?.['dist-tags'] && typeof doc['dist-tags'] === 'object' ? doc['dist-tags'] : {};
-  const latestName = typeof tags.latest === 'string' && versions[tags.latest] ? tags.latest : null;
-  const latest = latestName ? versions[latestName] : null;
-  const ordered = Object.keys(versions).filter((v) => time(times[v])).sort((a, b) => Date.parse(times[a]) - Date.parse(times[b]));
-  const deprecated = Object.values(versions).filter((v) => typeof v?.deprecated === 'string' && v.deprecated.length > 0).length;
-  const recent = ordered.slice(-RECENT);
-  const scripts = latest?.scripts && typeof latest.scripts === 'object' ? latest.scripts : {};
-  const engines = latest?.engines && typeof latest.engines === 'object' && !Array.isArray(latest.engines) ? latest.engines : {};
-  const att = latest?.dist?.attestations;
-  const repoUrl = typeof latest?.repository === 'string' ? latest.repository : latest?.repository?.url ?? (typeof doc?.repository === 'string' ? doc.repository : doc?.repository?.url);
+  return {
+    name: str(doc?.name, 214),
+    modified: time(doc?.modified),
+    dist_tags: Object.entries(tags).slice(0, 20).map(([tag, v]) => ({ tag: str(tag, 64), version: str(v, 100) })),
+    latest: typeof tags.latest === 'string' && has(versions, tags.latest) ? tags.latest : null,
+    // [version, deprecated, provenance predicate type or null, has install script]
+    versions: Object.keys(versions).slice(-5000).map((v) => {
+      const x = versions[v] ?? {};
+      const att = x.dist?.attestations;
+      return [str(v, 100), typeof x.deprecated === 'string' && x.deprecated.length > 0, att ? (str(att.provenance?.predicateType, 200) ?? 'present') : null, x.hasInstallScript === true];
+    }),
+  };
+}
+
+/** What we keep from the latest version's own document: facts and counts, no text. */
+export function npmVersionSummary(v) {
+  const scripts = v?.scripts && typeof v.scripts === 'object' ? v.scripts : {};
+  const engines = v?.engines && typeof v.engines === 'object' && !Array.isArray(v.engines) ? v.engines : {};
+  const repoUrl = typeof v?.repository === 'string' ? v.repository : v?.repository?.url;
+  return {
+    repository_url: str(repoUrl, 300),
+    licence: str(typeof v?.license === 'string' ? v.license : v?.license?.type, 100),
+    has_bin: !!v?.bin && (typeof v.bin === 'string' || Object.keys(v.bin).length > 0),
+    engines: Object.entries(engines).slice(0, 10).map(([name, range]) => ({ name: str(name, 32), range: str(range, 64) })),
+    install_scripts: ['preinstall', 'install', 'postinstall', 'prepare'].filter((k) => typeof scripts[k] === 'string'),
+    git_head: typeof v?.gitHead === 'string' && /^[0-9a-f]{40}$/.test(v.gitHead) ? v.gitHead : null,
+    integrity_present: typeof v?.dist?.integrity === 'string',
+    signatures: Array.isArray(v?.dist?.signatures) ? v.dist.signatures.length : 0,
+    unpacked_size: int(v?.dist?.unpackedSize),
+    file_count: int(v?.dist?.fileCount),
+    mcp_name: str(v?.mcpName, 200),
+    dependencies: v?.dependencies && typeof v.dependencies === 'object' ? Object.keys(v.dependencies).length : 0,
+    // Maintainers listed in this version's document (those at its publish): a count, never names.
+    maintainers_count: Array.isArray(v?.maintainers) ? v.maintainers.length : null,
+  };
+}
+
+/** Assemble the three npm records from the abbreviated summary, the version summary and deps.dev dates. */
+export function npmSummary(abbrev, latestDoc, dates, subjectRepo) {
+  const when = new Map((dates?.versions ?? []).map((x) => [x[0], x[1]]));
+  const flags = new Map(abbrev.versions.map((x) => [x[0], x]));
+  const dated = abbrev.versions.map((x) => x[0]).filter((v) => when.get(v)).sort((a, b) => Date.parse(when.get(a)) - Date.parse(when.get(b)));
+  const recent = (dated.length ? dated : abbrev.versions.map((x) => x[0])).slice(-RECENT);
+  const latest = abbrev.latest;
+  const lf = latest ? flags.get(latest) : null;
   return {
     doc: {
-      package: str(doc?.name, 214),
-      repository_matches_subject: repoUrl ? githubRepoOf(repoUrl) === subjectRepo.toLowerCase() : null,
-      repository_url: str(repoUrl, 300),
-      created_at: time(times.created),
-      modified_at: time(times.modified),
-      versions_count: Object.keys(versions).length,
-      first_version: ordered[0] ? { version: str(ordered[0], 100), published_at: time(times[ordered[0]]) } : null,
-      dist_tags: Object.entries(tags).slice(0, 20).map(([tag, v]) => ({ tag: str(tag, 64), version: str(v, 100) })),
-      deprecated_versions_count: deprecated,
+      package: abbrev.name,
+      repository_matches_subject: latestDoc?.repository_url ? githubRepoOf(latestDoc.repository_url) === subjectRepo.toLowerCase() : null,
+      repository_url: latestDoc?.repository_url ?? null,
+      created_at: dated.length ? when.get(dated[0]) : null,
+      modified_at: abbrev.modified,
+      dates_source: dated.length ? 'deps.dev' : null,
+      versions_count: abbrev.versions.length,
+      first_version: dated.length ? { version: dated[0], published_at: when.get(dated[0]) } : null,
+      dist_tags: abbrev.dist_tags,
+      deprecated_versions_count: abbrev.versions.filter((x) => x[1]).length,
       latest: latest ? {
-        version: str(latestName, 100),
-        published_at: time(times[latestName]),
-        deprecated: typeof latest.deprecated === 'string' && latest.deprecated.length > 0,
-        licence: str(typeof latest.license === 'string' ? latest.license : latest.license?.type, 100),
-        has_bin: !!latest.bin && (typeof latest.bin === 'string' || Object.keys(latest.bin).length > 0),
-        engines: Object.entries(engines).slice(0, 10).map(([name, range]) => ({ name: str(name, 32), range: str(range, 64) })),
-        install_scripts: ['preinstall', 'install', 'postinstall', 'prepare'].filter((k) => typeof scripts[k] === 'string'),
-        git_head: typeof latest.gitHead === 'string' && /^[0-9a-f]{40}$/.test(latest.gitHead) ? latest.gitHead : null,
-        integrity_present: typeof latest.dist?.integrity === 'string',
-        signatures: Array.isArray(latest.dist?.signatures) ? latest.dist.signatures.length : 0,
-        unpacked_size: int(latest.dist?.unpackedSize),
-        file_count: int(latest.dist?.fileCount),
-        mcp_name: str(latest.mcpName, 200),
-        dependencies: latest.dependencies && typeof latest.dependencies === 'object' ? Object.keys(latest.dependencies).length : 0,
+        version: latest,
+        published_at: when.get(latest) ?? null,
+        deprecated: !!lf?.[1],
+        has_install_script: !!lf?.[3],
+        ...(latestDoc ? (({ maintainers_count, repository_url, ...rest }) => rest)(latestDoc) : {}),
       } : null,
-      recent_versions: recent.map((v) => ({
-        version: str(v, 100),
-        published_at: time(times[v]),
-        deprecated: typeof versions[v]?.deprecated === 'string' && versions[v].deprecated.length > 0,
-        provenance: !!versions[v]?.dist?.attestations,
-      })),
+      recent_versions: recent.map((v) => ({ version: v, published_at: when.get(v) ?? null, deprecated: !!flags.get(v)?.[1], provenance: !!flags.get(v)?.[2] })),
     },
-    maintainers: { package: str(doc?.name, 214), count: Array.isArray(doc?.maintainers) ? doc.maintainers.length : null },
+    maintainers: { package: abbrev.name, count: latestDoc?.maintainers_count ?? null, basis: 'latest_version_document' },
     attestations: {
-      package: str(doc?.name, 214),
-      version: str(latestName, 100),
-      provenance_present: !!att,
-      predicate_type: str(att?.provenance?.predicateType, 200),
-      recent_with_provenance: recent.filter((v) => !!versions[v]?.dist?.attestations).length,
+      package: abbrev.name,
+      version: latest,
+      provenance_present: !!lf?.[2],
+      predicate_type: lf?.[2] && lf[2] !== 'present' ? lf[2] : null,
+      recent_with_provenance: recent.filter((v) => !!flags.get(v)?.[2]).length,
       recent_versions: recent.length,
+      versions_with_provenance: abbrev.versions.filter((x) => x[2]).length,
     },
   };
 }
 
 export async function npmRead(http, name, subjectRepo) {
   if (!NPM_NAME.test(name)) return { status: 'invalid_name' };
+  const base = `${NPM}/${name.replace('/', '%2F')}`;
   try {
-    const url = `${NPM}/${name.replace('/', '%2F')}`;
-    const r = await http.getSummary(url, {
-      cacheKey: `${url}#${subjectRepo.toLowerCase()}`,
-      version: 'npm/1', headers: { accept: 'application/json' }, extract: (doc) => npmSummary(doc, subjectRepo),
+    const a = await http.getSummary(base, {
+      cacheKey: `${base}#abbreviated`, version: 'npm-abbrev/1',
+      headers: { accept: 'application/vnd.npm.install-v1+json' }, extract: npmAbbrevSummary,
     });
-    return answered(r) ? { status: 'ok', value: r.value } : { status: r.status === 404 ? 'not_found' : `http_${r.status}` };
+    if (!answered(a)) return { status: a.status === 404 ? 'not_found' : `http_${a.status}` };
+    let latestDoc = null;
+    if (a.value.latest && NPM_VERSION.test(a.value.latest)) {
+      const v = await http.getSummary(`${base}/${encodeURIComponent(a.value.latest)}`, {
+        version: 'npm-version/1', headers: { accept: 'application/json' }, extract: npmVersionSummary,
+      });
+      if (answered(v)) latestDoc = v.value;
+    }
+    let dates = null;
+    try {
+      const d = await depsdevVersions(http, 'npm', name);
+      if (answered(d)) dates = d.value;
+    } catch (err) {
+      problemOf(err); // dates are optional: a deps.dev problem leaves them null
+    }
+    return { status: 'ok', value: npmSummary(a.value, latestDoc, dates, subjectRepo) };
   } catch (err) {
     return problemOf(err);
   }
@@ -241,9 +302,9 @@ export function pypiSummary(json, simple, subjectRepo) {
       latest_upload_at: uploads.at(-1) ?? null,
       requires_python: str(info.requires_python, 100),
       licence_expression: str(info.license_expression, 200),
-      licence: typeof info.license === 'string' && info.license.length <= 64 && !/[\r\n]/.test(info.license) ? str(info.license, 64) : null,
-      licence_text: typeof info.license === 'string' && (info.license.length > 64 || /[\r\n]/.test(info.license)) ? textDigest(info.license) : null,
-      summary: textDigest(info.summary),
+      licence: str(info.license_short, 64),
+      licence_text: info.license_digest ?? null,
+      summary: info.summary_digest ?? null,
       project_url_labels: Object.keys(urls).slice(0, 20).map((k) => str(k, 64)),
       dependencies: int(info.requires_dist) ?? 0,
       latest_files: latestFiles.slice(0, 50).map((f) => ({
@@ -295,7 +356,11 @@ function pypiJsonSlim(doc) {
   return {
     info: {
       name: info.name, version: info.version, requires_python: info.requires_python, license_expression: info.license_expression,
-      license: info.license, summary: info.summary, project_urls: info.project_urls, home_page: info.home_page,
+      // Free text is kept as a digest, also in the cache (R-META-06); a short licence name is kept.
+      license_short: typeof info.license === 'string' && info.license.length <= 64 && !/[\r\n]/.test(info.license) ? info.license : null,
+      license_digest: typeof info.license === 'string' && (info.license.length > 64 || /[\r\n]/.test(info.license)) ? textDigest(info.license) : null,
+      summary_digest: textDigest(info.summary),
+      project_urls: info.project_urls, home_page: info.home_page,
       requires_dist: Array.isArray(info.requires_dist) ? info.requires_dist.length : 0,
     },
     releases,
@@ -338,12 +403,19 @@ export function crateSummary(doc, owners, subjectRepo) {
   };
 }
 
+/** The crate fields we read, so the cache holds no description or other free text (R-META-06). */
+function crateSlim(c) {
+  if (!c || typeof c !== 'object') return {};
+  const pick = ['name', 'repository', 'created_at', 'updated_at', 'max_version', 'max_stable_version', 'newest_version', 'num_versions', 'trustpub_only'];
+  return Object.fromEntries(pick.filter((k) => Object.hasOwn(c, k)).map((k) => [k, c[k]]));
+}
+
 export async function crateRead(http, name, subjectRepo) {
   if (!CRATE_NAME.test(name)) return { status: 'invalid_name' };
   try {
     const r = await http.getSummary(`${CRATES}/${name}`, {
       version: 'crates/1', headers: { accept: 'application/json' },
-      extract: (doc) => ({ doc: { crate: doc?.crate, versions: (Array.isArray(doc?.versions) ? doc.versions : []).slice(0, 500).map((v) => ({ num: v?.num, created_at: v?.created_at, yanked: v?.yanked, license: v?.license, rust_version: v?.rust_version, trustpub_data: v?.trustpub_data ? 1 : null, crate_size: v?.crate_size, has_lib: v?.has_lib, bin_names: v?.bin_names })) } }),
+      extract: (doc) => ({ doc: { crate: crateSlim(doc?.crate), versions: (Array.isArray(doc?.versions) ? doc.versions : []).slice(0, 500).map((v) => ({ num: v?.num, created_at: v?.created_at, yanked: v?.yanked, license: v?.license, rust_version: v?.rust_version, trustpub_data: v?.trustpub_data ? 1 : null, crate_size: v?.crate_size, has_lib: v?.has_lib, bin_names: v?.bin_names })) } }),
     });
     if (!answered(r)) return { status: r.status === 404 ? 'not_found' : `http_${r.status}` };
     const o = await http.getSummary(`${CRATES}/${name}/owners`, {
@@ -404,21 +476,27 @@ export async function goRead(http, repo) {
 
 const SYSTEMS = { npm: 'NPM', pypi: 'PYPI', cargo: 'CARGO', go: 'GO' };
 
-export async function depsdevPackage(http, system, name) {
-  const sys = SYSTEMS[system];
-  const base = `${DEPSDEV}/systems/${sys}/packages/${encodeURIComponent(name)}`;
-  const p = await http.getSummary(base, {
-    version: 'depsdev-pkg/1',
-    extract: (doc) => {
-      const vs = Array.isArray(doc?.versions) ? doc.versions : [];
-      const def = vs.find((v) => v?.isDefault) ?? vs.at(-1) ?? null;
-      return { versions_count: vs.length, deprecated_versions: vs.filter((v) => v?.isDeprecated === true).length, default_version: str(def?.versionKey?.version, 100) };
-    },
+/** deps.dev's version list for a package: [version, publishedAt, isDefault, isDeprecated] each. Shared by npm and deps.dev stages. */
+export function depsdevVersions(http, system, name) {
+  return http.getSummary(`${DEPSDEV}/systems/${SYSTEMS[system]}/packages/${encodeURIComponent(name)}`, {
+    version: 'depsdev-versions/1',
+    extract: (doc) => ({
+      versions: (Array.isArray(doc?.versions) ? doc.versions : []).slice(-5000)
+        .map((v) => [str(v?.versionKey?.version, 100), time(v?.publishedAt), v?.isDefault === true, v?.isDeprecated === true])
+        .filter((v) => v[0]),
+    }),
   });
+}
+
+export async function depsdevPackage(http, system, name) {
+  const base = `${DEPSDEV}/systems/${SYSTEMS[system]}/packages/${encodeURIComponent(name)}`;
+  const p = await depsdevVersions(http, system, name);
   if (!answered(p)) return { system, name, found: false };
-  const out = { system, name, found: true, ...p.value };
-  if (p.value.default_version) {
-    const v = await http.getSummary(`${base}/versions/${encodeURIComponent(p.value.default_version)}`, {
+  const vs = p.value.versions;
+  const def = vs.find((v) => v[2]) ?? vs.at(-1) ?? null;
+  const out = { system, name, found: true, versions_count: vs.length, deprecated_versions: vs.filter((v) => v[3]).length, default_version: def?.[0] ?? null };
+  if (out.default_version) {
+    const v = await http.getSummary(`${base}/versions/${encodeURIComponent(out.default_version)}`, {
       version: 'depsdev-ver/1',
       extract: (doc) => ({
         published_at: time(doc?.publishedAt),
@@ -507,11 +585,20 @@ export async function collectSubject(http, repo, { seed = new Map() } = {}) {
 
 const ATTRIBUTION = 'Data from deps.dev, CC BY 4.0 for the data deps.dev generates; relayed data keeps its source terms.';
 
+/** The output for a subject whose data made the lane throw: one skip that is not retried (R-META-01). */
+export function subjectErrorOutput() {
+  return {
+    records: [record('registry_entry_history', null, 'this subject\'s data could not be read (the lane failed on it)')],
+    skips: [{ stage: 'collect', reason: 'upstream_unavailable', retryable: false }],
+    stages: { collect: 'subject_error' },
+  };
+}
+
 /** Observation records and skips for one subject's collected data. */
 export function subjectOutput(c, observedAt) {
   const records = [];
   const skips = [];
-  const skip = (stage, reason) => skips.push({ stage, reason, retryable: true });
+  const skip = (stage, code) => skips.push(skipFor(stage, code));
 
   if (c.registry.problem) {
     skip('mcp_registry', c.registry.problem);
@@ -519,7 +606,8 @@ export function subjectOutput(c, observedAt) {
   } else {
     // One element per registry entry whose repository is the subject; an empty list means none.
     records.push(record('registry_entry_history', [...c.registry.servers].map(([name, versions]) => ({
-      server_name: name, source: 'mcp-registry-official', source_licence: 'CC0-1.0', search_truncated: c.registry.truncated, versions,
+      server_name: name, namespace_matches_subject: namespaceMatches(name, c.repo),
+      source: 'mcp-registry-official', source_licence: 'CC0-1.0', search_truncated: c.registry.truncated, versions,
     }))));
   }
 

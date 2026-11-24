@@ -67,8 +67,10 @@ test('http: a cached ETag is sent, and a 304 gives the cached summary back witho
     if (n === 1) return new Response(JSON.stringify({ count: 5 }), { status: 200, headers: { etag: '"abc"' } });
     return new Response(null, { status: 304 });
   };
-  const http = createHttp({ fetch: f, sleep: async () => {} });
-  const a = await http.getSummary('https://x.test/a', { version: 'v1', extract: (d) => ({ c: d.count }) });
+  // Two runs sharing one cache (within a run, the same read is sent once).
+  const cache = createCache();
+  const a = await createHttp({ fetch: f, sleep: async () => {}, cache }).getSummary('https://x.test/a', { version: 'v1', extract: (d) => ({ c: d.count }) });
+  const http = createHttp({ fetch: f, sleep: async () => {}, cache });
   const b = await http.getSummary('https://x.test/a', { version: 'v1', extract: () => { throw new Error('not parsed on 304'); } });
   assert.deepEqual([a.status, a.value, b.status, b.value, b.cached], [200, { c: 5 }, 304, { c: 5 }, true]);
   assert.deepEqual(seen, [null, '"abc"']);
@@ -78,9 +80,9 @@ test('http: a cached ETag is sent, and a 304 gives the cached summary back witho
 test('http: a cached summary from another extractor version is not used', async () => {
   const seen = [];
   const f = async (url, init) => { seen.push(init.headers['if-none-match'] ?? null); return new Response('{"x":1}', { status: 200, headers: { etag: '"e"' } }); };
-  const http = createHttp({ fetch: f, sleep: async () => {} });
-  await http.getSummary('https://x.test/a', { version: 'v1', extract: (d) => d });
-  await http.getSummary('https://x.test/a', { version: 'v2', extract: (d) => d });
+  const cache = createCache();
+  await createHttp({ fetch: f, sleep: async () => {}, cache }).getSummary('https://x.test/a', { version: 'v1', extract: (d) => d });
+  await createHttp({ fetch: f, sleep: async () => {}, cache }).getSummary('https://x.test/a', { version: 'v2', extract: (d) => d });
   assert.deepEqual(seen, [null, null]);
 });
 

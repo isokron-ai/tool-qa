@@ -64,12 +64,14 @@ test('known-answer control (meta-github): matches our repository, and a changed 
   assert.match(bad.files['controls/known-answer.json'], /"created_at"/);
 });
 
-test('known-answer control (meta-registry): matches; an unreachable registry is a mismatch, not a pass', async () => {
+test('known-answer control (meta-registry): matches; an unreachable registry is unavailable, never a pass', async () => {
   const lane = laneOf('meta-registry');
   const ok = await knownAnswerControl(lane, { http: createHttp({ fetch: registryFetch(), sleep: async () => {} }) });
   assert.equal(ok.control.observed, 'match');
   const down = createHttp({ fetch: async () => new Response('', { status: 503 }), sleep: async () => {}, retries: 0 });
-  assert.equal((await knownAnswerControl(lane, { http: down })).control.observed, 'mismatch');
+  const r = await knownAnswerControl(lane, { http: down });
+  assert.equal(r.unavailable, 'upstream_unavailable');
+  assert.equal(r.control, null);
 });
 
 test('the known answers name our own repository', () => {

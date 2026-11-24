@@ -63,11 +63,11 @@ function inputChecks(indent) {
   ];
 }
 
-function kitSteps({ uses, dryRun, attemptExpr, outDir }) {
+function kitSteps({ uses, dryRun, dryRunExpr, attemptExpr, outDir }) {
   const lines = [];
   for (let i = 0; i < SLOTS; i++) {
     lines.push(
-      `      - name: Seal ${dryRun ? 'and check' : 'and upload'} item ${i}`,
+      `      - name: Seal ${dryRunExpr ? 'and check or upload' : dryRun ? 'and check' : 'and upload'} item ${i}`,
       `        if: \${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_${i} == 'true' }}`,
       `        uses: ${uses}`,
       '        with:',
@@ -78,7 +78,8 @@ function kitSteps({ uses, dryRun, attemptExpr, outDir }) {
       `          fence: \${{ steps.collect.outputs.fence_${i} }}`,
       `          run-key: \${{ steps.collect.outputs.run_key_${i} }}`,
     );
-    if (dryRun) lines.push("          dry-run: 'true'");
+    if (dryRunExpr) lines.push(`          dry-run: ${dryRunExpr}`);
+    else if (dryRun) lines.push("          dry-run: 'true'");
   }
   return lines;
 }
@@ -199,9 +200,11 @@ export function workerWorkflow(lane) {
 export function fixtureWorkflow() {
   return [
     '# Fixture run of the metadata lanes on every pull request that touches them: the real APIs, three of our own',
-    '# repositories, the same script and the same 100 worker-kit slots (the same pinned kit) as the workers, with the kit in dry-run mode',
-    '# (built and checked, never encrypted or uploaded). meta/fixture.mjs then judges every bundle with ingest\'s own',
-    '# checks against the pinned field registry, and the job fails unless each one is accepted.',
+    '# repositories, the same script and the same 100 worker-kit slots (the same pinned kit) as the workers.',
+    '# mode check: the kit builds every bundle in dry-run mode and meta/fixture.mjs judges each one with ingest\'s',
+    '# own checks against the pinned field registry; the job fails unless each is accepted.',
+    '# mode upload: the kit runs as the workers run it (install age, encrypt to the ingest key, upload a 3-day',
+    '# artifact), which measures the time per item slot (meta/README.md, "Runtime"). Ingest never reads pull request runs.',
     '#',
     '# Security: pull_request only (no pull_request_target), permissions: {} at the top and contents: read for the',
     '# job, no secrets; the job token reads public data. Actions are pinned by full SHA.',
@@ -226,7 +229,7 @@ export function fixtureWorkflow() {
     '',
     'jobs:',
     '  fixture:',
-    '    name: fixture (${{ matrix.lane }})',
+    '    name: fixture (${{ matrix.lane }}, ${{ matrix.mode }})',
     '    runs-on: ubuntu-24.04',
     '    timeout-minutes: 30',
     '    permissions:',
@@ -235,6 +238,7 @@ export function fixtureWorkflow() {
     '      fail-fast: false',
     '      matrix:',
     '        lane: [meta-github, meta-registry]',
+    '        mode: [check, upload]',
     '    steps:',
     `      - uses: ${PINS.checkout}`,
     '        with:',
@@ -247,7 +251,8 @@ export function fixtureWorkflow() {
     '        name: Fixture items',
     '        env:',
     '          LANE: ${{ matrix.lane }}',
-    '        run: node meta/fixture.mjs items "$LANE" >> "$GITHUB_OUTPUT"',
+    '          MODE: ${{ matrix.mode }}',
+    '        run: node meta/fixture.mjs items "$LANE" "$MODE" >> "$GITHUB_OUTPUT"',
     '      - id: collect',
     '        name: Read the fixture subjects (real APIs)',
     '        env:',
@@ -259,8 +264,9 @@ export function fixtureWorkflow() {
     '        run: |',
     ...inputChecks(10),
     '          node meta/run.mjs "$LANE" "$RUNNER_TEMP/meta-out"',
-    ...kitSteps({ uses: PINS.workerKit, dryRun: true, attemptExpr: '${{ steps.items.outputs.attempt_id }}', outDir: 'meta-out' }),
+    ...kitSteps({ uses: PINS.workerKit, dryRunExpr: "${{ matrix.mode == 'check' && 'true' || 'false' }}", attemptExpr: '${{ steps.items.outputs.attempt_id }}', outDir: 'meta-out' }),
     '      - name: Judge every bundle with ingest\'s checks',
+    "        if: matrix.mode == 'check'",
     '        env:',
     '          LANE: ${{ matrix.lane }}',
     '          ATTEMPT_ID: ${{ steps.items.outputs.attempt_id }}',

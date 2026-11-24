@@ -63,6 +63,7 @@ test('meta-fixture.yml runs on pull requests only, dry-run, and judges the bundl
   const steps = w.jobs.fixture.steps;
   const kit = steps.filter((s) => s.uses === PINS.workerKit.split(' ')[0]);
   assert.equal(kit.length, SLOTS);
-  assert.ok(kit.every((s) => s.with['dry-run'] === 'true'));
+  assert.ok(kit.every((s) => s.with['dry-run'] === "${{ matrix.mode == 'check' && 'true' || 'false' }}"));
+  assert.deepEqual(w.jobs.fixture.strategy.matrix.mode, ['check', 'upload']);
   assert.match(steps.at(-1).run, /meta\/fixture\.mjs judge/);
 });

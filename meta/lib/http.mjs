@@ -12,7 +12,13 @@
 // Errors: a rate limit, a timeout, a network error or a 5xx that is still
 // there after the retries throws FetchProblem with code `rate_limited` or
 // `upstream_unavailable`; the caller records a retryable skip for that stage.
-// Any other status is returned to the caller.
+// A body larger than `maxBodyBytes` (20 MiB) is not read past the cap: it
+// throws FetchProblem `too_large`, which the caller records as a skip that is
+// not retryable (R-META-01). Any other status is returned to the caller.
+//
+// Within one run, a GET for the same URL and extractor version is sent once:
+// later callers get the same answer (the known-answer subject, deps.dev
+// package lists read by two stages).
 
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 
@@ -20,8 +26,10 @@ export const USER_AGENT = 'isokron-tool-qa-meta/1 (+https://github.com/isokron-a
 export const CACHE_VERSION = 1;
 const MAX_CACHE_ENTRIES = 50_000;
 
+export const MAX_BODY_BYTES = 20 * 1024 * 1024;
+
 export class FetchProblem extends Error {
-  /** @param {'rate_limited'|'upstream_unavailable'} code */
+  /** @param {'rate_limited'|'upstream_unavailable'|'too_large'} code */
   constructor(code, message, { status = null, retryAfterMs = null } = {}) {
     super(message);
     this.name = 'FetchProblem';
@@ -63,6 +71,44 @@ export function createCache({ path = null, now = () => Date.now() } = {}) {
   };
 }
 
+/**
+ * Read a response body as text, at most `max` bytes. A larger body (by its
+ * Content-Length, or once the stream passes the cap) is cancelled and throws
+ * FetchProblem too_large; nothing past the cap is held in memory.
+ */
+export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > max) {
+    await res.body?.cancel?.().catch(() => {});
+    throw new FetchProblem('too_large', `${where}: the answer is ${declared} bytes, over the ${max}-byte cap`);
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      throw new FetchProblem('too_large', `${where}: the answer is over the ${max}-byte cap`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
+}
+
+/** readCapped, parsed as JSON; a body that is not JSON is upstream_unavailable. */
+export async function readJsonCapped(res, max = MAX_BODY_BYTES, where = '') {
+  const text = await readCapped(res, max, where);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new FetchProblem('upstream_unavailable', `${where}: the answer is not JSON`, { status: res.status });
+  }
+}
+
 function hostOf(url) {
   try { return new URL(url).host; } catch { return ''; }
 }
@@ -87,8 +133,10 @@ export function createHttp({
   retries = 2,
   maxRetryWaitMs = 20_000,
   minIntervalMs = {},
+  maxBodyBytes = MAX_BODY_BYTES,
 } = {}) {
   const lastAt = new Map();
+  const memo = new Map(); // cacheKey + version -> promise of the answer, for this run
   const queue = new Map(); // host -> promise chain, so pacing holds under concurrency
   const stats = { requests: 0, not_modified: 0, retries: 0, by_host: {} };
 
@@ -148,13 +196,24 @@ export function createHttp({
    * @returns {Promise<{status: number, value: any, cached: boolean, res: Response|null}>}
    *   status 200 (or 304, with the cached value), or any other status with value null
    */
-  async function getSummary(url, { extract, version, headers = {}, rateLimitCheck, parse = 'json', cacheKey = url } = {}) {
+  function getSummary(url, opts = {}) {
+    const key = `${opts.cacheKey ?? url}\n${opts.version}`;
+    if (!memo.has(key)) {
+      const p = fetchSummary(url, opts);
+      memo.set(key, p);
+      p.catch(() => memo.delete(key)); // a failed read may be tried again
+    }
+    return memo.get(key);
+  }
+
+  async function fetchSummary(url, { extract, version, headers = {}, rateLimitCheck, parse = 'json', cacheKey = url, onResponse } = {}) {
     const hit = cache.get(cacheKey);
     const usable = hit && hit.v === version;
     const h = { ...headers };
     if (usable && hit.etag) h['if-none-match'] = hit.etag;
     else if (usable && hit.last_modified) h['if-modified-since'] = hit.last_modified;
     const res = await request(url, { headers: h, rateLimitCheck });
+    if (onResponse) onResponse(res);
     if (res.status === 304 && usable) {
       stats.not_modified++;
       cache.set(cacheKey, hit);
@@ -164,12 +223,7 @@ export function createHttp({
       await res.body?.cancel?.().catch(() => {});
       return { status: res.status, value: null, cached: false, res };
     }
-    let doc;
-    try {
-      doc = parse === 'text' ? await res.text() : await res.json();
-    } catch {
-      throw new FetchProblem('upstream_unavailable', `${hostOf(url)}: the answer is not ${parse === 'text' ? 'text' : 'JSON'}`, { status: 200 });
-    }
+    const doc = parse === 'text' ? await readCapped(res, maxBodyBytes, hostOf(url)) : await readJsonCapped(res, maxBodyBytes, hostOf(url));
     const value = await extract(doc, res);
     const etag = res.headers.get('etag');
     const lm = res.headers.get('last-modified');
@@ -177,7 +231,7 @@ export function createHttp({
     return { status: 200, value, cached: false, res };
   }
 
-  return { request, getSummary, stats, cache };
+  return { request, getSummary, stats, cache, maxBodyBytes };
 }
 
 /** Run `fn` over `list` with at most `n` at a time, in order of start. */

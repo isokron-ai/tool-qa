@@ -5,7 +5,10 @@
 //   through the same code and APIs as the subjects, and compares facts that do
 //   not change (ids, creation times, first published versions) or only grow
 //   (release count) with meta/fixtures/known-answer.json. A mismatch means the
-//   lane no longer reads what it claims, and the run uploads nothing.
+//   lane no longer reads what it claims, and the run uploads nothing. When the
+//   read itself hit a passing problem (a rate limit, an outage) in a stage the
+//   facts come from, nothing is compared: the control is unavailable, and the
+//   run reports every item as a retryable skip instead (R-META-02).
 //
 // forgery (kind forgery, expected "contained")
 //   The lane reads a planted subject, offline, from meta/fixtures/forgery-<lane>.json:
@@ -59,7 +62,8 @@ export function compareFacts(spec, observed) {
 
 /**
  * The known-answer control, live.
- * @returns {Promise<{control: object, files: Record<string, string>}>}
+ * @returns {Promise<{control: object|null, files: Record<string, string>, unavailable?: string, stage?: string}>}
+ *   unavailable: the skip reason (rate_limited or upstream_unavailable) when a passing problem stopped the read
  */
 export async function knownAnswerControl(lane, { http, token, budget, spec = loadKnownAnswer() }) {
   const want = spec[lane.name];
@@ -71,6 +75,8 @@ export async function knownAnswerControl(lane, { http, token, budget, spec = loa
     const outs = await lane.collect({ http, repos: [subject], token, budget });
     const o = outs.get(subject);
     if (!o) throw new Error('the lane returned nothing for the known-answer subject');
+    const passing = o.skips.find((sk) => sk.retryable === true && lane.factStages.includes(sk.stage));
+    if (passing) return { unavailable: passing.reason, stage: passing.stage, control: null, files: {} };
     observed = lane.facts(o);
     mismatches = compareFacts(want, observed);
   } catch (err) {

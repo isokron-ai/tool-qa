@@ -38,11 +38,15 @@ run).
 Per shard: one GraphQL query per 10 repositories, then three conditional REST
 calls per repository (contributor count from the `Link` header, the rules for
 the default branch, private vulnerability reporting) and one Scorecard call.
-The job's `GITHUB_TOKEN` has 1,000 REST requests and 1,000 GraphQL points an
-hour for this repository, shared with the other workflows here. The lane
-sends no REST call when fewer than 200 requests are left (`META_REST_RESERVE`)
-or after 400 counted calls in the shard (`META_REST_CAP`), and no GraphQL
-query below 50 points (`META_GRAPHQL_RESERVE`). A 304 answer does not count.
+The job's `GITHUB_TOKEN` has an hourly REST limit and an hourly GraphQL
+point limit for this repository (1,000 each on the free plan; GitHub reports
+the real figure in `x-ratelimit-limit` and `rateLimit.limit`). That bucket is
+shared: the pump, ingest, the watchdog and history-popularity use the same
+job token here. So the lane keeps a reserve of 25 % of the reported limit,
+and never less than 300 (`META_RESERVE_PERCENT`, `META_RESERVE_MIN`). No
+REST call starts if the requests left, less those already in flight, would
+go under it, nor after 400 counted calls in the shard (`META_REST_CAP`); no
+GraphQL query starts under the GraphQL reserve. A 304 answer does not count.
 
 ### meta-registry fields
 
@@ -53,7 +57,15 @@ packages each version declares; an empty list when there is none),
 `pypi_info`, `pypi_project_status`, `pypi_provenance`, `crates_crate_facts`,
 `go_module_facts`, `depsdev_facts`.
 
-`npm_maintainer_count_and_change` holds the maintainer count only. The change
+npm is read through its abbreviated document
+(`application/vnd.npm.install-v1+json`: versions, tags, deprecations,
+provenance per version, without the readmes that make full documents run to
+hundreds of MB), the latest version's own document (repository, licence,
+gitHead, scripts, maintainers at that publish) and deps.dev's version list
+for publish dates (`dates_source: deps.dev`).
+
+`npm_maintainer_count_and_change` holds the maintainer count only, from the
+latest version's document (`basis: latest_version_document`). The change
 is derived later, by ingest's longitudinal layer, from the counts of
 successive scans: the worker keeps no maintainer names, not even hashed, so it
 cannot compare sets itself.
@@ -75,6 +87,14 @@ at most one request a second. No GitHub API is called.
 - No personal data: maintainers, owners and contributors are counted, never
   named. Emails are never read into the cache or a bundle.
 - Captured answers are not kept in `raw/`, apart from the forgery target's.
+- The cache holds the same summaries: licence texts, summaries and crate
+  descriptions are digests there too.
+- No answer is read past 20 MiB. A larger one stops that stage with a
+  `policy_excluded` skip that is not retried.
+- Each `registry_entry_history` element carries `namespace_matches_subject`:
+  `false` for an `io.github.<owner>/...` entry whose owner is not the
+  subject's (an entry that claims someone else's repository), `null` for a
+  domain namespace.
 
 ## Skips
 
@@ -85,12 +105,17 @@ retries, or a subject not started before the shard deadline (22 minutes,
 `META_DEADLINE_MINUTES`). When every skip of an item is retryable, ingest sends
 it back later. A subject that is not `owner/name` reports `policy_excluded`. A
 repository or package that does not exist is data (`null` with a `why`), not
-a skip.
+a skip. A subject whose data makes the lane fail is that subject's own skip
+(`upstream_unavailable`, not retryable), never a failed shard.
 
 ## Controls
 
 Both run before any subject is read. If one fails, nothing is written and the
-job uploads nothing.
+job uploads nothing. If the known-answer read is stopped by a rate limit or
+an outage in a stage its facts come from, nothing is compared and no subject
+is read: every item gets a bundle with the forgery control and one retryable
+`known_answer` skip, so ingest sends it back later (`retry_later`, which does
+not count towards parking). A fact that does not match stays a failure.
 
 - **known-answer** (`known_good`, expected `match`): the lane reads our own
   repository `isokron-ai/mcp-check`, live, and compares facts that do not
@@ -107,6 +132,20 @@ job uploads nothing.
 we extracted from that answer (never the body). The workflow restores it with
 `actions/cache/restore` and saves it after the run, so an unchanged answer
 costs a 304.
+
+## Runtime
+
+The job has 40 minutes; the pump's lease for a shard of 100 is 43. The worker
+starts no subject after 22 minutes (`META_DEADLINE_MINUTES`, checked before
+each subject). Then come the 100 worker-kit slots. The kit pinned at b1f25a9
+downloads and checks age in every slot (`install-age.sh` has no "already
+installed" check, and the action calls it with its own path, so a copy on
+`PATH` is not used), then encrypts and uploads. The fixture's upload mode
+measures a slot on GitHub. With N seconds a slot, a full shard takes at most
+22 + 100 × N / 60 minutes plus about 1 minute of setup: it fits in 40 minutes
+while N is at most 10. If N is higher, lower `shard_size` in
+`pump/workflows.json` to (40 − 23) × 60 / N, or skip the install in the kit
+and move the pin.
 
 ## Kill switch
 
@@ -126,5 +165,7 @@ is the pump's business: a worker it has already dispatched finishes its shard.
 - `test/`: mocked fetch only; every bundle is judged with ingest's own checks
   against a copy of the pinned field registry.
 - `.github/workflows/meta-fixture.yml`: on pull requests, both lanes read three
-  of our own repositories through the real APIs, the kit builds every bundle in
-  dry-run mode, and `fixture.mjs judge` checks each one as ingest would.
+  of our own repositories through the real APIs. In `check` mode the kit builds
+  every bundle in dry-run mode and `fixture.mjs judge` checks each one as
+  ingest would; in `upload` mode the kit encrypts and uploads as the workers
+  do, which measures the time per slot.

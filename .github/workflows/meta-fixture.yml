@@ -1,7 +1,9 @@
 # Fixture run of the metadata lanes on every pull request that touches them: the real APIs, three of our own
-# repositories, the same script and the same 100 worker-kit slots (the same pinned kit) as the workers, with the kit in dry-run mode
-# (built and checked, never encrypted or uploaded). meta/fixture.mjs then judges every bundle with ingest's own
-# checks against the pinned field registry, and the job fails unless each one is accepted.
+# repositories, the same script and the same 100 worker-kit slots (the same pinned kit) as the workers.
+# mode check: the kit builds every bundle in dry-run mode and meta/fixture.mjs judges each one with ingest's
+# own checks against the pinned field registry; the job fails unless each is accepted.
+# mode upload: the kit runs as the workers run it (install age, encrypt to the ingest key, upload a 3-day
+# artifact), which measures the time per item slot (meta/README.md, "Runtime"). Ingest never reads pull request runs.
 #
 # Security: pull_request only (no pull_request_target), permissions: {} at the top and contents: read for the
 # job, no secrets; the job token reads public data. Actions are pinned by full SHA.
@@ -26,7 +28,7 @@ concurrency:
 
 jobs:
   fixture:
-    name: fixture (${{ matrix.lane }})
+    name: fixture (${{ matrix.lane }}, ${{ matrix.mode }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -35,6 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         lane: [meta-github, meta-registry]
+        mode: [check, upload]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,7 +50,8 @@ jobs:
         name: Fixture items
         env:
           LANE: ${{ matrix.lane }}
-        run: node meta/fixture.mjs items "$LANE" >> "$GITHUB_OUTPUT"
+          MODE: ${{ matrix.mode }}
+        run: node meta/fixture.mjs items "$LANE" "$MODE" >> "$GITHUB_OUTPUT"
       - id: collect
         name: Read the fixture subjects (real APIs)
         env:
@@ -65,7 +69,7 @@ jobs:
           if [[ ! "$ATTEMPT_ID" =~ $id_re ]]; then echo "::error::attempt_id is malformed"; exit 1; fi
           if [[ ! "$ITEMS" =~ $items_re ]] || [ "${#ITEMS}" -gt 60000 ]; then echo "::error::items must be one line of JSON, a list of at most 60000 characters"; exit 1; fi
           node meta/run.mjs "$LANE" "$RUNNER_TEMP/meta-out"
-      - name: Seal and check item 0
+      - name: Seal and check or upload item 0
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_0 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -75,8 +79,8 @@ jobs:
           item-index: '0'
           fence: ${{ steps.collect.outputs.fence_0 }}
           run-key: ${{ steps.collect.outputs.run_key_0 }}
-          dry-run: 'true'
-      - name: Seal and check item 1
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 1
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_1 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -86,8 +90,8 @@ jobs:
           item-index: '1'
           fence: ${{ steps.collect.outputs.fence_1 }}
           run-key: ${{ steps.collect.outputs.run_key_1 }}
-          dry-run: 'true'
-      - name: Seal and check item 2
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 2
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_2 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -97,8 +101,8 @@ jobs:
           item-index: '2'
           fence: ${{ steps.collect.outputs.fence_2 }}
           run-key: ${{ steps.collect.outputs.run_key_2 }}
-          dry-run: 'true'
-      - name: Seal and check item 3
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 3
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_3 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -108,8 +112,8 @@ jobs:
           item-index: '3'
           fence: ${{ steps.collect.outputs.fence_3 }}
           run-key: ${{ steps.collect.outputs.run_key_3 }}
-          dry-run: 'true'
-      - name: Seal and check item 4
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 4
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_4 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -119,8 +123,8 @@ jobs:
           item-index: '4'
           fence: ${{ steps.collect.outputs.fence_4 }}
           run-key: ${{ steps.collect.outputs.run_key_4 }}
-          dry-run: 'true'
-      - name: Seal and check item 5
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 5
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_5 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -130,8 +134,8 @@ jobs:
           item-index: '5'
           fence: ${{ steps.collect.outputs.fence_5 }}
           run-key: ${{ steps.collect.outputs.run_key_5 }}
-          dry-run: 'true'
-      - name: Seal and check item 6
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 6
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_6 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -141,8 +145,8 @@ jobs:
           item-index: '6'
           fence: ${{ steps.collect.outputs.fence_6 }}
           run-key: ${{ steps.collect.outputs.run_key_6 }}
-          dry-run: 'true'
-      - name: Seal and check item 7
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 7
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_7 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -152,8 +156,8 @@ jobs:
           item-index: '7'
           fence: ${{ steps.collect.outputs.fence_7 }}
           run-key: ${{ steps.collect.outputs.run_key_7 }}
-          dry-run: 'true'
-      - name: Seal and check item 8
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 8
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_8 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -163,8 +167,8 @@ jobs:
           item-index: '8'
           fence: ${{ steps.collect.outputs.fence_8 }}
           run-key: ${{ steps.collect.outputs.run_key_8 }}
-          dry-run: 'true'
-      - name: Seal and check item 9
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 9
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_9 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -174,8 +178,8 @@ jobs:
           item-index: '9'
           fence: ${{ steps.collect.outputs.fence_9 }}
           run-key: ${{ steps.collect.outputs.run_key_9 }}
-          dry-run: 'true'
-      - name: Seal and check item 10
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 10
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_10 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -185,8 +189,8 @@ jobs:
           item-index: '10'
           fence: ${{ steps.collect.outputs.fence_10 }}
           run-key: ${{ steps.collect.outputs.run_key_10 }}
-          dry-run: 'true'
-      - name: Seal and check item 11
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 11
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_11 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -196,8 +200,8 @@ jobs:
           item-index: '11'
           fence: ${{ steps.collect.outputs.fence_11 }}
           run-key: ${{ steps.collect.outputs.run_key_11 }}
-          dry-run: 'true'
-      - name: Seal and check item 12
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 12
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_12 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -207,8 +211,8 @@ jobs:
           item-index: '12'
           fence: ${{ steps.collect.outputs.fence_12 }}
           run-key: ${{ steps.collect.outputs.run_key_12 }}
-          dry-run: 'true'
-      - name: Seal and check item 13
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 13
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_13 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -218,8 +222,8 @@ jobs:
           item-index: '13'
           fence: ${{ steps.collect.outputs.fence_13 }}
           run-key: ${{ steps.collect.outputs.run_key_13 }}
-          dry-run: 'true'
-      - name: Seal and check item 14
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 14
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_14 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -229,8 +233,8 @@ jobs:
           item-index: '14'
           fence: ${{ steps.collect.outputs.fence_14 }}
           run-key: ${{ steps.collect.outputs.run_key_14 }}
-          dry-run: 'true'
-      - name: Seal and check item 15
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 15
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_15 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -240,8 +244,8 @@ jobs:
           item-index: '15'
           fence: ${{ steps.collect.outputs.fence_15 }}
           run-key: ${{ steps.collect.outputs.run_key_15 }}
-          dry-run: 'true'
-      - name: Seal and check item 16
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 16
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_16 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -251,8 +255,8 @@ jobs:
           item-index: '16'
           fence: ${{ steps.collect.outputs.fence_16 }}
           run-key: ${{ steps.collect.outputs.run_key_16 }}
-          dry-run: 'true'
-      - name: Seal and check item 17
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 17
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_17 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -262,8 +266,8 @@ jobs:
           item-index: '17'
           fence: ${{ steps.collect.outputs.fence_17 }}
           run-key: ${{ steps.collect.outputs.run_key_17 }}
-          dry-run: 'true'
-      - name: Seal and check item 18
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 18
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_18 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -273,8 +277,8 @@ jobs:
           item-index: '18'
           fence: ${{ steps.collect.outputs.fence_18 }}
           run-key: ${{ steps.collect.outputs.run_key_18 }}
-          dry-run: 'true'
-      - name: Seal and check item 19
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 19
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_19 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -284,8 +288,8 @@ jobs:
           item-index: '19'
           fence: ${{ steps.collect.outputs.fence_19 }}
           run-key: ${{ steps.collect.outputs.run_key_19 }}
-          dry-run: 'true'
-      - name: Seal and check item 20
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 20
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_20 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -295,8 +299,8 @@ jobs:
           item-index: '20'
           fence: ${{ steps.collect.outputs.fence_20 }}
           run-key: ${{ steps.collect.outputs.run_key_20 }}
-          dry-run: 'true'
-      - name: Seal and check item 21
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 21
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_21 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -306,8 +310,8 @@ jobs:
           item-index: '21'
           fence: ${{ steps.collect.outputs.fence_21 }}
           run-key: ${{ steps.collect.outputs.run_key_21 }}
-          dry-run: 'true'
-      - name: Seal and check item 22
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 22
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_22 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -317,8 +321,8 @@ jobs:
           item-index: '22'
           fence: ${{ steps.collect.outputs.fence_22 }}
           run-key: ${{ steps.collect.outputs.run_key_22 }}
-          dry-run: 'true'
-      - name: Seal and check item 23
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 23
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_23 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -328,8 +332,8 @@ jobs:
           item-index: '23'
           fence: ${{ steps.collect.outputs.fence_23 }}
           run-key: ${{ steps.collect.outputs.run_key_23 }}
-          dry-run: 'true'
-      - name: Seal and check item 24
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 24
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_24 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -339,8 +343,8 @@ jobs:
           item-index: '24'
           fence: ${{ steps.collect.outputs.fence_24 }}
           run-key: ${{ steps.collect.outputs.run_key_24 }}
-          dry-run: 'true'
-      - name: Seal and check item 25
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 25
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_25 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -350,8 +354,8 @@ jobs:
           item-index: '25'
           fence: ${{ steps.collect.outputs.fence_25 }}
           run-key: ${{ steps.collect.outputs.run_key_25 }}
-          dry-run: 'true'
-      - name: Seal and check item 26
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 26
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_26 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -361,8 +365,8 @@ jobs:
           item-index: '26'
           fence: ${{ steps.collect.outputs.fence_26 }}
           run-key: ${{ steps.collect.outputs.run_key_26 }}
-          dry-run: 'true'
-      - name: Seal and check item 27
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 27
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_27 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -372,8 +376,8 @@ jobs:
           item-index: '27'
           fence: ${{ steps.collect.outputs.fence_27 }}
           run-key: ${{ steps.collect.outputs.run_key_27 }}
-          dry-run: 'true'
-      - name: Seal and check item 28
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 28
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_28 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -383,8 +387,8 @@ jobs:
           item-index: '28'
           fence: ${{ steps.collect.outputs.fence_28 }}
           run-key: ${{ steps.collect.outputs.run_key_28 }}
-          dry-run: 'true'
-      - name: Seal and check item 29
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 29
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_29 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -394,8 +398,8 @@ jobs:
           item-index: '29'
           fence: ${{ steps.collect.outputs.fence_29 }}
           run-key: ${{ steps.collect.outputs.run_key_29 }}
-          dry-run: 'true'
-      - name: Seal and check item 30
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 30
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_30 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -405,8 +409,8 @@ jobs:
           item-index: '30'
           fence: ${{ steps.collect.outputs.fence_30 }}
           run-key: ${{ steps.collect.outputs.run_key_30 }}
-          dry-run: 'true'
-      - name: Seal and check item 31
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 31
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_31 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -416,8 +420,8 @@ jobs:
           item-index: '31'
           fence: ${{ steps.collect.outputs.fence_31 }}
           run-key: ${{ steps.collect.outputs.run_key_31 }}
-          dry-run: 'true'
-      - name: Seal and check item 32
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 32
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_32 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -427,8 +431,8 @@ jobs:
           item-index: '32'
           fence: ${{ steps.collect.outputs.fence_32 }}
           run-key: ${{ steps.collect.outputs.run_key_32 }}
-          dry-run: 'true'
-      - name: Seal and check item 33
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 33
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_33 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -438,8 +442,8 @@ jobs:
           item-index: '33'
           fence: ${{ steps.collect.outputs.fence_33 }}
           run-key: ${{ steps.collect.outputs.run_key_33 }}
-          dry-run: 'true'
-      - name: Seal and check item 34
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 34
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_34 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -449,8 +453,8 @@ jobs:
           item-index: '34'
           fence: ${{ steps.collect.outputs.fence_34 }}
           run-key: ${{ steps.collect.outputs.run_key_34 }}
-          dry-run: 'true'
-      - name: Seal and check item 35
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 35
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_35 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -460,8 +464,8 @@ jobs:
           item-index: '35'
           fence: ${{ steps.collect.outputs.fence_35 }}
           run-key: ${{ steps.collect.outputs.run_key_35 }}
-          dry-run: 'true'
-      - name: Seal and check item 36
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 36
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_36 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -471,8 +475,8 @@ jobs:
           item-index: '36'
           fence: ${{ steps.collect.outputs.fence_36 }}
           run-key: ${{ steps.collect.outputs.run_key_36 }}
-          dry-run: 'true'
-      - name: Seal and check item 37
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 37
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_37 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -482,8 +486,8 @@ jobs:
           item-index: '37'
           fence: ${{ steps.collect.outputs.fence_37 }}
           run-key: ${{ steps.collect.outputs.run_key_37 }}
-          dry-run: 'true'
-      - name: Seal and check item 38
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 38
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_38 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -493,8 +497,8 @@ jobs:
           item-index: '38'
           fence: ${{ steps.collect.outputs.fence_38 }}
           run-key: ${{ steps.collect.outputs.run_key_38 }}
-          dry-run: 'true'
-      - name: Seal and check item 39
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 39
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_39 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -504,8 +508,8 @@ jobs:
           item-index: '39'
           fence: ${{ steps.collect.outputs.fence_39 }}
           run-key: ${{ steps.collect.outputs.run_key_39 }}
-          dry-run: 'true'
-      - name: Seal and check item 40
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 40
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_40 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -515,8 +519,8 @@ jobs:
           item-index: '40'
           fence: ${{ steps.collect.outputs.fence_40 }}
           run-key: ${{ steps.collect.outputs.run_key_40 }}
-          dry-run: 'true'
-      - name: Seal and check item 41
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 41
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_41 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -526,8 +530,8 @@ jobs:
           item-index: '41'
           fence: ${{ steps.collect.outputs.fence_41 }}
           run-key: ${{ steps.collect.outputs.run_key_41 }}
-          dry-run: 'true'
-      - name: Seal and check item 42
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 42
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_42 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -537,8 +541,8 @@ jobs:
           item-index: '42'
           fence: ${{ steps.collect.outputs.fence_42 }}
           run-key: ${{ steps.collect.outputs.run_key_42 }}
-          dry-run: 'true'
-      - name: Seal and check item 43
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 43
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_43 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -548,8 +552,8 @@ jobs:
           item-index: '43'
           fence: ${{ steps.collect.outputs.fence_43 }}
           run-key: ${{ steps.collect.outputs.run_key_43 }}
-          dry-run: 'true'
-      - name: Seal and check item 44
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 44
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_44 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -559,8 +563,8 @@ jobs:
           item-index: '44'
           fence: ${{ steps.collect.outputs.fence_44 }}
           run-key: ${{ steps.collect.outputs.run_key_44 }}
-          dry-run: 'true'
-      - name: Seal and check item 45
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 45
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_45 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -570,8 +574,8 @@ jobs:
           item-index: '45'
           fence: ${{ steps.collect.outputs.fence_45 }}
           run-key: ${{ steps.collect.outputs.run_key_45 }}
-          dry-run: 'true'
-      - name: Seal and check item 46
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 46
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_46 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -581,8 +585,8 @@ jobs:
           item-index: '46'
           fence: ${{ steps.collect.outputs.fence_46 }}
           run-key: ${{ steps.collect.outputs.run_key_46 }}
-          dry-run: 'true'
-      - name: Seal and check item 47
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 47
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_47 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -592,8 +596,8 @@ jobs:
           item-index: '47'
           fence: ${{ steps.collect.outputs.fence_47 }}
           run-key: ${{ steps.collect.outputs.run_key_47 }}
-          dry-run: 'true'
-      - name: Seal and check item 48
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 48
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_48 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -603,8 +607,8 @@ jobs:
           item-index: '48'
           fence: ${{ steps.collect.outputs.fence_48 }}
           run-key: ${{ steps.collect.outputs.run_key_48 }}
-          dry-run: 'true'
-      - name: Seal and check item 49
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 49
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_49 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -614,8 +618,8 @@ jobs:
           item-index: '49'
           fence: ${{ steps.collect.outputs.fence_49 }}
           run-key: ${{ steps.collect.outputs.run_key_49 }}
-          dry-run: 'true'
-      - name: Seal and check item 50
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 50
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_50 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -625,8 +629,8 @@ jobs:
           item-index: '50'
           fence: ${{ steps.collect.outputs.fence_50 }}
           run-key: ${{ steps.collect.outputs.run_key_50 }}
-          dry-run: 'true'
-      - name: Seal and check item 51
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 51
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_51 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -636,8 +640,8 @@ jobs:
           item-index: '51'
           fence: ${{ steps.collect.outputs.fence_51 }}
           run-key: ${{ steps.collect.outputs.run_key_51 }}
-          dry-run: 'true'
-      - name: Seal and check item 52
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 52
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_52 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -647,8 +651,8 @@ jobs:
           item-index: '52'
           fence: ${{ steps.collect.outputs.fence_52 }}
           run-key: ${{ steps.collect.outputs.run_key_52 }}
-          dry-run: 'true'
-      - name: Seal and check item 53
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 53
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_53 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -658,8 +662,8 @@ jobs:
           item-index: '53'
           fence: ${{ steps.collect.outputs.fence_53 }}
           run-key: ${{ steps.collect.outputs.run_key_53 }}
-          dry-run: 'true'
-      - name: Seal and check item 54
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 54
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_54 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -669,8 +673,8 @@ jobs:
           item-index: '54'
           fence: ${{ steps.collect.outputs.fence_54 }}
           run-key: ${{ steps.collect.outputs.run_key_54 }}
-          dry-run: 'true'
-      - name: Seal and check item 55
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 55
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_55 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -680,8 +684,8 @@ jobs:
           item-index: '55'
           fence: ${{ steps.collect.outputs.fence_55 }}
           run-key: ${{ steps.collect.outputs.run_key_55 }}
-          dry-run: 'true'
-      - name: Seal and check item 56
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 56
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_56 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -691,8 +695,8 @@ jobs:
           item-index: '56'
           fence: ${{ steps.collect.outputs.fence_56 }}
           run-key: ${{ steps.collect.outputs.run_key_56 }}
-          dry-run: 'true'
-      - name: Seal and check item 57
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 57
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_57 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -702,8 +706,8 @@ jobs:
           item-index: '57'
           fence: ${{ steps.collect.outputs.fence_57 }}
           run-key: ${{ steps.collect.outputs.run_key_57 }}
-          dry-run: 'true'
-      - name: Seal and check item 58
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 58
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_58 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -713,8 +717,8 @@ jobs:
           item-index: '58'
           fence: ${{ steps.collect.outputs.fence_58 }}
           run-key: ${{ steps.collect.outputs.run_key_58 }}
-          dry-run: 'true'
-      - name: Seal and check item 59
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 59
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_59 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -724,8 +728,8 @@ jobs:
           item-index: '59'
           fence: ${{ steps.collect.outputs.fence_59 }}
           run-key: ${{ steps.collect.outputs.run_key_59 }}
-          dry-run: 'true'
-      - name: Seal and check item 60
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 60
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_60 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -735,8 +739,8 @@ jobs:
           item-index: '60'
           fence: ${{ steps.collect.outputs.fence_60 }}
           run-key: ${{ steps.collect.outputs.run_key_60 }}
-          dry-run: 'true'
-      - name: Seal and check item 61
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 61
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_61 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -746,8 +750,8 @@ jobs:
           item-index: '61'
           fence: ${{ steps.collect.outputs.fence_61 }}
           run-key: ${{ steps.collect.outputs.run_key_61 }}
-          dry-run: 'true'
-      - name: Seal and check item 62
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 62
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_62 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -757,8 +761,8 @@ jobs:
           item-index: '62'
           fence: ${{ steps.collect.outputs.fence_62 }}
           run-key: ${{ steps.collect.outputs.run_key_62 }}
-          dry-run: 'true'
-      - name: Seal and check item 63
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 63
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_63 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -768,8 +772,8 @@ jobs:
           item-index: '63'
           fence: ${{ steps.collect.outputs.fence_63 }}
           run-key: ${{ steps.collect.outputs.run_key_63 }}
-          dry-run: 'true'
-      - name: Seal and check item 64
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 64
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_64 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -779,8 +783,8 @@ jobs:
           item-index: '64'
           fence: ${{ steps.collect.outputs.fence_64 }}
           run-key: ${{ steps.collect.outputs.run_key_64 }}
-          dry-run: 'true'
-      - name: Seal and check item 65
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 65
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_65 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -790,8 +794,8 @@ jobs:
           item-index: '65'
           fence: ${{ steps.collect.outputs.fence_65 }}
           run-key: ${{ steps.collect.outputs.run_key_65 }}
-          dry-run: 'true'
-      - name: Seal and check item 66
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 66
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_66 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -801,8 +805,8 @@ jobs:
           item-index: '66'
           fence: ${{ steps.collect.outputs.fence_66 }}
           run-key: ${{ steps.collect.outputs.run_key_66 }}
-          dry-run: 'true'
-      - name: Seal and check item 67
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 67
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_67 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -812,8 +816,8 @@ jobs:
           item-index: '67'
           fence: ${{ steps.collect.outputs.fence_67 }}
           run-key: ${{ steps.collect.outputs.run_key_67 }}
-          dry-run: 'true'
-      - name: Seal and check item 68
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 68
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_68 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -823,8 +827,8 @@ jobs:
           item-index: '68'
           fence: ${{ steps.collect.outputs.fence_68 }}
           run-key: ${{ steps.collect.outputs.run_key_68 }}
-          dry-run: 'true'
-      - name: Seal and check item 69
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 69
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_69 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -834,8 +838,8 @@ jobs:
           item-index: '69'
           fence: ${{ steps.collect.outputs.fence_69 }}
           run-key: ${{ steps.collect.outputs.run_key_69 }}
-          dry-run: 'true'
-      - name: Seal and check item 70
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 70
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_70 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -845,8 +849,8 @@ jobs:
           item-index: '70'
           fence: ${{ steps.collect.outputs.fence_70 }}
           run-key: ${{ steps.collect.outputs.run_key_70 }}
-          dry-run: 'true'
-      - name: Seal and check item 71
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 71
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_71 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -856,8 +860,8 @@ jobs:
           item-index: '71'
           fence: ${{ steps.collect.outputs.fence_71 }}
           run-key: ${{ steps.collect.outputs.run_key_71 }}
-          dry-run: 'true'
-      - name: Seal and check item 72
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 72
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_72 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -867,8 +871,8 @@ jobs:
           item-index: '72'
           fence: ${{ steps.collect.outputs.fence_72 }}
           run-key: ${{ steps.collect.outputs.run_key_72 }}
-          dry-run: 'true'
-      - name: Seal and check item 73
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 73
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_73 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -878,8 +882,8 @@ jobs:
           item-index: '73'
           fence: ${{ steps.collect.outputs.fence_73 }}
           run-key: ${{ steps.collect.outputs.run_key_73 }}
-          dry-run: 'true'
-      - name: Seal and check item 74
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 74
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_74 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -889,8 +893,8 @@ jobs:
           item-index: '74'
           fence: ${{ steps.collect.outputs.fence_74 }}
           run-key: ${{ steps.collect.outputs.run_key_74 }}
-          dry-run: 'true'
-      - name: Seal and check item 75
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 75
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_75 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -900,8 +904,8 @@ jobs:
           item-index: '75'
           fence: ${{ steps.collect.outputs.fence_75 }}
           run-key: ${{ steps.collect.outputs.run_key_75 }}
-          dry-run: 'true'
-      - name: Seal and check item 76
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 76
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_76 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -911,8 +915,8 @@ jobs:
           item-index: '76'
           fence: ${{ steps.collect.outputs.fence_76 }}
           run-key: ${{ steps.collect.outputs.run_key_76 }}
-          dry-run: 'true'
-      - name: Seal and check item 77
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 77
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_77 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -922,8 +926,8 @@ jobs:
           item-index: '77'
           fence: ${{ steps.collect.outputs.fence_77 }}
           run-key: ${{ steps.collect.outputs.run_key_77 }}
-          dry-run: 'true'
-      - name: Seal and check item 78
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 78
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_78 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -933,8 +937,8 @@ jobs:
           item-index: '78'
           fence: ${{ steps.collect.outputs.fence_78 }}
           run-key: ${{ steps.collect.outputs.run_key_78 }}
-          dry-run: 'true'
-      - name: Seal and check item 79
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 79
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_79 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -944,8 +948,8 @@ jobs:
           item-index: '79'
           fence: ${{ steps.collect.outputs.fence_79 }}
           run-key: ${{ steps.collect.outputs.run_key_79 }}
-          dry-run: 'true'
-      - name: Seal and check item 80
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 80
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_80 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -955,8 +959,8 @@ jobs:
           item-index: '80'
           fence: ${{ steps.collect.outputs.fence_80 }}
           run-key: ${{ steps.collect.outputs.run_key_80 }}
-          dry-run: 'true'
-      - name: Seal and check item 81
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 81
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_81 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -966,8 +970,8 @@ jobs:
           item-index: '81'
           fence: ${{ steps.collect.outputs.fence_81 }}
           run-key: ${{ steps.collect.outputs.run_key_81 }}
-          dry-run: 'true'
-      - name: Seal and check item 82
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 82
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_82 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -977,8 +981,8 @@ jobs:
           item-index: '82'
           fence: ${{ steps.collect.outputs.fence_82 }}
           run-key: ${{ steps.collect.outputs.run_key_82 }}
-          dry-run: 'true'
-      - name: Seal and check item 83
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 83
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_83 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -988,8 +992,8 @@ jobs:
           item-index: '83'
           fence: ${{ steps.collect.outputs.fence_83 }}
           run-key: ${{ steps.collect.outputs.run_key_83 }}
-          dry-run: 'true'
-      - name: Seal and check item 84
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 84
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_84 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -999,8 +1003,8 @@ jobs:
           item-index: '84'
           fence: ${{ steps.collect.outputs.fence_84 }}
           run-key: ${{ steps.collect.outputs.run_key_84 }}
-          dry-run: 'true'
-      - name: Seal and check item 85
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 85
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_85 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1010,8 +1014,8 @@ jobs:
           item-index: '85'
           fence: ${{ steps.collect.outputs.fence_85 }}
           run-key: ${{ steps.collect.outputs.run_key_85 }}
-          dry-run: 'true'
-      - name: Seal and check item 86
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 86
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_86 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1021,8 +1025,8 @@ jobs:
           item-index: '86'
           fence: ${{ steps.collect.outputs.fence_86 }}
           run-key: ${{ steps.collect.outputs.run_key_86 }}
-          dry-run: 'true'
-      - name: Seal and check item 87
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 87
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_87 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1032,8 +1036,8 @@ jobs:
           item-index: '87'
           fence: ${{ steps.collect.outputs.fence_87 }}
           run-key: ${{ steps.collect.outputs.run_key_87 }}
-          dry-run: 'true'
-      - name: Seal and check item 88
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 88
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_88 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1043,8 +1047,8 @@ jobs:
           item-index: '88'
           fence: ${{ steps.collect.outputs.fence_88 }}
           run-key: ${{ steps.collect.outputs.run_key_88 }}
-          dry-run: 'true'
-      - name: Seal and check item 89
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 89
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_89 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1054,8 +1058,8 @@ jobs:
           item-index: '89'
           fence: ${{ steps.collect.outputs.fence_89 }}
           run-key: ${{ steps.collect.outputs.run_key_89 }}
-          dry-run: 'true'
-      - name: Seal and check item 90
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 90
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_90 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1065,8 +1069,8 @@ jobs:
           item-index: '90'
           fence: ${{ steps.collect.outputs.fence_90 }}
           run-key: ${{ steps.collect.outputs.run_key_90 }}
-          dry-run: 'true'
-      - name: Seal and check item 91
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 91
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_91 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1076,8 +1080,8 @@ jobs:
           item-index: '91'
           fence: ${{ steps.collect.outputs.fence_91 }}
           run-key: ${{ steps.collect.outputs.run_key_91 }}
-          dry-run: 'true'
-      - name: Seal and check item 92
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 92
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_92 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1087,8 +1091,8 @@ jobs:
           item-index: '92'
           fence: ${{ steps.collect.outputs.fence_92 }}
           run-key: ${{ steps.collect.outputs.run_key_92 }}
-          dry-run: 'true'
-      - name: Seal and check item 93
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 93
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_93 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1098,8 +1102,8 @@ jobs:
           item-index: '93'
           fence: ${{ steps.collect.outputs.fence_93 }}
           run-key: ${{ steps.collect.outputs.run_key_93 }}
-          dry-run: 'true'
-      - name: Seal and check item 94
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 94
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_94 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1109,8 +1113,8 @@ jobs:
           item-index: '94'
           fence: ${{ steps.collect.outputs.fence_94 }}
           run-key: ${{ steps.collect.outputs.run_key_94 }}
-          dry-run: 'true'
-      - name: Seal and check item 95
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 95
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_95 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1120,8 +1124,8 @@ jobs:
           item-index: '95'
           fence: ${{ steps.collect.outputs.fence_95 }}
           run-key: ${{ steps.collect.outputs.run_key_95 }}
-          dry-run: 'true'
-      - name: Seal and check item 96
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 96
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_96 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1131,8 +1135,8 @@ jobs:
           item-index: '96'
           fence: ${{ steps.collect.outputs.fence_96 }}
           run-key: ${{ steps.collect.outputs.run_key_96 }}
-          dry-run: 'true'
-      - name: Seal and check item 97
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 97
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_97 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1142,8 +1146,8 @@ jobs:
           item-index: '97'
           fence: ${{ steps.collect.outputs.fence_97 }}
           run-key: ${{ steps.collect.outputs.run_key_97 }}
-          dry-run: 'true'
-      - name: Seal and check item 98
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 98
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_98 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1153,8 +1157,8 @@ jobs:
           item-index: '98'
           fence: ${{ steps.collect.outputs.fence_98 }}
           run-key: ${{ steps.collect.outputs.run_key_98 }}
-          dry-run: 'true'
-      - name: Seal and check item 99
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
+      - name: Seal and check or upload item 99
         if: ${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_99 == 'true' }}
         uses: isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9
         with:
@@ -1164,8 +1168,9 @@ jobs:
           item-index: '99'
           fence: ${{ steps.collect.outputs.fence_99 }}
           run-key: ${{ steps.collect.outputs.run_key_99 }}
-          dry-run: 'true'
+          dry-run: ${{ matrix.mode == 'check' && 'true' || 'false' }}
       - name: Judge every bundle with ingest's checks
+        if: matrix.mode == 'check'
         env:
           LANE: ${{ matrix.lane }}
           ATTEMPT_ID: ${{ steps.items.outputs.attempt_id }}

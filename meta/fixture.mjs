@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Helpers for the pull-request fixture run (.github/workflows/meta-fixture.yml).
 //
-//   node meta/fixture.mjs items <lane>
+//   node meta/fixture.mjs items <lane> [check|upload]
 //     Prints shard_id, attempt_id and items (three of our own repositories) as
 //     step outputs.
 //   node meta/fixture.mjs judge <lane> <bundle-dir> <out-dir>
@@ -22,7 +22,7 @@ import { parseInputs } from './lib/common.mjs';
 
 export const FIXTURE_SUBJECTS = Object.freeze(['isokron-ai/mcp-check', 'isokron-ai/tool-qa', 'isokron-ai/mcp-writecheck-action']);
 
-export function fixtureInputs(lane, env = process.env) {
+export function fixtureInputs(lane, env = process.env, mode = 'check') {
   const run = /^\d+$/.test(env.GITHUB_RUN_ID ?? '') ? env.GITHUB_RUN_ID : '0';
   const attempt = /^\d+$/.test(env.GITHUB_RUN_ATTEMPT ?? '') ? env.GITHUB_RUN_ATTEMPT : '1';
   const items = FIXTURE_SUBJECTS.map((subject, i) => ({
@@ -30,7 +30,7 @@ export function fixtureInputs(lane, env = process.env) {
     run_key: createHash('sha256').update(`${lane}\n${subject}\n${run}`).digest('hex'),
     fence: i + 1,
   }));
-  return { shard_id: `fixture-${lane}-${run}`, attempt_id: `fixture-${lane}-${run}-${attempt}`, items: JSON.stringify(items) };
+  return { shard_id: `fixture-${lane}-${mode}-${run}`, attempt_id: `fixture-${lane}-${mode}-${run}-${attempt}`, items: JSON.stringify(items) };
 }
 
 export async function judge({ lane, bundleDir, outDir, env = process.env, registry, write = (s) => process.stdout.write(s) }) {
@@ -71,8 +71,8 @@ export async function judge({ lane, bundleDir, outDir, env = process.env, regist
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
-  if (argv[0] === 'items' && argv.length === 2 && /^meta-(github|registry)$/.test(argv[1])) {
-    const o = fixtureInputs(argv[1], env);
+  if (argv[0] === 'items' && (argv.length === 2 || (argv.length === 3 && /^(check|upload)$/.test(argv[2]))) && /^meta-(github|registry)$/.test(argv[1])) {
+    const o = fixtureInputs(argv[1], env, argv[2] ?? 'check');
     process.stdout.write(`shard_id=${o.shard_id}\nattempt_id=${o.attempt_id}\nitems=${o.items}\n`);
     return 0;
   }

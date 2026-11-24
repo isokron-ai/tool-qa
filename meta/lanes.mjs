@@ -14,12 +14,20 @@ const GITHUB = {
   version: gh.VERSION,
   settings: gh.SETTINGS,
   needsToken: true,
+  // Stages the known-answer facts come from: a passing problem there makes the control unavailable, not failed.
+  factStages: ['graphql', 'contributors'],
   minIntervalMs: {},
   async collect({ http, repos, token, budget = gh.createBudget(), deadline = () => false, log = () => {}, now = () => new Date() }) {
     const raw = await gh.collect({ http, repos, token, budget, deadline, log });
     const out = new Map();
     for (const [repo, entry] of raw) {
-      out.set(repo, gh.subjectOutput({ ...entry, observedAt: now().toISOString() }));
+      let o;
+      try {
+        o = gh.subjectOutput({ ...entry, observedAt: now().toISOString() });
+      } catch {
+        o = gh.subjectErrorOutput('map');
+      }
+      out.set(repo, o);
     }
     return out;
   },
@@ -45,13 +53,21 @@ const REGISTRY = {
   version: reg.VERSION,
   settings: reg.SETTINGS,
   needsToken: false,
+  factStages: ['mcp_registry', 'npm'],
   minIntervalMs: reg.MIN_INTERVAL_MS,
   async collect({ http, repos, deadline = () => false, log = () => {}, seed = new Map(), now = () => new Date(), concurrency = 4 }) {
     const out = new Map();
     await mapLimit(repos, concurrency, async (repo, i) => {
       if (deadline()) return;
-      const c = await reg.collectSubject(http, repo, { seed });
-      const o = reg.subjectOutput(c, now().toISOString());
+      let o;
+      try {
+        const c = await reg.collectSubject(http, repo, { seed });
+        o = reg.subjectOutput(c, now().toISOString());
+      } catch (err) {
+        // One subject's data never fails the shard (R-META-01).
+        log(`subject ${i}: failed (${err?.name ?? 'Error'}); recorded as its own skip`);
+        o = reg.subjectErrorOutput();
+      }
       out.set(repo, { ...o, sha: null });
       log(`subject ${i}: ${Object.entries(o.stages).map(([k, s]) => `${k}=${s}`).join(' ')}`);
     });

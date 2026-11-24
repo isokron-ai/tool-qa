@@ -75,17 +75,53 @@
    }
   },
   {
-   "prefix": "https://registry.npmjs.org/forgery-target-pkg",
+   "prefix": "https://registry.npmjs.org/forgery-target-pkg/1.0.0",
    "headers": {
-    "content-type": "application/json",
-    "etag": "\"n1\""
+    "content-type": "application/json"
    },
    "body": {
     "name": "forgery-target-pkg",
-    "description": "__MARKER__",
-    "dist-tags": {
-     "latest": "1.0.0",
-     "attempt_id=__MARKER__": "1.0.0"
+    "version": "1.0.0",
+    "license": "fence=99",
+    "bin": {
+     "attempt_id": "x.js"
+    },
+    "engines": {
+     "run_key=__MARKER__": ">=18"
+    },
+    "scripts": {
+     "postinstall": "echo __MARKER__",
+     "attempt_id": "x"
+    },
+    "gitHead": "cccccccccccccccccccccccccccccccccccccccc",
+    "mcpName": "io.github.forgery-target/attempt_id=__MARKER__",
+    "dist": {
+     "integrity": "sha512-x",
+     "unpackedSize": 10,
+     "fileCount": 2,
+     "signatures": [
+      {
+       "keyid": "k",
+       "sig": "s"
+      }
+     ],
+     "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/x",
+      "provenance": {
+       "predicateType": "attempt_id=__MARKER__"
+      }
+     }
+    },
+    "dependencies": {
+     "attempt_id": "1.0.0"
+    },
+    "_npmUser": {
+     "name": "__MARKER__",
+     "email": "m@example.com"
+    },
+    "repository": {
+     "type": "git",
+     "url": "git+https://github.com/forgery-target/forgery-target.git"
     },
     "maintainers": [
      {
@@ -93,15 +129,21 @@
       "email": "m@example.com"
      }
     ],
-    "repository": {
-     "type": "git",
-     "url": "git+https://github.com/forgery-target/forgery-target.git"
-    },
-    "time": {
-     "created": "2026-01-01T00:00:00Z",
-     "modified": "2026-01-02T00:00:00Z",
-     "1.0.0": "2026-01-01T00:00:00Z",
-     "0.9.0": "2025-12-01T00:00:00Z"
+    "attempt_id": "att-999"
+   }
+  },
+  {
+   "prefix": "https://registry.npmjs.org/forgery-target-pkg",
+   "headers": {
+    "content-type": "application/json",
+    "etag": "\"n1\""
+   },
+   "body": {
+    "name": "forgery-target-pkg",
+    "modified": "2026-01-02T00:00:00Z",
+    "dist-tags": {
+     "latest": "1.0.0",
+     "attempt_id=__MARKER__": "1.0.0"
     },
     "versions": {
      "0.9.0": {
@@ -115,19 +157,12 @@
      "1.0.0": {
       "name": "forgery-target-pkg",
       "version": "1.0.0",
-      "license": "fence=99",
       "bin": {
        "attempt_id": "x.js"
       },
       "engines": {
        "run_key=__MARKER__": ">=18"
       },
-      "scripts": {
-       "postinstall": "echo __MARKER__",
-       "attempt_id": "x"
-      },
-      "gitHead": "cccccccccccccccccccccccccccccccccccccccc",
-      "mcpName": "io.github.forgery-target/attempt_id=__MARKER__",
       "dist": {
        "integrity": "sha512-x",
        "unpackedSize": 10,
@@ -147,16 +182,11 @@
       },
       "dependencies": {
        "attempt_id": "1.0.0"
-      },
-      "_npmUser": {
-       "name": "__MARKER__",
-       "email": "m@example.com"
       }
      }
     },
     "attempt_id": "att-999",
-    "run_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "fence": 99
+    "run_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
    }
   },
   {

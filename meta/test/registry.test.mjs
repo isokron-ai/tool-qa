@@ -49,11 +49,12 @@ test('npm: versions, publish dates, deprecations and provenance are kept; mainta
   const [doc] = by('npm_version_doc');
   assert.equal(doc.package, '@isokron/mcp-check');
   assert.equal(doc.repository_matches_subject, true);
-  assert.equal(doc.created_at, '2026-11-19T05:55:56.351Z');
+  assert.equal(doc.created_at, '2026-11-19T05:55:56Z');
+  assert.equal(doc.dates_source, 'deps.dev');
   assert.equal(doc.deprecated_versions_count, 1);
   assert.equal(doc.latest.version, '1.3.1');
   assert.deepEqual(doc.latest.engines, [{ name: 'node', range: '>=20' }]);
-  assert.deepEqual(by('npm_maintainer_count_and_change')[0], { package: '@isokron/mcp-check', count: 1 }, 'the count only: no change flag, no names');
+  assert.deepEqual(by('npm_maintainer_count_and_change')[0], { package: '@isokron/mcp-check', count: 1, basis: 'latest_version_document' }, 'the count only: no change flag, no names');
   assert.equal(by('npm_attestations')[0].provenance_present, true);
   assert.equal(by('npm_attestations')[0].recent_with_provenance, 2);
   const text = JSON.stringify(sanitize(o.records));

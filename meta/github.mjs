@@ -14,15 +14,22 @@
 //   Scorecard one call per repository to api.scorecard.dev (most answer 404:
 //             the public dataset covers few repositories).
 //
-// Budgets: no GraphQL query is sent when fewer than `graphqlReserve` points
-// remain, and no REST call when fewer than `restReserve` requests remain or
-// after `restCap` counted calls in this shard. The other workflows of this
-// repository share the same hourly limit. What did not run is recorded as a
-// retryable `rate_limited` skip for that stage, so ingest sends the item back
-// for a later try (worker-kit README, "skips").
+// Budgets (R-META-03): the reserve is a share of the token's hourly limit as
+// GitHub reports it (x-ratelimit-limit, GraphQL rateLimit.limit): 25 %, and
+// never under 300. No REST call starts when the requests left, less those
+// already in flight, would fall under the reserve, nor after `restCap` counted
+// calls in this shard; no GraphQL query starts under the GraphQL reserve. The
+// pump, ingest, the watchdog and history-popularity use the same job token in
+// this repository, so they draw on the same hourly bucket; the reserve is
+// what leaves them room. What did not run is recorded as a retryable
+// `rate_limited` skip for that stage, so ingest sends the item back for a
+// later try (worker-kit README, "skips").
+//
+// A subject whose data makes the lane throw is recorded as that subject's own
+// skip, never a failed shard (R-META-01).
 
-import { FetchProblem, mapLimit } from './lib/http.mjs';
-import { bool, daysBetween, int, median, record, str, textDigest, time } from './lib/common.mjs';
+import { FetchProblem, mapLimit, readJsonCapped } from './lib/http.mjs';
+import { bool, daysBetween, int, median, record, skipFor, str, textDigest, time } from './lib/common.mjs';
 
 export const LANE = 'meta-github';
 export const VERSION = '1.0.0';
@@ -79,7 +86,7 @@ export function buildQuery(repos) {
     decl.push(`$o${i}: String!`, `$n${i}: String!`);
     body.push(`  r${i}: repository(owner: $o${i}, name: $n${i}) { ...R }`);
   });
-  const query = `query(${decl.join(', ')}) {\n  rateLimit { cost remaining resetAt }\n${body.join('\n')}\n}\n${REPO_FRAGMENT}`;
+  const query = `query(${decl.join(', ')}) {\n  rateLimit { cost limit remaining resetAt }\n${body.join('\n')}\n}\n${REPO_FRAGMENT}`;
   return { query, variables: vars };
 }
 
@@ -89,31 +96,43 @@ export function githubRateLimited(res) {
   return res.headers.get('x-ratelimit-remaining') === '0' || res.headers.get('retry-after') !== null;
 }
 
+/** The reserve for a limit: `share` of it, at least `min` (the limit unknown: `min`). */
+export function reserveFor(limit, { share = 0.25, min = 300 } = {}) {
+  return Number.isFinite(limit) && limit > 0 ? Math.max(min, Math.ceil(limit * share)) : min;
+}
+
 /** Shared accounting of GitHub's limits for one shard. */
-export function createBudget({ restReserve = 200, restCap = 400, graphqlReserve = 50 } = {}) {
+export function createBudget({ restCap = 400, reserveShare = 0.25, reserveMin = 300 } = {}) {
+  const opts = { share: reserveShare, min: reserveMin };
   return {
-    restReserve, restCap, graphqlReserve,
-    rest: { remaining: null, reset: null, counted: 0, not_modified: 0 },
-    graphql: { remaining: null, reset: null, cost: 0, queries: 0 },
+    restCap,
+    rest: { limit: null, remaining: null, reset: null, counted: 0, not_modified: 0, in_flight: 0 },
+    graphql: { limit: null, remaining: null, reset: null, cost: 0, queries: 0, in_flight: 0 },
+    get restReserve() { return reserveFor(this.rest.limit, opts); },
+    get graphqlReserve() { return reserveFor(this.graphql.limit, opts); },
     noteRest(res) {
-      const rem = Number(res.headers.get('x-ratelimit-remaining'));
-      if (res.headers.get('x-ratelimit-remaining') !== null && Number.isFinite(rem)) this.rest.remaining = rem;
+      const num = (h) => (res.headers.get(h) === null ? NaN : Number(res.headers.get(h)));
+      if (Number.isFinite(num('x-ratelimit-remaining'))) this.rest.remaining = num('x-ratelimit-remaining');
+      if (Number.isFinite(num('x-ratelimit-limit'))) this.rest.limit = num('x-ratelimit-limit');
       const reset = res.headers.get('x-ratelimit-reset');
       if (reset) this.rest.reset = reset;
       if (res.status === 304) this.rest.not_modified++;
       else this.rest.counted++;
     },
     restAllowed() {
-      if (this.rest.counted >= this.restCap) return 'the shard reached its REST cap';
-      if (this.rest.remaining !== null && this.rest.remaining < this.restReserve) return 'GitHub REST requests left this hour are below the reserve';
+      if (this.rest.counted + this.rest.in_flight >= this.restCap) return 'the shard reached its REST cap';
+      if (this.rest.remaining !== null && this.rest.remaining - this.rest.in_flight - 1 < this.restReserve) return 'GitHub REST requests left this hour are below the reserve';
       return null;
     },
     graphqlAllowed() {
-      if (this.graphql.remaining !== null && this.graphql.remaining < this.graphqlReserve) return 'GitHub GraphQL points left this hour are below the reserve';
+      if (this.graphql.remaining !== null && this.graphql.remaining - this.graphql.in_flight - 1 < this.graphqlReserve) return 'GitHub GraphQL points left this hour are below the reserve';
       return null;
     },
   };
 }
+
+/** Thrown when GitHub refuses the token itself: a harness problem, not a subject's. */
+export class TokenRefused extends Error {}
 
 function authHeaders(token) {
   return token ? { authorization: `Bearer ${token}` } : {};
@@ -127,29 +146,31 @@ export async function graphqlBatch(http, { repos, token, budget }) {
   const stop = budget.graphqlAllowed();
   if (stop) throw new FetchProblem('rate_limited', stop);
   const { query, variables } = buildQuery(repos);
-  const res = await http.request(`${API}/graphql`, {
-    method: 'POST',
-    headers: { ...authHeaders(token), 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ query, variables }),
-    rateLimitCheck: githubRateLimited,
-  });
+  budget.graphql.in_flight++;
+  let res;
+  try {
+    res = await http.request(`${API}/graphql`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ query, variables }),
+      rateLimitCheck: githubRateLimited,
+    });
+  } finally {
+    budget.graphql.in_flight--;
+  }
   budget.graphql.queries++;
   if (res.status !== 200) {
     await res.body?.cancel?.().catch(() => {});
-    if (res.status === 401) throw new Error('GitHub GraphQL refused the token (HTTP 401)');
+    if (res.status === 401) throw new TokenRefused('GitHub GraphQL refused the token (HTTP 401)');
     throw new FetchProblem(res.status === 403 ? 'rate_limited' : 'upstream_unavailable', `GraphQL HTTP ${res.status}`, { status: res.status });
   }
-  let doc;
-  try {
-    doc = await res.json();
-  } catch {
-    throw new FetchProblem('upstream_unavailable', 'GraphQL answer is not JSON');
-  }
+  const doc = await readJsonCapped(res, http.maxBodyBytes, 'GraphQL');
   const errors = Array.isArray(doc?.errors) ? doc.errors : [];
   if (errors.some((e) => e?.type === 'RATE_LIMITED' || e?.type === 'RATE_LIMIT')) throw new FetchProblem('rate_limited', 'GraphQL rate limit');
   if (!doc?.data || typeof doc.data !== 'object') throw new FetchProblem('upstream_unavailable', 'GraphQL answered without data');
   const rl = doc.data.rateLimit;
   if (rl && Number.isFinite(rl.remaining)) budget.graphql.remaining = rl.remaining;
+  if (rl && Number.isFinite(rl.limit)) budget.graphql.limit = rl.limit;
   if (rl && Number.isFinite(rl.cost)) budget.graphql.cost += rl.cost;
   if (rl?.resetAt) budget.graphql.reset = rl.resetAt;
   const notFound = new Set(errors.filter((e) => e?.type === 'NOT_FOUND').map((e) => (Array.isArray(e.path) ? e.path[0] : null)));
@@ -175,11 +196,15 @@ export function lastPage(link) {
 async function rest(http, url, { token, budget, extract, version }) {
   const stop = budget.restAllowed();
   if (stop) throw new FetchProblem('rate_limited', stop);
-  const out = await http.getSummary(url, {
-    extract, version, headers: { ...GH_HEADERS, ...authHeaders(token) }, rateLimitCheck: githubRateLimited,
-  });
-  if (out.res) budget.noteRest(out.res);
-  return out;
+  budget.rest.in_flight++;
+  try {
+    return await http.getSummary(url, {
+      extract, version, headers: { ...GH_HEADERS, ...authHeaders(token) }, rateLimitCheck: githubRateLimited,
+      onResponse: (res) => budget.noteRest(res),
+    });
+  } finally {
+    budget.rest.in_flight--;
+  }
 }
 
 /** The three REST reads for one repository. Each is { status, value } or { problem }. */
@@ -383,7 +408,21 @@ function stageOf(r) {
  * Observation records, skips and a results summary for one subject.
  * @param {{graph: {status: string, node?: object, problem?: string}, rest?: object, scorecard?: object, observedAt: string}} p
  */
-export function subjectOutput({ graph, rest = {}, scorecard, observedAt }) {
+export const FIELDS = Object.freeze(['repo_core', 'repo_owner_type', 'repo_popularity', 'owner_org_facts', 'releases_summary', 'issues_prs_summary',
+  'contributors_counts', 'security_posture', 'branch_rules_public', 'community_profile', 'workflow_health']);
+
+/** The output for a subject whose data made the lane throw: every field null, one skip that is not retried. */
+export function subjectErrorOutput(stage = 'collect') {
+  return {
+    records: FIELDS.map((f) => record(f, null, 'this subject\'s data could not be read (the lane failed on it)')),
+    skips: [{ stage, reason: 'upstream_unavailable', retryable: false }],
+    stages: { [stage]: 'subject_error' },
+    sha: null,
+  };
+}
+
+export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }) {
+  if (error) return subjectErrorOutput();
   const records = [];
   const skips = [];
   const stages = {};
@@ -391,9 +430,8 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt }) {
   if (graph.status !== 'ok') {
     const why = graph.status === 'not_found' ? 'GitHub has no public repository with this name'
       : graph.problem ? `GitHub GraphQL did not answer for this shard (${graph.problem})` : 'GitHub GraphQL returned an error for this repository';
-    for (const f of ['repo_core', 'repo_owner_type', 'repo_popularity', 'owner_org_facts', 'releases_summary', 'issues_prs_summary',
-      'contributors_counts', 'security_posture', 'branch_rules_public', 'community_profile', 'workflow_health']) records.push(record(f, null, why));
-    if (graph.problem) skips.push({ stage: 'graphql', reason: graph.problem, retryable: true });
+    for (const f of FIELDS) records.push(record(f, null, why));
+    if (graph.problem) skips.push(skipFor('graphql', graph.problem));
     else if (graph.status === 'error') skips.push({ stage: 'graphql', reason: 'upstream_unavailable', retryable: true });
   } else {
     const g = graphFacts(graph.node, observedAt);
@@ -410,7 +448,7 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt }) {
     stages.contributors = stageOf(c);
     if (c?.problem) {
       records.push(record('contributors_counts', null, `not read: ${c.problem}`));
-      skips.push({ stage: 'contributors', reason: c.problem, retryable: true });
+      skips.push(skipFor('contributors', c.problem));
     } else if (c && (c.status === 200 || c.status === 304)) {
       records.push(record('contributors_counts', { accounts: c.value.accounts, anonymous_included: false, basis: 'rest_contributors_link_header' }));
     } else if (c?.status === 204) {
@@ -421,7 +459,7 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt }) {
 
     const p = rest.pvr;
     stages.private_vulnerability_reporting = stageOf(p);
-    if (p?.problem) skips.push({ stage: 'private_vulnerability_reporting', reason: p.problem, retryable: true });
+    if (p?.problem) skips.push(skipFor('private_vulnerability_reporting', p.problem));
     records.push(record('security_posture', {
       ...g.security_posture,
       private_vulnerability_reporting: p && (p.status === 200 || p.status === 304) ? p.value.enabled : null,
@@ -429,7 +467,7 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt }) {
 
     const r = rest.rules;
     stages.branch_rules = stageOf(r);
-    if (r?.problem) skips.push({ stage: 'branch_rules', reason: r.problem, retryable: true });
+    if (r?.problem) skips.push(skipFor('branch_rules', r.problem));
     records.push(record('branch_rules_public', {
       branch: g.default_branch,
       rulesets: r && (r.status === 200 || r.status === 304) ? r.value : null,
@@ -440,7 +478,7 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt }) {
   stages.scorecard = !scorecard ? 'not_run' : scorecard.status === 404 ? 'not_in_dataset' : stageOf(scorecard);
   if (scorecard?.problem) {
     records.push(record('scorecard_api_result', null, `not read: ${scorecard.problem}`));
-    skips.push({ stage: 'scorecard', reason: scorecard.problem, retryable: true });
+    skips.push(skipFor('scorecard', scorecard.problem));
   } else if (scorecard && (scorecard.status === 200 || scorecard.status === 304)) {
     records.push(record('scorecard_api_result', { available: true, source: 'api.scorecard.dev', ...scorecard.value }));
   } else if (scorecard) {
@@ -464,19 +502,29 @@ export async function collect({ http, repos, token, budget, deadline = () => fal
     try {
       ({ byRepo } = await graphqlBatch(http, { repos: batch, token, budget }));
     } catch (err) {
-      if (!(err instanceof FetchProblem)) throw err;
-      log(`graphql batch ${i / GRAPHQL_BATCH}: ${err.code}`);
-      for (const repo of batch) out.set(repo, { graph: { status: 'problem', problem: err.code } });
+      if (err instanceof TokenRefused) throw err;
+      const code = err instanceof FetchProblem ? err.code : null;
+      log(`graphql batch ${i / GRAPHQL_BATCH}: ${code ?? 'error'}`);
+      // A batch the lane cannot read is a skip for its subjects, never a failed shard (R-META-01).
+      for (const repo of batch) out.set(repo, code ? { graph: { status: 'problem', problem: code } } : { error: true });
       continue;
     }
     await mapLimit(batch, concurrency, async (repo) => {
-      const graph = byRepo.get(repo);
-      const entry = { graph };
-      if (graph.status === 'ok') {
-        entry.rest = await restReads(http, repo, graph.node.defaultBranchRef?.name ?? null, { token, budget });
+      // The deadline is checked per subject, not per batch (R-META-04).
+      if (deadline()) return;
+      try {
+        const graph = byRepo.get(repo);
+        const entry = { graph };
+        if (graph.status === 'ok') {
+          entry.rest = await restReads(http, repo, graph.node.defaultBranchRef?.name ?? null, { token, budget });
+        }
+        entry.scorecard = await scorecardRead(http, repo);
+        out.set(repo, entry);
+      } catch (err) {
+        if (err instanceof TokenRefused) throw err;
+        log(`a subject failed (${err?.name ?? 'Error'}); recorded as its own skip`);
+        out.set(repo, { error: true });
       }
-      entry.scorecard = await scorecardRead(http, repo);
-      out.set(repo, entry);
     });
   }
   return out;

@@ -93,17 +93,33 @@ export function registryRoutes() {
       ],
       metadata: { count: 3 },
     },
+    // npm's abbreviated document (the lane asks for application/vnd.npm.install-v1+json).
     'https://registry.npmjs.org/@isokron%2Fmcp-check': {
       name: '@isokron/mcp-check',
+      modified: '2026-11-22T19:50:22.127Z',
       'dist-tags': { latest: '1.3.1', placeholder: '0.0.0-placeholder.0' },
-      maintainers: [{ name: 'someone', email: 'person@maintainer-mail.net' }],
-      repository: { type: 'git', url: 'git+https://github.com/isokron-ai/mcp-check.git' },
-      time: { created: '2026-11-19T05:55:56.351Z', modified: '2026-11-22T19:50:22.127Z', '0.0.0-placeholder.0': '2026-11-19T05:57:12.212Z', '1.0.0': '2026-11-19T06:13:23.858Z', '1.3.1': '2026-11-22T19:50:21.781Z' },
       versions: {
+        '0.0.0-stage': { version: '0.0.0-stage', dist: {} },
         '0.0.0-placeholder.0': { version: '0.0.0-placeholder.0', deprecated: 'Placeholder, not a release.', dist: {} },
         '1.0.0': { version: '1.0.0', dist: { integrity: 'sha512-x', attestations: { url: 'https://registry.npmjs.org/-/npm/v1/attestations/x', provenance: { predicateType: 'https://slsa.dev/provenance/v1' } } } },
-        '1.3.1': { version: '1.3.1', license: 'MIT', bin: { 'mcp-check': 'bin/cli.mjs' }, engines: { node: '>=20' }, scripts: { test: 'node --test' }, gitHead: 'f'.repeat(40), mcpName: 'io.github.isokron-ai/mcp-check', _npmUser: { name: 'someone', email: 'person@maintainer-mail.net' }, dist: { integrity: 'sha512-y', unpackedSize: 1000, fileCount: 12, signatures: [{ keyid: 'k', sig: 's' }], attestations: { url: 'https://registry.npmjs.org/-/npm/v1/attestations/y', provenance: { predicateType: 'https://slsa.dev/provenance/v1' } } } },
+        '1.3.1': { version: '1.3.1', bin: { 'mcp-check': 'bin/cli.mjs' }, engines: { node: '>=20' }, dist: { integrity: 'sha512-y', unpackedSize: 1000, fileCount: 12, signatures: [{ keyid: 'k', sig: 's' }], attestations: { url: 'https://registry.npmjs.org/-/npm/v1/attestations/y', provenance: { predicateType: 'https://slsa.dev/provenance/v1' } } } },
       },
+    },
+    // The latest version's own document.
+    'https://registry.npmjs.org/@isokron%2Fmcp-check/1.3.1': {
+      name: '@isokron/mcp-check', version: '1.3.1', license: 'MIT', bin: { 'mcp-check': 'bin/cli.mjs' }, engines: { node: '>=20' }, scripts: { test: 'node --test' },
+      gitHead: 'f'.repeat(40), mcpName: 'io.github.isokron-ai/mcp-check', repository: { type: 'git', url: 'git+https://github.com/isokron-ai/mcp-check.git' },
+      maintainers: [{ name: 'someone', email: 'person@maintainer-mail.net' }], _npmUser: { name: 'someone', email: 'person@maintainer-mail.net' },
+      dist: { integrity: 'sha512-y', unpackedSize: 1000, fileCount: 12, signatures: [{ keyid: 'k', sig: 's' }], attestations: { url: 'https://registry.npmjs.org/-/npm/v1/attestations/y', provenance: { predicateType: 'https://slsa.dev/provenance/v1' } } },
+    },
+    // deps.dev's version list: the publish dates.
+    'https://api.deps.dev/v3/systems/NPM/packages/%40isokron%2Fmcp-check': {
+      versions: [
+        { versionKey: { version: '0.0.0-stage' }, publishedAt: '2026-11-19T05:55:56Z', isDefault: false },
+        { versionKey: { version: '0.0.0-placeholder.0' }, publishedAt: '2026-11-19T05:57:12Z', isDefault: false, isDeprecated: true },
+        { versionKey: { version: '1.0.0' }, publishedAt: '2026-11-19T06:13:23Z', isDefault: false },
+        { versionKey: { version: '1.3.1' }, publishedAt: '2026-11-22T19:50:21Z', isDefault: true },
+      ],
     },
   };
 }

@@ -173,3 +173,12 @@ export function record(field, value, why) {
   if (value === null || value === undefined) return { field, value: null, why: why ?? 'not available' };
   return { field, value };
 }
+
+/**
+ * The skip for a stage that did not run: an answer over the size cap is not
+ * retried (policy_excluded); a rate limit or an outage is (R-META-01).
+ */
+export function skipFor(stage, code) {
+  if (code === 'too_large') return { stage, reason: 'policy_excluded' };
+  return { stage, reason: code === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', retryable: true };
+}

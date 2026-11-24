@@ -9,7 +9,9 @@
 //   GITHUB_TOKEN                  meta-github only: the job's own token (public reads)
 //   META_CACHE_FILE               optional: the conditional-request cache to load and save
 //   META_DEADLINE_MINUTES         optional: start no subject after this many minutes (default 22)
-//   META_REST_RESERVE, META_REST_CAP, META_GRAPHQL_RESERVE   optional GitHub budget settings
+//   META_REST_CAP                 optional: counted REST calls per shard (default 400)
+//   META_RESERVE_PERCENT, META_RESERVE_MIN   optional: the GitHub reserve, a share of the
+//                                 hourly limit (default 25 %), at least META_RESERVE_MIN (300)
 //   GITHUB_OUTPUT                 step outputs: has_<i>, fence_<i>, run_key_<i> for every item
 //
 // Writes <out-dir>/<i>/bundle/ (observations/, results/, controls/, raw/, logs/)
@@ -17,8 +19,12 @@
 //
 // Order: the known-answer control (live) and a forgery control (offline) run
 // first; if either does not give its expected outcome, nothing is written and
-// the exit code is 3, so no bundle is uploaded. Then every subject is read.
-// A subject that fails never fails the run: its bundle records skips.
+// the exit code is 3, so no bundle is uploaded. If the known-answer read was
+// stopped by a rate limit or an outage, no subject is read: every item gets a
+// bundle with the forgery control and one retryable skip, so ingest sends it
+// back later without counting it against the item (R-META-02). Then every
+// subject is read. A subject that fails never fails the run: its bundle
+// records skips.
 //
 // Exit codes: 0 bundles written; 2 bad inputs or usage; 3 a control failed or
 // a harness error.
@@ -70,9 +76,9 @@ export async function runShard({
   const token = lane.needsToken ? (env.GITHUB_TOKEN || null) : null;
   if (lane.needsToken && !token) throw new InputError('GITHUB_TOKEN is required for meta-github');
   const budget = createBudget({
-    restReserve: numberEnv(env, 'META_REST_RESERVE', 200),
     restCap: numberEnv(env, 'META_REST_CAP', 400),
-    graphqlReserve: numberEnv(env, 'META_GRAPHQL_RESERVE', 50),
+    reserveShare: numberEnv(env, 'META_RESERVE_PERCENT', 25) / 100,
+    reserveMin: numberEnv(env, 'META_RESERVE_MIN', 300),
   });
   const cache = createCache({ path: env.META_CACHE_FILE || null, now: clock });
   const http = createHttp({ fetch: f, cache, now: clock, minIntervalMs: lane.minIntervalMs, ...(sleep ? { sleep } : {}) });
@@ -82,14 +88,14 @@ export async function runShard({
 
   // Controls first: a lane that fails them reports nothing.
   const known = await knownAnswerControl(lane, { http, token, budget, ...(knownAnswerSpec ? { spec: knownAnswerSpec } : {}) });
-  if (known.control.observed !== known.control.expected) throw new ControlFailure(`the known-answer control gave ${known.control.observed}`);
+  if (!known.unavailable && known.control.observed !== known.control.expected) throw new ControlFailure(`the known-answer control gave ${known.control.observed}`);
   const firstForgery = await forgeryControl(lane, { marker: marker() });
   if (firstForgery.control.observed !== firstForgery.control.expected) throw new ControlFailure(`the forgery control gave ${firstForgery.control.observed}`);
-  log(`controls: known-answer ${known.control.observed}, forgery ${firstForgery.control.observed}`);
+  log(`controls: known-answer ${known.unavailable ? `unavailable (${known.unavailable})` : known.control.observed}, forgery ${firstForgery.control.observed}`);
 
   const repos = [...new Set(input.items.map((x) => x.repo).filter(Boolean))];
   const deadline = () => clock() - t0 > deadlineMin * 60_000;
-  const results = await lane.collect({ http, repos, token, budget, deadline, seed, now, log });
+  const results = known.unavailable ? new Map() : await lane.collect({ http, repos, token, budget, deadline, seed, now, log });
   const finishedAt = now().toISOString();
 
   const shardApi = {
@@ -107,7 +113,10 @@ export async function runShard({
     if (forgery.control.observed !== forgery.control.expected) throw new ControlFailure(`the forgery control gave ${forgery.control.observed}`);
     let o;
     let outcome;
-    if (!item.repo) {
+    if (known.unavailable) {
+      o = { records: [], skips: [{ stage: 'known_answer', reason: known.unavailable, retryable: true }], stages: { known_answer: known.unavailable }, sha: null };
+      outcome = 'known_answer_unavailable';
+    } else if (!item.repo) {
       o = { records: [], skips: [{ stage: 'collect', reason: 'policy_excluded' }], stages: { collect: 'not_a_github_repository' }, sha: null };
       outcome = 'not_a_github_repository';
     } else if (!results.has(item.repo)) {
@@ -141,7 +150,7 @@ export async function runShard({
       started_at: startedAt,
       finished_at: finishedAt,
       skips: o.skips,
-      controls: [known.control, forgery.control],
+      controls: known.unavailable ? [forgery.control] : [known.control, forgery.control],
     };
     writeFileSync(join(dir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
     outputs.push({ index: i, fence: item.fence, run_key: item.run_key, outcome });
