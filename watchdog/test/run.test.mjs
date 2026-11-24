@@ -8,6 +8,7 @@ import { runWatchdog } from '../run.mjs';
 import { parseBody } from '../health.mjs';
 import { openState } from '../../state/db.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
+import { backed, greenStatus } from '../../test/lib/conformance.mjs';
 
 const REPO = 'isokron-ai/tool-qa';
 const MIN = 60_000;
@@ -59,6 +60,8 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
     apiUrl: API,
     log: () => {},
     stateDir: dir,
+    readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
+    verifyConformanceRun: backed,
     mintToken: async (args) => {
       mints.push(args);
       return { token: 'ghs_synthetic_app_token', expiresAt: c.t + 3_600_000 };
@@ -173,5 +176,109 @@ test('a failed pump dispatch is reported in the issue instead of failing the run
   const c = out.checks.find((x) => x.id === 'pump-dispatch');
   assert.equal(c.status, 'red');
   assert.match(c.summary, /422/);
+  w.cleanup();
+});
+
+test('R-WD-01: the sandbox breaker is on the health issue: red while it holds an enabled lane, amber with none enabled, green when it passed', async () => {
+  const lanes = (enabled) => ({
+    'live-probe': { enabled, runs_untrusted: true, sandbox_sha: 'a'.repeat(40) },
+    writecheck: { enabled: false, runs_untrusted: true, sandbox_sha: null },
+    'scan-static': { enabled: true, runs_untrusted: false },
+  });
+  // Green.
+  let w = world({ seed: () => {} });
+  w.opts.workerWorkflows = lanes(true);
+  let out = await runWatchdog(w.opts);
+  let b = out.checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(b.status, 'green');
+  assert.match(b.summary, /^closed: sandbox conformance passed 60 minutes ago on ubuntu24\/20261117\.1, gVisor 20261116\.0$/);
+  assert.equal(b.link, 'https://github.com/isokron-ai/mcp-surface-corpus/actions/runs/1');
+  w.cleanup();
+  // Red: stale, with live-probe enabled.
+  w = world({ seed: () => {} });
+  w.opts.workerWorkflows = lanes(true);
+  w.opts.readConformance = async () => ({ status: greenStatus(w.c.t - 40 * 3_600_000) });
+  out = await runWatchdog(w.opts);
+  b = out.checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(b.status, 'red');
+  assert.match(b.summary, /^open \(stale\): the pump holds live-probe: the last sandbox conformance pass is from 40\.0 hours ago/);
+  assert.equal(out.overall, 'red');
+  assert.equal(parseBody(w.issues[0].body).checks.find((c) => c.id === 'sandbox-breaker').status, 'red');
+  w.cleanup();
+  // Amber: unreadable, nothing untrusted enabled.
+  w = world({ seed: () => {} });
+  w.opts.workerWorkflows = lanes(false);
+  w.opts.readConformance = async () => { throw new Error('socket hang up'); };
+  out = await runWatchdog(w.opts);
+  b = out.checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(b.status, 'amber');
+  assert.match(b.summary, /^open \(unreadable\): would hold live-probe, writecheck \(none enabled\): the conformance status cannot be read: socket hang up/);
+  w.cleanup();
+});
+
+test('R-WD-01: the watchdog fetches the conformance status itself, with no token', async () => {
+  const w = world({ seed: () => {} });
+  delete w.opts.readConformance;
+  w.opts.workerWorkflows = { 'live-probe': { enabled: true, runs_untrusted: true, sandbox_sha: 'a'.repeat(40) } };
+  const seen = [];
+  const inner = w.opts.fetch;
+  w.opts.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url);
+    if (url.hostname === 'github.com') {
+      seen.push({ url: url.href, auth: new Headers(init.headers ?? {}).get('authorization') });
+      return new Response(JSON.stringify(greenStatus(w.c.t - 2 * 3_600_000)), { status: 200 });
+    }
+    return inner(input, init);
+  };
+  const out = await runWatchdog(w.opts);
+  assert.deepEqual(seen, [{ url: 'https://github.com/isokron-ai/mcp-surface-corpus/releases/download/conformance/conformance-status.json', auth: null }]);
+  assert.equal(out.checks.find((c) => c.id === 'sandbox-breaker').status, 'green');
+  w.cleanup();
+});
+
+test('R-WD-03: the health issue shows amber while an enabled lane pins another sandbox commit than the nightly tested', async () => {
+  const w = world({ seed: () => {} });
+  w.opts.workerWorkflows = { 'live-probe': { enabled: true, runs_untrusted: true, sandbox_sha: 'b'.repeat(40) }, writecheck: { enabled: true, runs_untrusted: true, sandbox_sha: null } };
+  const out = await runWatchdog(w.opts);
+  const b = out.checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(b.status, 'amber');
+  assert.match(b.summary, /^closed, but the nightly tested sandbox aaaaaaaaaaaa and live-probe pins bbbbbbbbbbbb, writecheck pins none: sandbox conformance passed/);
+  w.cleanup();
+});
+
+test('R-WD-07: the watchdog judges with what the pump remembered: a rollback is unreadable, and a run already verified is not looked up again', async () => {
+  const at = Date.parse('2026-03-02T11:00:00Z');
+  const lanes = { 'live-probe': { enabled: true, runs_untrusted: true, sandbox_sha: 'a'.repeat(40) } };
+  const t = new Date(at).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const remembered = { newest: { run_id: 9, run_attempt: 1, checked_at: t, started_at: t, updated_at: t }, verified: { run_id: 9, run_attempt: 1, checked_at: t, started_at: t, updated_at: t } };
+  // Remembered run 9; the file now says run 1: a rollback.
+  let w = world({ seed: (db, c) => db.setKv('pump.conformance', remembered, { now: c.t }) });
+  w.opts.workerWorkflows = lanes;
+  const rolled = (await runWatchdog(w.opts)).checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(rolled.status, 'red');
+  assert.match(rolled.summary, /open \(unreadable\): the pump holds live-probe: the conformance status went back to run 1 attempt 1, older than run 9 attempt 1/);
+  w.cleanup();
+  // Run 9 itself: verified already, so no lookup.
+  w = world({ seed: (db, c) => db.setKv('pump.conformance', remembered, { now: c.t }) });
+  w.opts.workerWorkflows = lanes;
+  w.opts.readConformance = async () => ({ status: { ...greenStatus(at), run_id: 9, run_attempt: 1 } });
+  w.opts.verifyConformanceRun = async () => { throw new Error('must not be looked up'); };
+  const out = await runWatchdog(w.opts);
+  assert.equal(out.checks.find((c) => c.id === 'sandbox-breaker').status, 'green');
+  w.cleanup();
+});
+
+test('R-WD-13: a workflows.json the pump cannot load is a red config check; the watchdog still writes the issue', async () => {
+  const w = world({ seed: () => {} });
+  w.opts.workerWorkflows = undefined;
+  w.opts.loadWorkerConfig = () => {
+    throw new Error('pump/workflows.json: live-probe: enabled must be true or false');
+  };
+  const out = await runWatchdog(w.opts);
+  const c = out.checks.find((x) => x.id === 'config');
+  assert.equal(c.status, 'red');
+  assert.match(c.summary, /the pump cannot load its config, so it dispatches nothing: pump\/workflows\.json: live-probe: enabled must be true or false/);
+  assert.equal(out.overall, 'red');
+  assert.equal(w.issues.length, 1, 'the issue is still written');
   w.cleanup();
 });
