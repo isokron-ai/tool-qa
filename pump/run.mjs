@@ -385,7 +385,11 @@ export async function cancelSuccessor({ successorFile, repo, mint, fetch, apiUrl
   try {
     const { token } = await mint({ repositories: [String(repo).split('/')[1]], permissions: { actions: 'write' } });
     const client = createClient({ token, fetch, apiUrl, budget, now, sleep });
-    await client.request('POST', `/repos/${repo}/actions/runs/${runId}/cancel`, { essential: true, allow: [409] });
+    const res = await client.request('POST', `/repos/${repo}/actions/runs/${runId}/cancel`, { essential: true, allow: [409] });
+    if (res.status === 409) {
+      say(`pump: the successor run ${runId} could not be cancelled (HTTP 409: it already finished or cannot be cancelled now)`);
+      return false;
+    }
     say(`pump: cancelled the successor run ${runId}; the schedule and the watchdog start the pump again`);
     return true;
   } catch (err) {

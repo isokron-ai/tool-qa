@@ -288,7 +288,8 @@ an earlier rejection into an acceptance.
 completed. The lease's expiry is checked against it instead of `now` when it is
 earlier, so a run that finished in time is not `lease_expired` because the pump
 looked later (R-CHAOS-02). A newer lease still makes the fence stale. The
-pump's ingest passes the run's `updated_at`; the manual re-ingest passes none.
+pump's ingest passes the run's `updated_at`, or the item's artifact
+`created_at` when that is later (R-CHAOS-10); the manual re-ingest passes none.
 
 Every call is kept as an attempt, accepted or not; a rejected result never
 overwrites an accepted one. When the attempt is current, its lease is released.

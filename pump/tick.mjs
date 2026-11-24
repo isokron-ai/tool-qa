@@ -53,16 +53,24 @@ export function planShards(due, workflows, { openByWorkflow = new Map() } = {}) 
   return shards;
 }
 
+const SENT_RE = /\/actions\/workflows\/[^/]+\/(dispatches|runs)$/;
+
 /**
  * A dispatch that failed in a way that does not say whether GitHub acted on it:
- * a server error or a network failure on the POST. A refusal (4xx), a rate
- * limit and our own budget never sent anything that started a run.
+ * a server error or a network failure on the dispatch POST itself, or on the
+ * poll for its run that follows a POST GitHub accepted. Anything before the
+ * POST (re-reading the ref, minting the token) sent nothing (R-CHAOS-08); nor
+ * did a refusal (4xx), a rate limit or our own budget.
  */
-function ambiguous(err) {
+export function ambiguous(err) {
   if (err instanceof BudgetExceededError || err?.name === 'BudgetExceededError') return false;
-  const status = Number(err?.status);
   if (err?.name !== 'GitHubError') return false;
-  return status === 0 || status >= 500;
+  const status = Number(err?.status);
+  if (!(status === 0 || status >= 500)) return false;
+  const method = String(err.method ?? '').toUpperCase();
+  const path = String(err.path ?? '');
+  if (!SENT_RE.test(path)) return false;
+  return path.endsWith('/dispatches') ? method === 'POST' : method === 'GET';
 }
 
 function stopReason(err) {

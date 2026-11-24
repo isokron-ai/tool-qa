@@ -250,7 +250,23 @@ encrypted to another key, or from newer code) also cancels the successor it
 dispatched, so the chain stops instead of failing once a minute; the schedule
 and the watchdog try again every 30 minutes or so, each a red run, until a
 person fixes it (R-CHAOS-03). A passing GitHub error while pulling does not
-stop the chain. To start afresh on purpose, delete the snapshots first. The workflow
+stop the chain.
+
+To start from an empty state on purpose, keep the snapshots (they are the only
+way back) and put a fresh state in place by hand instead (R-CHAOS-11). With
+the pump switched off (`LANE_PUMP_ENABLED=false`) and no pump run going:
+
+```sh
+node --input-type=module -e "import('./state/db.mjs').then((m) => m.openState('fresh.sqlite').close())"
+GITHUB_TOKEN=<a token that may write this repository's releases> \
+  node scripts/state-asset.mjs push --file fresh.sqlite --force --repo isokron-ai/tool-qa
+```
+
+The push encrypts to `state/state.pub`; `--force` is needed because there was
+no pull. Then switch the pump back on. Do not delete the snapshots to get past
+the refusal.
+
+The workflow
 [`state-snapshot.yml`](../.github/workflows/state-snapshot.yml) keeps
 versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
 

@@ -109,10 +109,12 @@ One tick:
 
 The dispatch is written before it is sent, so a pump that dies mid-send leaves
 a pending dispatch that simply expires. A send GitHub refused (a 4xx) closes
-the dispatch and frees its leases and slot at once; one that failed with a
-server or network error may have started a run anyway, so it stays pending
-like a send the pump died after: ingest finds the run by name, or the lease
-expires (R-CHAOS-05). Tokens for worker repositories are minted
+the dispatch and frees its leases and slot at once; so does any failure before
+the dispatch request goes out (re-reading the ref, minting the token;
+R-CHAOS-08). A dispatch request, or the poll for its run right after, that
+failed with a server or network error may have started a run anyway, so that
+dispatch stays pending like a send the pump died after: ingest finds the run
+by name, or the lease expires (R-CHAOS-05). Tokens for worker repositories are minted
 per repository from the loop's GitHub App with `actions: write` only to
 dispatch, and `actions: read` only for ingest
 ([`pump/app-token.mjs`](../pump/app-token.mjs)). The state asset itself is

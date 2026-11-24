@@ -140,11 +140,27 @@ function normalizeRecord(answer, requested) {
   return { accepted: answer.accepted, reason: answer.reason ?? null };
 }
 
+/**
+ * When the result was in, for the store's lease check (R-CHAOS-02): the run's
+ * completion, or the item's artifact upload if that is later (R-CHAOS-10).
+ * null when the run's completion is not known (the store then uses now).
+ */
+export function resultInAt(completedAt, artifactCreatedAt) {
+  const done = completedAt === null || completedAt === undefined ? NaN : (typeof completedAt === 'number' ? completedAt : Date.parse(completedAt));
+  if (!Number.isFinite(done)) return null;
+  const art = artifactCreatedAt ? Date.parse(artifactCreatedAt) : NaN;
+  return Number.isFinite(art) ? Math.max(done, art) : done;
+}
+
 function wrap({ getAttempt, recordResult, close, now, completedAt }) {
   return {
     kind: 'state',
     getAttempt: (id) => normalizeAttempt(getAttempt(id)),
-    recordResult: (r) => normalizeRecord(recordResult({ ...r, ...(now ? { now: now() } : {}), ...(completedAt != null ? { completedAt } : {}) }), r),
+    recordResult: (r) => {
+      const { artifactCreatedAt, ...rest } = r;
+      const inAt = resultInAt(completedAt, artifactCreatedAt);
+      return normalizeRecord(recordResult({ ...rest, ...(now ? { now: now() } : {}), ...(inAt !== null ? { completedAt: inAt } : {}) }), r);
+    },
     close,
   };
 }
