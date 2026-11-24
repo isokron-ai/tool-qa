@@ -238,6 +238,71 @@ push state by hand or run the manual re-ingest workflow, first switch the pump
 off (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going. The
 watchdog only downloads a copy and never pushes.
 
+## Subjects: where they come from
+
+The due list works on the `subjects` table. Today its only source is the seed
+list, [`history/seed-v1.json`](../history/seed-v1.json): 997 GitHub
+repositories, drawn as described in
+[`history/seed/README.md`](../history/seed/README.md).
+[`pump/subjects.mjs`](../pump/subjects.mjs) loads it at the start of every pump
+run, inside the pump (the one writer), before the first tick. The log line is
+`pump: subjects: ...`.
+
+- **Cheap and idempotent.** The seed file's sha256 and the loader's mapping
+  version are kept in kv as `subjects.seed`. When both match, nothing is
+  written (`pump: subjects: seed-v1 already loaded (997 subjects)`).
+  Otherwise every seed subject is upserted in one transaction.
+- **What is written.** id `owner/name` (what the scan-static worker takes),
+  kind `github`, source `seed-v1` (set when the subject is first seen), and a
+  tier. The commit SHA is left empty: the scan-static worker reads the head of
+  the default branch itself. A SHA or digest set by another writer is kept.
+- **A seed that cannot be read or is malformed** (duplicate id, an id that is
+  not `owner/name`, an unknown population) is refused whole. Nothing is
+  written, the subjects already in the state stay, and the run fails (red)
+  with `pump: subjects: seed not loaded, ...`.
+
+**Tiers.** From the seed's own population labels:
+
+| Seed label | Subjects | Tier | Why |
+|---|---|---|---|
+| `T0` (our five repositories) | 5 | T0 | Our own servers: the tier that runs first and most often. |
+| `gold14` (the 14 Go and Rust servers) and `reference` (`modelcontextprotocol/servers`) | 15 | T1 | Calibration subjects: vendor-official or reference servers whose results we check our tools against, refreshed at least weekly. They come right after T0 in a first pass, as the gold-set stratum does in the design. |
+| `sample` with 100 or more stars in the seed | 48 | T2 | Popular community servers: refreshed at least every 14 days. |
+| `sample` with fewer than 100 stars | 929 | T3 | The long tail: refreshed at least every 30 days. |
+
+The star count is the one recorded in the seed, so a subject's tier does not
+move with its live star count. Star bucket is one of the sample's strata, so
+the different cadences stay within strata and the sample's weights still hold.
+
+**No SHA, so cadence only.** With no SHA, a subject's run_key does not move
+when the repository changes, so it is due again only when its last result is
+older than the tier's max age (`pump/tiers.json`). Where a tier's cell has no
+max age of its own (T0 scan-static: "every push"), `unversioned_max_age_days`
+applies to a subject with no SHA and no digest: 1 day for T0, then 7, 14, 30
+and 90 days for T1 to T4. Without it, T0 would never be scanned again after
+its first result. A new tool version in `pump/workflows.json` still makes
+every subject due at once.
+
+**Leaving the seed.** A subject removed from a later seed is not deleted; its
+results and history stay. It is marked retired (`subjects.retired_at`), the
+due list skips it, and its last results simply grow older from then on. It
+becomes active again if a later seed lists it. Only subjects first seen from a
+seed (`source` `seed-v...`) are retired this way.
+
+**Refreshing.** Edit or rebuild the seed (`history/seed/README.md`) and merge.
+The next pump run sees the new hash and loads it. To re-apply the same file
+after a change to the tier mapping, bump `MAPPING_VERSION` in
+`pump/subjects.mjs`. To see the result without dispatching anything, pull the
+state and run `node pump/run.mjs --plan --state state/state.sqlite` (the plan
+reads the state as pushed; the seed is loaded by the next pump run).
+
+**First pass.** With scan-static on (shard size 25, at most 3 open shards) and
+`LOOP_SLOTS=3`, the first tick finds all 997 subjects due (`first_sight`) and
+sends three full shards of 25: our five, the 15 calibration subjects and the
+first T2 subjects first. Later ticks send nothing until results free a slot,
+so a full pass takes 14 rounds of up to 75, each about as long as one shard runs
+(at most about 30 minutes for 25 subjects), roughly 7 hours.
+
 ## The pump
 
 `.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
