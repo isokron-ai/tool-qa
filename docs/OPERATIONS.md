@@ -238,6 +238,71 @@ push state by hand or run the manual re-ingest workflow, first switch the pump
 off (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going. The
 watchdog only downloads a copy and never pushes.
 
+## Subjects: where they come from
+
+The due list works on the `subjects` table. Today its only source is the seed
+list, [`history/seed-v1.json`](../history/seed-v1.json): 997 GitHub
+repositories, drawn as described in
+[`history/seed/README.md`](../history/seed/README.md).
+[`pump/subjects.mjs`](../pump/subjects.mjs) loads it at the start of every pump
+run, inside the pump (the one writer), before the first tick. The log line is
+`pump: subjects: ...`.
+
+- **Cheap and idempotent.** The seed file's sha256 and the loader's mapping
+  version are kept in kv as `subjects.seed`. When both match, nothing is
+  written (`pump: subjects: seed-v1 already loaded (997 subjects)`).
+  Otherwise every seed subject is upserted in one transaction.
+- **What is written.** id `owner/name` (what the scan-static worker takes),
+  kind `github`, source `seed-v1` (set when the subject is first seen), and a
+  tier. The commit SHA is left empty: the scan-static worker reads the head of
+  the default branch itself. A SHA or digest set by another writer is kept.
+- **A seed that cannot be read or is malformed** (duplicate id, an id that is
+  not `owner/name`, an unknown population) is refused whole. Nothing is
+  written, the subjects already in the state stay, and the run fails (red)
+  with `pump: subjects: seed not loaded, ...`.
+
+**Tiers.** From the seed's own population labels:
+
+| Seed label | Subjects | Tier | Why |
+|---|---|---|---|
+| `T0` (our five repositories) | 5 | T0 | Our own servers: the tier that runs first and most often. |
+| `gold14` (the 14 Go and Rust servers) and `reference` (`modelcontextprotocol/servers`) | 15 | T1 | Calibration subjects: vendor-official or reference servers whose results we check our tools against, refreshed at least weekly. They come right after T0 in a first pass, as the gold-set stratum does in the design. |
+| `sample` with 100 or more stars in the seed | 48 | T2 | Popular community servers: refreshed at least every 14 days. |
+| `sample` with fewer than 100 stars | 929 | T3 | The long tail: refreshed at least every 30 days. |
+
+The star count is the one recorded in the seed, so a subject's tier does not
+move with its live star count. Star bucket is one of the sample's strata, so
+the different cadences stay within strata and the sample's weights still hold.
+
+**No SHA, so cadence only.** With no SHA, a subject's run_key does not move
+when the repository changes, so it is due again only when its last result is
+older than the tier's max age (`pump/tiers.json`). Where a tier's cell has no
+max age of its own (T0 scan-static: "every push"), `unversioned_max_age_days`
+applies to a subject with no SHA and no digest: 1 day for T0, then 7, 14, 30
+and 90 days for T1 to T4. Without it, T0 would never be scanned again after
+its first result. A new tool version in `pump/workflows.json` still makes
+every subject due at once.
+
+**Leaving the seed.** A subject removed from a later seed is not deleted; its
+results and history stay. It is marked retired (`subjects.retired_at`), the
+due list skips it, and its last results simply grow older from then on. It
+becomes active again if a later seed lists it. Only subjects first seen from a
+seed (`source` `seed-v...`) are retired this way.
+
+**Refreshing.** Edit or rebuild the seed (`history/seed/README.md`) and merge.
+The next pump run sees the new hash and loads it. To re-apply the same file
+after a change to the tier mapping, bump `MAPPING_VERSION` in
+`pump/subjects.mjs`. To see the result without dispatching anything, pull the
+state and run `node pump/run.mjs --plan --state state/state.sqlite` (the plan
+reads the state as pushed; the seed is loaded by the next pump run).
+
+**First pass.** With scan-static on (shard size 25, at most 3 open shards) and
+`LOOP_SLOTS=3`, the first tick finds all 997 subjects due (`first_sight`) and
+sends three full shards of 25: our five, the 15 calibration subjects and the
+first T2 subjects first. Later ticks send nothing until results free a slot,
+so a full pass takes 14 rounds of up to 75, each about as long as one shard runs
+(at most about 30 minutes for 25 subjects), roughly 7 hours.
+
 ## The pump
 
 `.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
@@ -295,6 +360,8 @@ To start it:
    it exists in its repository and uploads one result bundle per item
    ([`worker-kit/README.md`](../worker-kit/README.md)). Until then the pump
    has nothing to dispatch.
+   A workflow that runs third-party code also needs `"runs_untrusted": true`
+   and a passing nightly sandbox status ("The sandbox breaker" below).
 3. Set `LOOP_SLOTS` (for example 5) and `LOOP_ENABLED=true`.
 4. Run the pump by hand once, or wait for the schedule.
 
@@ -317,6 +384,105 @@ To stop it:
 A running pump run notices none of these until its next start; cancel it from
 the Actions tab if it must stop at once. Its dispatches stay in the state, and
 their leases expire as usual.
+
+## The sandbox breaker
+
+Lanes that run third-party code (servers, builds) run it only inside the
+sandbox of `isokron-ai/mcp-surface-corpus`. That repository runs the sandbox
+self test and its mutation matrix every night (`conformance-nightly.yml`, 03:41
+UTC, whatever the loop's switches say) and publishes the result as a small
+public file, readable without a token:
+
+```
+https://github.com/isokron-ai/mcp-surface-corpus/releases/download/conformance/conformance-status.json
+```
+
+The pump reads it on every tick that may dispatch a workflow that runs
+third-party code (one GET each 150 seconds). The breaker is **open** while the
+status is:
+
+| Reason | Means |
+|---|---|
+| `red` | The last nightly run failed: `ok` is not true, or the self test or the mutations did not pass. |
+| `stale` | The last pass is more than 36 hours old (or the file claims a time more than 10 minutes ahead). |
+| `unreadable` | The file could not be fetched (after one retry), is over 16 KiB (reading stops there), is not JSON, or is not a well-formed status. Also: it names an older run (or attempt) than the newest verified run, a rollback; or its run does not back it (below). |
+
+Every status is checked against its run before anything is remembered from
+it: the Actions API must show that run attempt as a `conformance-nightly.yml`
+run in `isokron-ai/mcp-surface-corpus` on `main`, started by `schedule` or by
+hand, of the very commit the status names, with the status's `checked_at`
+inside the run's own times; and that commit must be on `main` (`GET
+/compare/main...<sha>` is `identical` or `behind`), so a tag named `main`
+does not pass. A red status needs that identity; a green one also needs the
+run to have succeeded. Only then does the run become the newest seen (so a
+forged status, red or green, cannot move the rollback memory). A green status
+is aged by its run's start, not its own `checked_at`, so a replay of an old
+green with a fresh date is still stale.
+
+The lookups (`GET .../actions/runs/<id>/attempts/<n>` and the compare) send the
+job token to `api.github.com` only, for its own rate budget; the reads are
+public. A run is looked up once and remembered in the state
+(`pump.conformance`: the newest verified run, and the verified green with its
+start and end times). For a minute or so after the nightly publishes, its run
+is still finishing and the breaker reads `unreadable`; it closes on the next
+tick after the run ends.
+
+**Resetting the memory.** Only verified runs are remembered, so this should
+never be needed. If `pump.conformance` ever holds a run that keeps the breaker
+open wrongly (for example the corpus repository was recreated and its run ids
+started again), delete the key: pause the pump (`LANE_PUMP_ENABLED=false`) and
+wait until no pump run is going, pull the state ("State encryption" above),
+then
+
+```sh
+node -e 'import("./state/db.mjs").then(({ openState }) => { const db = openState("state/state.sqlite"); db.deleteKv("pump.conformance"); db.close(); })'
+GITHUB_TOKEN=... GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs push
+```
+
+and turn the pump lane back on. The next tick verifies the current status
+afresh.
+
+While it is open the pump dispatches none of the workflows marked
+`"runs_untrusted": true` in `pump/workflows.json` (today `live-probe`,
+`writecheck`, `build-probe` and `scan-deep`; a workflow that does not say
+`false` counts as `true`). A workflow is enabled only when `enabled` is exactly
+`true`: the due list, the ingest key check, the breaker and the watchdog all
+use the one test (`isEnabled` in `pump/due.mjs`), and the pump refuses to load
+`pump/workflows.json` when `enabled` or `runs_untrusted` is not a real boolean.
+Which lanes are trusted is pinned by a test (`R-WD-04`), so changing a flag
+needs that test changed and a review. Source-only workflows (`scan-static`,
+`meta-github`, `meta-registry`) keep running. The run logs `pump: sandbox
+breaker open (<reason>): not dispatching <lanes>: <why>` once, keeps what it
+saw as `pump.breaker` in the state (and in `pump.last_tick`), and does not
+fail. Work already dispatched is not recalled; each such job runs the sandbox
+self test on its own runner before any target. The breaker closes by itself
+at the next pump run after a passing nightly status.
+
+Each untrusted lane names the mcp-surface-corpus commit its sandbox is pinned
+at (`sandbox_sha` in `pump/workflows.json`, `null` until it pins one). When the
+nightly tested another commit, the breaker stays closed (the nightly tests
+`main`, which moves with every commit there, so holding on every difference
+would hold the lanes after each unrelated change), the pump logs the lanes and
+records them in `pump.breaker` (`mismatch`), and the watchdog shows amber.
+Bump the lane's pin, and its `sandbox_sha`, to the tested commit.
+
+The watchdog reads the same file, judges it the same way with what the pump
+remembered, and shows it as `sandbox-breaker` on the health issue (below).
+
+To clear it:
+
+1. Open the latest `conformance-nightly` run in `mcp-surface-corpus` (the
+   health issue links it when the status names one). Red: the failing job's
+   log and its telemetry artifact say which case or mutation failed; the
+   runner image, kernel, Docker and gVisor versions are in the status file.
+2. Stale: check that `conformance-nightly.yml` is still enabled there (GitHub
+   disables scheduled workflows after 60 days without a commit) and run it by
+   hand (Actions → conformance-nightly → Run workflow).
+3. Unreadable: check that the `conformance` release and its asset
+   `conformance-status.json` exist; the nightly run makes them.
+
+There is no switch to override the breaker. To run an untrusted lane anyway,
+fix or rerun the nightly; to stop worrying about it, disable the lane.
 
 ## The GitHub App and the `loop` environment
 
@@ -378,6 +544,8 @@ person. off: switched off on purpose.
 | `slots`, `dispatches` | Rows more than 15 minutes past their expiry (red): the pump is not reaping. | See the `pump` check and the latest pump logs. |
 | `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
 | `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
+| `config` | Red: the pump cannot load `pump/workflows.json` (for example `enabled` or `runs_untrusted` is not a real boolean), so it dispatches nothing. | Fix the file; the details name the entry. |
+| `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.

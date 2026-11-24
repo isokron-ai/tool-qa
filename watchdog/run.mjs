@@ -11,6 +11,8 @@
 //   3. downloads a copy of the state asset with the job token (read-only) and
 //      reads open slots, waiting dispatches and the pump's successor result;
 //   4. evaluates the checks (watchdog/checks.mjs);
+//      It also reads the public nightly sandbox conformance status (no token;
+//      pump/breaker.mjs), the same file the pump reads for its breaker;
 //   5. dispatches pump.yml if no pump run started for 20 minutes, and
 //      re-enables loop workflows GitHub disabled for inactivity;
 //   6. rewrites the "Loop health" issue (watchdog/health.mjs).
@@ -39,6 +41,8 @@ import { openState } from '../state/db.mjs';
 import { appTokenMinter } from '../pump/app-token.mjs';
 import { ApiBudget } from '../pump/budgets.mjs';
 import { createClient, scrub } from '../pump/github.mjs';
+import { judgeConformance, pinMismatches, readConformance as readConformanceStatus, untrustedWorkflows, verifyRun } from '../pump/breaker.mjs';
+import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 
@@ -67,7 +71,7 @@ export function readState(file) {
       // now: 0 returns every dispatch still waiting, expired or not; the checks
       // decide which are stuck.
       openDispatches: db.openDispatches({ now: 0 }),
-      kv: { 'pump.successor': db.getKv('pump.successor') ?? null },
+      kv: { 'pump.successor': db.getKv('pump.successor') ?? null, 'pump.conformance': db.getKv('pump.conformance') ?? null },
     };
   } finally {
     db.close();
@@ -88,6 +92,10 @@ export async function runWatchdog({
   pull = pullState,
   stateDir,
   expected = loadExpected(),
+  readConformance,
+  verifyConformanceRun,
+  workerWorkflows,
+  loadWorkerConfig = () => loadConfig().workflows,
 } = {}) {
   const repo = env.GITHUB_REPOSITORY;
   if (!repo || !repo.includes('/')) throw new Error('GITHUB_REPOSITORY is required (owner/name)');
@@ -134,8 +142,41 @@ export async function runWatchdog({
     if (!stateDir) rmSync(dir, { recursive: true, force: true });
   }
 
+  // The sandbox breaker, as the pump sees it.
+  // A pump/workflows.json the pump cannot load is a red `config` check, not a
+  // silent watchdog (R-WD-13).
+  let wfs = {};
+  let configError = null;
+  try {
+    wfs = workerWorkflows ?? loadWorkerConfig();
+  } catch (err) {
+    configError = scrub(String(err?.message ?? err), secrets).slice(0, 300);
+  }
+  let conformance;
+  try {
+    conformance = await (readConformance ?? (() => readConformanceStatus({ fetch, sleep })))();
+  } catch (err) {
+    conformance = { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) };
+  }
+  // The same judgement as the pump's, with what the pump remembered (newest
+  // status seen, run verified); the watchdog itself writes no state.
+  const judged = await judgeConformance({
+    read: conformance,
+    now: now(),
+    memory: state?.kv?.['pump.conformance'] ?? null,
+    verify: verifyConformanceRun ?? ((status, o) => verifyRun({ fetch, status, token: env.GITHUB_TOKEN || undefined, ...o })),
+  });
+  const { memory: _m, changed: _c, ...verdict } = judged;
+  const breaker = {
+    ...verdict,
+    untrusted: untrustedWorkflows(wfs),
+    enabled: untrustedWorkflows(wfs, { enabledOnly: true }),
+    mismatch: verdict.tripped ? [] : pinMismatches(wfs, verdict.sandbox_sha),
+  };
+
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected, breaker });
+  if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
     c.summary = `could not read the state asset: ${stateError.slice(0, 200)}`;

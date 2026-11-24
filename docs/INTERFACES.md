@@ -13,6 +13,26 @@ it: the manual re-ingest workflow (`.github/workflows/ingest.yml`, which
 refuses to run while the pump lane is on and waits in the `pump` group), or a
 person by hand (docs/OPERATIONS.md).
 
+## Subjects
+
+The due list reads `db.listSubjects()` and skips retired subjects
+(`retired_at` set). The pump fills the table from the seed at start-up
+(`syncSeedSubjects(db, { now, file })` in `pump/subjects.mjs`; docs/OPERATIONS.md,
+"Subjects: where they come from"). A subject id is what the worker receives as
+`subject`: for the seed's GitHub subjects, `owner/name`. kv `subjects.seed`
+holds `{ file, source, sha256, mapping, subjects, tiers, retired, loaded_at }`
+for the last load.
+
+- `db.setSubjectVersion({ id, kind, source, tier, sha, artifactDigest, now })`
+  inserts or updates a subject and clears `retired_at`. A new sha or digest
+  moves `changed_at`; pass the current ones to keep them.
+- `db.retireSubjects({ sourcePrefix, keep, now })` retires every active
+  subject whose `source` starts with `sourcePrefix` and whose id is not in
+  `keep`. Returns the number retired.
+- A subject with no sha and no digest is refreshed on its tier's cadence:
+  `maxAgeDays(cell, subject, tiers, tierName)` in `pump/due.mjs` falls back to
+  `unversioned_max_age_days` in `pump/tiers.json` where the cell has no max age.
+
 ## Worker dispatch
 
 The pump starts a worker with a `workflow_dispatch` on the workflow named in
@@ -255,7 +275,9 @@ instead of after the lease expires. It wraps `db.closeDispatch()` and returns
 | Key | Value |
 |---|---|
 | `pump.successor` | `{ ok, at, ref, runId?, error? }` from `pump/successor.mjs` for the current run. The watchdog reports `ok: false` as red. |
-| `pump.last_tick` | The last tick's summary: due, planned, dispatched, failed, reaped, why it stopped early; `ingest` (checked, judged, recorded, outcomes, errors, why ingest stopped, or `null` if it did not run) and `blocked` (why nothing may be dispatched this run, or `null`). |
+| `pump.last_tick` | The last tick's summary: due, planned, dispatched, failed, reaped, why it stopped early; `ingest` (checked, judged, recorded, outcomes, errors, why ingest stopped, or `null` if it did not run) `blocked` (why nothing may be dispatched this run, or `null`) and `breaker` (`{ tripped, reason, held }`, or `null` when no enabled workflow runs third-party code). |
+| `pump.breaker` | The sandbox breaker as the run saw it (`pump/breaker.mjs`): `{ tripped, reason (red, stale, unreadable or null), summary, checked_at, run_url, sandbox_sha, held, mismatch: [{ lane, pins, tested }], at }`. Written when a run first judges it and whenever it changes. |
+| `pump.conformance` | What the breaker remembers across runs: `{ newest, verified }`, each `{ run_id, run_attempt, checked_at, started_at, updated_at }`: the newest run verified against the Actions API (an older status is a rollback) and the verified green (not looked up again; aged by its `started_at`). Nothing is written before a run is verified. Reset: OPERATIONS.md, "The sandbox breaker". |
 | `pump.last_run` | Start, finish, ticks, dispatched, failed and slot numbers of the last pump run. |
 | `pump.api_budget` | The pump's API budget (`ApiBudget.snapshot()`): the time of every API call in the last hour, per endpoint family, and any rate-limit block still in force. Saved before every push and restored at the start of the next run, so the hourly caps hold across runs rather than per run. |
 | `ingest.failures:<attempt_id>:<index>` | `{ count, first, last, error }`: how often the pump failed to judge that item (not counting transient errors). Removed when the item is decided; at 3 it is recorded as `ingest_error`. |
