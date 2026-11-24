@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { analyse, failuresOf, itemsFromEntries, loadSeed, main, readArchive, subjectWeight, DEFAULT_CONFIG } from '../checkin.mjs';
+import { analyse, byTime, failuresOf, itemsFromEntries, loadSeed, main, readArchive, renderMarkdown, subjectWeight, DEFAULT_CONFIG } from '../checkin.mjs';
 import { ageEncrypt } from '../../ingest/age.mjs';
 import { writeTar } from '../../worker-kit/tar.mjs';
 
@@ -116,6 +116,38 @@ test('R-CHECKIN-06: a signature holds only our own codes: a repository name in a
   for (const fp of r.fingerprints) for (const bad of ['initech', 'secret-name', 'acme', 'globex']) assert.ok(!JSON.stringify({ ...fp, evidence: undefined, example: undefined }).toLowerCase().includes(bad), `${bad} in ${fp.fingerprint}`);
 });
 
+test('R-CHECKIN-06: probes: reasons, stages and languages outside the known lists, name fragments, short names, non-ASCII names and other items\' names', () => {
+  const mk = (subject, i, extra) => ({
+    subject, lane: 'scan-static', at: '2026-11-22T00:00:0' + i + 'Z', attempt: `att-p${i}`, index: 0, run_id: 2000 + i, tools: [{ name: 'mcp-check', version: '1.3.1' }],
+    skips: [], result: { status: 'skipped', detail: 'no_tools', listing: { via: 'github' } }, server_json: 0, ...extra,
+  });
+  const probes = [
+    // a reason, a stage and a class that are a name
+    mk('acme/acme-widget-mcp', 1, { skips: [{ stage: 'acme-widget-private', reason: 'acme-widget-private', fault: 'tool' }] }),
+    // a fragment of the name inside an error name, and a list error
+    mk('acme/acme-widget-mcp-b', 2, { result: { status: 'error', detail: 'no_tools', error_name: 'AcmeWidgetFault', list_error: 'widgetmcpBroke' } }),
+    // a short name is not enough to redact a word like ValidationError
+    mk('ab/va', 3, { result: { status: 'error', error_name: 'ValidationError' } }),
+    // non-ASCII: the folded name Uni-tool is in UniTool
+    mk('Ünï-owner/Ünï-tool', 4, { result: { status: 'error', error_name: 'UniTool' } }),
+    // another item's name in this item's error
+    mk('plain/other-xyzw', 5, { result: { status: 'error', error_name: 'ZetaQuuxCrash', language_hint: 'Zeta-Quux-Lang', list: { from: 'zeta-quux', fidelity: 'zeta-fid' } } }),
+    mk('zeta/zeta-quux', 6, { result: { status: 'skipped', detail: 'no_tools' } }),
+  ];
+  const r = analyse(itemsFromEntries(entriesOf(probes)), { seed: new Map(), tierWeights });
+  const sigs = Object.fromEntries(r.fingerprints.flatMap((f) => f.evidence.map((e) => [e.subject + '#' + e.run_id, f])));
+  assert.match(sigs['acme/acme-widget-mcp#2001'].signature, /^class=<other>;/);
+  assert.equal(sigs['acme/acme-widget-mcp#2001'].component, '<other>');
+  assert.equal(sigs['acme/acme-widget-mcp#2001'].class, '<other>');
+  assert.match(sigs['acme/acme-widget-mcp-b#2002'].signature, /error=<other>;list_error=<other>/);
+  assert.match(sigs['ab/va#2003'].signature, /error=validationerror/);
+  assert.match(sigs['Ünï-owner/Ünï-tool#2004'].signature, /error=<other>/);
+  assert.match(sigs['plain/other-xyzw#2005'].signature, /error=<other>/);
+  assert.match(sigs['plain/other-xyzw#2005'].idiom, /^<other>\/<other>\/<other>$/);
+  const all = JSON.stringify(r.fingerprints.map((f) => ({ ...f, evidence: undefined, example: undefined }))).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+  for (const bad of ['widget', 'acme', 'uni-tool', 'unitool', 'zeta', 'quux']) assert.ok(!all.includes(bad), `${bad} reached a fingerprint`);
+});
+
 test('R-CHECKIN-07: every claim carries run id, attempt id and item index; the same bundle twice counts once', () => {
   const items = [...itemsFromEntries(entriesOf()), ...itemsFromEntries(entriesOf())];
   const r = analyse(items, { seed: loadSeed(SEED_FILE), tierWeights });
@@ -148,6 +180,19 @@ test('R-CHECKIN-08: the reports are written 0600 outside the input, an output in
     assert.match(bad.join(''), /must not be inside/);
     symlinkSync(input, join(out, 'link')); // a link into the input does not get round the check
     assert.equal(await main(['--plain', input, '--out-md', join(out, 'link', 'c3.md'), '--out-json', join(out, 'c3.json'), '--seed', SEED_FILE], { write: () => {} }), 2);
+    // an output file that is itself a link into the input, or a second name for a file in it, is refused and the target is untouched
+    const target = join(input, 'accepted', 'att-a', '0', 'manifest.json');
+    const keep = readFileSync(target);
+    symlinkSync(target, join(out, 'sym.md'));
+    assert.equal(await main(['--plain', input, '--out-md', join(out, 'sym.md'), '--out-json', join(out, 'c4.json'), '--seed', SEED_FILE], { write: () => {} }), 2);
+    linkSync(target, join(out, 'hard.json'));
+    assert.equal(await main(['--plain', input, '--out-md', join(out, 'c5.md'), '--out-json', join(out, 'hard.json'), '--seed', SEED_FILE], { write: () => {} }), 2);
+    assert.deepEqual(readFileSync(target), keep);
+    // a link to somewhere else is refused too (a link is how an output gets pointed at a file)
+    writeFileSync(join(dir, 'elsewhere'), 'x');
+    symlinkSync(join(dir, 'elsewhere'), join(out, 'else.md'));
+    assert.equal(await main(['--plain', input, '--out-md', join(out, 'else.md'), '--out-json', join(out, 'c6.json'), '--seed', SEED_FILE], { write: () => {} }), 2);
+    assert.equal(readFileSync(join(dir, 'elsewhere'), 'utf8'), 'x');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -181,4 +226,36 @@ test('failuresOf: a graded result with nothing missing has none; a result with n
   const items = itemsFromEntries(entriesOf());
   const clean = items.find((i) => i.subject === 'acme/clean');
   assert.deepEqual(failuresOf(clean), []);
+});
+
+test('R-CHECKIN-10: every result in a bundle is read, not only the first one with a status', () => {
+  const entries = entriesOf([fixture.items.find((i) => i.subject === 'acme/clean')]);
+  const base = entries.find((e) => e.path.endsWith('results/scan-static.json'));
+  // a second result (another lane's file) with a reader limit, sorted after the clean one
+  const second = { status: 'graded', list: { from: 'source', fidelity: 'derived', language: 'go', unresolved_names: 3, unreadable: {} }, listing: { via: 'github' } };
+  entries.push({ path: base.path.replace('scan-static.json', 'zz-extra.json'), data: Buffer.from(JSON.stringify(second)) });
+  const r = analyse(itemsFromEntries(entries), { seed: new Map(), tierWeights });
+  assert.deepEqual(r.fingerprints.map((f) => f.kind), ['reader_limit:unresolved_names']);
+});
+
+test('R-CHECKIN-11: a finished_at that does not parse sorts last, never NaN', () => {
+  assert.deepEqual(['x', '2026-11-22T00:00:00Z', '2026-11-21T00:00:00Z'].sort(byTime), ['2026-11-21T00:00:00Z', '2026-11-22T00:00:00Z', 'x']);
+  assert.equal(byTime('x', 'y'), 0);
+  const items = fixture.items.filter((i) => i.subject === 'acme/py-two').map((i) => ({ ...i, at: 'not a time' }));
+  const good = fixture.items.filter((i) => i.subject === 'globex/py-three');
+  const r = run([...items, ...good]);
+  const py = find(r, (x) => x.class === 'no_tools_found');
+  assert.equal(py.first_seen, '2026-11-20T10:02:00Z');
+  assert.equal(py.last_seen, 'not a time');
+  for (const f of r.fingerprints) assert.ok(Number.isFinite(f.impact));
+});
+
+test('R-CHECKIN-12: the Markdown says how many evidence refs are left to the JSON, and shows all when asked', () => {
+  const many = Array.from({ length: 12 }, (_, i) => ({ ...fixture.items[0], subject: `acme/many-${i}`, attempt: `att-m${i}`, index: 0, run_id: 3000 + i }));
+  const r = run(many);
+  assert.equal(r.fingerprints[0].evidence.length, 12);
+  assert.match(renderMarkdown(r, { generatedAt: 'now' }), /Evidence \(12, first 10 here, 2 more in the JSON\)/);
+  const all = renderMarkdown(r, { generatedAt: 'now', md_evidence: 12 });
+  assert.doesNotMatch(all, /more in the JSON/);
+  assert.equal([...all.matchAll(/run 30\d\d, attempt/g)].length, 12);
 });

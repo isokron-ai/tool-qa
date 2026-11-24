@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { derive, itemsFromEntries, main, outInside, readArchive, readPlain } from '../derive.mjs';
+import { derive, itemsFromEntries, main, outInside, outUnsafe, readArchive, readPlain } from '../derive.mjs';
 import { ageEncrypt } from '../../ingest/age.mjs';
 import { writeTar } from '../../worker-kit/tar.mjs';
 import { parseRegistry } from '../../ingest/registry.mjs';
@@ -240,6 +240,27 @@ test('R-DRIFT-24: --out is written 0600, and never inside the folder being read'
     assert.equal(await main(['--archive', join(dir, 'in'), '--out', join(dir, 'in', 'accepted', 'y.ndjson')], { write: () => {} }), 2);
     assert.equal(outInside(join(dir, 'in'), join(dir, 'in')), true);
     assert.equal(outInside(join(dir, 'in-sibling.ndjson'), join(dir, 'in')), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-DRIFT-26: an --out that is a link, or a second name, for a file in the folder being read is refused and the file is untouched', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'derive-link-'));
+  try {
+    const input = join(dir, 'in');
+    mkdirSync(join(input, 'accepted', 'a', '0'), { recursive: true });
+    const victim = join(input, 'accepted', 'a', '0', 'manifest.json');
+    writeFileSync(victim, 'keep');
+    mkdirSync(join(dir, 'out'));
+    symlinkSync(victim, join(dir, 'out', 'sym.ndjson'));
+    linkSync(victim, join(dir, 'out', 'hard.ndjson'));
+    for (const f of ['sym.ndjson', 'hard.ndjson']) {
+      assert.equal(outUnsafe(join(dir, 'out', f), input), true);
+      assert.equal(await main(['--plain', input, '--out', join(dir, 'out', f)], { write: () => {} }), 2);
+    }
+    assert.equal(readFileSync(victim, 'utf8'), 'keep');
+    assert.equal(outUnsafe(join(dir, 'out', 'new.ndjson'), input), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -34,16 +34,16 @@
 // could not be read.
 
 import { createHash } from 'node:crypto';
-import { chmodSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ageDecrypt } from '../ingest/age.mjs';
-import { skipFault } from '../worker-kit/contract.mjs';
+import { SKIP_REASONS, skipFault } from '../worker-kit/contract.mjs';
 import { readTar } from '../worker-kit/tar.mjs';
 import { tierFor } from '../pump/subjects.mjs';
-import { DEFAULT_IDENTITY, outInside, sealedFiles } from './derive.mjs';
+import { DEFAULT_IDENTITY, outUnsafe, sealedFiles, writeOut } from './derive.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 export const SOURCE = 'tool-qa longitudinal/checkin.mjs';
@@ -152,22 +152,50 @@ export function readPlain(dir) {
 
 // ---------------------------------------------------------------- fingerprints
 
-/** A short word from a result: kept only when it looks like one of our own codes, never free text or a name. */
+const fold = (v) => String(v).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+const flatten = (v) => fold(v).replace(/[^a-z0-9]/g, '');
+
+/**
+ * The name matcher for a set of subject ids: every case-folded NFKD token of at
+ * least 3 characters of each owner and repo (acme-widget-mcp: acme, widget, mcp),
+ * and each whole name with separators removed. Used on every free word.
+ */
+export function nameTokens(subjects) {
+  const out = new Set();
+  for (const subject of subjects) {
+    for (const part of String(subject).split('/')) {
+      const f = fold(part);
+      for (const t of f.split(/[^a-z0-9]+/)) if (t.length >= 3) out.add(t);
+      const whole = f.replace(/[^a-z0-9]/g, '');
+      if (whole.length >= 3) out.add(whole);
+    }
+  }
+  return out;
+}
+const hitsName = (value, names) => { const flat = flatten(value); for (const n of names) if (flat.includes(n)) return true; return false; };
+
+/** A closed list: the value if it is on it, else <other> (null stays null). */
+const oneOf = (v, list) => (v === null || v === undefined ? null : list.includes(v) ? v : '<other>');
+
+const ENUMS = Object.freeze({
+  stage: ['static', 'live', 'scan', 'build', 'install', 'start', 'probe', 'meta', 'registry', 'differential', 'conformance', 'bridge', 'trace'],
+  from: ['catalog', 'source', 'committed', 'snapshots', 'live', 'registry'],
+  fidelity: ['exact', 'derived', 'literal', 'names'],
+  via: ['github', 'git', 'api', 'archive', 'tarball', 'zip', 'local'],
+  language: ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'c#', 'c++', 'c', 'swift', 'php', 'ruby', 'scala', 'dart', 'elixir', 'shell', 'other'],
+  detail: ['no_tools', 'multiple_servers', 'unsupported_language', 'names_only', 'too_large', 'tool_error', 'rate_limited', 'needs_credentials', 'quarantined'],
+});
+const CLASSES = [...SKIP_REASONS];
+
+/** A free word (error name, detail, list error): only our own short codes, never a name of anything in the run. */
 function word(v, names) {
   if (v === null || v === undefined) return null;
   const s = String(v);
   if (!/^[A-Za-z][A-Za-z0-9_.-]{0,39}$/.test(s)) return '<other>';
-  const low = s.toLowerCase();
-  const flat = low.replace(/[^a-z0-9]/g, ''); // SecretNameSrvError holds secret-name-srv
-  for (const n of names) {
-    const nf = n.replace(/[^a-z0-9]/g, '');
-    if (nf.length >= 3 && flat.includes(nf)) return '<other>';
-  }
-  return low;
+  return hitsName(s, names) ? '<other>' : s.toLowerCase();
 }
-
-/** Lower-case owner and repo parts of a subject id, to keep them out of any signature. */
-const namesOf = (subject) => String(subject).toLowerCase().split('/').filter(Boolean);
+/** A code from a closed list; anything else is <other>. */
+const code = (v, list) => (v === null || v === undefined ? null : list.includes(v) ? v : '<other>');
 
 const bucketHttp = (n) => (Number.isInteger(n) && n >= 100 && n < 600 ? `${Math.floor(n / 100)}xx` : null);
 
@@ -177,17 +205,17 @@ function layoutOf(item, result) {
   const parts = [];
   if (n !== null) parts.push(`server_json:${n === 0 ? '0' : n === 1 ? '1' : 'many'}`);
   if (result?.detail === 'multiple_servers') parts.push('multi_server');
-  if (result?.listing?.via) parts.push(`via:${word(result.listing.via, []) ?? 'none'}`);
+  if (result?.listing?.via) parts.push(`via:${oneOf(result.listing.via, ENUMS.via) ?? 'none'}`);
   return parts.join(';') || 'unknown';
 }
 
 /** A language name as the reader or the seed spells it (c#, c++, go): lower-case, a short fixed alphabet. */
-const langWord = (v) => (typeof v === 'string' && /^[A-Za-z][A-Za-z0-9+#.-]{0,19}$/.test(v) ? v.toLowerCase() : null);
+const langWord = (v) => (typeof v === 'string' ? (ENUMS.language.includes(v.toLowerCase()) ? v.toLowerCase() : '<other>') : null);
 
 function idiomOf(result, seedLanguage) {
   const l = result?.list;
   const lang = langWord(l?.language ?? result?.language_hint) ?? (langWord(seedLanguage) ? `repo:${langWord(seedLanguage)}` : 'unknown');
-  return `${l ? `${word(l.from, []) ?? 'none'}/${word(l.fidelity, []) ?? 'none'}` : 'none'}/${lang}`;
+  return `${l ? `${oneOf(l.from, ENUMS.from) ?? 'none'}/${oneOf(l.fidelity, ENUMS.fidelity) ?? 'none'}` : 'none'}/${lang}`;
 }
 
 /**
@@ -195,22 +223,24 @@ function idiomOf(result, seedLanguage) {
  * A skip with a declared (or defaulted) fault outside config.faults is not ours.
  * The result's own detail word says more than an ambiguous manifest reason.
  */
-export function failuresOf(item, config = DEFAULT_CONFIG, { langOf = () => null } = {}) {
+export function failuresOf(item, config = DEFAULT_CONFIG, { langOf = () => null, names = nameTokens([item.subject]) } = {}) {
   const want = new Set(config.faults);
-  const names = namesOf(item.subject);
-  const result = [...item.results.values()].find((r) => r && typeof r.status === 'string') ?? null;
+  // Every result in the bundle is read, not only the first.
+  const results = [...item.results.values()].filter((r) => r && typeof r.status === 'string');
   const out = [];
-  const detailCls = result?.status === 'skipped' ? DETAIL_CLASS[result.detail] ?? null : null;
-  const base = { idiom: idiomOf(result, langOf(item.subject)), layout: layoutOf(item, result) };
-  const common = (cls, stage, extra) => ({
-    ...base, cls, stage,
+  const detailOf = (r) => (r.status === 'skipped' ? DETAIL_CLASS[r.detail] ?? null : null);
+  const primary = results.find((r) => detailOf(r)) ?? results.find((r) => r.status === 'error') ?? results[0] ?? null;
+  const baseFor = (r) => ({ idiom: idiomOf(r, langOf(item.subject)), layout: layoutOf(item, r) });
+  const common = (r, cls, stage, extra) => ({
+    ...baseFor(r), cls: code(cls, CLASSES), stage: code(stage, ENUMS.stage) ?? 'unknown',
     signature: [
-      `class=${cls}`, `detail=${word(result?.detail, names) ?? '-'}`, `error=${word(result?.error_name, names) ?? '-'}`,
-      `list_error=${word(typeof result?.list_error === 'string' ? result.list_error : result?.list_error?.code, names) ?? '-'}`,
-      `http=${bucketHttp(result?.http_status) ?? '-'}`, ...extra,
+      `class=${code(cls, CLASSES)}`, `detail=${code(r?.detail, ENUMS.detail) ?? '-'}`, `error=${word(r?.error_name, names) ?? '-'}`,
+      `list_error=${word(typeof r?.list_error === 'string' ? r.list_error : r?.list_error?.code, names) ?? '-'}`,
+      `http=${bucketHttp(r?.http_status) ?? '-'}`, ...extra,
     ].join(';'),
   });
 
+  const detailCls = primary ? detailOf(primary) : null;
   let usedDetail = false;
   for (const s of item.skips) {
     let cls = s.reason;
@@ -218,29 +248,32 @@ export function failuresOf(item, config = DEFAULT_CONFIG, { langOf = () => null 
     if (detailCls && AMBIGUOUS.has(s.reason)) { cls = detailCls; if (!s.fault) fault = 'tool'; usedDetail = true; }
     else if (detailCls === s.reason) usedDetail = true;
     if (!want.has(fault)) continue;
-    out.push({ ...common(cls, word(s.stage, []) ?? 'unknown', [`fault=${fault}`, `retryable=${s.retryable === true}`]), partial: false });
+    out.push({ ...common(primary, cls, s.stage, [`fault=${fault}`, `retryable=${s.retryable === true}`]), partial: false });
   }
-  if (detailCls && !usedDetail && want.has('tool')) {
-    out.push({ ...common(detailCls, 'static', ['fault=tool', 'retryable=false']), partial: false });
+  if (detailCls && !usedDetail && want.has('tool')) out.push({ ...common(primary, detailCls, 'static', ['fault=tool', 'retryable=false']), partial: false });
+  for (const r of results) {
+    if (r.status === 'error' && want.has('tool') && !out.some((f) => f.cls === 'tool_error')) {
+      out.push({ ...common(r, 'tool_error', 'static', ['fault=tool', 'retryable=false']), partial: false });
+    }
+    // A graded result that is incomplete: the reader said what it could not read.
+    if (r.status === 'graded' && want.has('tool')) {
+      const partials = [];
+      const l = r.list ?? {};
+      if (l.unresolved_names > 0) partials.push('unresolved_names');
+      if (l.registration_not_seen > 0) partials.push('registration_not_seen');
+      if (l.tools_left_out > 0) partials.push('tools_left_out');
+      for (const k of ['input_schemas', 'descriptions', 'annotations']) if (l.unreadable?.[k] > 0) partials.push(`unreadable_${k}`);
+      if (l.listing_truncated === true || r.listing?.truncated === true) partials.push('listing_truncated');
+      if (r.listing?.budget_hit === true) partials.push('budget_hit');
+      for (const p of partials) out.push({ ...common(r, 'reader_limit', 'static', [`partial=${p}`]), partial: true });
+    }
   }
-  if (result?.status === 'error' && want.has('tool') && !out.some((f) => f.cls === 'tool_error')) {
-    out.push({ ...common('tool_error', 'static', ['fault=tool', 'retryable=false']), partial: false });
-  }
-
-  // A graded result that is incomplete: the reader said what it could not read.
-  if (result?.status === 'graded' && want.has('tool')) {
-    const partials = [];
-    const l = result.list ?? {};
-    if (l.unresolved_names > 0) partials.push('unresolved_names');
-    if (l.registration_not_seen > 0) partials.push('registration_not_seen');
-    if (l.tools_left_out > 0) partials.push('tools_left_out');
-    for (const k of ['input_schemas', 'descriptions', 'annotations']) if (l.unreadable?.[k] > 0) partials.push(`unreadable_${k}`);
-    if (l.listing_truncated === true || result.listing?.truncated === true) partials.push('listing_truncated');
-    if (result.listing?.budget_hit === true) partials.push('budget_hit');
-    for (const p of partials) out.push({ ...common('reader_limit', 'static', [`partial=${p}`]), partial: true });
-  }
-  return out.map((f) => ({ ...f, tool: item.tools.join(',') || 'unknown', lane: item.lane }));
+  const safe = (v) => (/^[A-Za-z0-9@._,-]{1,80}$/.test(v) && !hitsName(v, names) ? v : '<other>');
+  return out.map((f) => ({ ...f, tool: safe(item.tools.join(',') || 'unknown'), lane: safe(item.lane) }));
 }
+
+/** Order by time; a time that does not parse sorts last (never NaN). */
+export const byTime = (a, b) => { const x = Date.parse(a); const y = Date.parse(b); const ax = Number.isFinite(x) ? x : Infinity; const ay = Number.isFinite(y) ? y : Infinity; return ax < ay ? -1 : ax > ay ? 1 : 0; };
 
 /** The fingerprint id and its parts. */
 export function fingerprintOf(f) {
@@ -286,7 +319,8 @@ export function analyse(items, { seed = new Map(), tierWeights, config: over = {
     seen.add(k);
     uniq.push(it);
   }
-  uniq.sort((a, b) => Date.parse(a.observed_at) - Date.parse(b.observed_at) || `${a.attempt_id}/${a.item_index}`.localeCompare(`${b.attempt_id}/${b.item_index}`));
+  uniq.sort((a, b) => byTime(a.observed_at, b.observed_at) || `${a.attempt_id}/${a.item_index}`.localeCompare(`${b.attempt_id}/${b.item_index}`));
+  const allNames = nameTokens(uniq.map((i) => i.subject));
   const latest = new Map();
   for (const it of uniq) latest.set(`${it.subject}\u0000${it.lane}`, it);
 
@@ -295,7 +329,7 @@ export function analyse(items, { seed = new Map(), tierWeights, config: over = {
   let failingItems = 0;
   for (const it of uniq) {
     const isLatest = latest.get(`${it.subject}\u0000${it.lane}`) === it;
-    const fl = failuresOf(it, config, { langOf: (s) => seed.get(s.toLowerCase())?.language ?? null });
+    const fl = failuresOf(it, config, { langOf: (s) => seed.get(s.toLowerCase())?.language ?? null, names: allNames });
     if (fl.length) failingItems++;
     for (const f of fl) {
       const { id, parts } = fingerprintOf(f);
@@ -321,7 +355,7 @@ export function analyse(items, { seed = new Map(), tierWeights, config: over = {
       if (!top || w > top.w || (w === top.w && subject < top.subject)) top = { subject, w, ...si };
     }
     const severity = sevOf(fp.class) * (fp.partial ? config.partial_multiplier : 1);
-    const times = fp.observations.map((o) => o.observed_at).sort((a, b) => Date.parse(a) - Date.parse(b));
+    const times = fp.observations.map((o) => o.observed_at).sort(byTime);
     const evidence = [...fp.current.values()].sort((a, b) => a.subject.localeCompare(b.subject));
     return {
       fingerprint: fp.id,
@@ -387,7 +421,7 @@ export function renderMarkdown(report, { generatedAt, md_evidence = report.confi
     if (f.example) L.push(`- Example: ${f.example.subject} (${f.example.tier}, ${f.example.stars} stars).`);
     if (f.evidence.length) {
       const shown = f.evidence.slice(0, md_evidence);
-      L.push(`- Evidence (${f.evidence.length}${f.evidence.length > shown.length ? `, first ${shown.length} here; all in the JSON` : ''}):`);
+      L.push(`- Evidence (${f.evidence.length}${f.evidence.length > shown.length ? `, first ${shown.length} here, ${f.evidence.length - shown.length} more in the JSON` : ''}):`);
       for (const e of shown) L.push(`  - ${ref(e)}`);
     }
     L.push('');
@@ -415,8 +449,8 @@ export async function main(argv = process.argv.slice(2), { write = (s) => proces
     return 2;
   }
   const input = o.archive ?? o.plain;
-  if (outInside(o['out-md'], input) || outInside(o['out-json'], input)) {
-    write('--out-md and --out-json must not be inside the folder being read (the archive is never written to)\n');
+  if (outUnsafe(o['out-md'], input) || outUnsafe(o['out-json'], input)) {
+    write('--out-md and --out-json must not be inside the folder being read, nor a link or a second name for a file in it (the archive is never written to)\n');
     return 2;
   }
   let read, seed, tierWeights, over;
@@ -438,10 +472,13 @@ export async function main(argv = process.argv.slice(2), { write = (s) => proces
   const report = analyse(read.items, { seed, tierWeights, config: over });
   const generatedAt = now().toISOString();
   const json = { source: SOURCE, generated_at: generatedAt, read: read.stats, config: report.config, summary: report.summary, fingerprints: report.fingerprints };
-  writeFileSync(o['out-json'], `${JSON.stringify(json, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(o['out-json'], 0o600);
-  writeFileSync(o['out-md'], renderMarkdown(report, { generatedAt }), { mode: 0o600 });
-  chmodSync(o['out-md'], 0o600);
+  try {
+    writeOut(o['out-json'], `${JSON.stringify(json, null, 2)}\n`);
+    writeOut(o['out-md'], renderMarkdown(report, { generatedAt }));
+  } catch (err) {
+    write(`could not write the output (${err?.code ?? err?.name ?? 'error'})\n`);
+    return 3;
+  }
   const top = Number(o.top ?? 15);
   write(`${JSON.stringify({ read: read.stats, ...report.summary }, null, 2)}\n`);
   for (const f of report.fingerprints.slice(0, top)) {
