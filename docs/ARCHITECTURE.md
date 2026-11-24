@@ -185,12 +185,14 @@ It writes the result to one pinned issue, "Loop health"
 ([`watchdog/health.mjs`](../watchdog/health.mjs)), rewriting the body in place
 and commenting only when the overall status turns red or recovers.
 
-## Archive of history artifacts
+## Archive of history artifacts and ingest outputs
 
-Workflow artifacts expire after 30 days. [`scripts/archive-pull.mjs`](../scripts/archive-pull.mjs)
-copies the history artifacts to a folder on a machine we keep, checks every
-file against its manifest's sha256, and never overwrites or deletes anything
-there. See [OPERATIONS.md](OPERATIONS.md).
+Workflow artifacts expire (history after 30 days, the sealed ingest outputs
+after 90). [`scripts/archive-pull.mjs`](../scripts/archive-pull.mjs)
+copies both to a folder on a machine we keep, checks each download against
+GitHub's digest and every history file against its manifest's sha256, keeps
+ingest outputs age-encrypted with a manifest line per artifact, and never
+overwrites or deletes anything there. See [OPERATIONS.md](OPERATIONS.md).
 
 ## State store
 
