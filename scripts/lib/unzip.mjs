@@ -48,7 +48,7 @@ function findEnd(buf) {
 /**
  * @param {Buffer} buf  the whole archive
  * @param {{maxEntries?: number, maxTotalBytes?: number}} [limits]
- * @returns {{ name: string, data: Buffer }[]}  files in archive order; folders are skipped
+ * @returns {{ name: string, data: Buffer, mode: number }[]}  files in archive order; folders are skipped
  */
 export function readZip(buf, limits = {}) {
   return scanZip(buf, limits, false).entries;
@@ -86,6 +86,7 @@ function scanZip(buf, { maxEntries = MAX_ENTRIES, maxTotalBytes = MAX_TOTAL_BYTE
   let p = cdOffset;
   for (let i = 0; i < count; i++) {
     if (p + 46 > end || buf.readUInt32LE(p) !== CENTRAL) fail(`bad central directory entry ${i} (truncated?)`);
+    const madeBy = buf.readUInt16LE(p + 4) >> 8;
     const flags = buf.readUInt16LE(p + 8);
     const method = buf.readUInt16LE(p + 10);
     const crc = buf.readUInt32LE(p + 16);
@@ -94,6 +95,7 @@ function scanZip(buf, { maxEntries = MAX_ENTRIES, maxTotalBytes = MAX_TOTAL_BYTE
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
+    const external = buf.readUInt32LE(p + 38);
     const localOffset = buf.readUInt32LE(p + 42);
     const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
     p += 46 + nameLen + extraLen + commentLen;
@@ -129,7 +131,9 @@ function scanZip(buf, { maxEntries = MAX_ENTRIES, maxTotalBytes = MAX_TOTAL_BYTE
       refused.push({ name, reason: err.message });
       continue;
     }
-    entries.push({ name, data });
+    // Unix permission and type bits, when a Unix tool made the entry (0 otherwise): callers that care
+    // (release-diff) refuse symbolic links (0o120000) and note executable bits.
+    entries.push({ name, data, mode: madeBy === 3 ? (external >>> 16) & 0xffff : 0 });
   }
   return { entries, refused };
 }

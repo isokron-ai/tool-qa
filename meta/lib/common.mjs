@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { scanText } from '../../ingest/redact.mjs';
 import { TEXT_CLAIM_RE } from '../../ingest/forgery.mjs';
 
-export const LANES = Object.freeze(['meta-github', 'meta-registry']);
+export const LANES = Object.freeze(['meta-github', 'meta-registry', 'release-diff']);
 export const MAX_ITEMS = 100;
 export const MAX_ITEMS_CHARS = 60_000;
 

@@ -104,6 +104,20 @@
       "versions": { "tool": {}, "oracle": {}, "probe": {} },
       "image_digest": null,
       "settings_state": "default"
+    },
+    "release-diff": {
+      "enabled": false,
+      "runs_untrusted": false,
+      "repo": "isokron-ai/tool-qa",
+      "file": "release-diff.yml",
+      "ref": "main",
+      "shard_size": 20,
+      "setup_minutes": 2,
+      "minutes_per_subject": 1,
+      "slots_max": 1,
+      "versions": { "tool": { "release-diff": "1.0.0" }, "oracle": {}, "probe": {} },
+      "image_digest": null,
+      "settings_state": "default"
     }
   }
 }

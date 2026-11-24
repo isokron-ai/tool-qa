@@ -72,22 +72,28 @@ export function createCache({ path = null, now = () => Date.now() } = {}) {
 }
 
 /**
- * Read a response body as text, at most `max` bytes. A larger body (by its
+ * Read a response body as bytes, at most `max` bytes. A larger body (by its
  * Content-Length, or once the stream passes the cap) is cancelled and throws
  * FetchProblem too_large; nothing past the cap is held in memory.
  */
-export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
+export async function readBytesCapped(res, max = MAX_BODY_BYTES, where = '') {
   const declared = Number(res.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > max) {
     await res.body?.cancel?.().catch(() => {});
     throw new FetchProblem('too_large', `${where}: the answer is ${declared} bytes, over the ${max}-byte cap`);
   }
-  if (!res.body) return '';
+  if (!res.body) return Buffer.alloc(0);
   const reader = res.body.getReader();
   const chunks = [];
   let total = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    let step;
+    try {
+      step = await reader.read();
+    } catch (err) {
+      throw new FetchProblem('upstream_unavailable', `${where}: the answer stopped (${err?.name === 'TimeoutError' || err?.name === 'AbortError' ? 'timed out' : 'network error'})`);
+    }
+    const { done, value } = step;
     if (done) break;
     total += value.byteLength;
     if (total > max) {
@@ -96,7 +102,14 @@ export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+}
+
+/**
+ * Read a response body as text, at most `max` bytes (readBytesCapped).
+ */
+export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
+  return (await readBytesCapped(res, max, where)).toString('utf8');
 }
 
 /** readCapped, parsed as JSON; a body that is not JSON is upstream_unavailable. */
@@ -156,9 +169,12 @@ export function createHttp({
 
   /**
    * One request with retries. Returns { status, headers, text() , json() }.
+   * `redirect` is passed to fetch ('follow' by default; release-diff uses 'manual'
+   * so it never leaves the hosts it allows), `timeoutMs` overrides the
+   * per-request time limit (it covers reading the body too).
    * Throws FetchProblem for a rate limit or an outage that outlasts the retries.
    */
-  async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck } = {}) {
+  async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck, redirect = 'follow', timeoutMs: callTimeoutMs } = {}) {
     const host = hostOf(url);
     for (let attempt = 0; ; attempt++) {
       await pace(host);
@@ -169,9 +185,9 @@ export function createHttp({
         res = await f(url, {
           method,
           body,
-          redirect: 'follow',
+          redirect,
           headers: { 'user-agent': USER_AGENT, ...headers },
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: AbortSignal.timeout(callTimeoutMs ?? timeoutMs),
         });
       } catch (err) {
         if (attempt < retries) { stats.retries++; await sleep(1000 * 2 ** attempt); continue; }

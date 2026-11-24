@@ -12,6 +12,8 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const SLOTS = 100;
+/** Item slots per lane: the shard_size in pump/workflows.json. */
+export const LANE_SLOTS = Object.freeze({ 'meta-github': 100, 'meta-registry': 100, 'release-diff': 20 });
 export const PINS = Object.freeze({
   checkout: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
   setupNode: 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0',
@@ -19,7 +21,11 @@ export const PINS = Object.freeze({
   cacheSave: 'actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0',
   // The tool-qa commit whose worker kit seals and uploads the bundles (main, with item-index).
   workerKit: 'isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9',
+  // release-diff's skips say their fault side (too_large, reader_limit, tool_error with fault tool), which the kit
+  // knows from 2ffcea1 on (R-COV-01); the same pin as mcp-check's scan-static.
+  workerKitFault: 'isokron-ai/tool-qa/worker-kit@2ffcea16117ec679398f83eefe8c6fa66d38bac6 # main at 2ffcea1 (skip fault sides)',
 });
+const kitFor = (lane) => (lane === 'release-diff' ? PINS.workerKitFault : PINS.workerKit);
 const ROOT = new URL('../', import.meta.url);
 
 const ABOUT = {
@@ -40,6 +46,16 @@ const ABOUT = {
     'No package is installed or run, so no sandbox is needed. The worker kit seals one bundle per item to the',
     'ingest key and uploads it as result-<attempt_id>-<i>.tar.age. meta/README.md says what a bundle holds.',
   ],
+  'release-diff': [
+    'Loop worker (internal): the release-diff lane. The tool-qa pump dispatches it with shard_id, attempt_id and',
+    'items (docs/INTERFACES.md, "Worker dispatch"); each item is a public GitHub repository, owner/name.',
+    'meta/run.mjs compares each npm tarball, PyPI sdist and wheel the repository publishes with the source at the',
+    'version\'s tag: tags, provenance, unexpected or differing files, install scripts, manifests. Artifacts come',
+    'only from registry.npmjs.org and files.pythonhosted.org, the source from codeload.github.com; both are read',
+    'in memory with our own archive readers and nothing from them is installed, imported or run, so no sandbox is',
+    'needed. The worker kit seals one bundle per item to the ingest key and uploads it as',
+    'result-<attempt_id>-<i>.tar.age. meta/README.md says what a bundle holds.',
+  ],
 };
 
 const SECURITY = [
@@ -50,11 +66,11 @@ const SECURITY = [
   'fails, nothing is uploaded.',
 ];
 
-function inputChecks(indent) {
+function inputChecks(indent, slots = SLOTS) {
   const p = ' '.repeat(indent);
   return [
     `${p}# Whole-string checks: a newline or control character anywhere fails the match. meta/run.mjs checks`,
-    `${p}# the items in full (JSON, 1 to ${SLOTS} entries, run_key, fence) before anything is read.`,
+    `${p}# the items in full (JSON, 1 to ${slots} entries, run_key, fence) before anything is read.`,
     `${p}id_re='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'`,
     `${p}items_re='^\\[[^[:cntrl:]]+\\]$'`,
     `${p}if [[ ! "$SHARD_ID" =~ $id_re ]]; then echo "::error::shard_id is malformed"; exit 1; fi`,
@@ -63,9 +79,9 @@ function inputChecks(indent) {
   ];
 }
 
-function kitSteps({ uses, dryRun, dryRunExpr, attemptExpr, outDir }) {
+function kitSteps({ uses, dryRun, dryRunExpr, attemptExpr, outDir, slots = SLOTS }) {
   const lines = [];
-  for (let i = 0; i < SLOTS; i++) {
+  for (let i = 0; i < slots; i++) {
     lines.push(
       `      - name: Seal ${dryRunExpr ? 'and check or upload' : dryRun ? 'and check' : 'and upload'} item ${i}`,
       `        if: \${{ !cancelled() && steps.collect.outcome == 'success' && steps.collect.outputs.has_${i} == 'true' }}`,
@@ -87,6 +103,13 @@ function kitSteps({ uses, dryRun, dryRunExpr, attemptExpr, outDir }) {
 export function workerWorkflow(lane) {
   const laneVar = `LANE_${lane.toUpperCase().replace(/-/g, '_')}_ENABLED`;
   const isGithub = lane === 'meta-github';
+  const slots = LANE_SLOTS[lane];
+  const lease = lane === 'release-diff'
+    ? ['    # Below the pump\'s lease for a shard of 20: 1.5 x (2 + 20 x 1) + 10 = 43 minutes. meta/run.mjs starts',
+      '    # no subject after 22 minutes; those not started report a retryable skip. A subject starts no download',
+      '    # after 6 minutes, and each download has 2.']
+    : ['    # Below the pump\'s lease for a shard of 100: 1.5 x (2 + 100 x 0.2) + 10 = 43 minutes. meta/run.mjs starts',
+      '    # no subject after 22 minutes; those not started report a retryable skip.'];
   return [
     ...ABOUT[lane].map((l) => `# ${l}`),
     '#',
@@ -111,7 +134,7 @@ export function workerWorkflow(lane) {
     '        required: true',
     '        type: string',
     '      items:',
-    `        description: 'JSON list of 1 to ${SLOTS} {"subject": "owner/name", "run_key": "<64 hex>", "fence": <n>}.'`,
+    `        description: 'JSON list of 1 to ${slots} {"subject": "owner/name", "run_key": "<64 hex>", "fence": <n>}.'`,
     '        required: true',
     '        type: string',
     '',
@@ -128,8 +151,7 @@ export function workerWorkflow(lane) {
     `    name: ${lane}`,
     "    if: github.repository == 'isokron-ai/tool-qa' && github.ref == 'refs/heads/main'",
     '    runs-on: ubuntu-24.04',
-    '    # Below the pump\'s lease for a shard of 100: 1.5 x (2 + 100 x 0.2) + 10 = 43 minutes. meta/run.mjs starts',
-    '    # no subject after 22 minutes; those not started report a retryable skip.',
+    ...lease,
     '    timeout-minutes: 40',
     '    permissions:',
     '      contents: read',
@@ -161,7 +183,7 @@ export function workerWorkflow(lane) {
     '          ATTEMPT_ID: ${{ inputs.attempt_id }}',
     '          ITEMS: ${{ inputs.items }}',
     '        run: |',
-    ...inputChecks(10),
+    ...inputChecks(10, slots),
     "      - if: steps.guard.outputs.proceed == 'true'",
     `        uses: ${PINS.setupNode}`,
     '        with:',
@@ -192,7 +214,7 @@ export function workerWorkflow(lane) {
     `          path: \${{ runner.temp }}/meta-cache/${lane}.json`,
     `          key: ${lane}-http-v1-\${{ github.run_id }}-\${{ github.run_attempt }}`,
     `      # One step per item slot (has_<i> is set for every dispatched item). One item's failed upload does not stop the others.`,
-    ...kitSteps({ uses: PINS.workerKit, dryRun: false, attemptExpr: '${{ inputs.attempt_id }}', outDir: 'meta-out' }),
+    ...kitSteps({ uses: kitFor(lane), dryRun: false, attemptExpr: '${{ inputs.attempt_id }}', outDir: 'meta-out', slots }),
     '',
   ].join('\n');
 }
@@ -220,6 +242,9 @@ export function fixtureWorkflow() {
     "      - 'worker-kit/**'",
     "      - 'ingest/**'",
     "      - '.github/workflows/meta-*.yml'",
+    "      - '.github/workflows/release-diff.yml'",
+    "      - 'scripts/lib/untar.mjs'",
+    "      - 'scripts/lib/unzip.mjs'",
     '',
     'permissions: {}',
     '',
@@ -272,13 +297,63 @@ export function fixtureWorkflow() {
     '          ATTEMPT_ID: ${{ steps.items.outputs.attempt_id }}',
     '          ITEMS: ${{ steps.items.outputs.items }}',
     '        run: node meta/fixture.mjs judge "$LANE" "$RUNNER_TEMP/tool-qa-result" "$RUNNER_TEMP/meta-out"',
+    ...releaseDiffFixtureJob(),
     '',
   ].join('\n');
+}
+
+/** release-diff's fixture job: our own published packages, the newer kit (skip fault sides), 20 slots. */
+function releaseDiffFixtureJob() {
+  const slots = LANE_SLOTS['release-diff'];
+  return [
+    '  # release-diff reads our own published packages (meta/fixture.mjs FIXTURE_SUBJECTS) with the kit pin that knows',
+    '  # skip fault sides; it prints each subject\'s runtime and findings.',
+    '  release-diff-fixture:',
+    '    name: fixture (release-diff, ${{ matrix.mode }})',
+    '    runs-on: ubuntu-24.04',
+    '    timeout-minutes: 30',
+    '    permissions:',
+    '      contents: read',
+    '    strategy:',
+    '      fail-fast: false',
+    '      matrix:',
+    '        mode: [check, upload]',
+    '    steps:',
+    `      - uses: ${PINS.checkout}`,
+    '        with:',
+    '          persist-credentials: false',
+    `      - uses: ${PINS.setupNode}`,
+    '        with:',
+    "          node-version: '22'",
+    '          package-manager-cache: false',
+    '      - id: items',
+    '        name: Fixture items',
+    '        env:',
+    '          MODE: ${{ matrix.mode }}',
+    '        run: node meta/fixture.mjs items release-diff "$MODE" >> "$GITHUB_OUTPUT"',
+    '      - id: collect',
+    '        name: Read the fixture subjects (real registries, no token)',
+    '        env:',
+    '          SHARD_ID: ${{ steps.items.outputs.shard_id }}',
+    '          ATTEMPT_ID: ${{ steps.items.outputs.attempt_id }}',
+    '          ITEMS: ${{ steps.items.outputs.items }}',
+    '        run: |',
+    ...inputChecks(10, slots),
+    '          node meta/run.mjs release-diff "$RUNNER_TEMP/meta-out"',
+    ...kitSteps({ uses: PINS.workerKitFault, dryRunExpr: "${{ matrix.mode == 'check' && 'true' || 'false' }}", attemptExpr: '${{ steps.items.outputs.attempt_id }}', outDir: 'meta-out', slots }),
+    '      - name: Judge every bundle with ingest\'s checks',
+    "        if: matrix.mode == 'check'",
+    '        env:',
+    '          ATTEMPT_ID: ${{ steps.items.outputs.attempt_id }}',
+    '          ITEMS: ${{ steps.items.outputs.items }}',
+    '        run: node meta/fixture.mjs judge release-diff "$RUNNER_TEMP/tool-qa-result" "$RUNNER_TEMP/meta-out"',
+  ];
 }
 
 export const FILES = Object.freeze({
   '.github/workflows/meta-github.yml': () => workerWorkflow('meta-github'),
   '.github/workflows/meta-registry.yml': () => workerWorkflow('meta-registry'),
+  '.github/workflows/release-diff.yml': () => workerWorkflow('release-diff'),
   '.github/workflows/meta-fixture.yml': () => fixtureWorkflow(),
 });
 

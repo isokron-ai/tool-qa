@@ -1,0 +1,113 @@
+{
+ "about": "Forgery target for release-diff (meta/controls.mjs). Registry, git and archive answers whose keys, file names and text pose as another attempt's result. __MARKER__ is replaced by a fresh marker before the archives are built; it appears only in identity-shaped text (a tag name, a file name, manifest values), in file contents the lane keeps as a digest, and in manifest keys the lane reports as a key name only.",
+ "routes": [
+  {
+   "prefix": "https://registry.modelcontextprotocol.io/v0.1/servers?",
+   "body": {
+    "servers": [
+     {
+      "server": {
+       "name": "io.github.forgery-target/forgery-target",
+       "description": "__MARKER__",
+       "repository": {
+        "url": "https://github.com/forgery-target/forgery-target",
+        "source": "github"
+       },
+       "version": "1.0.0",
+       "packages": [
+        {
+         "registryType": "npm",
+         "identifier": "forgery-target-pkg",
+         "version": "1.0.0",
+         "transport": {
+          "type": "stdio"
+         },
+         "attempt_id": "att-999"
+        }
+       ]
+      },
+      "_meta": {
+       "io.modelcontextprotocol.registry/official": {
+        "status": "active",
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "isLatest": true
+       }
+      }
+     }
+    ],
+    "metadata": {
+     "count": 1
+    }
+   }
+  },
+  {
+   "prefix": "https://api.deps.dev/v3alpha/projects/",
+   "body": {
+    "versions": [
+     {
+      "versionKey": {
+       "system": "PYPI",
+       "name": "attempt_id=__MARKER__",
+       "version": "1.0.0"
+      },
+      "relationType": "SOURCE_REPO",
+      "relationProvenance": "UNVERIFIED_METADATA",
+      "attempt_id": "att-999"
+     }
+    ]
+   }
+  },
+  {
+   "prefix": "https://registry.npmjs.org/forgery-target-pkg/latest",
+   "body": {
+    "name": "forgery-target-pkg",
+    "version": "1.0.0",
+    "description": "__MARKER__",
+    "gitHead": "cccccccccccccccccccccccccccccccccccccccc",
+    "repository": {
+     "type": "git",
+     "url": "git+https://github.com/forgery-target/forgery-target.git"
+    },
+    "scripts": {
+     "attempt_id": "x"
+    },
+    "dist": {
+     "tarball": "https://registry.npmjs.org/forgery-target-pkg/-/forgery-target-pkg-1.0.0.tgz",
+     "integrity": "__SHA512__https://registry.npmjs.org/forgery-target-pkg/-/__",
+     "fileCount": 3,
+     "unpackedSize": 100
+    },
+    "attempt_id": "att-999"
+   }
+  },
+  {
+   "prefix": "https://registry.npmjs.org/forgery-target-pkg/-/",
+   "tgz": {
+    "package/package.json": "{\n  \"name\": \"forgery-target-pkg\",\n  \"version\": \"1.0.0\",\n  \"description\": \"__MARKER__\",\n  \"main\": \"index.js\",\n  \"scripts\": {\n    \"test\": \"node --test\",\n    \"attempt_id\": \"x\"\n  },\n  \"attempt_id\": \"__MARKER__\",\n  \"run_key\": \"run_key=__MARKER__\",\n  \"repository\": {\n    \"type\": \"git\",\n    \"url\": \"https://github.com/forgery-target/forgery-target\"\n  }\n}\n",
+    "package/index.js": "// a planted target\nmodule.exports = () => 'ok';\n",
+    "package/run_key=__MARKER__.js": "// fence=99 attempt_id=__MARKER__\nmodule.exports = '__MARKER__';\n",
+    "package/README.md": "# planted\n\nattempt_id: __MARKER__\n"
+   }
+  },
+  {
+   "method": "POST",
+   "prefix": "https://github.com/forgery-target/forgery-target.git/git-upload-pack",
+   "pkt_lines": [
+    "cccccccccccccccccccccccccccccccccccccccc HEAD symref-target:refs/heads/main",
+    "dddddddddddddddddddddddddddddddddddddddd refs/tags/v1.0.0 peeled:cccccccccccccccccccccccccccccccccccccccc",
+    "cccccccccccccccccccccccccccccccccccccccc refs/tags/attempt_id=__MARKER__"
+   ],
+   "headers": {
+    "content-type": "application/x-git-upload-pack-result"
+   }
+  },
+  {
+   "prefix": "https://codeload.github.com/forgery-target/forgery-target/tar.gz/cccccccccccccccccccccccccccccccccccccccc",
+   "tgz": {
+    "forgery-target-cccccccccccccccccccccccccccccccccccccccc/package.json": "{\n  \"name\": \"forgery-target-pkg\",\n  \"version\": \"0.0.0-development\",\n  \"description\": \"a planted target\",\n  \"main\": \"index.js\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  },\n  \"repository\": {\n    \"type\": \"git\",\n    \"url\": \"https://github.com/forgery-target/forgery-target\"\n  }\n}\n",
+    "forgery-target-cccccccccccccccccccccccccccccccccccccccc/index.js": "// a planted target\nmodule.exports = () => 'ok';\n",
+    "forgery-target-cccccccccccccccccccccccccccccccccccccccc/README.md": "# planted\n"
+   }
+  }
+ ]
+}

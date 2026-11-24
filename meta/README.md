@@ -1,12 +1,15 @@
 # meta: the metadata lanes
 
-Two worker lanes that live in this repository, because neither runs any code
-from a subject: they read public metadata through public APIs.
+Three worker lanes that live in this repository, because none runs any code
+from a subject: two read public metadata through public APIs, and
+`release-diff` reads published packages and source archives as data
+([below](#release-diff)).
 
 | Lane | Workflow | Reads |
 |---|---|---|
 | `meta-github` | `.github/workflows/meta-github.yml` | GitHub GraphQL and REST, api.scorecard.dev |
 | `meta-registry` | `.github/workflows/meta-registry.yml` | the official MCP registry, npm, PyPI, crates.io, the Go module proxy, deps.dev |
+| `release-diff` | `.github/workflows/release-diff.yml` | npm and PyPI artifacts, their provenance, the repository's tags and source archive |
 
 The pump dispatches them like any worker (`pump/workflows.json`, shard size
 100, one slot each) with `shard_id`, `attempt_id` and `items`
@@ -186,3 +189,123 @@ is the pump's business: a worker it has already dispatched finishes its shard.
   every bundle in dry-run mode and `fixture.mjs judge` checks each one as
   ingest would; in `upload` mode the kit encrypts and uploads as the workers
   do, which measures the time per slot.
+
+## release-diff
+
+Is what a subject publishes what its source says? For each npm tarball,
+PyPI sdist and wheel a repository publishes, the lane compares the artifact
+with the source tree at the version's git tag (`release-diff.mjs`,
+`lib/diff.mjs`). It is switched off in `pump/workflows.json` until review
+switches it on; shard size 20, one slot.
+
+### What it reads, and from where
+
+| Step | Source |
+|---|---|
+| Packages | the subject's own official MCP registry entries, the seed list, deps.dev's GetProjectPackageVersions (attested links first, v3alpha), then other registry entries; at most three per ecosystem |
+| Release | the latest version (`registry.npmjs.org/<name>/latest`, `pypi.org/pypi/<name>/json`); npm's tarball, PyPI's sdist and one wheel (`py3-none-any` first) |
+| Provenance | npm SLSA v1 (`dist.attestations`) and PyPI PEP 740 (the integrity API), checked as live-probe checks them (`lib/provenance.mjs`): Sigstore's Fulcio root, a GitHub Actions workflow of the subject, the DSSE signature, the artifact's digest; plus the commit and ref the certificate names |
+| Tags | `git-upload-pack` over smart HTTP, protocol 2 `ls-refs` for `refs/tags/` and `HEAD` only (`lib/gitrefs.mjs`); no API quota |
+| Source | `codeload.github.com/<repo>/tar.gz/<commit>` |
+
+Every request goes to `ALLOWED_HOSTS` over HTTPS (registry.npmjs.org,
+pypi.org, files.pythonhosted.org, github.com, codeload.github.com,
+api.deps.dev, registry.modelcontextprotocol.io); anything else is refused
+before it is sent. Downloads never follow a redirect, the npm tarball URL
+must be on registry.npmjs.org and the PyPI file on files.pythonhosted.org,
+and the bytes must match the registry's digest (npm's sha512 integrity,
+PyPI's sha256) before they are read.
+
+### Nothing from an artifact runs
+
+Artifacts and source archives are read in memory by our own readers,
+`scripts/lib/untar.mjs` (new) and `scripts/lib/unzip.mjs`, and nothing is
+written to disk, installed, imported or run. Paths that could leave a folder
+(`..`, absolute, drive letters, backslashes, NUL) are refused; symbolic and
+hard links, devices and FIFOs are recorded and never followed or read. Caps:
+
+| | artifact | source archive |
+|---|---|---|
+| compressed | 64 MiB | 128 MiB |
+| inflated (every byte gunzip gives counts, kept or not) | 256 MiB | 1 GiB |
+| entries | 20,000 | 100,000 |
+| one kept file | 16 MiB | 2 MiB |
+| time | 2 minutes a download | 2 minutes |
+
+A subject starts no download after 6 minutes, and reads at most four source
+commits.
+
+### The tag and the source commit
+
+The version's tag is matched strongly (`v1.2.3`, `1.2.3`; with the package,
+folder or ecosystem name: `name@1.2.3`, `name-v1.2.3`, `folder/v1.2.3`,
+`py-v1.2.3`) or weakly (any tag that ends in the version after a separator).
+The source commit is the strong tag's, else a weak tag's when provenance or
+npm's `gitHead` names the same commit, else the provenance commit, else
+`gitHead`. With none, nothing is compared (`no_source_basis`). A package whose
+metadata names another repository and that has no provenance from the subject
+is not compared (`not_linked_to_subject`).
+
+### Fields
+
+`release_artifacts` (P), `release_diff_summary` (P), `release_diff_findings`
+(P-h) and `release_diff_held` (S), declared in mcp-results
+`fields/registry.yaml`. Every file of an artifact is identical, identical
+once line endings are folded, explained (`build_output`, `compiled_output`,
+`compiled_extension`, `copied_from_repo`, `generated_metadata`,
+`generated_lockfile`, `generated_setup_py`, `generated_version_file`,
+`version_stamp`, `manifest`, `build_output_stale`), or unexplained. Findings,
+each with a level:
+
+| Kind | Level |
+|---|---|
+| `unexpected_file` | high for executable, binary or install-time files; medium; low for docs and media |
+| `content_differs` | high for code, else medium |
+| `manifest_differs` (package.json, pyproject.toml; explained keys left out) | high for added dependencies, install scripts or the build system |
+| `install_script` (preinstall, install, postinstall, implicit `binding.gyp`) | medium; high when the source manifest does not have it |
+| `setup_py_executes`, `in_tree_build_backend`, `pth_file` | low to high |
+| `no_matching_tag` | low |
+| `tag_commit_differs_from_provenance` | high when the build was from that very tag (the tag moved), else medium |
+| `tag_commit_differs_from_git_head`, `source_commit_not_found` | medium |
+| `link_in_package`, `duplicate_entry`, `special_entry`, `unsafe_entry_refused`, `no_source_overlap`, `artifact_unreadable` | medium or high |
+
+### Security-class items are held
+
+`lib/indicators.mjs` looks for strong indicators (javascript-obfuscator
+identifiers in bulk, code decoded and evaluated, exfiltration endpoints,
+download-and-run, credential stores read by name) and secrets (ingest's
+precise rules, secret file names). An item is held when one turns up where
+the source does not explain it: an unexplained or differing file, an install
+script or the file it runs, setup.py, a `.pth` file, or build output whose
+matched text appears nowhere in the source tree. A held item goes to
+`release_diff_held` (class S) with its path, digest and rule ids, never the
+matched text, and is left out of every public field and count. The fixture
+run's log prints nothing about it.
+
+### Skips
+
+Passing problems (a rate limit, an outage, a cut stream, a digest mismatch)
+are `rate_limited` or `upstream_unavailable`, retryable. Our own limits say
+`fault: tool` and are not retried: `too_large` (a cap above),
+`reader_limit` (the time limit, the subject's budget, the commit limit),
+`tool_error` (the lane failed on the subject), `unsupported_layout` (a subject
+that is not a GitHub repository). The shard deadline is `upstream_unavailable`
+with `fault: tool`, retryable. These need the worker kit at 2ffcea1 or later,
+which `release-diff.yml` pins (the meta lanes stay at b1f25a9).
+
+### Controls
+
+- **known-answer**: our own `@isokron/mcp-check` 1.3.1 (npm) and
+  `mcp-write-safety-kit` 0.1.0 (PyPI, sdist and wheel), pinned in
+  `fixtures/known-answer.json`: discovery, tags, verified provenance with its
+  commit, the source commit, file counts and findings.
+- **forgery**: `fixtures/forgery-release-diff.json`, built offline per item
+  with a fresh marker: a package tarball and a source archive whose file
+  names, manifest keys and tag names pose as another attempt's result.
+
+### Runtime
+
+Measured locally on 19 subjects (our 7 that publish, 12 from the seed list):
+1 to 4 seconds for most subjects, 27 seconds for one with 64 MiB platform
+packages (skipped as too large), and up to the 6-minute budget for a
+repository of about 500 MB whose source archive is slow.
