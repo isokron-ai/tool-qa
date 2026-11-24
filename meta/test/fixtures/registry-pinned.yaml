@@ -180,8 +180,10 @@ fields:
   # pinned by version and git commit, runs the read-only server scenarios of each frozen requirement set (spec
   # revisions 2025-11-25 and 2026-07-28) through a stdio-to-HTTP bridge, so its results are payload-level only.
   # sdk_client_results: one entry per client: client, sdk, sdk_version, outcome (listed | init_failed | list_failed
-  # | timeout | client_error | unavailable | skipped), stage, protocol_negotiated, tool_count, catalog_sha256 (the
-  # checker engine's catalog hash of what the client listed), names_sha256, pages, ms. conformance_suite: package,
+  # | timeout | client_error | unavailable | skipped), stage, protocol_negotiated (a spec revision, or other),
+  # tool_count, catalog_sha256 (the checker engine's catalog hash of what the client listed),
+  # catalog_defaults_sha256 (the same with annotations that only state the spec default left out),
+  # catalog_vs_reader (same | same_but_annotation_defaults | different), names_sha256, pages, ms. conformance_suite: package,
   # version, git_commit, integrity, requirement_sets_sha256, bridge (name, version, counts). conformance_summary:
   # per spec revision, the counts of pass | fail | expected_fail | warning | info | skipped | bridge_excluded |
   # not_applicable, the scenarios run, and every scenario of the frozen set not run, with why (calls_tool,
