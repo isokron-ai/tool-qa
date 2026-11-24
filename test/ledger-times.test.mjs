@@ -113,7 +113,7 @@ test('firstCommitWhere binary-searches a file\'s history and reads only a few ve
   assert.equal(w.calls.filter((c) => c.includes('/commits?')).length, 1, 'the commit list is asked once per file per run');
 });
 
-test('R-LED-10: each row gets found, pinned, merged and released dates, and the stats follow', async () => {
+test('R-LED-11: each row gets found, pinned, merged and released dates, and the stats follow', async () => {
   const w = world();
   const { ledger } = await build(w);
   const [a, b] = ledger.records;
@@ -134,7 +134,7 @@ test('R-LED-10: each row gets found, pinned, merged and released dates, and the 
   assert.match(md, /\| 2026-11-02 \| 2026-11-03 \| 2026-11-06 \| v1\.0\.0 \(2026-11-10\) \|/);
 });
 
-test('R-LED-10: without a pull request, the row\'s first commit in REGRESSIONS.md is the found date', async () => {
+test('R-LED-11: without a pull request, the row\'s first commit in REGRESSIONS.md is the found date', async () => {
   const w = world();
   const real = w.gh.get;
   w.gh.get = async (p) => (/\/pulls\/\d+$/.test(p) ? { status: 404, body: null } : real(p));
@@ -144,7 +144,7 @@ test('R-LED-10: without a pull request, the row\'s first commit in REGRESSIONS.m
   assert.equal(ledger.cycle['o/r'].excluded >= 1, true);
 });
 
-test('R-LED-10: answers are cached for good, so a rerun makes no history, pull request or file calls', async () => {
+test('R-LED-11: answers are cached for good, so a rerun makes no history, pull request or file calls', async () => {
   const w = world();
   const { cache } = await build(w);
   assert.equal(cache.prs['o/r#7'].created_at, '2026-11-02T00:00:00Z');
@@ -157,7 +157,7 @@ test('R-LED-10: answers are cached for good, so a rerun makes no history, pull r
   assert.equal(second.ledger.records[0].found_at, '2026-11-02T00:00:00Z');
 });
 
-test('R-LED-10: an empty API budget leaves the times for the next run, and the rest of the ledger is still written', async () => {
+test('R-LED-11: an empty API budget leaves the times for the next run, and the rest of the ledger is still written', async () => {
   const w = world();
   // Enough for the fix lookups and releases, not for history.
   const gh = makeGitHub({ fetch: async (url) => { const u = new URL(url); const r = await w.gh.get(u.pathname + u.search); return new Response(JSON.stringify(r.body), { status: r.status }); }, budget: 5 });
@@ -169,7 +169,7 @@ test('R-LED-10: an empty API budget leaves the times for the next run, and the r
   assert.equal(ledger.cycle['o/r'].rows, 2);
 });
 
-test('R-LED-10: the time lookups need only read access and add no code to the publish job', async () => {
+test('R-LED-11: the time lookups need only read access and add no code to the publish job', async () => {
   const { readFileSync } = await import('node:fs');
   const wf = readFileSync(new URL('../.github/workflows/ledger.yml', import.meta.url), 'utf8');
   const publish = wf.slice(wf.indexOf('\n  publish:'));
@@ -179,7 +179,7 @@ test('R-LED-10: the time lookups need only read access and add no code to the pu
   assert.doesNotMatch(generate, /contents: write|pull-requests: write/);
 });
 
-test('R-LED-10: a corrupt cache entry is dropped, not trusted, and a history cut at the page cap gives no date', async () => {
+test('R-LED-11: a corrupt cache entry is dropped, not trusted, and a history cut at the page cap gives no date', async () => {
   const w = world();
   const cache = { commits: {}, contains: {}, prs: { 'o/r#7': { created_at: { x: 1 } } }, times: { 'o/r:row:R-A-01': 12345 } };
   const { ledger } = await build(w, cache);
