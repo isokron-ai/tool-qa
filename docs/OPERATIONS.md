@@ -68,6 +68,8 @@ The three history workflows capture public data and don't work in slots, so
 they run the guard with `--no-slots`: `LOOP_SLOTS=0` does not stop them. Use
 `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` or the lane switch for those. The same goes
 for the manual re-ingest workflow (see "Manual re-ingest").
+The off-site backup (`offsite-backup`, "Off-site backup") also runs the guard
+with `--no-slots`; its lane switch is `LANE_OFFSITE_ENABLED`.
 
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a
@@ -772,6 +774,7 @@ person. off: switched off on purpose.
 | `archive` | The Mac archive pull's last good run (repository variable `ARCHIVE_LAST_OK`, set by `scripts/archive-pull.mjs`) is more than 12 hours old, or dated in the future (amber); more than 24 hours old, or the variable is empty, not JSON or has no valid `at` (red). `off` when the variable is `off` (stop the Mac's agent first, or its next good pull sets the variable again). | On the Mac: `tail ~/Library/Logs/tool-qa-archive-pull.log`, `launchctl print gui/$(id -u)/ai.isokron.tool-qa.archive-pull`, then `launchctl kickstart` it. See "Archive of history artifacts and ingest outputs". |
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 | `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
+| `offsite-backup` | The off-site backup to R2: no good run for 12 hours, not configured yet, near the cost cap, or a run stopped early (amber); no good run for 24 hours, over the cost cap, or a verification failure (red). | Open the newest `offsite-backup` run's summary. See "Off-site backup". |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
@@ -966,6 +969,210 @@ hand while the agent is pulling finds the lock and exits. Check the log after th
 run; a full first pull takes a while, because it paces itself under the API
 limits. To update the code it runs, `git -C ~/isokron-archive/tool-qa-code
 pull --ff-only` after a change to the script is merged.
+
+## Off-site backup
+
+GitHub keeps release assets and Actions artifacts (history for 30 days, ingest
+outputs for 90), and the Mac archive above keeps a second copy on one machine.
+[`offsite-backup.yml`](../.github/workflows/offsite-backup.yml) keeps a third
+copy in a Cloudflare R2 bucket, outside both. Every 6 hours (`23 */6 * * *`;
+the operator's stand-in scheduler also dispatches it while the GitHub
+schedule is unreliable) [`offsite/backup.mjs`](../offsite/backup.mjs) copies
+everything new since the last run, byte for byte as GitHub stores it:
+
+| What | Key | Encrypted |
+|---|---|---|
+| State snapshots the `state-snapshots` manifest lists | `snapshots/<day>/state-<time>-<sha8>.sqlite.age` | yes (state key) |
+| Each version of that manifest | `snapshot-manifests/<day>/manifest-<updated>-<sha8>.json` | no (public metadata) |
+| `ingest-*` artifacts | `ingest/<day>/<artifact>/<artifact>.zip` (or the artifact's one file, for `archive: false`) | yes: the zip holds only `*.tar.age` files |
+| `history-*`, `registry-*` artifacts | `history/<day>/<artifact>/<artifact>.zip` | no (public registry and package data) |
+| What each run copied | `manifest/<day>/<run time>-<run id>.ndjson` | no |
+| Where the next run starts | `_state/cursor/<run time>-<run id>.json` | no |
+
+`<day>` is the UTC day the item was made. It never decrypts anything and holds
+no age key. Artifacts pass the archive pull's origin check (`SOURCES` in
+`scripts/archive-pull.mjs`: this repository, not a fork, branch `main`, the
+expected workflow): one from a fork or another branch is skipped and listed in
+the run's summary; one of ours from a workflow `SOURCES` does not list fails
+the run until `SOURCES` lists it. A download is checked against GitHub's
+sha256 digest, and a snapshot against its manifest entry, before upload.
+
+Each line of a run manifest names the key, its size, sha256 and MD5, the
+source (artifact id and name, run id, head commit, workflow path, or the
+release asset), and for artifacts the files inside with their sizes and
+sha256s. The bucket's lock rule keeps every object for 30 days, so nothing is
+rewritten: each run writes its own manifest part and its own cursor (the
+newest cursor wins). A run that died before writing its manifest part leaves
+objects without a line; the next run that meets one of them (written after the
+last cursor) writes its line then, marked `"recovered": true`.
+
+**Integrity.** Every upload is a new object only (`If-None-Match: *`) with
+`Content-MD5` (R2 refuses a body that does not match),
+`x-amz-checksum-sha256` and the sha256 again as metadata (`x-amz-meta-sha256`).
+A HEAD after each upload must show the same size, an ETag equal to the MD5,
+and the same sha256; anything else is a verification failure (the run fails,
+the health item is red). A key that already holds the same sha256 is skipped.
+A key that holds other bytes is never overwritten: the copy goes beside it as
+`<key>.sha256-<12 hex>` and that run reports a verification failure. Should R2
+ever refuse the `x-amz-checksum-sha256` header, set the variable
+`OFFSITE_SHA256_HEADER` to `off`: Content-MD5, the signed payload hash and the
+metadata check remain.
+
+**Client.** The official AWS SDK v3 S3 client, exact version in
+[`offsite/package.json`](../offsite/package.json), installed with
+`npm ci --prefix offsite --ignore-scripts` from
+[`offsite/package-lock.json`](../offsite/package-lock.json), which holds every
+package's integrity hash. The rest of tool-qa stays free of dependencies.
+
+### Setup
+
+1. In the Cloudflare dashboard, R2 → Manage API tokens → Create API token:
+   permission **Object Read & Write**, applied to the bucket
+   `isokron-loop-backup` only. Copy the Access Key ID and the Secret Access Key
+   (the S3 credentials, not the token value).
+2. Add them as repository secrets, the account ID as a secret too, and the
+   bucket as a repository variable. The account ID is read only from the
+   secret: GitHub prints each step's environment in the run log, which is
+   public here, and masks only secrets. Delete any repository variable
+   `R2_ACCOUNT_ID` (`gh variable delete R2_ACCOUNT_ID --repo isokron-ai/tool-qa`);
+   the workflow does not read it:
+
+   ```sh
+   gh secret set R2_ACCESS_KEY_ID --repo isokron-ai/tool-qa       # paste the Access Key ID
+   gh secret set R2_SECRET_ACCESS_KEY --repo isokron-ai/tool-qa   # paste the Secret Access Key
+   gh secret set R2_ACCOUNT_ID --repo isokron-ai/tool-qa          # paste the 32-hex account ID
+   gh variable set R2_BUCKET --repo isokron-ai/tool-qa --body isokron-loop-backup
+   ```
+
+3. Run it once and read the summary: `gh workflow run offsite-backup.yml --repo isokron-ai/tool-qa`.
+
+Until all four are set, each run exits 0 with a notice ("not configured
+yet") and the health item is amber. Only the `Back up` step (and the opt-in
+`Prune` step) gets the secrets, and both jobs run only on `main`: a dispatch
+from another branch skips them. Optional variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LANE_OFFSITE_ENABLED` | on | `false` stops the backup (and shows `off` on the health issue). `LOOP_ENABLED` and `LOOP_PAUSE_UNTIL` stop it too. |
+| `OFFSITE_MAX_BYTES` | 8000000000 (8 GB) | The cost cap; at most 10000000000, the free tier. |
+| `OFFSITE_MAX_RUN_BYTES` | 2000000000 | Bytes one phase of a run (snapshots, then artifacts) uploads; past it, the rest of that kind waits for the next run and the other kinds go on. A run also stops taking new items after 30 minutes. |
+| `OFFSITE_MAX_CLASS_A` | 2000 | LIST and PUT operations one run may use. |
+| `OFFSITE_MAX_CLASS_B` | 20000 | HEAD and GET operations one run may use. |
+| `OFFSITE_SHA256_HEADER` | on | `off` stops sending `x-amz-checksum-sha256`. |
+| `OFFSITE_PRUNE_ENABLED` | off | `true` lets the prune job delete (below). |
+| `OFFSITE_PRUNE_AT_BYTES`, `OFFSITE_PRUNE_TO_BYTES`, `OFFSITE_PRUNE_KEEP_SNAPSHOTS` | 85% and 70% of the cap; 48 | Prune thresholds. |
+
+### The cost cap
+
+R2's free tier is 10 GB-month of storage, 1 million Class A operations (LIST,
+PUT) and 10 million Class B operations (HEAD, GET) a month, with free egress,
+and there is no spending cap on Cloudflare's side. So the run enforces one:
+
+- before uploading it lists the whole bucket and sums its size; it uploads
+  nothing that would take the bucket past `OFFSITE_MAX_BYTES` (1 MB is kept
+  for the run's own manifest and cursor). A run that hits the cap fails, its
+  heartbeat says `over_cap`, and the health item is red until room is made;
+- from 85% of the cap the health item is amber ("near the cap");
+- each run counts its operations, retries included (the S3 client does not
+  retry on its own; the run retries a network error, 429 or 5xx up to three
+  times and counts each attempt), refuses any past its per-run caps, and
+  reports them in the run summary and the heartbeat;
+- a PUT whose every attempt failed may still have been stored, so its bytes
+  count against the cap (`possibly_stored_bytes` in the heartbeat);
+- a bucket listing marked truncated with no continuation token is an error:
+  the run copies nothing on a short sum.
+
+**Operations per month.** At four runs a day the per-run caps bound a month
+at 2,000 × 4 × 30 = 240,000 Class A operations (24% of the free tier) and
+20,000 × 4 × 30 = 2.4 million Class B (24%), even if every run used its full
+caps. The stand-in scheduler does not add runs: it dispatches only when no run
+started in the last 330 minutes. Typical use is far below that (next
+paragraph).
+
+At the rate measured on 24 Nov 2026 (about 590 MB a day of ingest outputs, 45
+MB of state snapshots, 6 MB of history; about 240 objects a day), a month is
+about 7,000 PUTs plus about 1,000 LIST pages (0.8% of the Class A tier) and
+about 11,000 HEADs (0.1% of the Class B tier). Storage is the limit: about 19
+GB a month, so with the 30-day lock the 8 GB cap is reached after about 12
+days, and the prune cannot make room before objects are 30 days old. Keeping
+30 days off-site at that rate needs one of: a shorter lock with the prune on,
+a cap above the free tier, or copying less (the ingest outputs are most of
+it). Until then the item turns red when the cap is reached, and nothing is
+lost on GitHub or the Mac archive.
+
+### Prune (opt-in, off by default)
+
+The `prune` job ([`offsite/prune.mjs`](../offsite/prune.mjs)) frees room when
+the bucket nears the cap. It does nothing unless the bucket holds more than
+`OFFSITE_PRUNE_AT_BYTES`; then it deletes, until the bucket is down to
+`OFFSITE_PRUNE_TO_BYTES`, only objects last written more than 31 days ago (the
+lock refuses younger ones; a day of margin), in this order, oldest first in
+each: `history/`, old cursors (the newest 10 kept), old snapshot manifests (the
+newest 10 kept), `ingest/`, then `snapshots/`, never the newest
+`OFFSITE_PRUNE_KEEP_SNAPSHOTS` (48). The run manifests under `manifest/` are
+never deleted. It fails when it cannot reach the target because the rest is
+still locked. In apply mode it deletes nothing, and fails, when the listing
+looks cut short: a page marked truncated with no continuation token, or the
+newest cursor or newest run manifest (each listed on its own) missing from
+the full listing; it also refuses when there is no cursor yet. Its run summary
+is scrubbed of the credentials and the account ID.
+
+- Dry run, any time: `gh workflow run offsite-backup.yml --repo isokron-ai/tool-qa -f prune=dry-run` (lists what it would delete in the run summary).
+- To let it delete: `gh variable set OFFSITE_PRUNE_ENABLED --repo isokron-ai/tool-qa --body true`. It then runs after every scheduled backup (not after a cancelled one), and on a dispatch with `-f prune=apply`; the stand-in scheduler dispatches with `-f prune=apply` while the variable is `true`.
+
+An R2 lifecycle rule ("delete objects older than N days" on a prefix) would
+do the same for one prefix without code, but it cannot keep the newest
+snapshots by count or wait for the bucket to fill, so the job is used instead.
+
+### Health
+
+Each run uploads a heartbeat artifact, `offsite-heartbeat-<run id>-<attempt>.json`
+(kept 7 days): status (`ok`, `unconfigured`, `over_cap`, `verify_failed`,
+`error`), the last good run, bucket size and cap, counts and operations. The
+job's `GITHUB_TOKEN` cannot write a repository variable such as
+`OFFSITE_LAST_OK`, and handing the job the loop App's key or a second R2 token
+only for a heartbeat would widen what it holds; an artifact needs no
+permission. The watchdog reads the newest heartbeat of a finished
+`offsite-backup.yml` run on `main` ([`watchdog/offsite.mjs`](../watchdog/offsite.mjs));
+when that run failed before it could read the bucket, it takes the last good
+time from an older heartbeat, so one failed run is amber, not red:
+
+| Check | Amber or red means | What to do |
+|---|---|---|
+| `offsite-backup` | Amber: the last good run is 12 to 24 hours old, the backup is not configured yet, no run has reported yet, the bucket is near the cap, or a run stopped early on its per-run caps. Red: no good run for 24 hours, over the cost cap, a verification failure, or no good run ever and the last one failed. Off: `LANE_OFFSITE_ENABLED` is not `true`. | Open the newest `offsite-backup` run's summary. Over the cap: see "The cost cap" and the prune. A verification failure: the summary names the key; compare it with its manifest line (restore steps below). |
+
+### Restore
+
+On the operator's machine, with the AWS CLI (or any S3 client), a token that
+can read the bucket, and age with the right identity. Use a separate
+read-only R2 token for this (Object Read only, this bucket), not the backup's.
+
+```sh
+export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_DEFAULT_REGION=auto
+R2=https://<account id>.r2.cloudflarestorage.com
+B=s3://isokron-loop-backup
+
+# 1. Find it: the run manifests list every object with its sha256.
+aws s3 ls --endpoint-url "$R2" "$B/manifest/2026-11-24/"
+aws s3 cp --endpoint-url "$R2" "$B/manifest/2026-11-24/<part>.ndjson" - | grep ingest-45312591667-1
+
+# 2. Download it and check it against the manifest line and its own metadata.
+aws s3 cp --endpoint-url "$R2" "$B/ingest/2026-11-24/ingest-45312591667-1/ingest-45312591667-1.zip" .
+shasum -a 256 ingest-45312591667-1.zip            # must equal "sha256" in the manifest line
+aws s3api head-object --endpoint-url "$R2" --bucket isokron-loop-backup \
+  --key ingest/2026-11-24/ingest-45312591667-1/ingest-45312591667-1.zip --query Metadata.sha256
+
+# 3. Decrypt locally (never on a runner).
+unzip ingest-45312591667-1.zip -d ingest-45312591667-1   # each file's sha256 is in the line's contents.files
+age --decrypt -i ingest-identity.txt -o item.tar ingest-45312591667-1/<file>.tar.age   # "Reading ingest outputs"
+
+# A state snapshot: download, check the sha256 (it starts with the sha8 in the name), then
+age --decrypt -i ~/.isokron/loop-age-identity.key -o state.sqlite state-<time>-<sha8>.sqlite.age
+```
+
+To put a snapshot back as the live state, follow "State snapshots" (the
+restore drill and `restore --apply`, with the loop stopped); the off-site copy
+is the same bytes as the release asset of that name.
 
 ## Result encryption keys
 

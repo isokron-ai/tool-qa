@@ -1,0 +1,14 @@
+{
+  "name": "tool-qa-offsite",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The off-site backup's S3 client for Cloudflare R2, kept apart so the rest of tool-qa stays free of dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1166.0"
+  }
+}

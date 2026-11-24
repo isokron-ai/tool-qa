@@ -32,6 +32,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      # The off-site backup's S3 client (exact version, lockfile integrity, no
+      # install scripts), so its request test runs; without it that test skips.
+      - name: Install the off-site S3 client (lockfile)
+        run: npm ci --prefix offsite --ignore-scripts --no-audit --no-fund
       # Without age the tests that use the real binaries skip themselves.
       - name: Install age (pinned version, sha256 checked)
         run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
