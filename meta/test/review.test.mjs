@@ -53,8 +53,8 @@ test('R-META-01: npm is read through the abbreviated document and the latest ver
   ]);
 });
 
-for (const laneName of ['meta-github', 'meta-registry']) {
-  test(`R-META-01: one subject whose data makes the lane throw is that subject's own skip, never a failed shard (${laneName})`, async () => {
+async function oneHostileSubject(laneName) {
+  {
     const dir = tmp();
     try {
       const base = laneName === 'meta-github'
@@ -78,8 +78,11 @@ for (const laneName of ['meta-github', 'meta-registry']) {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }
 }
+
+test("R-META-01: one subject whose data makes the lane throw is that subject's own skip, never a failed shard (meta-github)", () => oneHostileSubject('meta-github'));
+test("R-META-01: one subject whose data makes the lane throw is that subject's own skip, never a failed shard (meta-registry)", () => oneHostileSubject('meta-registry'));
 
 test('R-META-01: an error thrown while reading one subject is recorded as its non-retryable skip', async () => {
   const lane = laneOf('meta-registry');
