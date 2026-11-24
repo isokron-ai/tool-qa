@@ -755,13 +755,24 @@ export class StateDb {
   // health issue, until the pause ends. A dispatch whose run passed the checks
   // resets the count.
 
-  /** One more dispatch of `workflow` rejected as run_sha_mismatch. Returns {count, paused}. */
-  noteShaMismatch(workflow, { now, limit = 3, pauseMs = 6 * 3_600_000 } = {}) {
+  /**
+   * One more dispatch of `workflow` rejected as run_sha_mismatch. `sha` is the
+   * commit recorded with that dispatch: each recorded commit counts once
+   * (R-ING-24), so the shards of one tick that a merge overtook (all recorded
+   * at the old commit, all run at the new one) count as one, not three.
+   * Returns {count, paused}.
+   */
+  noteShaMismatch(workflow, { sha = null, now, limit = 3, pauseMs = 6 * 3_600_000 } = {}) {
     const key = `pump.sha_mismatch:${workflow}`;
     const prev = this.getKv(key);
-    const count = (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1;
+    const before = Number.isSafeInteger(prev?.count) ? prev.count : 0;
+    if (before > 0 && sha !== null && prev.last_sha === sha) {
+      this.setKv(key, { ...prev, last: iso(now) }, { now });
+      return { count: before, paused: false };
+    }
+    const count = before + 1;
     if (count < limit) {
-      this.setKv(key, { count, first: prev?.first ?? iso(now), last: iso(now) }, { now });
+      this.setKv(key, { count, first: prev?.first ?? iso(now), last: iso(now), last_sha: sha }, { now });
       return { count, paused: false };
     }
     this.setKv(`pump.paused:${workflow}`, {
@@ -769,6 +780,15 @@ export class StateDb {
     }, { now });
     this.deleteKv(key);
     return { count, paused: true };
+  }
+
+  /**
+   * Replace the expected commit of a dispatch not sent yet (pending): the pump
+   * reads the ref again just before sending (R-ING-24).
+   */
+  updateDispatchSha(attemptId, workflowSha) {
+    const r = this.raw.prepare("UPDATE dispatches SET workflow_sha = ? WHERE attempt_id = ? AND status = 'pending'").run(workflowSha, attemptId);
+    return r.changes > 0;
   }
 
   /** A dispatch of `workflow` whose run passed the run checks: the count starts again. */

@@ -210,7 +210,7 @@ test('end to end with the real dispatcher against a fake API', async () => {
   assert.equal(posts[0].json.return_run_details, true);
   assert.equal(db.getDispatch('att-001').run_id, '701');
   assert.equal(db.getDispatch('att-002').workflow_sha, 'e'.repeat(40));
-  assert.equal(api.calls.filter((r) => r.path.endsWith('/branches/main')).length, 1, 'the ref is resolved once per tick');
+  assert.equal(api.calls.filter((r) => r.path.endsWith('/branches/main')).length, 3, 'the ref is read once to plan, and again just before each of the two sends');
   db.close();
 });
 
@@ -258,5 +258,28 @@ test('R-ING-22: a paused workflow gets no dispatch, and the tick says it is paus
   const later = await runTick({ db, now: c.now, config, workerSlots: 2, dispatcher: d, newId });
   assert.deepEqual(later.paused, []);
   assert.ok(d.calls.length > 0);
+  db.close();
+});
+
+test('R-ING-24: the ref is read again just before each send; a merge since the tick began moves the expected commit', async () => {
+  const { c, db, config, newId } = setup({ subjects: 4 });
+  const d = recorder();
+  const shas = ['a'.repeat(40), 'b'.repeat(40)];
+  let reads = 0;
+  d.resolveRef = async () => shas[Math.min(reads++, 1)]; // the merge lands after the first read
+  let saved;
+  const lines = [];
+  await runTick({
+    db, now: c.now, config, workerSlots: 2, dispatcher: d, newId, log: (l) => lines.push(l),
+    beforeSend: () => {
+      saved = db.getDispatch('att-001').workflow_sha;
+      return true;
+    },
+  });
+  assert.equal(saved, 'a'.repeat(40), 'recorded at the commit read to plan');
+  assert.equal(d.calls.length, 2);
+  assert.equal(db.getDispatch('att-001').workflow_sha, 'b'.repeat(40), 'moved to the commit read just before sending');
+  assert.equal(db.getDispatch('att-002').workflow_sha, 'b'.repeat(40));
+  assert.ok(lines.some((l) => /moved to b{40} since this tick began/.test(l)));
   db.close();
 });

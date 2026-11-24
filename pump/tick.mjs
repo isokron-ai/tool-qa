@@ -167,7 +167,7 @@ export async function runTick({
       for (const r of reserved) db.failDispatch(r.attemptId, { error: 'not sent: the tick failed before sending', now: now() });
       throw err;
     }
-    reserved.push({ shard, wf, attemptId, shardId, leased });
+    reserved.push({ shard, wf, attemptId, shardId, leased, workflowSha });
   }
   if (reserved.length === 0) return summary;
 
@@ -200,7 +200,7 @@ export async function runTick({
   // and slot freed, so the work is due again on the next tick.
   const skip = new Set();
   for (let i = 0; i < reserved.length; i++) {
-    const { shard, wf, attemptId, shardId, leased } = reserved[i];
+    const { shard, wf, attemptId, shardId, leased, workflowSha } = reserved[i];
     if (skip.has(shard.workflow)) {
       withdraw([reserved[i]], `an earlier ${shard.workflow} dispatch failed this tick`);
       continue;
@@ -211,6 +211,15 @@ export async function runTick({
       break;
     }
     try {
+      // Read the ref again right before sending, so a merge since the tick
+      // began does not make this run a run_sha_mismatch (R-ING-24).
+      if (workflowSha && typeof dispatcher?.resolveRef === 'function') {
+        const fresh = await dispatcher.resolveRef({ repo: wf.repo, ref: wf.ref });
+        if (fresh !== workflowSha) {
+          db.updateDispatchSha(attemptId, fresh);
+          log(`${wf.repo} ${wf.ref} moved to ${fresh} since this tick began; ${shardId} expects that commit`);
+        }
+      }
       const inputs = workerInputs({ shardId, attemptId, items: leased });
       const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile: wf.file, ref: wf.ref, inputs, shardId });
       // The expected commit was recorded at creation; markDispatched keeps it.
