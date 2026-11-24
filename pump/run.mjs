@@ -75,6 +75,7 @@ import { createDispatcher } from './dispatch.mjs';
 import { dueFromState, isEnabled, loadConfig } from './due.mjs';
 import { scrub } from './github.mjs';
 import { computeBudget, reapExpired } from './slots.mjs';
+import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { planShards, runTick } from './tick.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
@@ -85,6 +86,8 @@ export const CONFORMANCE_KEY = 'pump.conformance';
 const isSetupError = (err) => err instanceof IngestSetupError || err?.name === 'IngestSetupError';
 
 /**
+ * seedFile: the seed list loaded into the subjects table at start-up
+ * (pump/subjects.mjs); null loads nothing.
  * ingest: undefined for the pump's own collector (ingest/collect.mjs, built
  * with `ingestOptions`), null for none, a function (called as collect()), or an
  * object with collect() and optionally check().
@@ -99,6 +102,7 @@ export async function runPump({
   fetch = globalThis.fetch,
   log = (line) => process.stderr.write(`${line}\n`),
   stateFile = DEFAULT_STATE,
+  seedFile = SEED_FILE,
   config,
   pull = pullState,
   push = pushState,
@@ -234,6 +238,10 @@ export async function runPump({
         say(`pump: could not read the successor result: ${err.message}`);
       }
     }
+    // The seed subjects (pump/subjects.mjs); written only when the seed file changed.
+    const seeded = seedFile ? syncSeedSubjects(db, { now: now(), file: seedFile }) : { summary: 'no seed file given' };
+    say(`pump: subjects: ${seeded.summary}`);
+    if (seeded.error) ok = false;
     for (;;) {
       const tickStart = now();
       ticks += 1;

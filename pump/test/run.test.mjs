@@ -46,6 +46,7 @@ function harness({ slots = '3', subjects = 4, successor, ingest = null } = {}) {
     sleep: c.sleep,
     log: (l) => lines.push(l),
     stateFile,
+    seedFile: null, // only this test's subjects; pump/test/subjects.test.mjs covers the seed
     config: { tiers, workflows: { 'live-probe': wf } },
     pull: async (args) => {
       calls.pull += 1;

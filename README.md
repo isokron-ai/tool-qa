@@ -8,7 +8,8 @@ comes later, through [isokron-ai/mcp-results](https://github.com/isokron-ai/mcp-
 More about IsoKron: [isokron.ai](https://isokron.ai/?utm_source=tool-qa&utm_medium=readme).
 
 **Status: P1 in progress: the pump, dispatch, ingest (inside the pump) and the
-watchdog are built and the ingest key is in place; no worker workflow is
+watchdog are built and the ingest key is in place. The pump loads its subjects,
+the 997 repositories of the seed list, at start-up; no worker workflow is
 switched on yet, so there is no scanning yet.**
 
 ## What runs where
@@ -65,7 +66,7 @@ Details, and what to do in an emergency: [docs/OPERATIONS.md](docs/OPERATIONS.md
 | `scripts/state-asset.mjs` | Pulls and pushes the state database as a Release asset |
 | `scripts/archive-pull.mjs` | Copies history artifacts into a local archive folder and checks them |
 | `state/schema*.sql`, `state/db.mjs` | State store: subjects, runs, leases with fencing, slot ledger, attempts, dispatch ledger, results |
-| `pump/` | The pump: due list, shards, slots, dispatch to workers, ingest of finished runs, API budgets, App tokens |
+| `pump/` | The pump: subjects from the seed list, due list, shards, slots, dispatch to workers, ingest of finished runs, API budgets, App tokens |
 | `watchdog/` | Loop health checks and the "Loop health" issue |
 | `.github/workflows/pump.yml`, `watchdog.yml` | The pump (back to back, restarted every 30 minutes) and the watchdog (every 15 minutes) |
 | `worker-kit/` | Result contract (manifest schema), bundle builder and sealing action for workers, ingest public key |

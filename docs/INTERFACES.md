@@ -13,6 +13,26 @@ it: the manual re-ingest workflow (`.github/workflows/ingest.yml`, which
 refuses to run while the pump lane is on and waits in the `pump` group), or a
 person by hand (docs/OPERATIONS.md).
 
+## Subjects
+
+The due list reads `db.listSubjects()` and skips retired subjects
+(`retired_at` set). The pump fills the table from the seed at start-up
+(`syncSeedSubjects(db, { now, file })` in `pump/subjects.mjs`; docs/OPERATIONS.md,
+"Subjects: where they come from"). A subject id is what the worker receives as
+`subject`: for the seed's GitHub subjects, `owner/name`. kv `subjects.seed`
+holds `{ file, source, sha256, mapping, subjects, tiers, retired, loaded_at }`
+for the last load.
+
+- `db.setSubjectVersion({ id, kind, source, tier, sha, artifactDigest, now })`
+  inserts or updates a subject and clears `retired_at`. A new sha or digest
+  moves `changed_at`; pass the current ones to keep them.
+- `db.retireSubjects({ sourcePrefix, keep, now })` retires every active
+  subject whose `source` starts with `sourcePrefix` and whose id is not in
+  `keep`. Returns the number retired.
+- A subject with no sha and no digest is refreshed on its tier's cadence:
+  `maxAgeDays(cell, subject, tiers, tierName)` in `pump/due.mjs` falls back to
+  `unversioned_max_age_days` in `pump/tiers.json` where the cell has no max age.
+
 ## Worker dispatch
 
 The pump starts a worker with a `workflow_dispatch` on the workflow named in

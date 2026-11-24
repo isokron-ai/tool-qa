@@ -34,8 +34,8 @@ function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 
 
 test('schema v3 adds the dispatch ledger tables and columns', () => {
   const db = fresh();
-  assert.equal(SCHEMA_VERSION, 4);
-  assert.equal(db.schemaVersion(), 4);
+  assert.equal(SCHEMA_VERSION, 5);
+  assert.equal(db.schemaVersion(), 5);
   const tables = db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const t of ['dispatches', 'dispatch_items', 'results', 'run_keys', 'kv']) assert.ok(tables.includes(t), t);
   const cols = (t) => db.raw.prepare(`PRAGMA table_info(${t})`).all().map((r) => r.name);
@@ -53,7 +53,7 @@ test('migration from version 2 keeps existing rows', () => {
   raw.prepare("INSERT INTO subjects VALUES ('s', 'repo', 'test', 'x', 'x')").run();
   const db = new StateDb(':memory:');
   db.raw = raw;
-  assert.equal(db.migrate(), 4);
+  assert.equal(db.migrate(), SCHEMA_VERSION);
   const s = db.getSubject('s');
   assert.equal(s.tier, 4);
   assert.equal(s.sha, null);
@@ -93,7 +93,7 @@ test('migration from version 3 numbers existing items in the order they were sto
   ins.run('old-2', KEY_A, 's1', 3);
   const db = new StateDb(':memory:');
   db.raw = raw;
-  assert.equal(db.migrate(), 4);
+  assert.equal(db.migrate(), SCHEMA_VERSION);
   assert.deepEqual(db.getDispatch('old-1').items.map((i) => [i.item_index, i.run_key]), [[0, KEY_A]]);
   assert.deepEqual(db.getDispatch('old-2').items.map((i) => [i.item_index, i.run_key]), [[0, KEY_B], [1, KEY_A]]);
   assert.equal(db.nextFence(), 4);
