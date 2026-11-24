@@ -140,11 +140,11 @@ function normalizeRecord(answer, requested) {
   return { accepted: answer.accepted, reason: answer.reason ?? null };
 }
 
-function wrap({ getAttempt, recordResult, close, now }) {
+function wrap({ getAttempt, recordResult, close, now, completedAt }) {
   return {
     kind: 'state',
     getAttempt: (id) => normalizeAttempt(getAttempt(id)),
-    recordResult: (r) => normalizeRecord(recordResult(now ? { ...r, now: now() } : r), r),
+    recordResult: (r) => normalizeRecord(recordResult({ ...r, ...(now ? { now: now() } : {}), ...(completedAt != null ? { completedAt } : {}) }), r),
     close,
   };
 }
@@ -153,13 +153,15 @@ function wrap({ getAttempt, recordResult, close, now }) {
  * The ledger over a StateDb that is already open (the pump's). close() leaves
  * it open; its owner closes it.
  * @param {{getAttempt: Function, recordResult: Function}} db  a StateDb
- * @param {{now?: () => number|Date}} [opts]  the time recordResult stores
+ * @param {{now?: () => number|Date, completedAt?: number|string|null}} [opts]
+ *   now: the time recordResult stores; completedAt: when GitHub says the
+ *   worker run completed, which the store checks the lease against (R-CHAOS-02)
  */
-export function dbLedger(db, { now } = {}) {
+export function dbLedger(db, { now, completedAt = null } = {}) {
   if (typeof db?.getAttempt !== 'function' || typeof db?.recordResult !== 'function') {
     throw new LedgerError('ledger: the state store has no getAttempt()/recordResult()');
   }
-  return wrap({ getAttempt: (id) => db.getAttempt(id), recordResult: (r) => db.recordResult(r), close: () => {}, now });
+  return wrap({ getAttempt: (id) => db.getAttempt(id), recordResult: (r) => db.recordResult(r), close: () => {}, now, completedAt });
 }
 
 function stateLedger(mod, path) {

@@ -53,6 +53,18 @@ export function planShards(due, workflows, { openByWorkflow = new Map() } = {}) 
   return shards;
 }
 
+/**
+ * A dispatch that failed in a way that does not say whether GitHub acted on it:
+ * a server error or a network failure on the POST. A refusal (4xx), a rate
+ * limit and our own budget never sent anything that started a run.
+ */
+function ambiguous(err) {
+  if (err instanceof BudgetExceededError || err?.name === 'BudgetExceededError') return false;
+  const status = Number(err?.status);
+  if (err?.name !== 'GitHubError') return false;
+  return status === 0 || status >= 500;
+}
+
 function stopReason(err) {
   if (err instanceof BudgetExceededError || err?.name === 'BudgetExceededError') return 'budget';
   const status = Number(err?.status);
@@ -69,12 +81,15 @@ function stopReason(err) {
  *   dispatcher: { dispatch: (req: object) => Promise<object> }, log?: (line: string) => void,
  *   newId?: () => string, hooks?: object, deadline?: number }} args
  *   deadline: no new shard is started at or after this time (ms).
+ *   holdRunKeys: optional Set of run_keys not to dispatch this tick (the pump
+ *   holds work whose expired dispatch ingest has not looked at yet; R-CHAOS-02).
  *   beforeSend: optional async () => boolean, called once after the tick's
  *   dispatches are recorded as pending and before any is sent; the pump saves
  *   the state there. false (or a throw) withdraws them all unsent.
  */
 export async function runTick({
   db, now = Date.now, config, workerSlots, dispatcher, log = () => {}, newId = randomUUID, hooks = NO_HOOKS, deadline, beforeSend,
+  holdRunKeys = null,
 }) {
   const t0 = now();
   const reaped = reapExpired(db, { now: t0 });
@@ -98,7 +113,8 @@ export async function runTick({
   summary.paused = [...paused];
   if (!(workerSlots > 0)) return summary;
 
-  const due = dueFromState(db, { now: t0, tiers: config.tiers, workflows: config.workflows, hooks }).filter((d) => !paused.has(d.workflow));
+  const due = dueFromState(db, { now: t0, tiers: config.tiers, workflows: config.workflows, hooks })
+    .filter((d) => !paused.has(d.workflow) && !holdRunKeys?.has(d.run_key));
   summary.due = due.length;
   if (due.length === 0) return summary;
 
@@ -228,9 +244,21 @@ export async function runTick({
       log(`dispatched ${shardId}: ${leased.length} item(s) to ${wf.repo} ${wf.file}${out?.runId ? `, run ${out.runId}` : ', run not matched yet'}`);
     } catch (err) {
       const message = String(err?.message ?? err);
-      db.failDispatch(attemptId, { error: message, now: now() });
       summary.failed += 1;
-      log(`dispatch of ${shardId} failed: ${message}`);
+      if (ambiguous(err)) {
+        // A server error or a lost connection after the request went out: GitHub
+        // may have started the run anyway (R-CHAOS-05). The dispatch stays
+        // pending with its slot and leases, as if the pump had died after
+        // sending (R-ING-10): ingest finds its run by name if there is one,
+        // and otherwise its lease expires and the work is due again. Freeing
+        // them now would let a run the slot ledger does not count go on, its
+        // result never judged, while the same work is sent again.
+        summary.unconfirmed = (summary.unconfirmed ?? 0) + 1;
+        log(`dispatch of ${shardId} may or may not have started a run (${message}); it stays pending until ingest finds its run or its lease expires`);
+      } else {
+        db.failDispatch(attemptId, { error: message, now: now() });
+        log(`dispatch of ${shardId} failed: ${message}`);
+      }
       const stop = stopReason(err);
       if (stop) {
         summary.stopped = stop;

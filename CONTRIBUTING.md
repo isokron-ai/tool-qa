@@ -7,7 +7,12 @@ welcome.
 - **Bugs and ideas:** open an issue. For security problems, follow
   [SECURITY.md](SECURITY.md) instead.
 - **Pull requests:** keep them small and focused. Add or update tests with
-  `node:test`, and run `npm test` before you push.
+  `node:test`, and run `npm test` before you push. A change to the pump,
+  ingest, the state store, the watchdog or the snapshots should also pass
+  `npm run test:chaos`: the chaos suite in `chaos/` runs that code end to end
+  against a simulated GitHub with injected faults (its own CI job). `npm run
+  soak -- --seeds 50` plays random fault schedules; a failing seed reruns with
+  `--seed <n> --verbose`.
 - **Regressions:** every problem found (a review finding, a bug report, an
   incident) gets a permanent test named after its row in
   [REGRESSIONS.md](REGRESSIONS.md) (`R-ING-17: ...`), and a row there: what it
