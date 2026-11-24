@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The ledger workflow dispatches this on ledger/refresh: its pull request is
+  # opened with the job token, which starts no pull_request workflows.
+  workflow_dispatch:
 
 permissions: {}
 

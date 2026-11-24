@@ -8,15 +8,27 @@
 #             uploads them as an artifact. If a source's ledger cannot be read
 #             it still writes the rest, uploads them for a look, and fails, so
 #             no pull request is made from a partial ledger.
-#   publish   contents: write (push the refresh branch) and pull-requests: write
-#             (open or close its pull request). It runs no ledger code: it
-#             copies the three generated files into place and opens the pull
-#             request. Only a pull request from this repository counts as its
-#             own (scripts/ledger-own-pr.mjs, R-LED-02), not a fork's branch
-#             of the same name.
+#   publish   runs no ledger code: it copies the three generated files into
+#             place and publishes them. Only a pull request from this
+#             repository counts as its own (scripts/ledger-own-pr.mjs,
+#             R-LED-02), not a fork's branch of the same name.
+#             contents: write       build the commit through the API and move
+#                                   the refresh branch
+#             pull-requests: write  open or close its pull request
+#             actions: write        dispatch test.yml and lint.yml on the
+#                                   refresh branch
 #
-# A pull request opened with the job token does not start other workflows,
-# which is why generate runs test/ledger.test.mjs itself first.
+# The commit is made through the git data API (a tree, then a commit, then the
+# ref), never with `git commit` and a push, so GitHub signs it and it shows as
+# verified (R-LED-08). The job checks that the API tree is the one it generated
+# locally, and that the new commit is verified before it moves the branch. If
+# the branch already holds the same tree on the same main commit, verified, it
+# makes no new commit.
+#
+# A pull request opened with the job token starts no pull_request workflows, so
+# after a new commit the job dispatches test.yml and lint.yml on ledger/refresh
+# (workflow_dispatch is the one event the job token may start). Their check runs
+# attach to the head commit, so they show on the pull request (R-LED-09).
 #
 # Kill switch: LOOP_ENABLED, LOOP_PAUSE_UNTIL and LANE_LEDGER_ENABLED, through
 # scripts/guard.mjs, first in each job.
@@ -87,6 +99,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     steps:
@@ -124,6 +137,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           BRANCH: ledger/refresh
         run: |
+          set -euo pipefail
           open_pr="$(gh pr list -R "$REPO" --head "$BRANCH" --state open --json number,isCrossRepository,headRepositoryOwner | node scripts/ledger-own-pr.mjs "$OWNER")"
           if [ -z "$(git status --porcelain -- ledger docs/LEDGER.md)" ]; then
             echo "::notice::The ledger on main is up to date."
@@ -132,19 +146,74 @@ jobs:
             fi
             exit 0
           fi
-          git switch -C "$BRANCH"
+
+          # The tree we mean to publish, computed locally: main plus the three files.
+          base="$(git rev-parse HEAD)"
+          base_tree="$(git rev-parse "${base}^{tree}")"
           git add -- ledger docs/LEDGER.md
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-            commit -q -m "Ledger: refresh from the tool repositories' REGRESSIONS.md"
-          git -c credential.helper= -c credential.helper='!gh auth git-credential' push --force -q "https://github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
+          tree="$(git write-tree)"
           {
             echo "## Ledger"
-            git show --stat --format= HEAD
+            git diff --cached --stat "$base"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Where the refresh branch stands now (empty if it does not exist).
+          cur="$(gh api "repos/${REPO}/git/matching-refs/heads/${BRANCH}" --jq ".[] | select(.ref == \"refs/heads/${BRANCH}\") | .object.sha")"
+          if [ -n "$cur" ]; then
+            cur_state="$(gh api "repos/${REPO}/git/commits/${cur}" --jq '[.tree.sha, (.parents | map(.sha) | join(",")), (.verification.verified | tostring)] | join(" ")')"
+          else
+            cur_state=""
+          fi
+
+          new=""
+          if [ "$cur_state" = "$tree $base true" ]; then
+            echo "::notice::${BRANCH} already holds this ledger on ${base} as a verified commit; no new commit."
+          else
+            # R-LED-08: tree, commit and ref through the API, so GitHub signs the commit.
+            api_tree="$(jq -n --arg base_tree "$base_tree" \
+                --rawfile l ledger/ledger.json --rawfile c ledger/cache.json --rawfile m docs/LEDGER.md \
+                '{base_tree: $base_tree, tree: [
+                   {path: "ledger/ledger.json", mode: "100644", type: "blob", content: $l},
+                   {path: "ledger/cache.json",  mode: "100644", type: "blob", content: $c},
+                   {path: "docs/LEDGER.md",     mode: "100644", type: "blob", content: $m}]}' \
+              | gh api -X POST "repos/${REPO}/git/trees" --input - --jq .sha)"
+            if [ "$api_tree" != "$tree" ]; then
+              echo "::error::The tree built through the API (${api_tree}) is not the one generated here (${tree}); nothing published."
+              exit 1
+            fi
+            made="$(jq -n --arg tree "$tree" --arg parent "$base" \
+                --arg message "Ledger: refresh from the tool repositories' REGRESSIONS.md" \
+                '{message: $message, tree: $tree, parents: [$parent]}' \
+              | gh api -X POST "repos/${REPO}/git/commits" --input - --jq '[.sha, (.verification.verified | tostring)] | join(" ")')"
+            new="${made%% *}"
+            verified="${made#* }"
+            if [ "$verified" != true ]; then
+              verified="$(gh api "repos/${REPO}/git/commits/${new}" --jq '.verification.verified | tostring')"
+            fi
+            if [ "$verified" != true ]; then
+              echo "::error::Commit ${new} is not verified; ${BRANCH} is left as it was."
+              exit 1
+            fi
+            if [ -n "$cur" ]; then
+              gh api -X PATCH "repos/${REPO}/git/refs/heads/${BRANCH}" -f sha="$new" -F force=true --silent
+            else
+              gh api -X POST "repos/${REPO}/git/refs" -f ref="refs/heads/${BRANCH}" -f sha="$new" --silent
+            fi
+            echo "::notice::${BRANCH} is now ${new} (verified)."
+          fi
+
           if [ -n "$open_pr" ]; then
             echo "::notice::Updated pull request #${open_pr}."
           else
             gh pr create -R "$REPO" --base main --head "$BRANCH" \
               --title "Ledger: refresh" \
-              --body "Regenerated by the ledger workflow (scripts/ledger.mjs) from each tool repository's REGRESSIONS.md on main. Review docs/LEDGER.md, then merge by hand. This pull request was opened with the workflow token, so test.yml does not run on it; the workflow ran test/ledger.test.mjs before writing."
+              --body "Regenerated by the ledger workflow (scripts/ledger.mjs) from each tool repository's REGRESSIONS.md on main. Review docs/LEDGER.md, then merge by hand. The commit was made through the API, so GitHub signed it. A pull request opened with the workflow token starts no pull_request workflows, so the workflow dispatches test.yml and lint.yml on this branch after each new commit; their checks show here."
+          fi
+
+          # R-LED-09: the checks this pull request would otherwise not get.
+          if [ -n "$new" ]; then
+            for wf in test.yml lint.yml; do
+              gh workflow run "$wf" -R "$REPO" --ref "$BRANCH"
+            done
+            echo "::notice::Dispatched test.yml and lint.yml on ${BRANCH} at ${new}."
           fi
