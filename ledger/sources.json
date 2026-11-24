@@ -1,0 +1,41 @@
+{
+  "about": "The repositories whose REGRESSIONS.md the ledger reads (scripts/ledger.mjs), from their default branch. found_by maps an ID family to how its rows were found, where the ledger does not say; a row can also say it itself with a 'Found by: <how>.' sentence. Vocabulary: review, CI, self-test, mutation, live run, unknown.",
+  "repos": [
+    {
+      "repo": "isokron-ai/tool-qa",
+      "found_by": {
+        "R-ING": "review",
+        "R-WD": "review",
+        "R-META": "review"
+      }
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "found_by": {
+        "R-SS": "review"
+      }
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "found_by": {
+        "R-SBX": "review",
+        "R-CASE": "self-test",
+        "R-CI": "CI",
+        "R-MUT": "mutation"
+      }
+    },
+    {
+      "repo": "isokron-ai/mcp-writecheck-action",
+      "found_by": {
+        "R-WC": "CI",
+        "R-INP": "review"
+      }
+    },
+    {
+      "repo": "isokron-ai/mcp-write-safety",
+      "found_by": {
+        "R-INP": "review"
+      }
+    }
+  ]
+}
