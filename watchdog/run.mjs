@@ -32,6 +32,7 @@
 //   AGE_BIN, AGE_KEYGEN_BIN   optional paths of age and age-keygen
 //   ARCHIVE_LAST_OK     the Mac archive pull's heartbeat, `${{ vars.ARCHIVE_LAST_OK }}`
 //                       (watchdog/archive.mjs)
+//   LANE_OFFSITE_ENABLED  the off-site backup's lane switch (watchdog/offsite.mjs)
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -49,6 +50,7 @@ import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 import { archiveCheck } from './archive.mjs';
+import { offsiteCheck } from './offsite.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
 
@@ -204,6 +206,7 @@ export async function runWatchdog({
   }
   // The Mac archive pull's heartbeat, a repository variable passed in by the workflow.
   checks.push(archiveCheck({ now: now(), raw: env.ARCHIVE_LAST_OK }));
+  checks.push(await offsiteCheck({ client, repo, now: now(), env, fetch, sleep })); // the off-site backup's heartbeat artifact (watchdog/offsite.mjs)
 
   if (actions.dispatchPump) {
     const ref = env.GITHUB_REF_NAME || 'main';

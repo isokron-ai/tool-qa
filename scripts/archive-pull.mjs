@@ -487,7 +487,7 @@ export const SOURCE_BRANCH = 'main';
  * Looks each run up once, in `runs` (filled in bulk by prefetchRuns when there
  * are many).
  */
-async function provenanceProblem(client, repo, artifact, runs) {
+export async function provenanceProblem(client, repo, artifact, runs) {
   const wr = artifact.workflow_run;
   if (!wr || wr.id == null) return { why: 'GitHub gives no workflow run for it', ours: false };
   if (wr.repository_id == null || wr.head_repository_id !== wr.repository_id) return { why: `its run was made from another repository (head repository ${wr.head_repository_id ?? 'unknown'})`, ours: false };
@@ -516,7 +516,7 @@ const RUN_LEAD_MS = 24 * 60 * 60_000;
  * first), stopping once every id is found or the list is older than the
  * oldest artifact by a day. Ids it does not find are left for one GET each.
  */
-async function prefetchRuns(client, repo, artifacts, runs, maxPages = MAX_RUN_PAGES) {
+export async function prefetchRuns(client, repo, artifacts, runs, maxPages = MAX_RUN_PAGES) {
   const need = new Set(artifacts.map((a) => a.workflow_run?.id).filter((id) => id != null && !runs.has(id)));
   if (need.size < BULK_RUNS_MIN) return 0;
   const times = artifacts.map((a) => Date.parse(a.created_at)).filter(Number.isFinite);
@@ -734,7 +734,7 @@ export function cleanPartials(dest, { alive = pidAlive, pid = process.pid } = {}
 }
 
 /** @returns {Promise<{ items: object[], complete: boolean }>} */
-async function listArtifacts(client, repo, since, maxPages) {
+export async function listArtifacts(client, repo, since, maxPages) {
   const items = [];
   for (let page = 1; page <= maxPages; page++) {
     const res = await client.request('GET', `/repos/${repo}/actions/artifacts`, { query: { per_page: 100, page } });
@@ -746,7 +746,7 @@ async function listArtifacts(client, repo, since, maxPages) {
   return { items, complete: false };
 }
 
-async function download(client, fetch, repo, artifact, sleep) {
+export async function download(client, fetch, repo, artifact, sleep) {
   const res = await client.request('GET', `/repos/${repo}/actions/artifacts/${artifact.id}/zip`, { redirect: 'manual' });
   const location = res.headers.get('location');
   if (res.status < 300 || res.status >= 400 || !location) throw new Error(`expected a redirect to the archive, got HTTP ${res.status}`);
