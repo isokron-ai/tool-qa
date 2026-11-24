@@ -301,7 +301,7 @@ test('R-SNAP-09: the watchdog shows the state snapshots on the health issue: amb
 test('R-SNAP-09: the watchdog reads the snapshot manifest from the release with the job token; an unreadable one is amber, not a failed run', async () => {
   const w = world({ seed: () => {} });
   delete w.opts.readSnapshot;
-  const manifest = { version: 1, current_at: new Date(w.c.t - 30 * MIN).toISOString(), snapshots: [{ name: 'state-20260302T113000Z-0123abcd.sqlite.age', created: '2026-03-02T11:30:00Z', sha256: 'a'.repeat(64), size: 1 }] };
+  const manifest = { version: 1, current_at: new Date(w.c.t - 30 * MIN).toISOString(), snapshots: [{ name: 'state-20260302T113000Z-0123abcd.sqlite.age', created: '2026-03-02T11:30:00Z', sha256: `0123abcd${'a'.repeat(56)}`, size: 1 }] };
   const seen = [];
   const orig = w.opts.fetch;
   w.opts.fetch = async (url, init = {}) => {
@@ -329,3 +329,23 @@ test('R-SNAP-09: the watchdog reads the snapshot manifest from the release with 
   assert.equal(out.overall, 'amber');
   w2.cleanup();
 });
+
+test('R-SNAP-17: a snapshot manifest with null entries, one that throws, or a time in the future is amber; the watchdog run still writes the issue', async () => {
+  const cases = [
+    ['null entries', async () => ({ manifest: { version: 1, current_at: '2026-03-02T11:50:00Z', snapshots: [null, null, null] } })],
+    ['a hostile object', async () => ({ manifest: { version: 1, get snapshots() { throw new Error('boom'); } } })],
+    ['the future', async () => ({ manifest: { version: 1, current_at: '2026-03-02T15:00:00Z', snapshots: [{ name: 'state-20260302T113000Z-0123abcd.sqlite.age', created: '2026-03-02T11:30:00Z', sha256: 'a'.repeat(64), size: 1 }] } })],
+    ['no manifest', async () => ({ manifest: null, missing: 'manifest' })],
+  ];
+  for (const [what, readSnapshot] of cases) {
+    const w = world({ seed: () => {} });
+    w.opts.readSnapshot = readSnapshot;
+    const out = await runWatchdog(w.opts);
+    const item = parseBody(w.issues[0].body).checks.find((c) => c.id === 'state-snapshot');
+    assert.equal(item.status, 'amber', what);
+    assert.equal(out.overall, 'amber', what);
+    if (what === 'no manifest') assert.match(item.summary, /has no manifest\.json/);
+    w.cleanup();
+  }
+});
+

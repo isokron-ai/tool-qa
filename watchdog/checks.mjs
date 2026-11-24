@@ -32,8 +32,9 @@
 //                        than the one the nightly tested.
 //   state-snapshot       the hourly state snapshots (snapshot/health.mjs): amber
 //                        when no snapshot run has confirmed the live state is
-//                        captured for 3 hours (or there is no snapshot yet, or
-//                        the manifest cannot be read), red after 6. Off when the
+//                        captured for 3 hours (or there is no snapshot yet, the
+//                        release or manifest is missing or unreadable, or its
+//                        time is in the future), red after 6. Off when the
 //                        state-snapshot lane is off.
 
 import { snapshotCheck } from '../snapshot/health.mjs';
@@ -92,7 +93,7 @@ const baseName = (path) => String(path).split('/').pop();
  * @param {{ now: number, slots: number, lanes?: Record<string, boolean>,
  *   runs?: Record<string, object[]>, artifacts?: object[], state: object|null,
  *   workflows?: object[], expected?: string[], breaker?: object,
- *   snapshot?: { manifest?: object|null, error?: string|null } }} input
+ *   snapshot?: { manifest?: object|null, error?: string|null, missing?: string|null } }} input
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
@@ -202,7 +203,17 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
   if (breaker) checks.push(breakerCheck(breaker));
 
   // the hourly state snapshots
-  if (snapshot) checks.push(snapshotCheck({ now, manifest: snapshot.manifest ?? null, error: snapshot.error ?? null, laneOn: laneOn(lanes, 'state-snapshot') }));
+  // snapshotCheck does not throw, but a bad manifest must never take the
+  // whole watchdog run down, so it is fenced here too (R-SNAP-17).
+  if (snapshot) {
+    let item;
+    try {
+      item = snapshotCheck({ now, manifest: snapshot.manifest ?? null, error: snapshot.error ?? null, missing: snapshot.missing ?? null, laneOn: laneOn(lanes, 'state-snapshot') });
+    } catch (err) {
+      item = { id: 'state-snapshot', status: 'amber', summary: `could not judge the snapshot manifest: ${String(err?.message ?? err).slice(0, 200)}` };
+    }
+    checks.push(item);
+  }
 
   return { checks, actions };
 }
