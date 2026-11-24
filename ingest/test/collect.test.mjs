@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,12 +11,13 @@ import { join } from 'node:path';
 import { openState } from '../../state/db.mjs';
 import { ApiBudget, BudgetExceededError, budgetedFetch } from '../../pump/budgets.mjs';
 import { API, fakeApi } from '../../test/lib/fake-api.mjs';
+import { unpackBundle } from '../../worker-kit/bundle.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt } from '../age.mjs';
-import { createCollector, IngestSetupError } from '../collect.mjs';
+import { createCollector, IngestSetupError, SEAL_KEY } from '../collect.mjs';
 import { parseRegistry } from '../registry.mjs';
 import {
-  artifactEntry, defaultRun, fakeDecrypt, fakeEncrypt, makeBundle, REGISTRY_TEXT, RUN_ID, RUN_KEY, WORKER_REPO, WORKFLOW_SHA,
+  artifactEntry, defaultFiles, defaultRun, fakeDecrypt, fakeEncrypt, makeBundle, REGISTRY_TEXT, RUN_ID, RUN_KEY, WORKER_REPO, WORKFLOW_SHA,
 } from '../testkit.mjs';
 
 const T0 = Date.parse('2026-11-23T12:00:00Z');
@@ -82,7 +84,7 @@ function harness({ api, pub = PUBKEY, sealTo, ...over } = {}) {
   const lines = [];
   const collect = (db, more = {}) => collector.collect({ db, now: () => clock.t, log: (l) => lines.push(l), mintToken, ...more });
   const sealed = (attemptId = 'att-1', index = 0) => join(outDir, `ingest-${attemptId}-${index}.tar.age`);
-  const opened = (attemptId = 'att-1', index = 0) => new Map(readTar(fakeDecrypt(readFileSync(sealed(attemptId, index)))).map((e) => [e.path, e.data]));
+  const opened = (attemptId = 'att-1', index = 0) => new Map(readTar(unpackBundle(fakeDecrypt(readFileSync(sealed(attemptId, index))))).map((e) => [e.path, e.data]));
   return { collector, collect, minted, lines, dir, outDir, clock, sealed, opened, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -468,7 +470,8 @@ test('when one item\'s outputs cannot be sealed, only that item waits for the ne
   let calls = 0;
   const encrypt = (plaintext) => {
     calls += 1;
-    if (calls === 2) throw new Error('disk full');
+    // Each item seals its full bundle, then its keep-forever file: the second item's full bundle is call 3.
+    if (calls === 3) throw new Error('disk full');
     return fakeEncrypt(plaintext);
   };
   const h = harness({ api, crypto: { decrypt: fakeDecrypt, encrypt, publicKey: () => PUBKEY } });
@@ -673,7 +676,7 @@ test('with the real age binary: the bundle is decrypted and the outputs sealed t
     const s = await h.collect(db);
     assert.deepEqual(s.outcomes, { accepted: 1 });
     const tar = ageDecrypt({ ciphertext: readFileSync(h.sealed()), identity, ageBin: AGE });
-    const paths = readTar(tar).map((e) => e.path);
+    const paths = readTar(unpackBundle(tar)).map((e) => e.path);
     assert.ok(paths.includes('accepted/att-1/0/ingest.json'));
     assert.ok(paths.includes('accepted/att-1/0/manifest.json'));
     for (const l of h.lines) assert.ok(!l.includes('AGE-SECRET-KEY'), l);
@@ -1051,5 +1054,109 @@ test('R-CHAOS-10: ingest passes the artifact upload time: a run that completed i
       h.cleanup();
       db.close();
     }
+  }
+});
+
+// ---- loop upgrade 20: zstd before age, and the keep-forever files ----
+
+const TOOLS = '[{"name":"search","description":"finds things"}]';
+const withTools = (fence, tools = TOOLS) => makeBundle({ identity: { fence }, files: { ...defaultFiles(), 'raw/subject/tools.json': tools } });
+const keepTar = (h, name) => new Map(readTar(unpackBundle(fakeDecrypt(readFileSync(join(h.dir, 'keep-out', name))))).map((e) => [e.path, e.data]));
+
+test('R-RET-03: each full bundle is sealed as zstd, and its keep-forever file and its catalog next to it, each readable by magic bytes', async () => {
+  const { db, fence } = setup();
+  const h = harness({ api: worker({ bundle: withTools(fence) }) });
+  try {
+    await h.collect(db);
+    const sealedBytes = readFileSync(h.sealed());
+    assert.deepEqual(sealedBytes.subarray(fakeEncrypt(Buffer.alloc(0)).length, fakeEncrypt(Buffer.alloc(0)).length + 4), Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), 'zstd inside the age box');
+    const full = h.opened();
+    assert.ok(full.has('accepted/att-1/0/controls/forgery.json') && full.has('accepted/att-1/0/logs/run.log'), 'the full bundle keeps everything');
+    const keep = keepTar(h, 'keep-att-1-0.tar.age');
+    assert.deepEqual([...keep.keys()].sort(), ['accepted/att-1/0/ingest.json', 'accepted/att-1/0/manifest.json', 'accepted/att-1/0/observations/check.ndjson', 'accepted/att-1/0/results/report.json']);
+    const files = readdirSync(join(h.dir, 'keep-out')).sort();
+    const sha = createHash('sha256').update(TOOLS).digest('hex');
+    assert.deepEqual(files, [`catalog-${sha}.tar.age`, 'keep-att-1-0.tar.age']);
+    assert.equal(keepTar(h, `catalog-${sha}.tar.age`).get('tools.json').toString(), TOOLS);
+    const note = db.getKv(SEAL_KEY);
+    assert.equal(note.sealed, 1);
+    assert.equal(note.streak, 0);
+    assert.ok(note.bytes_out < note.bytes_in);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-RET-04: a tool list shared by two items is sealed once as a catalog; a different one is sealed again', async () => {
+  const keys = shardKeys(3);
+  const { db, items } = setup({ runKeys: keys });
+  const tools = [TOOLS, TOOLS, '[{"name":"other"}]'];
+  const api = shardWorker({
+    artifacts: shardArtifacts(items).artifacts,
+    blobs: Object.fromEntries(items.map((it, i) => [900 + i, fakeEncrypt(makeBundle({ identity: { run_key: it.run_key, fence: it.fence }, files: { ...defaultFiles(), 'raw/subject/tools.json': tools[i] } }).tar)])),
+  });
+  const h = harness({ api });
+  try {
+    await h.collect(db);
+    const files = readdirSync(join(h.dir, 'keep-out')).sort();
+    assert.equal(files.filter((f) => f.startsWith('catalog-')).length, 2, files.join(','));
+    assert.equal(files.filter((f) => f.startsWith('keep-')).length, 3);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-RET-05: a compression that fails never stops the seal: the bundle is sealed as a plain tar, the decision is recorded, and the failure is counted for the watchdog', async () => {
+  const { db, fence } = setup();
+  const h = harness({ api: worker({ bundle: withTools(fence) }), compress: () => { throw new Error('zstd exploded'); } });
+  try {
+    const s = await h.collect(db);
+    assert.equal(s.recorded, 1);
+    assert.equal(s.errors, 0);
+    const full = h.opened(); // unpackBundle takes the plain tar
+    assert.ok(full.has('accepted/att-1/0/manifest.json'));
+    assert.ok(!readFileSync(h.sealed()).subarray(fakeEncrypt(Buffer.alloc(0)).length).subarray(0, 4).equals(Buffer.from([0x28, 0xb5, 0x2f, 0xfd])));
+    const note = db.getKv(SEAL_KEY);
+    assert.equal(note.streak, 1);
+    assert.equal(note.failures.compress, 3, 'the full bundle, the keep file and the catalog');
+    assert.match(note.last_failure.error, /zstd exploded/);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-RET-05: a keep-forever file that cannot be written is counted and the full bundle is still sealed and recorded', async () => {
+  const { db, fence } = setup();
+  let calls = 0;
+  const encrypt = (plaintext) => {
+    calls += 1;
+    if (calls === 2) throw new Error('disk full');
+    return fakeEncrypt(plaintext);
+  };
+  const h = harness({ api: worker({ bundle: withTools(fence) }), crypto: { decrypt: fakeDecrypt, encrypt, publicKey: () => PUBKEY } });
+  try {
+    const s = await h.collect(db);
+    assert.equal(s.recorded, 1);
+    assert.ok(existsSync(h.sealed()));
+    assert.equal(db.getKv(SEAL_KEY).failures.keep, 1);
+    assert.equal(db.getKv(SEAL_KEY).streak, 1);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-RET-06: the note of a seal is written with the time of the tick (the seal once read a clock that was not in its scope, and no item could be sealed)', async () => {
+  const { db, fence } = setup();
+  const h = harness({ api: worker({ bundle: makeBundle({ identity: { fence } }) }) });
+  try {
+    await h.collect(db);
+    assert.equal(db.getKv(SEAL_KEY).at, new Date(h.clock.t).toISOString());
+  } finally {
+    h.cleanup();
+    db.close();
   }
 });

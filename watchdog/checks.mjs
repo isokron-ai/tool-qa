@@ -53,6 +53,7 @@
 
 import { snapshotCheck } from '../snapshot/health.mjs';
 import { sizeCheck } from './size.mjs';
+import { sealCheck } from '../keep/health.mjs';
 import { identityCheck } from './identity.mjs';
 
 const MIN = 60_000;
@@ -203,6 +204,7 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
       size = { id: 'state-size', status: 'amber', summary: `could not judge the state size: ${String(err?.message ?? err).slice(0, 200)}` };
     }
     checks.push(size);
+    checks.push(sealCheck(state.kv?.['retention.seal'] ?? null)); // compression and keep-forever files at seal time (keep/health.mjs)
     const subj = state.kv?.['pump.subjects'];
     if (subj && typeof subj === 'object') {
       checks.push(subj.ok

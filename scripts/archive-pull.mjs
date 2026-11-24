@@ -216,7 +216,7 @@ function readCursors(dest) {
 export function ingestRun(artifact) {
   const runId = artifact.workflow_run?.id ?? null;
   const name = String(artifact.name);
-  const m = /^ingest-(\d+)-(\d+)$/.exec(name);
+  const m = /^ingest-(?:keep-)?(\d+)-(\d+)$/.exec(name);
   if (m && (runId === null || String(runId) === m[1])) return { run_id: Number(m[1]), run_attempt: Number(m[2]), attempt_id: null };
   const attempt = name.replace(/^ingest-/, '').replace(/\.tar\.age$/, '');
   return { run_id: runId, run_attempt: null, attempt_id: attempt || null };
@@ -228,7 +228,8 @@ const isAge = (data) =>
 
 /**
  * What an ingest artifact is, for its manifest line: `pump` (the pump's sealed
- * outputs, ingest-<run id>-<run attempt>), `state-archive` (rows the pump moved
+ * outputs, ingest-<run id>-<run attempt>), `keep` (the keep-forever part of
+ * the same outputs, ingest-keep-<run id>-<run attempt>), `state-archive` (rows the pump moved
  * out of the live state, ingest-state-archive-<run id>-<run attempt>; see
  * pump/prune.mjs) or `re-ingest` (a manual re-ingest, ingest-<attempt id>).
  * Lines written before this field have none.
@@ -236,6 +237,7 @@ const isAge = (data) =>
 export function ingestKind(name) {
   const n = String(name);
   if (/^ingest-state-archive-\d+-\d+$/.test(n)) return 'state-archive';
+  if (/^ingest-keep-\d+-\d+$/.test(n)) return 'keep';
   if (/^ingest-\d+-\d+$/.test(n)) return 'pump';
   return 're-ingest';
 }

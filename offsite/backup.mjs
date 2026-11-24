@@ -66,7 +66,7 @@
 //
 // Environment: GITHUB_TOKEN (actions: read, contents: read), GITHUB_REPOSITORY,
 // GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, R2_* above, OFFSITE_* limits,
-// OFFSITE_SHA256_HEADER (`off` stops sending x-amz-checksum-sha256),
+// OFFSITE_SHA256_HEADER (`on` sends x-amz-checksum-sha256; off by default, R2 refuses it with Content-MD5),
 // OFFSITE_HEARTBEAT_FILE, GITHUB_STEP_SUMMARY.
 
 import { createHash } from 'node:crypto';
@@ -104,6 +104,7 @@ export const PREFIX = Object.freeze({
   snapshots: 'snapshots/',
   snapshotManifests: 'snapshot-manifests/',
   ingest: 'ingest/',
+  keep: 'keep/',
   history: 'history/',
   manifest: 'manifest/',
   cursor: '_state/cursor/',
@@ -177,7 +178,8 @@ export function readConfig(env) {
     bucket,
     accessKeyId: String(env.R2_ACCESS_KEY_ID ?? ''),
     secretAccessKey: String(env.R2_SECRET_ACCESS_KEY ?? ''),
-    sendSha256: String(env.OFFSITE_SHA256_HEADER ?? '').trim().toLowerCase() !== 'off',
+    // R2 refuses Content-MD5 together with x-amz-checksum-sha256, so the header is off unless asked for.
+    sendSha256: String(env.OFFSITE_SHA256_HEADER ?? '').trim().toLowerCase() === 'on',
     limits,
   };
 }
@@ -263,12 +265,17 @@ export async function readCursor(store, inv) {
 
 // ---- keys ----
 
+/** True for `ingest-keep-<run>-<attempt>`: the keep-forever part of a pump run's outputs. */
+export const isKeepArtifact = (name) => /^ingest-keep-\d+-\d+$/.test(String(name));
+
 /** The key of an artifact's bytes: by kind, UTC day of creation, and name. */
 export function artifactKey(artifact, isZip) {
   const kind = kindOf(artifact.name);
   if (!kind) throw new Error(`${artifact.name} is not an ingest or history artifact`);
   const folder = segment(artifact.name);
-  return `${PREFIX[kind]}${day(artifact.created_at)}/${folder}/${isZip ? `${folder}.zip` : folder}`;
+  // The keep-forever part of the pump's outputs is its own prefix, so the prune can tell it from full bundles.
+  const prefix = isKeepArtifact(artifact.name) ? PREFIX.keep : PREFIX[kind];
+  return `${prefix}${day(artifact.created_at)}/${folder}/${isZip ? `${folder}.zip` : folder}`;
 }
 
 /** Before download: a `.tar.age` name was uploaded as one file (archive: false); anything else is a zip. */
@@ -308,7 +315,7 @@ export function verifyProblem(head, { size, sha256, md5 }, putEtag) {
  * `gh` is { client, release, fetch, sleep } for this repository.
  * @returns {Promise<object>} the heartbeat (see the header)
  */
-export async function runBackup({ store, gh, repo, runId = 'local', limits = DEFAULTS, sendSha256 = true, now = Date.now, log = () => {}, maxRunMs = DEFAULT_MAX_RUN_MS }) {
+export async function runBackup({ store, gh, repo, runId = 'local', limits = DEFAULTS, sendSha256 = false, now = Date.now, log = () => {}, maxRunMs = DEFAULT_MAX_RUN_MS }) {
   const m = meter(store, { ...limits, ...(gh?.sleep ? { sleep: gh.sleep } : {}) });
   const startedAt = new Date(now()).toISOString();
   const deadline = Date.parse(startedAt) + maxRunMs;

@@ -39,6 +39,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ageDecrypt } from '../ingest/age.mjs';
+import { unpackBundle } from '../worker-kit/bundle.mjs';
 import { readTar } from '../worker-kit/tar.mjs';
 import { catalogDrift, gitTagSeries, ociTagSeries } from './drift.mjs';
 
@@ -271,17 +272,21 @@ export function sealedFiles(archiveDir) {
 export function readArchive(archiveDir, { identity, ageBin = process.env.AGE_BIN || 'age', log = () => {} } = {}) {
   const stats = { sealed: 0, failed: 0, unreadable: 0 };
   const items = [];
+  const seen = new Set();
   for (const file of sealedFiles(archiveDir)) {
     stats.sealed++;
     let entries;
     try {
-      entries = readTar(ageDecrypt({ ciphertext: readFileSync(file), identity, ageBin }));
+      entries = readTar(unpackBundle(ageDecrypt({ ciphertext: readFileSync(file), identity, ageBin })));
     } catch (err) {
       stats.failed++;
       log(`could not read ${relative(archiveDir, file)} (${err?.code ?? err?.name ?? 'error'})`);
       continue;
     }
-    items.push(...itemsFromEntries(entries, stats));
+    // An item is in its full bundle and in its keep-forever file (loop upgrade 20) until the full one expires.
+    const fresh = itemsFromEntries(entries, stats).filter((item) => !seen.has(item.key));
+    for (const item of fresh) seen.add(item.key);
+    items.push(...fresh);
   }
   return { items, stats };
 }

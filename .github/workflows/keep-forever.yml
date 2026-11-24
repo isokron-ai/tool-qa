@@ -1,0 +1,53 @@
+name: keep-forever
+
+# The keep-forever copy (loop upgrade 20): the keep-forever set (the pump's
+# keep-*.tar.age and catalog-*.tar.age files, still age-encrypted, and the
+# history artifacts) as release assets on the "keep-forever" release, rolled by
+# month, each asset under 2 GiB, with a manifest per month. It holds no key and
+# never decrypts. Skips what it has already copied. The GitHub schedule on this
+# repository has not fired reliably, so the operator's stand-in scheduler also
+# dispatches it every six hours. See docs/OPERATIONS.md, "Data retention".
+
+on:
+  schedule:
+    - cron: '37 */6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: keep-forever
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    name: copy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write # read and write the "keep-forever" release
+      actions: read # list and download the ingest-keep, history and registry artifacts
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Kill switch
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_KEEP_FOREVER_ENABLED: ${{ vars.LANE_KEEP_FOREVER_ENABLED }}
+        run: node scripts/guard.mjs --job keep-forever --no-slots
+      - name: Set up Node
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Copy
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KEEP_MAX_RUN_BYTES: ${{ vars.KEEP_MAX_RUN_BYTES }}
+        run: node keep/copy.mjs

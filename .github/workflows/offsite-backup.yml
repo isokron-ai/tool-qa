@@ -151,4 +151,5 @@ jobs:
           OFFSITE_PRUNE_AT_BYTES: ${{ vars.OFFSITE_PRUNE_AT_BYTES }}
           OFFSITE_PRUNE_TO_BYTES: ${{ vars.OFFSITE_PRUNE_TO_BYTES }}
           OFFSITE_PRUNE_KEEP_SNAPSHOTS: ${{ vars.OFFSITE_PRUNE_KEEP_SNAPSHOTS }}
+          OFFSITE_PRUNE_LEGACY_INGEST: ${{ vars.OFFSITE_PRUNE_LEGACY_INGEST }}
         run: node offsite/prune.mjs --mode "$MODE"

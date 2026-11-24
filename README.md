@@ -81,7 +81,7 @@ Details, and what to do in an emergency: [docs/OPERATIONS.md](docs/OPERATIONS.md
 
 ## Development
 
-Node 22.13 or newer. No runtime dependencies.
+Node 22.15 or newer (zstd in zlib). No runtime dependencies.
 
 ```sh
 npm test                 # node --test

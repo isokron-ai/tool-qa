@@ -7,6 +7,7 @@
     ".github/workflows/history-packages.yml",
     ".github/workflows/history-popularity.yml",
     ".github/workflows/state-snapshot.yml",
-    ".github/workflows/offsite-backup.yml"
+    ".github/workflows/offsite-backup.yml",
+    ".github/workflows/keep-forever.yml"
   ]
 }

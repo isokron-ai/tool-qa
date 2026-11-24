@@ -69,7 +69,9 @@ they run the guard with `--no-slots`: `LOOP_SLOTS=0` does not stop them. Use
 `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` or the lane switch for those. The same goes
 for the manual re-ingest workflow (see "Manual re-ingest").
 The off-site backup (`offsite-backup`, "Off-site backup") also runs the guard
-with `--no-slots`; its lane switch is `LANE_OFFSITE_ENABLED`.
+with `--no-slots`; its lane switch is `LANE_OFFSITE_ENABLED`. The keep-forever
+copy (`keep-forever`, "Data retention") does the same, with
+`LANE_KEEP_FOREVER_ENABLED`.
 
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a
@@ -968,6 +970,8 @@ person. off: switched off on purpose.
 | `state-size` | The state database (or the asset it was pulled from) is over 256 MiB, the `state-snapshots` release holds over 2 GB, the last prune pass failed or gave up its archive, or a pump run finished without recording a size (amber); the database is over 768 MiB or the snapshots over 6 GB (red). The details show the database and asset size, the main row counts, the last prune result and the snapshot total. | A failed or given-up pass needs nothing if the next one succeeds; otherwise read the pump log's `prune:` lines. If the size keeps growing, check that pruning is on (`LANE_STATE_PRUNE_ENABLED`) and that `ingest-state-archive-*` artifacts are uploaded. Red: act before it reaches 1 GiB (see "State pruning and size"). |
 | `subject-ids` | The pump's last subject id pass (kv `pump.identity`) stopped on a mass of NOT_FOUND answers, or more than 5 and more than 20% of the active subjects are marked gone (red); any subject is in id conflict (amber). Green shows the not-found, conflict and merged counts; absent before the first pass. | Red on NOT_FOUND: check the pump job's `GITHUB_TOKEN` (nothing was marked gone; it retries hourly). Red on gone: read `subject_events` for `not_found`. Amber: read the `id_conflict` events and decide by hand (see "Subject ids"). |
 | `offsite-backup` | The off-site backup to R2: no good run for 12 hours, not configured yet, near the cost cap, or a run stopped early (amber); no good run for 24 hours, over the cost cap, or a verification failure (red). | Open the newest `offsite-backup` run's summary. See "Off-site backup". |
+| `keep-forever` | The keep-forever copy on the `keep-forever` release ("Data retention"): no good run for 12 hours, the last run failed, or an artifact has waited over 30 days to be copied (amber); no good run for 24 hours, or an artifact has waited over 60 days (red: GitHub deletes it at 90). Off: `LANE_KEEP_FOREVER_ENABLED` is not `true`. | Open the newest `keep-forever` run's summary. Dispatch it if no run is recent (`gh workflow run keep-forever.yml --repo isokron-ai/tool-qa`) and check the stand-in scheduler. |
+| `retention-seal` | The last seal of the pump's outputs could not compress, or could not write the keep-forever file (amber); three seals in a row failed (red). The full bundle was still sealed, as a plain tar if need be, so nothing is lost, but each such seal leaves a hole in the keep-forever set. | Read the item's summary for the error (kv `retention.seal` in the state); fix the cause, then the next clean seal turns it green. "Data retention". |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
@@ -1181,6 +1185,7 @@ everything new since the last run, byte for byte as GitHub stores it:
 | State snapshots the `state-snapshots` manifest lists | `snapshots/<day>/state-<time>-<sha8>.sqlite.age` | yes (state key) |
 | Each version of that manifest | `snapshot-manifests/<day>/manifest-<updated>-<sha8>.json` | no (public metadata) |
 | `ingest-*` artifacts | `ingest/<day>/<artifact>/<artifact>.zip` (or the artifact's one file, for `archive: false`) | yes: the zip holds only `*.tar.age` files |
+| `ingest-keep-*` artifacts (the keep-forever part of the pump's outputs) | `keep/<day>/<artifact>/<artifact>.zip` | yes, the same |
 | `history-*`, `registry-*` artifacts | `history/<day>/<artifact>/<artifact>.zip` | no (public registry and package data) |
 | What each run copied | `manifest/<day>/<run time>-<run id>.ndjson` | no |
 | Where the next run starts | `_state/cursor/<run time>-<run id>.json` | no |
@@ -1204,15 +1209,17 @@ last cursor) writes its line then, marked `"recovered": true`.
 
 **Integrity.** Every upload is a new object only (`If-None-Match: *`) with
 `Content-MD5` (R2 refuses a body that does not match),
-`x-amz-checksum-sha256` and the sha256 again as metadata (`x-amz-meta-sha256`).
+the sha256 as metadata (`x-amz-meta-sha256`), and, only when asked for
+(`OFFSITE_SHA256_HEADER=on`), `x-amz-checksum-sha256`.
 A HEAD after each upload must show the same size, an ETag equal to the MD5,
 and the same sha256; anything else is a verification failure (the run fails,
 the health item is red). A key that already holds the same sha256 is skipped.
 A key that holds other bytes is never overwritten: the copy goes beside it as
-`<key>.sha256-<12 hex>` and that run reports a verification failure. Should R2
-ever refuse the `x-amz-checksum-sha256` header, set the variable
-`OFFSITE_SHA256_HEADER` to `off`: Content-MD5, the signed payload hash and the
-metadata check remain.
+`<key>.sha256-<12 hex>` and that run reports a verification failure.
+R2 refuses `Content-MD5` together with `x-amz-checksum-sha256`, so the header is
+not sent unless the variable `OFFSITE_SHA256_HEADER` is `on` (it is not set in
+production). Without it Content-MD5, the signed payload hash and the metadata
+check remain.
 
 **Client.** The official AWS SDK v3 S3 client, exact version in
 [`offsite/package.json`](../offsite/package.json), installed with
@@ -1254,9 +1261,10 @@ from another branch skips them. Optional variables:
 | `OFFSITE_MAX_RUN_BYTES` | 2000000000 | Bytes one phase of a run (snapshots, then artifacts) uploads; past it, the rest of that kind waits for the next run and the other kinds go on. A run also stops taking new items after 30 minutes. |
 | `OFFSITE_MAX_CLASS_A` | 2000 | LIST and PUT operations one run may use. |
 | `OFFSITE_MAX_CLASS_B` | 20000 | HEAD and GET operations one run may use. |
-| `OFFSITE_SHA256_HEADER` | on | `off` stops sending `x-amz-checksum-sha256`. |
+| `OFFSITE_SHA256_HEADER` | off | `on` sends `x-amz-checksum-sha256`; R2 refuses it together with Content-MD5, so leave it unset. |
 | `OFFSITE_PRUNE_ENABLED` | off | `true` lets the prune job delete (below). |
 | `OFFSITE_PRUNE_AT_BYTES`, `OFFSITE_PRUNE_TO_BYTES`, `OFFSITE_PRUNE_KEEP_SNAPSHOTS` | 85% and 70% of the cap; 48 | Prune thresholds. |
+| `OFFSITE_PRUNE_LEGACY_INGEST` | off | `true` lets the prune expire full bundles made before the keep-forever files existed (they have no copy). |
 
 ### The cost cap
 
@@ -1298,27 +1306,39 @@ lost on GitHub or the Mac archive.
 
 ### Prune (opt-in, off by default)
 
-The `prune` job ([`offsite/prune.mjs`](../offsite/prune.mjs)) frees room when
-the bucket nears the cap. It does nothing unless the bucket holds more than
-`OFFSITE_PRUNE_AT_BYTES`; then it deletes, until the bucket is down to
-`OFFSITE_PRUNE_TO_BYTES`, only objects last written more than 31 days ago (the
-lock refuses younger ones; a day of margin), in this order, oldest first in
-each: `history/`, old cursors (the newest 10 kept), old snapshot manifests (the
-newest 10 kept), `ingest/`, then `snapshots/`, never the newest
-`OFFSITE_PRUNE_KEEP_SNAPSHOTS` (48). The run manifests under `manifest/` are
-never deleted. It fails when it cannot reach the target because the rest is
-still locked. In apply mode it deletes nothing, and fails, when the listing
-looks cut short: a page marked truncated with no continuation token, or the
-newest cursor or newest run manifest (each listed on its own) missing from
-the full listing; it also refuses when there is no cursor yet. Its run summary
-is scrubbed of the credentials and the account ID.
+The `prune` job ([`offsite/prune.mjs`](../offsite/prune.mjs)) is our own
+expiry; nothing is changed on the bucket (its 30-day lock stays, and the
+token is object-only). It does two things, both only to objects last written
+more than 31 days ago (the lock refuses younger ones; a day of margin):
+
+1. **Expiry.** Every full ingest bundle (`ingest/`, a pump run's
+   `ingest-<run>-<attempt>`) past 30 days goes, whatever the bucket's size, if
+   its keep-forever copy (`keep/`, `ingest-keep-<run>-<attempt>`) is in the
+   bucket. A full bundle with no copy (made before the keep-forever files
+   existed) stays, and the summary counts it; `OFFSITE_PRUNE_LEGACY_INGEST=true`
+   lets the prune expire those too. State archives and manual re-ingests are
+   left to the cap pass.
+2. **Cap.** Only while the bucket holds more than `OFFSITE_PRUNE_AT_BYTES`: it
+   deletes, until the bucket is down to `OFFSITE_PRUNE_TO_BYTES`, oldest first
+   in each group: old cursors (the newest 10 kept), old snapshot manifests (the
+   newest 10 kept), full `ingest/` bundles, then `snapshots/`, never the newest
+   `OFFSITE_PRUNE_KEEP_SNAPSHOTS` (48). It fails when it cannot reach the target
+   because the rest is locked, held or keep-forever.
+
+It never deletes the keep-forever set (`keep/`, `history/`), the run
+manifests under `manifest/`, or an artifact on the hold list ("Data
+retention"). In apply mode it deletes nothing, and fails, when the listing
+looks cut short (a page marked truncated with no continuation token, or the
+newest cursor or newest run manifest, each listed on its own, missing from
+the full listing), when there is no cursor yet, or when the hold list cannot be
+read. Its run summary is scrubbed of the credentials and the account ID.
 
 - Dry run, any time: `gh workflow run offsite-backup.yml --repo isokron-ai/tool-qa -f prune=dry-run` (lists what it would delete in the run summary).
-- To let it delete: `gh variable set OFFSITE_PRUNE_ENABLED --repo isokron-ai/tool-qa --body true`. It then runs after every scheduled backup (not after a cancelled one), and on a dispatch with `-f prune=apply`; the stand-in scheduler dispatches with `-f prune=apply` while the variable is `true`.
+- **To turn it on** (it is off until you do): `gh variable set OFFSITE_PRUNE_ENABLED --repo isokron-ai/tool-qa --body true`. Read a dry run first. It then runs after every scheduled backup (not after a cancelled one), and on a dispatch with `-f prune=apply`; the stand-in scheduler dispatches with `-f prune=apply` while the variable is `true`. To turn it off again, set the variable to anything else or delete it.
 
-An R2 lifecycle rule ("delete objects older than N days" on a prefix) would
-do the same for one prefix without code, but it cannot keep the newest
-snapshots by count or wait for the bucket to fill, so the job is used instead.
+An R2 lifecycle rule would expire a whole prefix without code, but it cannot
+tell a full bundle with a copy from one without, or honour a hold, so the job
+is used instead.
 
 ### Health
 
@@ -1369,6 +1389,98 @@ age --decrypt -i ~/.isokron/loop-age-identity.key -o state.sqlite state-<time>-<
 To put a snapshot back as the live state, follow "State snapshots" (the
 restore drill and `restore --apply`, with the loop stopped); the off-site copy
 is the same bytes as the release asset of that name.
+
+## Data retention
+
+Loop upgrade 20 (owner decisions of 24 Nov 2026; the study is in the company
+audit repository, `research/data-retention-2026-11/`). Three parts: compress,
+keep two tiers, and keep a second copy of the small tier.
+
+**Compression.** The pump seals each judged item as `age(zstd(tar))`: plain
+zstd at level 12 (`worker-kit/bundle.mjs`), checked by reading it back before it
+is sealed, with Node's own zlib (no dependency; Node 22.15 or newer has it, and
+the workflows run Node 24). No trained dictionary. Readers tell a sealed file
+that is a plain tar (before the upgrade) from a zstd one by its first four
+bytes, so an archive holding both reads the same way. If compression fails the
+item is sealed as a plain tar and counted (kv `retention.seal`, the
+`retention-seal` health item); the decision is still recorded. A manual
+re-ingest seals zstd the same way.
+
+**Two tiers.** The pump also writes, next to each full bundle, the keep-forever
+part of it, from the same outputs (`ingest/retention.mjs`), to a second
+directory it uploads as the artifact `ingest-keep-<run>-<attempt>` (90 days on
+GitHub):
+
+| Tier | What | How long |
+|---|---|---|
+| Full bundle | everything, as before: `ingest-<attempt>-<index>.tar.age` | 30 days on R2 (our prune), 90 days on GitHub, until the Mac archive is cleaned by hand |
+| Keep-forever | `keep-<attempt>-<index>.tar.age`: `results/*`, `manifest.json`, `ingest.json` (also for rejected items), `observations/*`, `raw/subject/repo.json`; `catalog-<sha256>.tar.age`: `tools.json`, once per distinct tool list; the `history-*` and `registry-*` artifacts | indefinitely |
+
+Left out of the keep-forever set: the forgery control files, the repeated
+known-answer files, `report.json`, `scan.json`, logs and tar padding. The
+control files of an item whose manifest records a control that did not give its
+expected result are kept. Rejected items' `result.tar.age` (the worker's
+bundle) is full-tier only. A manual re-ingest has no keep-forever file; its
+decisions are in the state and its outputs live 90 days on GitHub.
+
+**Windows and holds.** Full raw data is kept 30 days (DESIGN-v3 section 9.6),
+90 days while a dispute or disclosure is open, and 18 months for items
+selected for raw keeping. A hold is a line in
+[`offsite/holds.json`](../offsite/holds.json), reviewed like any change:
+
+```json
+{ "holds": [ { "artifact": "ingest-45312591667-1", "for": "dispute", "from": "2026-11-24", "note": "ticket 12" } ] }
+```
+
+`for` is `dispute`, `disclosure` (90 days from `from`) or `raw` (548 days). A
+hold is by artifact, so it keeps the whole artifact. It stops the prune on R2;
+it cannot keep what GitHub already deleted (90 days), so add it early. A hold
+list the prune cannot read stops the prune. Window changes belong in
+`HOLD_DAYS` and `FULL_RAW_DAYS` in `ingest/retention.mjs`.
+
+**R2.** The bucket lock stays at 30 days and no bucket setting is changed. The
+off-site backup copies `ingest-keep-*` to `keep/` and everything else as
+before; the prune ("Prune") expires full bundles past 30 days and never touches
+`keep/` or `history/`.
+
+**The second copy.** [`keep-forever.yml`](../.github/workflows/keep-forever.yml)
+([`keep/copy.mjs`](../keep/copy.mjs)) copies the keep-forever set into the
+release tagged `keep-forever` on this repository, rolled by month:
+
+| Asset | What |
+|---|---|
+| `keep-<YYYY-MM>-<id>.tar` | one part per run and month, under 2 GiB (a run takes at most `KEEP_MAX_RUN_BYTES`, 512 MiB by default): the sealed `keep-*` and `catalog-*` files (still age-encrypted; the workflow holds no key) and the history zips (public data, not encrypted) |
+| `manifest-<YYYY-MM>.r<N>.json` | every artifact copied that month, its files and their sha256s, and which part holds them |
+| `catalogs.r<N>.json` | the sha256 of every catalog copied |
+| `status.r<N>.json` | the last run's result; the watchdog reads it |
+
+Re-runs do not duplicate: an artifact the manifest lists is skipped without a
+download, a part is named by its contents and not uploaded twice, and a
+catalog already copied is left out. A run that dies after uploading a part but
+before its manifest uploads the same part's name again next time; if more
+artifacts arrived meanwhile their files may appear in a second part (nothing is
+lost). The `r<N>` files are revisions: a new one is written before the old go,
+and the newest two stay. The workflow follows the other jobs' rules: actions
+pinned to commit SHAs, a top-level `permissions: {}`, the guard first
+(`LOOP_ENABLED`, `LOOP_PAUSE_UNTIL`, and the lane switch
+`LANE_KEEP_FOREVER_ENABLED`), concurrency `keep-forever`.
+
+*What the stand-in scheduler should dispatch* (GitHub's cron does not fire on
+this repository): `gh workflow run keep-forever.yml --repo isokron-ai/tool-qa`
+every 6 hours, but only when no run started in the last 330 minutes, like the
+off-site backup. GitHub keeps the artifacts it copies 90 days, so a copy that
+stops for more than a few weeks starts to lose data: the `keep-forever` health
+item turns amber at 30 days of waiting and red at 60.
+
+**Restore.** Download `keep-<month>-<id>.tar` from the release, `tar -xf` it,
+check each file against the month's `manifest-<month>.r<N>.json`, then
+`age --decrypt -i ingest-identity.txt` and read it as in "Reading ingest
+outputs". A `catalog-<sha256>.tar.age` holds one `tools.json`; the item's
+`manifest.json` names the tool list's sha256 for the match.
+
+**Health.** `keep-forever` (the copy: stalled, failing or off) and
+`retention-seal` (compression or keep-forever file failures) are on the health
+issue ("The loop health issue").
 
 ## Result encryption keys
 
@@ -1437,6 +1549,12 @@ zipped), then:
 age --decrypt -i ingest-identity.txt -o ingest.tar ingest-<attempt>-<index>.tar.age
 tar -tf ingest.tar    # accepted/<attempt>/<index>/..., rejected/<attempt>/<index>/... or quarantine/<attempt>/<index>/...
 ```
+
+Since loop upgrade 20 the decrypted file is zstd-compressed (it starts with the
+bytes `28 b5 2f fd`); one sealed before then is a plain tar. `tar -tf` reads
+both when `zstd` is installed (`brew install zstd`); otherwise `zstd -d ingest.tar`
+first. The repository's own readers (`worker-kit/bundle.mjs`, used by
+`longitudinal/derive.mjs` and `checkin.mjs`) tell them apart by those bytes.
 
 `ingest.json` in there is the report. For a rejected or quarantined item,
 `result.tar.age` is the worker's bundle as uploaded; it decrypts with the same

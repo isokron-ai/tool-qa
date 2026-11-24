@@ -1146,6 +1146,7 @@ test('R-ARC-20: every artifact a workflow here uploads under an archived prefix 
     'history-popularity- history-popularity.yml',
     'ingest- ingest.yml',
     'ingest- pump.yml',
+    'ingest-keep- pump.yml',
     'ingest-state-archive- pump.yml',
     'registry- history-registry.yml',
   ]);

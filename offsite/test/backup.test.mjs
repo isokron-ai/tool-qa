@@ -472,3 +472,18 @@ test('R-OFF-13: the account ID only from a secret, both jobs only on main; retri
   assert.match(ht.reason, /cut short/);
   assert.equal(t.s3.ops('put').length, 0);
 });
+
+test('R-RET-24: the keep-forever part of the pump outputs gets its own key prefix, so the prune can never mistake it for full data; the Mac archive names its kind', async () => {
+  const { isKeepArtifact } = await import('../backup.mjs');
+  const { ingestKind, ingestRun } = await import('../../scripts/archive-pull.mjs');
+  const keep = { name: 'ingest-keep-111-2', created_at: '2026-03-02T01:00:00Z' };
+  const full = { name: 'ingest-111-2', created_at: '2026-03-02T01:00:00Z' };
+  assert.equal(artifactKey(keep, true), 'keep/2026-03-02/ingest-keep-111-2/ingest-keep-111-2.zip');
+  assert.equal(artifactKey(full, true), 'ingest/2026-03-02/ingest-111-2/ingest-111-2.zip');
+  assert.equal(isKeepArtifact('ingest-keep-1-1'), true);
+  assert.equal(isKeepArtifact('ingest-keep-x'), false);
+  assert.equal(isKeepArtifact('ingest-1-1'), false);
+  assert.equal(ingestKind('ingest-keep-111-2'), 'keep');
+  assert.equal(ingestKind('ingest-111-2'), 'pump');
+  assert.deepEqual(ingestRun({ name: 'ingest-keep-111-2', workflow_run: { id: 111 } }), { run_id: 111, run_attempt: 2, attempt_id: null });
+});

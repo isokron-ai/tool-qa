@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 
 import { main } from '../ingest.mjs';
 import { ageDecrypt, ageEncrypt } from '../age.mjs';
+import { bundleFormat, unpackBundle } from '../../worker-kit/bundle.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
 import {
   makeBundle, defaultRun, artifactEntry, expectedRow, multiItemRow, REGISTRY_TEXT, WORKER_REPO, RUN_ID,
@@ -108,7 +109,8 @@ test('accepts a real age bundle, seals the outputs to the ingest key and records
     const box = readFileSync(sealed);
     assert.ok(box.subarray(0, 22).toString() === 'age-encryption.org/v1\n', 'the sealed file is age ciphertext');
     const tar = ageDecrypt({ ciphertext: box, identity: s.keys.identity, ageBin: AGE, tmpDir: s.dir });
-    const paths = readTar(tar).map((e) => e.path).sort();
+    assert.equal(bundleFormat(tar), 'zstd', 'a manual re-ingest seals zstd too');
+    const paths = readTar(unpackBundle(tar)).map((e) => e.path).sort();
     assert.ok(paths.includes('accepted/att-1/0/manifest.json') && paths.includes('accepted/att-1/0/ingest.json'), paths.join(','));
     assert.equal(paths.length, 7);
 
