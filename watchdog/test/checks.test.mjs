@@ -197,3 +197,23 @@ test('R-SNAP-09: state-snapshot.yml is a loop workflow: its failed run is red an
   assert.equal(byId(evaluate(base()))['state-snapshot'], undefined, 'no item when nothing was read');
 });
 
+
+test('R-CHAOS-04: api-budget is amber while a saved rate-limit block holds or the latest tick stopped on the budget, and absent otherwise', () => {
+  const st = (kv) => ({ openSlots: [], openDispatches: [], kv });
+  let c = byId(evaluate(base({ state: st({ 'pump.api_budget': { blocked: { core: NOW + 20 * MIN } } }) })));
+  assert.equal(c['api-budget'].status, 'amber');
+  assert.match(c['api-budget'].summary, /held until/);
+  c = byId(evaluate(base({ state: st({ 'pump.last_tick': { at: ago(5 * MIN), stopped: 'budget', ingest: null } }) })));
+  assert.equal(c['api-budget'].status, 'amber');
+  c = byId(evaluate(base({ state: st({ 'pump.last_tick': { at: ago(5 * MIN), stopped: null, ingest: { stopped: 'budget' } } }) })));
+  assert.equal(c['api-budget'].status, 'amber');
+  // A block that has passed, an old tick, or a tick stopped for another reason: no item.
+  for (const kv of [
+    { 'pump.api_budget': { blocked: { core: NOW - MIN } } },
+    { 'pump.last_tick': { at: ago(45 * MIN), stopped: 'budget' } },
+    { 'pump.last_tick': { at: ago(5 * MIN), stopped: 'deadline', ingest: { stopped: 'deadline' } } },
+    {},
+  ]) {
+    assert.equal(byId(evaluate(base({ state: st(kv) })))['api-budget'], undefined, JSON.stringify(kv));
+  }
+});

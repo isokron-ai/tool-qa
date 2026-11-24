@@ -281,6 +281,9 @@ export async function openAttempt(input, deps) {
       const extra = total - problems.length;
       const wantedRecord = {
         run_key: item.run_key, attempt_id: row.attempt_id, fence: item.fence, outcome, accepted: outcome === 'accepted', reason,
+        // When the item's artifact was uploaded (GitHub's time), so the store
+        // never counts a result as on time before its bundle existed (R-CHAOS-10).
+        ...(report.artifact?.created_at && Number.isFinite(Date.parse(report.artifact.created_at)) ? { artifactCreatedAt: report.artifact.created_at } : {}),
         ...(outcome === 'accepted' && resultOutcome ? { resultOutcome } : {}),
         // The result's fault side and coverage state (R-COV-02): a tool-fault
         // skip is stored as unassessed_tool, never as excluded or the subject's.

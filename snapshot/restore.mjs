@@ -153,6 +153,15 @@ export async function applySnapshot({ gh, bytes, sha, expectedLive, now = Date.n
   return { asset_id: up.id, replaced_kept_as: keptAs };
 }
 
+/** Do the live asset's bytes hash to `sha`? A download that fails counts as no. */
+async function liveMatches(gh, live, sha) {
+  try {
+    return sha256(await gh.download(live)) === sha;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The drill. Returns a report object; throws on any failed check.
  */
@@ -226,7 +235,11 @@ export async function drill({
     log(`restore: could not snapshot the live state first (${liveSnapshotError}); it will be kept on the "${SOURCE_TAG}" release under a new name instead`);
   }
   const live = pickSource((await gh.getRelease(SOURCE_TAG))?.assets);
-  if (live && labelSha(live.label) === entry.sha256) return { ...report, applied: false, note: 'the live state already is this snapshot', saved_live_as: savedLiveAs };
+  // The live asset's label is only a claim about its bytes: a damaged asset
+  // can keep the label of the good copy, so the bytes decide (R-CHAOS-06).
+  if (live && labelSha(live.label) === entry.sha256 && (await liveMatches(gh, live, entry.sha256))) {
+    return { ...report, applied: false, note: 'the live state already is this snapshot', saved_live_as: savedLiveAs };
+  }
   const applied = await applySnapshot({ gh, bytes, sha: entry.sha256, expectedLive: live, now, log });
   return {
     ...report, applied: true, saved_live_as: savedLiveAs, live_snapshot_error: liveSnapshotError,

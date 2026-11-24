@@ -243,7 +243,32 @@ watchdog only downloads a copy and never pushes.
 ## State snapshots
 
 The state asset is overwritten on every pump run, so on its own a damaged or
-deleted asset would start the loop from empty. The workflow
+deleted asset would start the loop from empty. The pump refuses to: when the
+state asset is missing but the `state-snapshots` release holds snapshots, a
+pump run fails with "the state asset is missing, but N snapshot(s) of it are
+on the "state-snapshots" release" and dispatches nothing (R-CHAOS-01); restore
+one (below). A pump run that cannot read the state (missing, damaged,
+encrypted to another key, or from newer code) also cancels the successor it
+dispatched, so the chain stops instead of failing once a minute; the schedule
+and the watchdog try again every 30 minutes or so, each a red run, until a
+person fixes it (R-CHAOS-03). A passing GitHub error while pulling does not
+stop the chain.
+
+To start from an empty state on purpose, keep the snapshots (they are the only
+way back) and put a fresh state in place by hand instead (R-CHAOS-11). With
+the pump switched off (`LANE_PUMP_ENABLED=false`) and no pump run going:
+
+```sh
+node --input-type=module -e "import('./state/db.mjs').then((m) => m.openState('fresh.sqlite').close())"
+GITHUB_TOKEN=<a token that may write this repository's releases> \
+  node scripts/state-asset.mjs push --file fresh.sqlite --force --repo isokron-ai/tool-qa
+```
+
+The push encrypts to `state/state.pub`; `--force` is needed because there was
+no pull. Then switch the pump back on. Do not delete the snapshots to get past
+the refusal.
+
+The workflow
 [`state-snapshot.yml`](../.github/workflows/state-snapshot.yml) keeps
 versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
 
@@ -740,7 +765,8 @@ person. off: switched off on purpose.
 | `subjects` | The last pump run could not load the seed subjects (red, with why: an unreadable or malformed seed, the shrink guard, a state error). The pump keeps dispatching the subjects it already has. | Fix the seed file (or set the shrink override, "Subjects: where they come from") and merge. Clears when a pump run loads it. |
 | `history-registry-delta` | Newest delta capture is over 45 minutes old (amber), or over 90 (red). | Open the `history-registry` runs. |
 | `history-registry-full`, `history-packages`, `history-popularity` | Newest artifact is over 26 hours old (amber), or over 50 (red). | Open that workflow's runs. |
-| `state` | No state asset yet, or it could not be read (amber; the details say which). | Normal until the first pump run has saved state. Otherwise check the `state` release. |
+| `state` | No state asset yet, or it could not be read (amber; the details say which). | Normal until the first pump run has saved state. Otherwise check the `state` release; if the pump runs are red too, restore a snapshot ("State snapshots"). |
+| `api-budget` | Amber while GitHub rate-limits the pump (a block it saved in `pump.api_budget` is still in force; the details say until when), or its latest tick stopped dispatching or ingest early on its own API budget. Results and dispatches wait meanwhile. Not shown otherwise. | Usually nothing: it clears when the limit resets. If it stays, look for what else spends the App's or the repository's API quota. |
 | `slots`, `dispatches` | Rows more than 15 minutes past their expiry (red): the pump is not reaping. | See the `pump` check and the latest pump logs. |
 | `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
 | `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |

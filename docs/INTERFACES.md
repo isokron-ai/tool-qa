@@ -89,7 +89,12 @@ works; `items` holds between one and `shard_size` entries.
 How long a dispatch may take: 1.5 × (`setup_minutes` + items ×
 `minutes_per_subject`) + 10 minutes, from `pump/workflows.json`. After that its
 leases and its slot expire, the pump closes it as `lease_expired`, and the work
-is due again. A result that arrives later is stored as rejected.
+is due again. A result whose run completed later (by the run's `updated_at`
+from GitHub) is stored as rejected. A run that completed inside the lease is on
+time even when the pump only judges it after the lease ran out: `recordResult`
+checks the lease against the run's completion (`completedAt`, R-CHAOS-02), and
+until ingest has looked at such an expired dispatch the pump does not send its
+work again (`holdRunKeys` in `runTick`).
 
 ## Ingest in the pump
 
@@ -141,7 +146,7 @@ What `collect()` does, oldest dispatch first, for each dispatch from
 | Run not finished, or GitHub does not know it | Wait. A run that never finishes is handled by lease expiry. |
 | Run finished | Check the run and list its artifacts once (`openAttempt()` in [`ingest/ingest.mjs`](../ingest/ingest.mjs), steps in [`ingest/README.md`](../ingest/README.md)). Then, for each item without a result, in index order: judge it against its own artifact `result-<attempt_id>-<index>.tar.age`, record the decision with `db.recordResult()`, and seal the item's outputs to `worker-kit/ingest.pub` as `ingest-<attempt_id>-<index>.tar.age` in the outputs directory. Recording and sealing one item are one transaction (`db.txAsync()`): if sealing fails, nothing is recorded for that item, the other items go on, and a later tick tries it again. Once every item has a result, the dispatch is closed as `run_completed` (frees its slot and any lease left), unless the store already closed it as `results_in`. |
 | Refused before any item was judged | Unknown attempt, wrong repo or run, run not found: nothing is recorded, the report is sealed as `ingest-<attempt_id>.tar.age`, and the dispatch is closed. |
-| Lease expired before the run finished | Still judged for six hours after the dispatch was closed, at most every ten minutes; the store keeps the late results as rejected. |
+| Lease expired before ingest looked | Still judged for six hours after the dispatch was closed, at most every ten minutes (a look the API budget stopped does not count; R-CHAOS-07). A run that completed inside its lease is accepted if no newer lease was granted; one that completed later is kept as rejected. |
 
 The `deadline` is checked before every item, so a large shard may be judged
 over several ticks; items already recorded are skipped.
@@ -278,6 +283,13 @@ an earlier rejection into an acceptance.
 | `run_sha_mismatch` | The worker run was at another commit than the one recorded at dispatch: the worker branch moved between the pump reading it and GitHub starting the run, or someone else's run took the shard's run name. The work is due again. Three such dispatches of one workflow in a row pause that workflow for six hours (`pump.paused:<workflow>` below). | no |
 | `retry_later` | Every skip in the bundle is retryable (a rate limit, an upstream outage): the item is sent out again after a backoff (`retry_backoff_minutes` in `pump/tiers.json`, doubled for each retry), at most three times per run_key, then the bundle is accepted with its skips. | no |
 | ingest's `reason`, or `rejected_by_ingest` | Ingest rejected the result. | yes |
+
+`completedAt` (optional, ms or ISO): when GitHub says the worker run
+completed. The lease's expiry is checked against it instead of `now` when it is
+earlier, so a run that finished in time is not `lease_expired` because the pump
+looked later (R-CHAOS-02). A newer lease still makes the fence stale. The
+pump's ingest passes the run's `updated_at`, or the item's artifact
+`created_at` when that is later (R-CHAOS-10); the manual re-ingest passes none.
 
 Every call is kept as an attempt, accepted or not; a rejected result never
 overwrites an accepted one. When the attempt is current, its lease is released.
