@@ -282,6 +282,9 @@ export async function openAttempt(input, deps) {
       const wantedRecord = {
         run_key: item.run_key, attempt_id: row.attempt_id, fence: item.fence, outcome, accepted: outcome === 'accepted', reason,
         ...(outcome === 'accepted' && resultOutcome ? { resultOutcome } : {}),
+        // The result's fault side and coverage state (R-COV-02): a tool-fault
+        // skip is stored as unassessed_tool, never as excluded or the subject's.
+        ...(outcome === 'accepted' && report.bundle?.coverage ? { fault: report.bundle.fault ?? null, coverage: report.bundle.coverage } : {}),
       };
       const answer = (await ledger.recordResult(wantedRecord)) ?? { accepted: wantedRecord.accepted, reason };
       const recorded = { accepted: answer.accepted === true, reason: typeof answer.reason === 'string' ? answer.reason : null };

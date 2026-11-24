@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { canonicalJson, runKey, runKeyFields, computeDue, dueFromState, loadConfig, NO_HOOKS } from '../due.mjs';
+import { canonicalJson, runKey, runKeyFields, computeDue, dueFromState, loadConfig, NO_HOOKS, gapKind, coverageGapBoost } from '../due.mjs';
 import { openState } from '../../state/db.mjs';
 
 const T0 = Date.parse('2026-11-23T12:00:00Z');
@@ -166,6 +166,7 @@ test('the default hooks pick nothing', () => {
   assert.equal(NO_HOOKS.determinism(s, 'live-probe'), false);
   assert.equal(NO_HOOKS.rawSample(s, 'live-probe'), false);
   assert.equal(NO_HOOKS.leadReverify(s, 'live-probe'), false);
+  // The coverage-gap boost needs the due list's context; without it, nothing.
   assert.equal(NO_HOOKS.coverageGap(s, 'live-probe'), 0);
 });
 
@@ -226,9 +227,10 @@ test('dueFromState reads subjects, results, in-flight work and rejections from t
   due = dueFromState(db, { ...config, now: T0 + 2000 });
   assert.deepEqual(due, []);
 
-  // Eight days later repo:1 is stale; repo:2's lease has expired so it is due again.
+  // Eight days later repo:1 is stale; repo:2's lease has expired so it is due
+  // again, first: it has never been assessed (coverage-gap boost, R-COV-03).
   due = dueFromState(db, { ...config, now: T0 + 8 * DAY });
-  assert.deepEqual(due.map((d) => [d.subject, d.reasons]), [['repo:1', ['stale']], ['repo:2', ['first_sight']]]);
+  assert.deepEqual(due.map((d) => [d.subject, d.reasons, d.gap]), [['repo:2', ['first_sight'], 'never_assessed'], ['repo:1', ['stale'], null]]);
   db.close();
 });
 
@@ -256,4 +258,114 @@ test('loadConfig reads the shipped tiers and workflows files', () => {
   // Pins which lanes are switched on, so turning one on needs a reviewed test change.
   assert.deepEqual(Object.entries(c.workflows).filter(([, w]) => w.enabled === true).map(([k]) => k).sort(), ['scan-static']);
   assert.ok(Object.values(c.workflows).every((w) => typeof w.enabled === 'boolean'));
+});
+
+// ---- R-COV-03: the coverage-gap boost ----
+
+test('R-COV-03: gapKind: never assessed, or last unassessed by our own limit; not the subject\'s side, policy or a result from before coverage', () => {
+  assert.equal(gapKind(undefined), 'never_assessed');
+  assert.equal(gapKind({ coverage: 'unassessed_tool', fault: 'tool' }), 'our_limit');
+  assert.equal(gapKind({ coverage: 'unassessed_unknown', fault: 'unknown' }), 'our_limit');
+  assert.equal(gapKind({ coverage: 'unassessed_infra', fault: 'infra', ever_assessed: false }), 'never_assessed');
+  assert.equal(gapKind({ coverage: 'unassessed_infra', fault: 'infra', ever_assessed: true }), null);
+  assert.equal(gapKind({ coverage: 'assessed', fault: null, ever_assessed: true }), null);
+  assert.equal(gapKind({ coverage: 'subject', fault: 'subject' }), null);
+  assert.equal(gapKind({ coverage: 'excluded', fault: 'policy' }), null);
+  assert.equal(gapKind({ coverage: null, fault: null }), null, 'a result from before state schema 7 is not guessed');
+});
+
+test('R-COV-03: the boost is coverage_gap_share x the tier weight, so it follows tier (popularity) and never lifts a pair over a whole tier', () => {
+  assert.equal(tiers.priority.coverage_gap_share, 0.5);
+  const boosts = [0, 1, 2, 3, 4].map((t) => coverageGapBoost(subj('x', t), 'scan-static', { tier: `T${t}`, last: undefined, tiers }));
+  assert.deepEqual(boosts, [50, 30, 20, 10, 5]);
+  assert.equal(coverageGapBoost(subj('x', 1), 'scan-static', { tier: 'T1', last: { coverage: 'assessed', ever_assessed: true }, tiers }), 0);
+  assert.equal(coverageGapBoost(subj('x', 1), 'scan-static', { tier: 'T1', last: undefined, tiers: { ...tiers, priority: { ...tiers.priority, coverage_gap_share: 0 } } }), 0);
+  for (let t = 1; t < 5; t++) {
+    const gap = tiers.weights[`T${t}`] * 1.5;
+    assert.ok(gap < tiers.weights[`T${t - 1}`] + 1, `a T${t} gap stays under a bare T${t - 1} pair`);
+  }
+});
+
+/** A last result as dueFromState builds it, with a fault side and coverage. */
+function lastWith(s, name, w, acceptedAt, coverage, fault, everAssessed = false) {
+  return { ...resultFor(s, name, w, acceptedAt), coverage, fault, ever_assessed: everAssessed };
+}
+
+test('R-COV-03: within a tier, a stale tool-fault skip and a never-assessed subject come before a stale assessed one; the boost never makes a pair due', () => {
+  const w = wf();
+  const ours = subj('ours', 3);
+  const theirs = subj('theirs', 3);
+  const fresh = subj('fresh', 3);
+  const graded = subj('graded', 3);
+  const recent = subj('recent', 3);
+  const at = T0 - 40 * DAY;
+  const last = new Map([
+    ['ours\u0000live-probe', lastWith(ours, 'live-probe', w, at, 'unassessed_tool', 'tool')],
+    ['theirs\u0000live-probe', lastWith(theirs, 'live-probe', w, at, 'subject', 'subject')],
+    ['graded\u0000live-probe', lastWith(graded, 'live-probe', w, at, 'assessed', null, true)],
+    ['recent\u0000live-probe', lastWith(recent, 'live-probe', w, T0 - DAY, 'unassessed_tool', 'tool')],
+  ]);
+  const due = computeDue(input({
+    subjects: [graded, theirs, ours, fresh, recent],
+    lastResults: last,
+    resultKeys: new Set([...last.values()].map((r) => r.run_key)),
+  }));
+  // T3: weight 20, stale 10, age capped at 30; gap +10. fresh: first_sight, no age.
+  assert.deepEqual(due.map((d) => [d.subject, d.reasons, d.gap, d.priority]), [
+    ['ours', ['stale'], 'our_limit', 70],
+    ['graded', ['stale'], null, 60],
+    ['theirs', ['stale'], null, 60],
+    ['fresh', ['first_sight'], 'never_assessed', 30],
+  ]);
+  assert.ok(!due.some((d) => d.subject === 'recent'), 'a recent tool-fault skip is not due only because it is a gap');
+});
+
+test('R-COV-03: a new tool version makes every tool-fault skip due again (tool_version), boosted ahead of the rest of its tier', () => {
+  const v1 = wf();
+  const v2 = wf({ versions: { ...v1.versions, tool: { 'mcp-check': '1.1.0' } } });
+  const ours = subj('ours', 2);
+  const graded = subj('graded', 2);
+  const theirs = subj('theirs', 2);
+  const at = T0 - DAY;
+  const last = new Map([
+    ['ours\u0000live-probe', lastWith(ours, 'live-probe', v1, at, 'unassessed_tool', 'tool')],
+    ['graded\u0000live-probe', lastWith(graded, 'live-probe', v1, at, 'assessed', null, true)],
+    ['theirs\u0000live-probe', lastWith(theirs, 'live-probe', v1, at, 'subject', 'subject')],
+  ]);
+  const keys = new Set([...last.values()].map((r) => r.run_key));
+  assert.deepEqual(computeDue(input({ subjects: [ours, graded, theirs], lastResults: last, resultKeys: keys })), [], 'same tool: nothing is due a day later');
+  const due = computeDue(input({ subjects: [ours, graded, theirs], workflows: { 'live-probe': v2 }, lastResults: last, resultKeys: keys }));
+  // T2: weight 40, tool_version 20, age 1 day; gap +20.
+  assert.deepEqual(due.map((d) => [d.subject, d.reasons, d.gap, d.priority]), [
+    ['ours', ['tool_version'], 'our_limit', 81],
+    ['graded', ['tool_version'], null, 61],
+    ['theirs', ['tool_version'], null, 61],
+  ]);
+});
+
+test('R-COV-03: dueFromState reads fault and coverage from the store; an assessed result under an older run_key counts as assessed', () => {
+  const db = openState(':memory:');
+  const v1 = wf();
+  const v2 = wf({ versions: { ...v1.versions, tool: { 'mcp-check': '1.1.0' } } });
+  db.setSubjectVersion({ id: 'repo:a', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 - 10 * DAY });
+  db.setSubjectVersion({ id: 'repo:b', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 - 10 * DAY });
+  const record = (workflows, now, outcome) => {
+    const due = dueFromState(db, { tiers, workflows, now });
+    for (const d of due) {
+      const att = `att-${d.subject}-${now}`;
+      const lease = db.acquireLease(d.run_key, att, { ttlMs: DAY, now });
+      db.recordRunKey(d.run_key, { subject: d.subject, workflow: d.workflow, fields: d.fields, now });
+      db.createDispatch({ attemptId: att, shardId: 's', workflow: d.workflow, repo: 'o/r', workflowFile: 'f.yml', ref: 'main', expires: now + DAY, items: [{ run_key: d.run_key, subject: d.subject, fence: lease.fence }], now });
+      db.recordResult({ run_key: d.run_key, attempt_id: att, fence: lease.fence, verdict: 'accepted', outcome: 'accepted', ...outcome(d.subject), now: now + 1 });
+    }
+    return due;
+  };
+  // v1: both assessed. v2: repo:a hits a reader error (ours), repo:b an infra skip whose retries ran out.
+  record({ 'live-probe': v1 }, T0, () => ({ fault: null, coverage: 'assessed' }));
+  record({ 'live-probe': v2 }, T0 + 1000, (s) => (s === 'repo:a' ? { fault: 'tool', coverage: 'unassessed_tool' } : { fault: 'infra', coverage: 'unassessed_infra' }));
+  // Eight days on, both are stale; only repo:a is a gap (repo:b was assessed under v1).
+  const due = dueFromState(db, { tiers, workflows: { 'live-probe': v2 }, now: T0 + 8 * DAY });
+  assert.deepEqual(due.map((d) => [d.subject, d.gap]), [['repo:a', 'our_limit'], ['repo:b', null]]);
+  assert.equal(due[0].priority - due[1].priority, 30);
+  db.close();
 });

@@ -23,6 +23,20 @@
 //   lead_reverify, determinism_sample, raw_sample
 //                  picked by a hook. The hooks return nothing for now.
 //
+// Priority: the tier weight, plus each reason's weight, plus the age of the
+// last result (age_per_day, at most age_max), plus the coverage-gap boost
+// (R-COV-03). A due pair is a coverage gap when it has no accepted result
+// yet, when its last result is unassessed by our own limit (coverage
+// unassessed_tool or unassessed_unknown, or a fault of tool or unknown), or
+// when none of its results was ever assessed and the last is a passing
+// condition (unassessed_infra). The boost is priority.coverage_gap_share x
+// the tier weight, so it follows the tier (which follows popularity) and
+// never lifts a pair over a whole tier. It orders due pairs; it never makes a
+// pair due. Results from before state schema 7 have no coverage and get no
+// boost. A new tool version moves every run_key, so a release makes every
+// tool-fault skip due again (tool_version), boosted ahead of the rest of its
+// tier.
+//
 // Retired subjects (no longer in their source list, pump/subjects.mjs), pairs
 // whose tier says `never`, pairs already in flight, pairs on a disabled
 // workflow, run_keys parked after too many rejections, and run_keys sent back
@@ -39,12 +53,48 @@ import { readFileSync } from 'node:fs';
 const DAY_MS = 86_400_000;
 const SEP = '\u0000';
 
-/** Hooks that pick nothing. Each takes (subject, workflowName, ctx). */
+/** Coverage states that are our own limit (worker-kit/contract.mjs COVERAGE_STATES). */
+const OUR_LIMIT = new Set(['unassessed_tool', 'unassessed_unknown']);
+const OUR_FAULTS = new Set(['tool', 'unknown']);
+
+/**
+ * What coverage gap a pair's last result leaves (R-COV-03):
+ *   never_assessed  no accepted result yet, or none of its results was ever
+ *                   assessed and the last is unassessed_infra
+ *   our_limit       the last result is unassessed by our own limit (tool or unknown fault)
+ * null otherwise: assessed, the subject's side, excluded by policy, or a
+ * result recorded before coverage was (state schema < 7).
+ * @param {{coverage?: string|null, fault?: string|null, ever_assessed?: boolean}|undefined} last
+ */
+export function gapKind(last) {
+  if (!last) return 'never_assessed';
+  if (OUR_LIMIT.has(last.coverage) || OUR_FAULTS.has(last.fault)) return 'our_limit';
+  if (last.coverage === 'unassessed_infra' && last.ever_assessed !== true) return 'never_assessed';
+  return null;
+}
+
+/**
+ * The coverage-gap boost of a due pair: priority.coverage_gap_share x the
+ * subject's tier weight when gapKind() names a gap, else 0. ctx is what
+ * computeDue() passes to every hook ({tier, last, tiers, ...}).
+ */
+export function coverageGapBoost(subject, workflowName, ctx) {
+  if (!ctx?.tiers || gapKind(ctx.last) === null) return 0;
+  const share = Number(ctx.tiers.priority?.coverage_gap_share);
+  const weight = Number(ctx.tiers.weights?.[ctx.tier]);
+  if (!Number.isFinite(share) || share <= 0 || !Number.isFinite(weight) || weight <= 0) return 0;
+  return share * weight;
+}
+
+/**
+ * The default hooks. Each takes (subject, workflowName, ctx). The sampling
+ * hooks pick nothing for now; coverageGap is the coverage-gap boost.
+ */
 export const NO_HOOKS = Object.freeze({
   leadReverify: () => false,
   determinism: () => false,
   rawSample: () => false,
-  coverageGap: () => 0,
+  coverageGap: coverageGapBoost,
 });
 
 /** JSON with object keys sorted at every level and no whitespace. */
@@ -135,14 +185,17 @@ function whyNoResult(fields, last) {
  * @param {{id:string, tier:number, sha?:string, artifact_digest?:string, changed_at?:string, retired_at?:string}[]} input.subjects
  * @param {Record<string, object>} input.workflows  name -> workflow config (pump/workflows.json)
  * @param {object} input.tiers  parsed pump/tiers.json
- * @param {Map<string, {run_key:string, accepted_at:string, outcome?:string, fields:object}>} input.lastResults
- *        "<subject>\0<workflow>" -> newest accepted result for the pair
+ * @param {Map<string, {run_key:string, accepted_at:string, outcome?:string, fields:object,
+ *        fault?:string|null, coverage?:string|null, ever_assessed?:boolean}>} input.lastResults
+ *        "<subject>\0<workflow>" -> newest accepted result for the pair; ever_assessed:
+ *        any of the pair's results (any run_key) was assessed
  * @param {Set<string>} input.resultKeys  run_keys that have an accepted result
  * @param {Set<string>} input.inFlight    "<subject>\0<workflow>" pairs with a live dispatch
  * @param {Set<string>} input.parked      run_keys not to dispatch again
  * @param {object} [input.hooks]
  * @returns {{subject:string, workflow:string, tier:number, run_key:string, fields:object,
- *            reasons:string[], priority:number}[]}
+ *            reasons:string[], priority:number, gap:string|null}[]}
+ *          gap: gapKind() of the pair's last result (R-COV-03)
  */
 export function computeDue({ now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, hooks = NO_HOOKS }) {
   const h = { ...NO_HOOKS, ...hooks };
@@ -166,7 +219,7 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       const key = runKey(fields);
       if (parked.has(key)) continue;
       const last = lastResults.get(pk);
-      const ctx = { now, tier: tierName, cell, last };
+      const ctx = { now, tier: tierName, cell, last, tiers };
       const reasons = [];
 
       if (cell.mode === 'always') {
@@ -191,7 +244,7 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       for (const r of reasons) priority += Number(prio[r] || 0);
       priority += Math.min(Number(prio.age_max ?? 30), ageDays * Number(prio.age_per_day ?? 1));
       priority += Number(h.coverageGap(s, name, ctx) || 0);
-      out.push({ subject: s.id, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority });
+      out.push({ subject: s.id, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority, gap: gapKind(last) });
     }
   }
   out.sort((a, b) => b.priority - a.priority || a.tier - b.tier
@@ -207,14 +260,20 @@ export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
   }));
   const lastResults = new Map();
   const resultKeys = new Set();
+  const everAssessed = new Set(); // pairs with an assessed result under any run_key (R-COV-03)
   for (const r of db.listResults()) {
     resultKeys.add(r.run_key);
     const pk = pairKey(r.subject, r.workflow);
+    if (r.coverage === 'assessed' || r.assessed_at != null) everAssessed.add(pk);
     const prev = lastResults.get(pk);
     if (prev && prev.accepted_at >= r.accepted_at) continue;
     const rk = db.getRunKey(r.run_key);
-    lastResults.set(pk, { run_key: r.run_key, accepted_at: r.accepted_at, outcome: r.outcome ?? null, skips_streak: r.skips_streak ?? 0, fields: rk ? JSON.parse(rk.fields) : {} });
+    lastResults.set(pk, {
+      run_key: r.run_key, accepted_at: r.accepted_at, outcome: r.outcome ?? null, skips_streak: r.skips_streak ?? 0,
+      fault: r.fault ?? null, coverage: r.coverage ?? null, fields: rk ? JSON.parse(rk.fields) : {},
+    });
   }
+  for (const [pk, last] of lastResults) last.ever_assessed = everAssessed.has(pk);
   const inFlight = new Set(db.inFlight({ now }).map((p) => pairKey(p.subject, p.workflow)));
   const maxRejections = Number.isInteger(tiers.max_rejections) && tiers.max_rejections > 0 ? tiers.max_rejections : 3;
   const parked = new Set(db.rejectedRunKeys(maxRejections).map((r) => r.run_key));
