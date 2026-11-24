@@ -7,7 +7,7 @@ import { buildLedger, makeGitHub, renderMarkdown } from '../scripts/ledger.mjs';
 import { cycleStats, daysBetween, firstCommitWhere, foundAt, summarise } from '../scripts/ledger-times.mjs';
 
 const LEDGER = (rows) => `# Regressions\n\n| ID | What it was | Pinned by | Fix |\n|---|---|---|---|\n${rows.join('\n')}\n`;
-const ROW = (id, sha) => `| ${id} | A problem. | \`t.test.mjs\` › \`${id}: pinned\` | ${sha} |`;
+const ROW = (id, sha) => `| ${id} | A problem. | \`t.test.mjs\` › \`pinned: ${id}\` | ${sha} |`;
 
 /**
  * One repository, o/r. REGRESSIONS.md history (newest first): c3 adds R-A-02, c2 adds R-A-01, c1 is empty.
@@ -21,8 +21,8 @@ function world() {
     c1: { 'REGRESSIONS.md': LEDGER([]) },
     c2: { 'REGRESSIONS.md': LEDGER([ROW('R-A-01', 'aaaaaaa')]) },
     c3: { 'REGRESSIONS.md': LEDGER([ROW('R-A-01', 'aaaaaaa'), ROW('R-A-02', 'bbbbbbb')]) },
-    t1: { 't.test.mjs': "test('R-A-01: pinned', () => {});\n" },
-    t2: { 't.test.mjs': "test('R-A-01: pinned', () => {});\ntest('R-A-02: pinned', () => {});\n" },
+    t1: { 't.test.mjs': "test('pinned: R-A-01', () => {});\n" },
+    t2: { 't.test.mjs': "test('pinned: R-A-01', () => {});\ntest('pinned: R-A-02', () => {});\n" },
   };
   const list = {
     'REGRESSIONS.md': [['c3', '2026-11-12T08:00:00Z'], ['c2', '2026-11-08T08:00:00Z'], ['c1', '2026-11-01T08:00:00Z']],
@@ -149,7 +149,7 @@ test('R-LED-08: answers are cached for good, so a rerun makes no history, pull r
   const { cache } = await build(w);
   assert.equal(cache.prs['o/r#7'].created_at, '2026-11-02T00:00:00Z');
   assert.equal(cache.times['o/r:row:R-A-02'], '2026-11-12T08:00:00Z');
-  assert.equal(cache.times['o/r:test:t.test.mjs:R-A-01: pinned'], '2026-11-03T08:00:00Z');
+  assert.equal(cache.times['o/r:test:t.test.mjs:pinned: R-A-01'], '2026-11-03T08:00:00Z');
   const again = world();
   const second = await build(again, JSON.parse(JSON.stringify(cache)));
   assert.equal(again.calls.filter((c) => c.includes('/commits?') || c.includes('/pulls/')).length, 0);
