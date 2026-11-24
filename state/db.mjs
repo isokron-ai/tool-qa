@@ -27,7 +27,9 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 8;
+import { deriveDisagreements, foldDisagreement, ORACLE_BUDGET_DAYS, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_LANES } from './oracle.mjs';
+
+export const SCHEMA_VERSION = 9;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -43,6 +45,7 @@ const MIGRATIONS = [
   { version: 6, sql: () => readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8') },
   { version: 7, sql: () => readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8') },
   { version: 8, sql: () => readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8') },
+  { version: 9, sql: () => readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -960,9 +963,12 @@ export class StateDb {
    *   fault, coverage: the result's fault side and coverage state
    *   (worker-kit/contract.mjs resultFault, R-COV-02); stored on the results
    *   row, NULL when not given. coverage 'assessed' also sets assessed_at.
+   *   oracle: the accepted bundle's oracle facts (state/oracle.mjs
+   *   oracleFacts), folded into the subject's disagreement by noteOracle().
+   *   It never changes fault or coverage.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, completedAt = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, completedAt = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -1028,6 +1034,7 @@ export class StateDb {
               assessed_at = COALESCE(excluded.assessed_at, results.assessed_at)
           `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0,
             fault, coverage, assessed);
+          if (oracle || ORACLE_LANES.includes(item.workflow)) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t });
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {
@@ -1040,6 +1047,82 @@ export class StateDb {
       }
       return { accepted: ok, reason: why, id: Number(r.lastInsertRowid) };
     });
+  }
+
+  /**
+   * Keep the oracle facts of an accepted result and re-derive the subject's
+   * disagreement (state/oracle.mjs). Called inside recordResult()'s
+   * transaction.
+   *
+   * Facts carry the subject version they were read at (sha, else artifact
+   * digest, from the run_key's fields); a lane whose facts are of another
+   * version than this result's is stale and left out of the comparison, and
+   * is dropped when an accepted result of that lane for the newer version has
+   * no facts (`facts` null) (R-ORD-12).
+   *
+   * One check cycle is one result from every lane that has current facts. A
+   * cycle that leaves the disagreement unchanged counts as one re-check
+   * towards settling (R-ORD-13). Besides that, a rolling budget of
+   * ORACLE_BUDGET_MAX cycles with a disagreement per ORACLE_BUDGET_DAYS settles
+   * a subject whatever its clears and reopens (a server that flaps).
+   * Server-side evidence is stored beside it and never opens or keeps one.
+   * @returns {{status: string|null, kinds: object[]}}
+   */
+  noteOracle(subject, workflow, runKey, facts, { now, maxUnchanged = ORACLE_MAX_UNCHANGED } = {}) {
+    const t = iso(now);
+    const rk = this.getRunKey(runKey);
+    let fields = {};
+    try { fields = rk ? JSON.parse(rk.fields) : {}; } catch { /* no version */ }
+    const version = fields.sha ?? fields.artifact_digest ?? null;
+    if (facts) {
+      this.raw.prepare(`
+        INSERT INTO oracle_facts (subject, workflow, run_key, facts, updated_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (subject, workflow) DO UPDATE SET run_key = excluded.run_key, facts = excluded.facts, updated_at = excluded.updated_at
+      `).run(subject, workflow, runKey, JSON.stringify({ ...facts, version }), t);
+    } else {
+      // No facts from this result: its lane's older facts are dropped when they are of another version.
+      const old = this.raw.prepare('SELECT facts FROM oracle_facts WHERE subject = ? AND workflow = ?').get(subject, workflow);
+      if (!old || (JSON.parse(old.facts).version ?? null) === version) return { status: null, kinds: [] };
+      this.raw.prepare('DELETE FROM oracle_facts WHERE subject = ? AND workflow = ?').run(subject, workflow);
+    }
+    const rows = this.raw.prepare('SELECT workflow, facts FROM oracle_facts WHERE subject = ?').all(subject)
+      .map((r) => [r.workflow, JSON.parse(r.facts)]).filter(([, f]) => (f.version ?? null) === version);
+    const byLane = Object.fromEntries(rows);
+    const derived = deriveDisagreements({ static: byLane['scan-static'] ?? null, live: byLane['live-probe'] ?? null, version });
+    const prior = plain(this.raw.prepare('SELECT * FROM oracle_disagreements WHERE subject = ?').get(subject));
+    const seen = new Set([...(prior ? JSON.parse(prior.lanes_seen) : []), workflow]);
+    const cycle = rows.every(([lane]) => seen.has(lane));
+    const next = foldDisagreement(prior, derived, { maxUnchanged, cycle });
+    if (next.status === null) return { status: null, kinds: [] };
+    if (next.status === 'cleared' && prior?.status === 'cleared') return { status: 'cleared', kinds: [] }; // already cleared: keep its time
+    const reopened = next.status === 'open' && (!prior || prior.status === 'cleared' || prior.signature !== derived.signature);
+    // The rolling budget: cycles with a disagreement present, and every (re)opening, in the last ORACLE_BUDGET_DAYS.
+    const since = toMs(t) - ORACLE_BUDGET_DAYS * 86_400_000;
+    let log = (prior ? JSON.parse(prior.recheck_log) : []).filter((x) => toMs(x) >= since);
+    let { status, reason } = next;
+    if (derived.signature && (cycle || reopened)) log.push(t);
+    log = log.slice(-(ORACLE_BUDGET_MAX + 1)); // the log needs no more than the budget and one
+    if (status === 'open' && log.length > ORACLE_BUDGET_MAX) { status = 'settled'; reason = 'recheck_budget'; }
+    const lanesSeen = status === 'cleared' || reopened || cycle ? [] : [...seen];
+    const kinds = status === 'cleared' ? prior.kinds : JSON.stringify(derived.kinds);
+    this.raw.prepare(`
+      INSERT INTO oracle_disagreements (subject, status, kinds, signature, server_side, unchanged_rechecks, lanes_seen, recheck_log, opened_at, updated_at, cleared_at, reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (subject) DO UPDATE SET status = excluded.status, kinds = excluded.kinds, signature = excluded.signature,
+        server_side = excluded.server_side, unchanged_rechecks = excluded.unchanged_rechecks, lanes_seen = excluded.lanes_seen,
+        recheck_log = excluded.recheck_log,
+        opened_at = CASE WHEN ? THEN excluded.opened_at ELSE oracle_disagreements.opened_at END,
+        updated_at = excluded.updated_at, cleared_at = excluded.cleared_at, reason = excluded.reason
+    `).run(subject, status, kinds, status === 'cleared' ? prior.signature : derived.signature, JSON.stringify(derived.server_side),
+      next.unchanged_rechecks, JSON.stringify(lanesSeen), JSON.stringify(log), t, t, status === 'cleared' ? t : null, reason, reopened ? 1 : 0);
+    return { status, kinds: derived.kinds };
+  }
+
+  /** The stored disagreement rows, parsed. `status` filters (default: all). */
+  listOracleDisagreements({ status = null } = {}) {
+    const rows = status ? this.raw.prepare('SELECT * FROM oracle_disagreements WHERE status = ? ORDER BY subject').all(status)
+      : this.raw.prepare('SELECT * FROM oracle_disagreements ORDER BY subject').all();
+    return rows.map((r) => ({ ...plain(r), kinds: JSON.parse(r.kinds), server_side: r.server_side ? JSON.parse(r.server_side) : [] }));
   }
 
   getResult(runKey) {

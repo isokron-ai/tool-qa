@@ -182,3 +182,11 @@ test('R-COV-02: the JSON ledger keeps an accepted result\'s fault side and cover
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('R-ORD-10: the lane name survives normalising a row twice, as the state ledger and ingest both do', () => {
+  const once = normalizeAttempt({ ...ROW, workflow: 'live-probe' });
+  assert.equal(once.workflow_name, 'live-probe');
+  assert.equal(normalizeAttempt(once).workflow_name, 'live-probe');
+  assert.equal(normalizeAttempt(ROW).workflow_name, null);
+  assert.equal(normalizeAttempt({ ...once, workflow_name: 'Not A Lane' }).workflow_name, null);
+});
