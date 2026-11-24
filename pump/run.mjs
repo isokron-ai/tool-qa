@@ -93,7 +93,7 @@ import { createReleaseClient } from '../snapshot/github.mjs';
 import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.mjs';
 import { computeBudget, reapExpired } from './slots.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
-import { identityEnabled, refreshIdentities } from './identity.mjs';
+import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
 import { planShards, runTick } from './tick.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
@@ -304,6 +304,8 @@ export async function runPump({
       say(`pump: subject ids: ${ids.summary}`);
     } else if (identity !== null) {
       say('pump: subject ids: lookups are off (LANE_SUBJECT_IDS_ENABLED); ids already found are still used');
+      // The watchdog shows the item off, not the last pass's colour (R-SUBJ-18).
+      db.setKv(IDENTITY_KV_KEY, { ...(db.getKv(IDENTITY_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
     }
     for (;;) {
       const tickStart = now();

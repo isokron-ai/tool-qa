@@ -660,16 +660,37 @@ not looked up yet is dispatched by its name, as before v8.
 
 **Switch.** `LANE_SUBJECT_IDS_ENABLED` (repository variable): unset, empty or
 `true` runs the lookups; anything else stops them. The ids and names already
-found are still used.
+found are still used, and the `subject-ids` health item shows `off`.
 
 **Read them.** Pull the state and run
 `sqlite3 state/state.sqlite "SELECT id, name, repo_id, id_status, gone_at FROM subjects WHERE name <> id OR id_status <> 'ok'"`
 and `SELECT * FROM subject_events ORDER BY id`.
 
 **Health.** The `subject-ids` item on the health issue (watchdog/identity.mjs)
-shows the last pass's not-found, conflict and merged counts: red when the last
-pass stopped on a mass of NOT_FOUND, or when more than 5 and more than 20% of
-the active subjects are marked gone; amber on any id conflict.
+shows the last pass's not-found, conflict and merged counts: red when a pass
+stopped on a mass of NOT_FOUND and no batch has been believed since (kv
+`pump.identity` carries `mass_not_found_at` forward through runs with nothing
+to look up), or when more than 5 and more than 20% of the active subjects are
+marked gone; amber on any id conflict.
+
+**Accepting a conflict.** A conflict is sticky: the subject keeps its last
+good name and the amber stays until a person decides. Read its `id_conflict`
+event (`SELECT * FROM subject_events WHERE subject = '<key>' ORDER BY id`) and
+check on GitHub that the repository it found is the one the subject means.
+If it is: switch the pump off (`LANE_PUMP_ENABLED=false`) and wait until no
+pump run is going, pull the state, run
+`node scripts/subject-accept.mjs <key> --state state/state.sqlite`, push it,
+and switch the pump back on. The acceptance names exactly the repository the
+last `id_conflict` event found (its id and creation time). The next pump run
+looks the subject up again, and if the answer is that repository it is bound
+(event `id_bound`, with `accepted` saying when and which repository was
+accepted), whatever the reuse and squatter guards say; the amber clears with
+that run. The acceptance is used up by that one lookup whatever it answers
+(not found, an error, another repository: the conflict stands, accept again
+if still wanted) and lapses after 48 hours. An id that another subject holds
+is still refused: merge or retire one of the two by hand first. If the repository is not the right one, leave the
+conflict (the subject keeps being dispatched under its last good name) or
+retire the subject.
 
 **The v8 migration** runs in the first pump run with this code, in one
 transaction: it adds the columns and `subject_events`, sets every subject's

@@ -136,6 +136,12 @@ export function parseAnswer(doc, count, kind) {
  */
 export async function refreshIdentities(db, { client, now = Date.now, log = () => {}, batch = BATCH, maxQueries = MAX_QUERIES, retryMs = RETRY_MS } = {}) {
   const out = { queries: 0, cost: 0, looked_up: 0, events: {}, unbound: 0, gone: 0, conflicts: 0, merged: 0, suspect_not_found: 0, stopped: null, error: null };
+  // When a pass last stopped on a mass of NOT_FOUND. Carried forward until a
+  // batch is believed again, so a run with nothing to look up (the errored
+  // subjects wait an hour) does not clear it (R-SUBJ-14).
+  let massAt = null;
+  try { massAt = db.getKv(IDENTITY_KV_KEY)?.mass_not_found_at ?? null; } catch { /* none */ }
+  let believed = false;
   const size = Math.max(1, Math.min(BATCH, Math.trunc(Number(batch)) || BATCH));
   try {
     if (!client) {
@@ -178,6 +184,8 @@ export async function refreshIdentities(db, { client, now = Date.now, log = () =
           // stops (R-SUBJ-13).
           const nf = answers.filter((a) => a.status === 'not_found').length;
           const mass = nf > MASS_NOT_FOUND.min && nf > MASS_NOT_FOUND.share * list.length;
+          // A mass batch always ends the pass, so it is the last word.
+          if (mass) { massAt = new Date(now()).toISOString(); believed = false; } else believed = true;
           if (mass) {
             out.suspect_not_found += nf;
             out.stopped = 'mass_not_found';
@@ -215,6 +223,7 @@ export async function refreshIdentities(db, { client, now = Date.now, log = () =
     out.conflicts = Number(c.conflicts ?? 0);
     out.active = Number(c.active ?? 0);
   } catch { /* counted as unknown below */ }
+  out.mass_not_found_at = believed ? null : massAt;
   const ev = Object.entries(out.events).sort().map(([k, v]) => `${k} ${v}`).join(', ');
   out.summary = `${out.queries} lookup queries (${out.looked_up} repositories${out.cost ? `, ${out.cost} points` : ''})${ev ? `: ${ev}` : ''}; ${out.active ?? '?'} active, ${out.unbound} without an id yet, ${out.gone} not found, ${out.conflicts} in conflict, ${out.merged} merged${out.stopped ? `; stopped (${out.stopped}${out.error ? `: ${out.error}` : ''})` : ''}`;
   try {
