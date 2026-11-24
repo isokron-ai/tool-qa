@@ -134,11 +134,10 @@ jobs:
           [[ "$PKG" =~ ^(@[a-z0-9][a-z0-9-]*/)?[a-z0-9][a-z0-9-]*$ ]]
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
           [[ -z "$REBUILD" || "$REBUILD" =~ ^[a-z0-9-]+( [a-z0-9-]+)*$ ]]
-          # The release goes in as a one-line package.json, then a plain install (no install scripts).
-          node perf/prepare-install.mjs "$RUNNER_TEMP/srv" "$PKG" "$VERSION"
-          npm install --prefix "$RUNNER_TEMP/srv" --ignore-scripts --no-audit --no-fund
-          # Only the native add-on the server needs is built; no other install script runs.
-          for dep in $REBUILD; do (cd "$RUNNER_TEMP/srv" && npm rebuild "$dep"); done
+          # A one-line package.json and a plain install with no install scripts; then only the native add-on the
+          # server needs is built (perf/install-server.mjs).
+          # shellcheck disable=SC2086 # REBUILD is a checked, space-separated list of package names
+          node perf/install-server.mjs "$RUNNER_TEMP/srv" "$PKG" "$VERSION" $REBUILD
       - name: Measure
         env:
           SERVER: ${{ matrix.server }}
