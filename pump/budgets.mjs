@@ -5,7 +5,7 @@
 // pump do this through budgetedFetch()). The budget:
 //
 //   - keeps each endpoint family under its own hourly and per-minute cap, and all
-//     families together under totalPerHour (1,500 calls an hour by default);
+//     families together under totalPerHour (2,500 calls an hour by default);
 //   - holds back a reserve in some families for essential calls (the health
 //     issue must still be updatable when everything else is spent);
 //   - spaces workflow dispatches 1 to 2 seconds apart, with jitter;
@@ -28,7 +28,7 @@ const HOUR = 3_600_000;
 export const DEFAULT_FAMILIES = Object.freeze({
   dispatch: Object.freeze({ perHour: 300, perMinute: 30, minIntervalMs: 1000, jitterMs: 1000 }),
   actions: Object.freeze({ perHour: 400, perMinute: 60 }),
-  artifacts: Object.freeze({ perHour: 200, perMinute: 40 }),
+  artifacts: Object.freeze({ perHour: 1200, perMinute: 60 }),
   contents: Object.freeze({ perHour: 150, perMinute: 30 }),
   issues: Object.freeze({ perHour: 60, perMinute: 10, reserve: 10, minIntervalMs: 1000 }),
   graphql: Object.freeze({ perHour: 30, perMinute: 5, resource: 'graphql' }),
@@ -72,7 +72,7 @@ const SECONDARY_RE = /secondary rate limit|abuse detection/i;
 export class ApiBudget {
   constructor({
     families = {},
-    totalPerHour = 1500,
+    totalPerHour = 2500,
     now = Date.now,
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
     random = Math.random,
