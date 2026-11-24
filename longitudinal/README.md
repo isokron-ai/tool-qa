@@ -105,3 +105,38 @@ the same version, rank medium).
 - Live-probe is not switched on yet, so the "same released version" case has
   fixtures only. scan-static reads source at the default branch head, so for
   it only "same commit" applies.
+
+## Check-in ranking (`checkin.mjs`)
+
+[`checkin.mjs`](checkin.mjs) answers "which tool fix first?". It reads the same
+archive the same way as `derive.mjs` (sealed bundles decrypted in memory, accepted
+items only, nothing decrypted written to disk), groups every tool-side skip, error
+and reader limit into fingerprints, and ranks them by what fixing each would unlock.
+
+```sh
+node longitudinal/checkin.mjs --archive ~/isokron-archive/tool-qa \
+  --out-md ~/checkin.md --out-json ~/checkin.json [--config weights.json] [--top 15]
+```
+
+- **Fingerprint** (DESIGN-v3 section 7): tool and version, lane, component, oracle,
+  class, SDK idiom (`from/fidelity/language`; the repository's language from the
+  seed when the result has none, as `repo:<language>`), layout, and a signature
+  built only from our own codes. A repository or owner name in an error or detail
+  is replaced by `<other>`.
+- **Tool-side**: a skip whose fault is `tool` or not stated (`unknown`), an error,
+  or a graded result that says what it could not read (unresolved names, tools
+  left out, unreadable schemas or descriptions, a truncated listing; these are
+  "partial"). A scan-static result's `detail` words say more than the older
+  manifest reason `no_runnable_artifact`, so they set the class.
+- **Unlocks**: the subjects whose latest result of that lane still has the
+  fingerprint; subjects fixed by a later run are counted as "healed since".
+- **Score**: `impact = severity[class] x sum(subject_weight)`, with
+  `subject_weight = tier_weight x (1 + popularity_boost x min(1, log10(1 + stars) / log10(1 + stars_cap)))`.
+  Tier weights are `weights` in `pump/tiers.json`; tier and stars come from the
+  seed. Severity, the partial multiplier, the boost, the stars cap, the fault
+  sides and the unseeded tier are `DEFAULT_CONFIG` and can be overridden with `--config`.
+- **Evidence**: each fingerprint lists run id, attempt id and item index per
+  subject. The Markdown shows the first 10 per fingerprint, the JSON all of them.
+
+Both outputs are written 0600 and never inside the folder being read. No network,
+no model.

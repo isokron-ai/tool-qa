@@ -33,7 +33,7 @@
 // Exit codes: 0 done; 2 usage (or --out inside the input); 3 the archive or
 // identity could not be read.
 
-import { chmodSync, existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, ftruncateSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -303,6 +303,32 @@ export function outInside(file, dir) {
   return rel === '' || (!rel.startsWith('..') && !rel.startsWith(sep) && rel !== '..');
 }
 
+/**
+ * Must `file` not be written for a run that reads `dir`? Yes when it would land
+ * inside it, when it is itself a link (to anywhere: a link is how an output gets
+ * pointed at an archive file), or when it is a second name (hard link) for an
+ * existing file. A missing file is fine.
+ */
+export function outUnsafe(file, dir) {
+  if (outInside(file, dir)) return true;
+  let st;
+  try { st = lstatSync(file); } catch { return false; }
+  return st.isSymbolicLink() || (st.isFile() && st.nlink > 1);
+}
+
+/** Write `data` to `file`, 0600: never through a link (O_NOFOLLOW), and never into a file with other names. */
+export function writeOut(file, data) {
+  const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  try {
+    if (fstatSync(fd).nlink > 1) throw Object.assign(new Error('output has other names'), { code: 'ELINKED' });
+    ftruncateSync(fd, 0);
+    fchmodSync(fd, 0o600);
+    writeSync(fd, data);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function parseArgs(argv) {
   const o = {};
   for (let i = 0; i < argv.length; i++) {
@@ -321,8 +347,8 @@ export async function main(argv = process.argv.slice(2), { write = (s) => proces
     write('usage: node longitudinal/derive.mjs (--archive <dir> [--identity <file>] | --plain <dir>) [--out <file>] [--since <iso time>]\n');
     return 2;
   }
-  if (o.out && outInside(o.out, o.archive ?? o.plain)) {
-    write('--out must not be inside the folder being read (the archive is never written to)\n');
+  if (o.out && outUnsafe(o.out, o.archive ?? o.plain)) {
+    write('--out must not be inside the folder being read, nor a link or a second name for a file in it (the archive is never written to)\n');
     return 2;
   }
   let read;
@@ -340,9 +366,8 @@ export async function main(argv = process.argv.slice(2), { write = (s) => proces
   }
   const { subjects, summary } = derive(read.items, { since: o.since ? Date.parse(o.since) : -Infinity });
   if (o.out) {
-    // Created 0600; an existing file is set to 0600 too (R-DRIFT-24).
-    writeFileSync(o.out, outputLines(subjects, now().toISOString()), { mode: 0o600 });
-    chmodSync(o.out, 0o600);
+    // Created 0600; an existing file is set to 0600 too (R-DRIFT-24); never through a link.
+    try { writeOut(o.out, outputLines(subjects, now().toISOString())); } catch (err) { write(`could not write the output (${err?.code ?? err?.name ?? 'error'})\n`); return 3; }
   }
   write(`${JSON.stringify({ read: read.stats, ...summary }, null, 2)}\n`);
   return 0;
