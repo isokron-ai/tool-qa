@@ -887,3 +887,41 @@ test('R-ING-21: a deadline further off than a timer can wait is no deadline, not
     db.close();
   }
 });
+
+test('R-ING-22: three dispatches in a row at the wrong commit pause the workflow; a run that passes resets the count', async () => {
+  const db = openState(':memory:');
+  const run = async (attemptId, headSha, at) => {
+    db.acquireSlot(attemptId, { budget: 5, ttlMs: 30 * MIN, now: at });
+    const l = db.acquireLease(RUN_KEY, attemptId, { ttlMs: 30 * MIN, now: at });
+    db.createDispatch({
+      attemptId, shardId: 's1', workflow: 'qa', repo: WORKER_REPO, workflowFile: 'qa-worker.yml', ref: 'main',
+      expires: at + 30 * MIN, items: [{ run_key: RUN_KEY, subject: 'repo:1', fence: l.fence }], workflowSha: WORKFLOW_SHA, now: at,
+    });
+    db.markDispatched(attemptId, { runId: RUN_ID });
+    const art = artifactEntry({ name: `result-${attemptId}-0.tar.age` });
+    const api = worker({ bundle: makeBundle({ identity: { attempt_id: attemptId, fence: l.fence } }), run: defaultRun({ head_sha: headSha }), artifacts: [art] });
+    const h = harness({ api });
+    h.clock.t = at + MIN;
+    try {
+      return await h.collect(db);
+    } finally {
+      h.cleanup();
+    }
+  };
+  const wrong = '2'.repeat(40);
+  await run('a1', wrong, T0);
+  await run('a2', wrong, T0 + 60 * MIN);
+  await run('a3', WORKFLOW_SHA, T0 + 120 * MIN); // passed: the count starts again
+  assert.equal(db.getKv('pump.sha_mismatch:qa'), undefined);
+  await run('a4', wrong, T0 + 180 * MIN);
+  await run('a5', wrong, T0 + 240 * MIN);
+  assert.deepEqual(db.pausedWorkflows({ now: T0 + 241 * MIN }), []);
+  await run('a6', wrong, T0 + 300 * MIN);
+  const [p] = db.pausedWorkflows({ now: T0 + 302 * MIN });
+  assert.equal(p.workflow, 'qa');
+  assert.equal(p.reason, 'run_sha_mismatch');
+  assert.equal(p.count, 3);
+  assert.equal(p.until, new Date(T0 + 301 * MIN + 6 * 60 * MIN).toISOString());
+  assert.deepEqual(db.pausedWorkflows({ now: T0 + 301 * MIN + 6 * 60 * MIN }), [], 'the pause ends on its own');
+  db.close();
+});

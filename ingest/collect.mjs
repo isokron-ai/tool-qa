@@ -319,6 +319,7 @@ export function createCollector({
         // is retried forever (R-ING-05).
         let decided = 0;
         let stopped = false;
+        const reasons = []; // of the items decided now, for the run_sha_mismatch alarm
         const failures = new Map(); // log line -> item indexes
         const decide = async (item, abandon) => {
           let sealed = false;
@@ -332,6 +333,7 @@ export function createCollector({
             return res;
           });
           decided += 1;
+          reasons.push(r.reason);
           summary.judged += 1;
           summary.outcomes[r.outcome] = (summary.outcomes[r.outcome] ?? 0) + 1;
           if (r.recorded) summary.recorded += 1;
@@ -373,6 +375,14 @@ export function createCollector({
             }
             failures.set(line, [...(failures.get(line) ?? []), item.index]);
           }
+        }
+        // R-ING-22: count dispatches whose run was at the wrong commit; one whose run passed resets the count.
+        if (reasons.includes('run_sha_mismatch')) {
+          const alarm = db.noteShaMismatch(d.workflow, { now: now() });
+          summary.changed = true;
+          log(`ingest: ${label}: run at another commit than recorded at dispatch (${alarm.count} dispatch${alarm.count === 1 ? '' : 'es'} in a row)${alarm.paused ? `; ${d.workflow} is paused` : ''}`);
+        } else if (reasons.some((x) => x === null || !(/^run_/.test(x) || x === 'stale_fence' || x === 'ingest_error'))) {
+          db.clearShaMismatch(d.workflow);
         }
         for (const [line, indexes] of failures) {
           const which = indexes.length === 1 ? `item ${indexes[0]}` : `items ${indexes.join(', ')}`;

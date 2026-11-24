@@ -89,12 +89,16 @@ export async function runTick({
     failed: 0,
     withdrawn: 0,
     skippedWorkflows: [],
+    paused: [],
     stopped: null,
   };
   for (const d of reaped.dispatches) log(`lease expired: closed ${d.workflow} shard ${d.shard_id} (${d.attempt_id})`);
+  // A workflow paused by the run_sha_mismatch alarm (R-ING-22) gets nothing; said in every tick, housekeeping too.
+  const paused = new Set((typeof db.pausedWorkflows === 'function' ? db.pausedWorkflows({ now: t0 }) : []).map((p) => p.workflow));
+  summary.paused = [...paused];
   if (!(workerSlots > 0)) return summary;
 
-  const due = dueFromState(db, { now: t0, tiers: config.tiers, workflows: config.workflows, hooks });
+  const due = dueFromState(db, { now: t0, tiers: config.tiers, workflows: config.workflows, hooks }).filter((d) => !paused.has(d.workflow));
   summary.due = due.length;
   if (due.length === 0) return summary;
 

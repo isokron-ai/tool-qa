@@ -244,3 +244,19 @@ test('R-ING-12: a ref that cannot be resolved is not dispatched this tick', asyn
   assert.ok(lines.some((l) => /cannot resolve isokron-ai\/mcp-check main/.test(l)));
   db.close();
 });
+
+test('R-ING-22: a paused workflow gets no dispatch, and the tick says it is paused', async () => {
+  const { c, db, config, newId } = setup({ subjects: 4 });
+  db.setKv('pump.paused:live-probe', { reason: 'run_sha_mismatch', count: 3, since: new Date(c.t).toISOString(), until: new Date(c.t + 60 * MIN).toISOString() }, { now: c.t });
+  const d = recorder();
+  const s = await runTick({ db, now: c.now, config, workerSlots: 2, dispatcher: d, newId });
+  assert.equal(d.calls.length, 0);
+  assert.deepEqual(s.paused, ['live-probe']);
+  const idle = await runTick({ db, now: c.now, config, workerSlots: 0, dispatcher: null, newId });
+  assert.deepEqual(idle.paused, ['live-probe'], 'housekeeping ticks say so too');
+  c.t += 61 * MIN;
+  const later = await runTick({ db, now: c.now, config, workerSlots: 2, dispatcher: d, newId });
+  assert.deepEqual(later.paused, []);
+  assert.ok(d.calls.length > 0);
+  db.close();
+});

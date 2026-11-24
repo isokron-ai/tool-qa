@@ -406,3 +406,15 @@ test('R-ING-11: the API budget is saved with the state and seeds the next run', 
   assert.equal(second.snapshot().used.contents, 7, 'the second run counts the first run\'s calls');
   h.cleanup();
 });
+
+test('R-ING-22: while a workflow is paused the pump run fails, once said why', async () => {
+  const h = harness({ slots: '1' });
+  const db = openState(h.stateFile);
+  db.setKv('pump.paused:live-probe', { reason: 'run_sha_mismatch', count: 3, since: new Date(h.c.t).toISOString(), until: new Date(h.c.t + 60 * 60_000).toISOString() }, { now: h.c.t });
+  db.close();
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, false);
+  assert.equal(h.calls.dispatch.length, 0);
+  assert.equal(h.lines.filter((l) => /live-probe is paused until .*run_sha_mismatch/.test(l)).length, 1, h.lines.join('\n'));
+  h.cleanup();
+});

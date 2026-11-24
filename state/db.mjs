@@ -744,6 +744,46 @@ export class StateDb {
     return rows.filter((r) => Date.parse(r.last) + baseMs * 2 ** Math.min(10, r.n - 1) > t).map((r) => r.run_key);
   }
 
+  // ---- run_sha_mismatch alarm (R-ING-22) ----
+  //
+  // run_sha_mismatch does not count towards parking a run_key (R-ING-18), so on
+  // its own nothing would stop a workflow whose every run is at the wrong
+  // commit (a branch that keeps moving, a run name someone else keeps taking).
+  // Ingest counts consecutive dispatches of a workflow rejected that way; at
+  // `limit` the workflow is paused for `pauseMs` (kv pump.paused:<workflow>):
+  // the pump dispatches none of it and fails its runs, which shows red on the
+  // health issue, until the pause ends. A dispatch whose run passed the checks
+  // resets the count.
+
+  /** One more dispatch of `workflow` rejected as run_sha_mismatch. Returns {count, paused}. */
+  noteShaMismatch(workflow, { now, limit = 3, pauseMs = 6 * 3_600_000 } = {}) {
+    const key = `pump.sha_mismatch:${workflow}`;
+    const prev = this.getKv(key);
+    const count = (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1;
+    if (count < limit) {
+      this.setKv(key, { count, first: prev?.first ?? iso(now), last: iso(now) }, { now });
+      return { count, paused: false };
+    }
+    this.setKv(`pump.paused:${workflow}`, {
+      reason: 'run_sha_mismatch', count, since: iso(now), until: iso(toMs(now) + pauseMs),
+    }, { now });
+    this.deleteKv(key);
+    return { count, paused: true };
+  }
+
+  /** A dispatch of `workflow` whose run passed the run checks: the count starts again. */
+  clearShaMismatch(workflow) {
+    this.deleteKv(`pump.sha_mismatch:${workflow}`);
+  }
+
+  /** [{workflow, reason, count, since, until}] paused now. */
+  pausedWorkflows({ now } = {}) {
+    const t = toMs(now);
+    return this.raw.prepare("SELECT key, value FROM kv WHERE key LIKE 'pump.paused:%' ORDER BY key").all()
+      .map((r) => ({ workflow: r.key.slice('pump.paused:'.length), ...JSON.parse(r.value) }))
+      .filter((p) => Date.parse(p.until) > t);
+  }
+
   // ---- ingest failures ----
   //
   // How often the pump failed to judge one item of a dispatch (an error that
