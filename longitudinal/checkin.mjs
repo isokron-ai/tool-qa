@@ -26,6 +26,15 @@
 //   subject_weight(s) = tier_weight[tier(s)] * (1 + popularity_boost * min(1, log10(1 + stars(s)) / log10(1 + stars_cap)))
 //   impact(fp)        = severity[class(fp)] * (partial_multiplier if fp is a partial reader limit) * sum over affected s of subject_weight(s)
 //
+// Oracle disagreement (loop upgrade #7, state/oracle.mjs): a subject whose
+// latest scan-static, live-probe, SDK-client and conformance results disagree
+// is where our tools are weakest, so its weight is multiplied by
+// (1 + oracle_boost), default 1.5 times, in every fingerprint it is still
+// affected by. The disagreement itself is evidence about our tool: it makes no
+// fingerprint of its own and a server-side skip stays out as before.
+//
+//   subject_weight(s) = ... * (config.oracle_multiplier if s has an open disagreement else 1)
+//
 // tier_weight is `weights` in pump/tiers.json (T0 100 .. T4 10), the weights
 // the pump's own priority uses; tier and stars come from the seed (the same
 // tierFor as the pump). A subject not in the seed gets `unseeded_tier`.
@@ -43,6 +52,7 @@ import { ageDecrypt } from '../ingest/age.mjs';
 import { SKIP_REASONS, skipFault } from '../worker-kit/contract.mjs';
 import { readTar } from '../worker-kit/tar.mjs';
 import { tierFor } from '../pump/subjects.mjs';
+import { deriveDisagreements, oracleFacts, observedFields, ORACLE_LANES } from '../state/oracle.mjs';
 import { DEFAULT_IDENTITY, outUnsafe, sealedFiles, subjectKeyOf, writeOut } from './derive.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -58,6 +68,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   // A graded result that is incomplete (names without schemas, files over the limit) counts less than no result.
   partial_multiplier: 0.5,
   popularity_boost: 1,
+  // A subject with an open oracle disagreement counts this many times as much (R-ORD-05).
+  oracle_multiplier: 1.5,
   stars_cap: 10000,
   unseeded_tier: 'T4',
   // Which fault sides count as tool-side. "unknown" is a skip that did not say (bundles from before the fault field).
@@ -75,7 +87,7 @@ const DETAIL_CLASS = Object.freeze({
 const AMBIGUOUS = new Set(['no_runnable_artifact', 'install_failed_registry', 'timeout_start']);
 
 const ITEM_RE = /^accepted\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/(\d{1,6})\/(.+)$/;
-const WANT_RE = /^(manifest\.json|ingest\.json|results\/[A-Za-z0-9._-]+\.json|raw\/subject\/scan\.json)$/;
+const WANT_RE = /^(manifest\.json|ingest\.json|results\/[A-Za-z0-9._-]+\.json|raw\/subject\/scan\.json|observations\/[A-Za-z0-9._-]+\.ndjson)$/;
 
 const parseJson = (buf) => { try { return JSON.parse(Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf)); } catch { return null; } };
 
@@ -104,6 +116,8 @@ export function itemsFromEntries(entries, stats = { unreadable: 0 }) {
       // The subject key ingest recorded it under, which a rename does not
       // move (derive.mjs subjectKeyOf); the name the worker was sent is kept.
       subject: subjectKeyOf(g.files.get('ingest.json'), man),
+      // The subject version the lane read (state oracle facts are compared on one version only, R-ORD-12).
+      version: man.subject.sha ?? man.subject.artifact_digest ?? null,
       sent_as: man.subject.id,
       lane,
       observed_at: man.finished_at,
@@ -114,6 +128,7 @@ export function itemsFromEntries(entries, stats = { unreadable: 0 }) {
       skips: Array.isArray(man.skips) ? man.skips : [],
       results,
       scan: parseJson(g.files.get('raw/subject/scan.json')),
+      fields: observedFields(g.files),
     });
   }
   return out;
@@ -298,7 +313,33 @@ export function loadSeed(file) {
 export function subjectWeight(info, tierWeights, config) {
   const w = tierWeights[info.tier] ?? 0;
   const pop = Math.min(1, Math.log10(1 + Math.max(0, info.stars)) / Math.log10(1 + config.stars_cap));
-  return w * (1 + config.popularity_boost * pop);
+  return w * (1 + config.popularity_boost * pop) * (info.oracle ? config.oracle_multiplier : 1);
+}
+
+/**
+ * The open oracle disagreements by subject, from each subject's latest item
+ * that carried oracle facts in each oracle lane (the same facts and rules as
+ * the state store's, state/oracle.mjs). Items must be sorted by time.
+ * @returns {Map<string, {kind: string, oracles: string[]}[]>}  only subjects that disagree
+ */
+export function oracleDisagreements(items) {
+  const latest = new Map();
+  const newest = new Map(); // subject -> the version of its newest item with facts
+  for (const it of items) {
+    if (!ORACLE_LANES.includes(it.lane)) continue;
+    const facts = oracleFacts(it.lane, (k) => it.fields?.get(k) ?? null, it.results.get(it.lane) ?? null);
+    if (facts) {
+      latest.set(`${it.subject}\u0000${it.lane}`, { ...facts, version: it.version ?? null });
+      newest.set(it.subject, it.version ?? null);
+    }
+  }
+  const subjects = new Set([...latest.keys()].map((k) => k.split('\u0000')[0]));
+  const out = new Map();
+  for (const subject of subjects) {
+    const d = deriveDisagreements({ static: latest.get(`${subject}\u0000scan-static`) ?? null, live: latest.get(`${subject}\u0000live-probe`) ?? null, version: newest.get(subject) });
+    if (d.kinds.length) out.set(subject, d.kinds);
+  }
+  return out;
 }
 
 const mergeConfig = (base, over) => {
@@ -327,7 +368,8 @@ export function analyse(items, { seed = new Map(), tierWeights, config: over = {
   const latest = new Map();
   for (const it of uniq) latest.set(`${it.subject}\u0000${it.lane}`, it);
 
-  const info = (subject) => seed.get(subject.toLowerCase()) ?? { tier: config.unseeded_tier, stars: 0, unseeded: true };
+  const disagree = oracleDisagreements(uniq);
+  const info = (subject) => ({ ...(seed.get(subject.toLowerCase()) ?? { tier: config.unseeded_tier, stars: 0, unseeded: true }), oracle: disagree.has(subject) });
   const fps = new Map();
   let failingItems = 0;
   for (const it of uniq) {
@@ -375,6 +417,7 @@ export function analyse(items, { seed = new Map(), tierWeights, config: over = {
       example: top ? { subject: top.subject, tier: top.tier, stars: top.stars } : null,
       evidence,
       unseeded_subjects: [...fp.current.keys()].filter((s) => info(s).unseeded).length,
+      oracle_subjects: [...fp.current.keys()].filter((s) => disagree.has(s)).length,
     };
   }).sort((a, b) => b.impact - a.impact || b.unlocks - a.unlocks || a.fingerprint.localeCompare(b.fingerprint));
   ranked.forEach((r, i) => { r.rank = i + 1; });
@@ -388,6 +431,7 @@ export function analyse(items, { seed = new Map(), tierWeights, config: over = {
       items_with_a_tool_side_failure: failingItems,
       fingerprints: ranked.length,
       open_fingerprints: ranked.filter((r) => r.unlocks > 0).length,
+      oracle_disagreements: { subjects: disagree.size, by_kind: Object.fromEntries([...new Set([...disagree.values()].flat().map((k) => k.kind))].sort().map((k) => [k, [...disagree.values()].filter((v) => v.some((x) => x.kind === k)).length])) },
     },
     fingerprints: ranked,
   };
@@ -403,8 +447,11 @@ export function renderMarkdown(report, { generatedAt, md_evidence = report.confi
   L.push('# Check-in: tool-side failures ranked by impact', '');
   L.push(`Generated ${generatedAt} by \`longitudinal/checkin.mjs\`. Local view: subject names are shown.`, '');
   L.push(`Read ${s.items} accepted items over ${s.subjects} subjects (lanes: ${s.lanes.join(', ') || 'none'}); ${s.items_with_a_tool_side_failure} carry a tool-side failure. ${s.open_fingerprints} fingerprints are still open on a subject's latest result (${s.fingerprints} seen in all).`, '');
+  const od = s.oracle_disagreements;
+  if (od.subjects > 0) L.push(`${od.subjects} subjects have an open oracle disagreement (${Object.entries(od.by_kind).map(([k, n]) => `${k}: ${n}`).join(', ')}); their fingerprints weigh x${config.oracle_multiplier}.`, '');
   L.push('## Scoring', '');
   L.push('```', 'subject_weight = tier_weight[tier] * (1 + popularity_boost * min(1, log10(1 + stars) / log10(1 + stars_cap)))',
+    'x oracle_multiplier when the subject has an open oracle disagreement (state/oracle.mjs)',
     'impact         = severity[class] * (partial_multiplier if a partial reader limit) * sum(subject_weight over the subjects still affected)', '```', '');
   L.push(`Config: \`${JSON.stringify({ ...config, severity: undefined })}\`, severity \`${JSON.stringify(config.severity)}\`.`, '');
   L.push('"Unlocks" counts the subjects whose latest result of that lane still carries the fingerprint; a subject that was fixed by a later run no longer counts (see "healed since").', '');
@@ -418,6 +465,7 @@ export function renderMarkdown(report, { generatedAt, md_evidence = report.confi
   for (const f of fingerprints) {
     L.push(`### ${f.rank}. \`${f.fingerprint}\` ${f.kind}${f.partial ? ' (partial)' : ''}, impact ${f.impact}`, '');
     L.push(`- This fix unlocks ${f.unlocks} subject${f.unlocks === 1 ? '' : 's'} (${Object.entries(f.unlocks_by_tier).map(([t, n]) => `${t}: ${n}`).join(', ') || 'none open'}); popularity-weighted ${f.weighted_subjects} x severity ${f.severity}.`);
+    if (f.oracle_subjects > 0) L.push(`- ${f.oracle_subjects} of these subject${f.oracle_subjects === 1 ? '' : 's'} also ${f.oracle_subjects === 1 ? 'has' : 'have'} an open oracle disagreement (weighted x${config.oracle_multiplier}).`);
     L.push(`- Tool ${f.tool}; component ${f.component}; oracle ${f.oracle}; idiom ${f.idiom}; layout ${f.layout}.`);
     L.push(`- Signature: \`${f.signature}\``);
     L.push(`- First seen ${f.first_seen}, last seen ${f.last_seen}; healed since: ${f.healed_since}.`);

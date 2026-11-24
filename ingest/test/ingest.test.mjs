@@ -788,3 +788,21 @@ test('R-SUBJ-02: the report names the subject by its key and repository id, with
   const rep = json(old.r.outputs.get('accepted/att-1/0/ingest.json'));
   assert.ok(!('subject_name' in rep.ledger) && !('repo_id' in rep.ledger));
 });
+
+// ---- loop upgrade #7: the oracle facts of an oracle lane's bundle go to the ledger ----
+
+test('R-ORD-07: an accepted live-probe bundle hands its oracle facts to the ledger; another lane, or a rejected item, hands none; the fault side is untouched', async () => {
+  const H = 'c'.repeat(64);
+  const files = defaultFiles();
+  files['observations/check.ndjson'] = [{ field: 'tool_count', value: 3 }, { field: 'tool_list_sha256', value: H }].map((r) => `${JSON.stringify(r)}\n`).join('');
+  const reg = { ...parseRegistry(`${REGISTRY_TEXT}  - {id: tool_list_sha256, layer: surface, type: hash, unit: none, source: check, class: P, redaction: null, status: active}\n`), source: 'test' };
+  const lane = async (workflow_name, bundle = makeBundle({ files })) => (await run({ bundle, registry: reg, ledger: fakeLedger([expectedRow({ workflow: workflow_name })]) })).ledger.records[0];
+  const rec = await lane('live-probe');
+  assert.deepEqual(rec.oracle, { lane: 'live-probe', tool_list_sha256: H, tool_count: 3, sdk: [], conformance_failed: 0, worker: [] });
+  assert.deepEqual([rec.fault, rec.coverage], [null, 'assessed'], 'a disagreement lead never changes the fault side or coverage');
+  assert.equal((await lane('meta-github')).oracle, undefined);
+  const skip = { stage: 'start', reason: 'timeout_start', retryable: true };
+  const retried = await lane('live-probe', makeBundle({ meta: { skips: [skip] }, files }));
+  assert.equal(retried.outcome, 'rejected');
+  assert.equal(retried.oracle, undefined);
+});

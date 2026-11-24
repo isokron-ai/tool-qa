@@ -570,6 +570,77 @@ old, never in T2 to T4. Results recorded before state schema 7 have no
 coverage: they get no `our_limit` boost, and one that was not `skips_only`
 counts as assessed.
 
+**Oracle disagreement (loop upgrade 7, R-ORD-01..15).** Where our reader
+(scan-static), the live tool list (live-probe) and the official SDK clients
+or conformance suite disagree, our tools are weakest there, so those subjects
+are looked at sooner and their fingerprints weigh more. The pieces:
+
+- *The signal* (`state/oracle.mjs`, state schema 9). Ingest reads the facts of
+  every accepted scan-static and live-probe bundle (tool count, whether the
+  reader's list is complete, `sdk_client_results`, failed scored
+  `conformance_checks`, the worker's `oracle_disagreements`) and
+  `StateDb.noteOracle()` keeps the latest per (subject, lane) in
+  `oracle_facts`, with the subject version (sha, else artifact digest) they
+  were read at. It then derives one row per subject in
+  `oracle_disagreements`: `kinds` (`tool_count`: reader and live list differ,
+  or an SDK client listed another count; `tool_set`, `schema`, `protocol`,
+  `conformance`: from the SDK clients' results and the worker's own
+  comparisons, made within the live-probe lane), with the oracles involved,
+  and a signature of those. **Across lanes only the tool count is compared,
+  and only when the reader's list is complete** (R-ORD-11): scan-static and
+  live-probe use the same catalog hash, but the reader derives its list from
+  source, so a different hash alone says nothing. **Lanes are compared on one
+  subject version only** (R-ORD-12): facts of an older version are stale and
+  left out, and a lane's row is dropped when a newer-version result of that
+  lane has no facts. Counts moving does not change the signature. Until
+  live-probe is switched on only the reader side exists, so there is nothing
+  to disagree with and no row; it fills in as results arrive.
+- *Fault side.* A disagreement is evidence about our tool, never the
+  subject's: it writes nothing to `results.fault` or `results.coverage`, is
+  not a coverage gap, and the check-in makes no fingerprint of it. Where an
+  oracle shows the server is wrong (a worker entry with `attribution:
+  server`, or a failed conformance check while the clients and our reader
+  agree) it is kept as `server_side` evidence and opens nothing.
+- *Priority* (`pump/due.mjs`, `priority.oracle_*` in `pump/tiers.json`). A
+  subject whose record is `open` gets, on its oracle lanes (`oracle_lanes`:
+  scan-static, live-probe): (1) a due reason `oracle_recheck` (15 points)
+  once its last result is older than `oracle_recheck_days` (1), well before
+  the tier max age; (2) a boost of `oracle_disagreement_share` (0.25) x the
+  tier weight (T0 +25, T1 +15, T2 +10, T3 +5, T4 +2.5). **Order, all inside
+  one cap:** the coverage-gap boost is taken first; then the
+  `oracle_recheck` reason's points, cut to what is left; then the oracle
+  boost, which gets what is left after both. The cap is `gapBoostCap()`, one
+  point under the gap to the next tier up, so with equal other reasons and
+  age a pair never reaches a bare pair of the tier above (R-ORD-02,
+  R-ORD-14). Example, T1 (cap 39): a coverage gap (+30) leaves 9 for the
+  reason, and the oracle boost gets 0; T2 (cap 19): reason 15, boost 4. The
+  boost orders due pairs; only `oracle_recheck` makes a pair due, and a
+  disagreement never moves a run_key.
+- *Clearing.* A re-check is one check cycle: a result from every lane that
+  has current facts (one result of one lane is not a cycle; R-ORD-13). The
+  record clears when the oracles agree (kept with `cleared_at`; a later
+  disagreement reopens it as a new episode). The same disagreement (same
+  signature) surviving `ORACLE_MAX_UNCHANGED` (5) cycles is `settled`: the
+  boost and the re-checks stop until the signature changes, so a server whose
+  tools are registered at run time from config (which the reader cannot know)
+  does not get looked at every day for ever. A changed signature starts over.
+  A rolling budget stops flapping: at most `ORACLE_BUDGET_MAX` (6) cycles with
+  a disagreement, counting each reopening, per `ORACLE_BUDGET_DAYS` (30) per
+  subject, however often it clears; beyond that it is `settled` with reason
+  `recheck_budget`.
+- *Check-in* (`longitudinal/checkin.mjs`). It derives the same signal from
+  each subject's latest facts in the archive. A subject with an open
+  disagreement counts `oracle_multiplier` (1.5) times as much in every
+  fingerprint it is still affected by, so a fix that unlocks such subjects
+  ranks higher; each fingerprint shows `oracle_subjects`, and the summary
+  lists the disagreements by kind. The check-in compares lanes on one subject
+  version only, like the store, and ignores the settle rule and the budget:
+  it has no re-check count.
+- *Watching it.* `SELECT subject, status, kinds, unchanged_rechecks FROM
+  oracle_disagreements` (state read access) or `db.listOracleDisagreements()`;
+  due items of an open one carry `oracle: [kinds]`. Pruning never touches
+  these tables (like `results`, they are small and current).
+
 **Throttling (R-SUB-04, R-SUB-09).** A result whose every skip is a
 retryable `rate_limited` or `upstream_unavailable` from a third-party stage
 the lane declares is sent back as `retry_throttled`. It does not use up the
