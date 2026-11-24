@@ -55,7 +55,9 @@ moved.
   pre-release or a build suffix allowed), optionally `v`-prefixed or behind a
   package prefix: `1.2.3`, `v1.2.3`, `pkg@1.2.3`, `server-v1.2.3`,
   `sub/v1.2.3`, with no floating word (snapshot, dev, nightly, edge, latest,
-  main, master, canary) in the prefix or the pre-release. `latest`, `main`,
+  main, master, canary) in the pre-release or as a bare one-word prefix. A
+  package prefix (ending in `@`, or of several parts, like `mcp-main@` or
+  `edge-runtime-v`) is a name and is not checked. `latest`, `main`,
   `v1`, `1.2`, `1.0.0-SNAPSHOT`, `nightly-1.0.0` and other floating tags are
   expected to move: they are counted (`floating_moved`), never events.
 - **Fix-up re-tags rank low; moved images rank medium.** A git tag whose old

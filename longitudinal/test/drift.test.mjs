@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { catalogDrift, cleanTag, FIXUP_WINDOW_MS, gitTagMoves, gitTagSeries, ociTagMoves, versionLikeTag } from '../drift.mjs';
 
 test('R-DRIFT-04: version-like means a full MAJOR.MINOR.PATCH, optionally v- or package-prefixed; floating tags are not', () => {
-  for (const t of ['1.2.3', 'v1.2.3', 'V0.0.1', '1.2.3-rc.1', 'v2.0.0+build.5', '1.2.3.4', '@scope/pkg@1.2.3', 'pkg@0.4.0', 'server-v1.0.0', 'sub/module/v1.2.3', 'release-2.1.0', '2024.11.01']) {
+  for (const t of ['1.2.3', 'v1.2.3', 'V0.0.1', '1.2.3-rc.1', 'v2.0.0+build.5', '1.2.3.4', '@scope/pkg@1.2.3', 'pkg@0.4.0', 'server-v1.0.0', 'sub/module/v1.2.3', 'release-2.1.0', '2024.11.01',
+    'mcp-server-dev-tools@1.0.0', 'edge-runtime-v2.0.0', 'mcp-main@1.0.0', 'main-server-v1.0.0']) {
     assert.equal(versionLikeTag(t), true, t);
   }
   for (const t of ['latest', 'main', 'stable', 'nightly', 'edge', 'v1', 'v1.2', '1', '1.2', 'sha-abc1234', 'foo1.2.3', 'v1.2.x', '', null, 7, `v${'1.'.repeat(200)}1`]) {
@@ -96,4 +97,14 @@ test('R-DRIFT-23: bidirectional control characters in a tag name never reach an 
     { at: '2026-11-22T00:00:00Z', value: { tags: [{ tag: 'v1.0.0-\u2066x', commit: B, commit_date: '2026-11-21T00:00:00Z' }] } },
   ]);
   assert.deepEqual([r.events.length, r.floating_moved], [0, 1]);
+});
+
+test('R-DRIFT-25: a floating word inside a package prefix does not make a tag floating; a bare one-word prefix or the pre-release still does', () => {
+  for (const t of ['mcp-server-dev-tools@1.0.0', 'edge-runtime-v2.0.0', 'mcp-main@1.0.0', 'main-server-v1.0.0', 'devtools-v1.2.3', '@devcycle/mcp@1.0.0',
+    'maintenance-1.2.3', 'developer-mcp@0.3.0', '1.2.3-devel', 'dev@1.0.0']) {
+    assert.equal(versionLikeTag(t), true, t);
+  }
+  for (const t of ['nightly-1.0.0', 'main-1.0.0', 'master/v1.0.0', 'Edge-2.0.0', '1.0.0-SNAPSHOT', '0.0.0-dev', 'mcp-main@1.0.0-canary.2']) {
+    assert.equal(versionLikeTag(t), false, t);
+  }
 });
