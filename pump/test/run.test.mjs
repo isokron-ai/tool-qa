@@ -553,3 +553,24 @@ test('R-WD-03: a lane pinned at another sandbox commit is logged and recorded, a
   db.close();
   h.cleanup();
 });
+
+test('R-CHAOS-12: cancelling the successor says so only when GitHub cancelled it; a 409 is reported as not cancelled', async () => {
+  const { cancelSuccessor } = await import('../run.mjs');
+  for (const [status, want] of [[202, true], [409, false]]) {
+    const dir = mkdtempSync(join(tmpdir(), 'pump-cancel-'));
+    const file = join(dir, 'successor.json');
+    writeFileSync(file, JSON.stringify({ ok: true, runId: 777 }));
+    const api = fakeApi([['POST', '/repos/isokron-ai/tool-qa/actions/runs/777/cancel', () => ({ status, body: {} })]]);
+    const c = fakeClock();
+    const lines = [];
+    const out = await cancelSuccessor({
+      successorFile: file, repo: 'isokron-ai/tool-qa', mint: async () => ({ token: 'tok-x', expiresAt: c.t + 3_600_000 }),
+      fetch: api.fetch, apiUrl: API, budget: new ApiBudget({ now: c.now, sleep: c.sleep }), now: c.now, sleep: c.sleep, say: (l) => lines.push(l),
+    });
+    assert.equal(out, want);
+    assert.equal(api.calls.length, 1);
+    assert.ok(lines.some((l) => (want ? /cancelled the successor run 777/ : /could not be cancelled \(HTTP 409/).test(l)), lines.join('\n'));
+    assert.ok(!want || !lines.some((l) => /could not/.test(l)));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

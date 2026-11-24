@@ -65,7 +65,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { createCollector, IngestSetupError } from '../ingest/collect.mjs';
+import { createCollector, IngestSetupError, LATE_MS } from '../ingest/collect.mjs';
 import { sleepUnless } from '../ingest/github.mjs';
 import { openState } from '../state/db.mjs';
 import { pullState, pushState } from '../scripts/state-asset.mjs';
@@ -74,7 +74,9 @@ import { ApiBudget, budgetedFetch } from './budgets.mjs';
 import { allowedWorkflows, judgeConformance, pinMismatches, readConformance as readConformanceStatus, untrustedWorkflows, verifyRun } from './breaker.mjs';
 import { createDispatcher } from './dispatch.mjs';
 import { dueFromState, isEnabled, loadConfig } from './due.mjs';
-import { scrub } from './github.mjs';
+import { createClient, scrub } from './github.mjs';
+import { createReleaseClient } from '../snapshot/github.mjs';
+import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.mjs';
 import { computeBudget, reapExpired } from './slots.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { planShards, runTick } from './tick.mjs';
@@ -119,6 +121,7 @@ export async function runPump({
   newId,
   readConformance,
   verifyConformanceRun,
+  countSnapshots,
 } = {}) {
   const start = now();
   const deadline = start + maxRunMs;
@@ -205,8 +208,30 @@ export async function runPump({
     return { ...b, held: b.tripped ? untrusted : [], mismatch: b.tripped ? [] : pinMismatches(cfg.workflows, b.sandbox_sha) };
   };
 
-  await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, ...stateKeys });
-  const db = openState(stateFile);
+  // The run cannot start without its state. When the state itself is wrong
+  // (not a passing GitHub error), it also takes back the successor it
+  // dispatched (R-CHAOS-03): otherwise every run fails at this point and
+  // starts the next one at once, a failing run a minute until a person steps
+  // in. The schedule and the watchdog still try every 30 minutes.
+  let db;
+  try {
+    const pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, ...stateKeys });
+    // No state asset, but snapshots of one: the state was lost, not never
+    // made. Starting from empty would silently throw away every result and
+    // the fence counter (R-CHAOS-01); a person restores a snapshot instead.
+    if (pulled?.status === 'absent') {
+      const n = await (countSnapshots ?? (() => snapshotCount({ repo, token: stateToken, fetch, apiUrl, sleep })))();
+      if (n > 0) {
+        throw new Error(`the state asset is missing, but ${n} snapshot(s) of it are on the "${SNAPSHOT_TAG}" release: refusing to start from an empty state. Restore a snapshot (snapshot/restore.mjs drill --apply; docs/OPERATIONS.md, "State snapshots")`);
+      }
+    }
+    db = openState(stateFile);
+  } catch (err) {
+    say(`pump: cannot start: ${err?.message ?? err}`);
+    // A GitHub outage or rate limit may pass by the next run: the chain goes on.
+    if (err?.transient !== true) await cancelSuccessor({ successorFile, repo, mint: lazyMint, fetch, apiUrl, budget: bud, now, sleep, say });
+    throw err;
+  }
   // The hourly API caps hold across runs (R-ING-11): this run starts with the
   // calls earlier runs made in the last hour, and leaves its own for the next.
   if (typeof bud.restore === 'function') bud.restore(db.getKv(BUDGET_KEY));
@@ -274,8 +299,13 @@ export async function runPump({
         lastBreaker = breaker;
       }
       const tickConfig = breaker?.tripped ? { ...cfg, workflows: allowedWorkflows(cfg.workflows, breaker) } : cfg;
+      // When ingest did not look at everything this tick (the run's last
+      // minutes, the API budget), work whose expired dispatch may hold a
+      // result that came in on time is not sent again yet: a later tick
+      // judges it first (R-CHAOS-02).
+      const holdRunKeys = slots > 0 && collector && !(ingested && !ingested.stopped) ? unjudgedLateRunKeys(db, { now: now() }) : null;
       const summary = await runTick({
-        db, now, config: tickConfig, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline,
+        db, now, config: tickConfig, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
         // The pending dispatches are saved before any is sent (R-ING-10).
         beforeSend: () => save(`tick ${ticks}, before dispatching`),
       });
@@ -311,6 +341,61 @@ export async function runPump({
   }
   await save('end of run', { open: false });
   return { ok, ticks, dispatched, failed, workerSlots, loopBudget };
+}
+
+/**
+ * run_keys of items that wait for a late judgment: in a dispatch whose lease
+ * expired, that has a run, and for which nothing is recorded yet.
+ */
+export function unjudgedLateRunKeys(db, { now }) {
+  const keys = new Set();
+  for (const d of db.dispatchesAwaitingResults({ now, lateMs: LATE_MS })) {
+    if (d.status !== 'expired') continue;
+    for (const it of db.getAttempt(d.attempt_id)?.items ?? []) if (it.outcome === null) keys.add(it.run_key);
+  }
+  return keys;
+}
+
+/** How many state snapshots the "state-snapshots" release holds (0 if there is no such release). */
+export async function snapshotCount({ repo, token, fetch, apiUrl, sleep }) {
+  const gh = createReleaseClient({ repo, token, fetch, apiUrl, sleep });
+  const release = await gh.getRelease(SNAPSHOT_TAG);
+  if (!release) return 0;
+  return (await gh.listAssets(release)).filter((a) => SNAPSHOT_NAME_RE.test(String(a.name))).length;
+}
+
+/**
+ * Cancel the pump run this run dispatched as its successor (pump/successor.mjs
+ * wrote its id to `successorFile`). Best effort: it is logged and never throws.
+ */
+export async function cancelSuccessor({ successorFile, repo, mint, fetch, apiUrl, budget, now, sleep, say }) {
+  if (!successorFile || !existsSync(successorFile)) return false;
+  let s;
+  try {
+    s = JSON.parse(readFileSync(successorFile, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!s?.ok) return false;
+  const runId = Number(s.runId);
+  if (!Number.isSafeInteger(runId) || runId <= 0) {
+    say('pump: the successor run has no known id, so it cannot be cancelled; it will fail the same way');
+    return false;
+  }
+  try {
+    const { token } = await mint({ repositories: [String(repo).split('/')[1]], permissions: { actions: 'write' } });
+    const client = createClient({ token, fetch, apiUrl, budget, now, sleep });
+    const res = await client.request('POST', `/repos/${repo}/actions/runs/${runId}/cancel`, { essential: true, allow: [409] });
+    if (res.status === 409) {
+      say(`pump: the successor run ${runId} could not be cancelled (HTTP 409: it already finished or cannot be cancelled now)`);
+      return false;
+    }
+    say(`pump: cancelled the successor run ${runId}; the schedule and the watchdog start the pump again`);
+    return true;
+  } catch (err) {
+    say(`pump: could not cancel the successor run ${runId}: ${err?.message ?? err}`);
+    return false;
+  }
 }
 
 /** Print the due list and shard plan from a local state file. Read-only. */
