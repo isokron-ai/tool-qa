@@ -43,7 +43,7 @@ import { stateCrypto } from '../scripts/state-asset.mjs';
 import { createReleaseClient } from './github.mjs';
 import {
   MANIFEST, SNAPSHOT_TAG, SOURCE_ASSET, SOURCE_TAG, SOURCE_UPLOAD_PREFIX,
-  labelSha, newest, parseManifest, pickSource, reconcile, runSnapshot, sha256, stamp, verifySnapshot,
+  labelSha, newest, orphanEntry, parseManifest, pickSource, reconcile, runSnapshot, sha256, stamp, verifySnapshot,
 } from './snapshot.mjs';
 
 const DEFAULT_REPO = 'isokron-ai/tool-qa';
@@ -51,17 +51,25 @@ export const DEFAULT_IDENTITY = join(homedir(), '.isokron', 'loop-age-identity.k
 export const PAUSE_MARGIN_MS = 10 * 60 * 1000;
 export const REPLACED_PREFIX = `${SOURCE_ASSET}.replaced-`;
 const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'binary');
+export const LOOP_VARIABLES = ['LOOP_ENABLED', 'LOOP_PAUSE_UNTIL', 'LANE_PUMP_ENABLED'];
+export const ACTIVE_BLOCKERS = ['pump.yml', 'ingest.yml', 'state-snapshot.yml'];
 const FIRST_TABLES = ['subjects', 'results', 'attempts', 'dispatches', 'dispatch_items', 'run_keys', 'leases'];
 
-/** The snapshots on the release, reconciled with the manifest, newest first. */
+/**
+ * The snapshots on the release, newest first: those the manifest lists, then
+ * (marked `in_manifest: false`) any it does not, described by their name and
+ * label only. The drill verifies whichever it uses, so a lost manifest does
+ * not stop a restore.
+ */
 export async function listSnapshots(gh) {
   const release = await gh.getRelease(SNAPSHOT_TAG);
-  if (!release) return { release: null, manifest: null, entries: [], assets: [] };
+  if (!release) return { release: null, manifest: null, entries: [], orphans: [], assets: [] };
   const assets = await gh.listAssets(release);
   const m = assets.find((a) => a.name === MANIFEST);
   const manifest = m ? parseManifest((await gh.download(m)).toString('utf8')) : null;
-  const { entries } = reconcile(manifest, assets);
-  return { release, manifest, entries, assets };
+  const { entries, unknown } = reconcile(manifest, assets);
+  const orphans = unknown.map((a) => ({ ...orphanEntry(a), in_manifest: false }));
+  return { release, manifest, entries, orphans, assets };
 }
 
 /**
@@ -93,7 +101,9 @@ export function inspectDatabase(file) {
  * @returns {{ stopped: boolean, why: string }}
  */
 export function loopStopped(vars, { now = Date.now() } = {}) {
-  const g = evaluateGuard(vars, { job: 'pump', noSlots: true, now });
+  // Only the switches, so nothing else in the environment can count.
+  const env = Object.fromEntries(LOOP_VARIABLES.map((k) => [k, vars?.[k]]));
+  const g = evaluateGuard(env, { job: 'pump', noSlots: true, now });
   if (g.proceed) return { stopped: false, why: 'the loop is running (LOOP_ENABLED is "true", no pause, pump lane on)' };
   if (g.reason === 'paused') {
     const until = parseIsoTime(vars.LOOP_PAUSE_UNTIL);
@@ -125,15 +135,18 @@ export async function applySnapshot({ gh, bytes, sha, expectedLive, now = Date.n
     await gh.deleteAsset(up.id).catch(() => {});
     throw new Error('the live state asset changed during the restore; nothing was replaced. Check that the loop is stopped and run the drill again');
   }
-  // The replaced asset is kept under a name the pump never reads, for a look
-  // afterwards; delete it by hand when done.
+  // The live asset (whatever its name: an interrupted push leaves only a
+  // state.sqlite.upload-*) is kept under a name the pump never reads, for a
+  // look afterwards; delete it by hand when done. Only other stale uploads,
+  // which the pump would never read either, are deleted.
   let keptAs = null;
+  if (cur) {
+    keptAs = `${REPLACED_PREFIX}${stamp(now())}`;
+    await gh.renameAsset(cur.id, keptAs);
+  }
   for (const a of release.assets ?? []) {
-    if (a.id === up.id) continue;
-    if (a.name === SOURCE_ASSET) {
-      keptAs = `${REPLACED_PREFIX}${stamp(now())}`;
-      await gh.renameAsset(a.id, keptAs);
-    } else if (String(a.name).startsWith(SOURCE_UPLOAD_PREFIX)) await gh.deleteAsset(a.id);
+    if (a.id === up.id || a.id === cur?.id) continue;
+    if (a.name === SOURCE_ASSET || String(a.name).startsWith(SOURCE_UPLOAD_PREFIX)) await gh.deleteAsset(a.id);
   }
   await gh.renameAsset(up.id, SOURCE_ASSET, label);
   log(`restore: ${SOURCE_ASSET} on release "${SOURCE_TAG}" is now the snapshot (sha256 ${sha})${keptAs ? `; the replaced asset is kept as ${keptAs}` : ''}`);
@@ -147,16 +160,20 @@ export async function drill({
   gh, name, identityFile = DEFAULT_IDENTITY, ageBin, apply = false, now = Date.now, log = () => {}, tmpRoot = tmpdir(),
   decrypt,
 }) {
-  const { entries } = await listSnapshots(gh);
-  if (!entries.length) throw new Error(`no snapshots on release "${SNAPSHOT_TAG}"`);
-  const entry = name ? entries.find((e) => e.name === name) : newest(entries);
+  const { entries, orphans } = await listSnapshots(gh);
+  if (!entries.length && !orphans.length) throw new Error(`no snapshots on release "${SNAPSHOT_TAG}"`);
+  // By default the newest the manifest lists; one it does not list only by name
+  // (or when there is no manifest at all), and then checked against its label.
+  const entry = name ? [...entries, ...orphans].find((e) => e.name === name) : newest(entries.length ? entries : orphans);
   if (!entry) throw new Error(`no snapshot named ${name}`);
-  const report = { snapshot: entry.name, created: entry.created, size: entry.size, sha256: entry.sha256, source: entry.source ?? null };
+  const report = { snapshot: entry.name, created: entry.created, size: entry.size, sha256: entry.sha256, source: entry.source ?? null, in_manifest: entry.in_manifest !== false };
 
   const bytes = await gh.download({ id: entry.asset_id });
   const v = verifySnapshot(bytes, entry);
   if (!v.ok) throw new Error(`${entry.name} failed verification: ${v.reason}`);
-  report.verified = 'sha256, size and name match the manifest; age ciphertext';
+  report.verified = entry.in_manifest === false
+    ? 'not in the manifest: sha256, size and name match the asset label; age ciphertext'
+    : 'sha256, size and name match the manifest; age ciphertext';
 
   const dir = mkdtempSync(join(tmpRoot, 'state-restore-'));
   try {
@@ -182,10 +199,19 @@ export async function drill({
 
   if (!apply) return { ...report, applied: false };
 
-  const vars = await gh.variables();
+  // The variables as the pump job sees them (environment `loop`, then the
+  // repository, then the organization); any read error refuses (fail closed).
+  let vars;
+  try {
+    vars = await gh.effectiveVariables(LOOP_VARIABLES, { environment: 'loop' });
+  } catch (err) {
+    throw Object.assign(new Error(`refusing --apply: could not read the loop switches (${err?.message ?? err})`), { report });
+  }
   const stop = loopStopped(vars, { now: now() });
   if (!stop.stopped) throw Object.assign(new Error(`refusing --apply: ${stop.why}`), { report });
-  for (const wf of ['pump.yml', 'ingest.yml']) {
+  // The pump and the re-ingest write the state; a snapshot run in CI would
+  // race this machine's own snapshot of the live state.
+  for (const wf of ACTIVE_BLOCKERS) {
     const active = await gh.activeRuns(wf);
     if (active.length) throw Object.assign(new Error(`refusing --apply: ${wf} has ${active.length} queued or running run(s); wait for them to end`), { report });
   }
@@ -244,10 +270,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   try {
     const gh = createReleaseClient({ repo: o.repo || env.GITHUB_REPOSITORY || DEFAULT_REPO, token, apiUrl: env.GITHUB_API_URL, log });
     if (o.command === 'list') {
-      const { manifest, entries } = await listSnapshots(gh);
+      const { manifest, entries, orphans } = await listSnapshots(gh);
       process.stdout.write(`${entries.length} snapshot(s) on release "${SNAPSHOT_TAG}"; live state last confirmed ${manifest?.current_at ?? 'never'}\n`);
       for (const e of entries) {
         process.stdout.write(`${e.name}  ${e.created}  ${String(e.size).padStart(9)} bytes  sha256 ${e.sha256}  source updated ${e.source?.updated_at ?? '?'}\n`);
+      }
+      for (const e of orphans) {
+        process.stdout.write(`${e.name}  ${e.created}  ${String(e.size).padStart(9)} bytes  label sha256 ${e.sha256 ?? 'none'}  NOT IN THE MANIFEST (unverified)\n`);
       }
       return 0;
     }

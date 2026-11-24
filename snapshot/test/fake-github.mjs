@@ -85,8 +85,10 @@ export function fakeGh({ repo = 'isokron-ai/tool-qa', vars = {}, active = {} } =
       f.a.updated_at = tick();
       return copy(f.a);
     },
-    async variables() {
-      return { ...vars };
+    async effectiveVariables(names) {
+      calls.push(['effectiveVariables', names.join(',')]);
+      if (vars instanceof Error) throw vars;
+      return Object.fromEntries(names.map((n) => [n, vars[n]]));
     },
     async activeRuns(file) {
       return active[file] ?? [];

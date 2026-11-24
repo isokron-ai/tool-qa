@@ -116,16 +116,53 @@ export function createReleaseClient({ repo, token, fetch = globalThis.fetch, api
       const res = await request('PATCH', `${api}/repos/${repo}/releases/assets/${id}`, { ...json(label === undefined ? { name } : { name, label }) });
       return res.json();
     },
-    /** Repository variables (needs a token that may read them). */
-    async variables() {
-      const res = await request('GET', `${api}/repos/${repo}/actions/variables?per_page=30`);
-      const data = await res.json();
-      return Object.fromEntries((data.variables ?? []).map((v) => [v.name, v.value]));
+    /**
+     * The value of each named Actions variable as a job in `environment`
+     * sees it: environment over repository over organization. Unset at every
+     * level is `undefined`. Any read that fails other than with 404 throws,
+     * so a caller that needs "the loop is stopped" fails closed.
+     */
+    async effectiveVariables(names, { environment = 'loop' } = {}) {
+      const one = async (path) => {
+        const res = await request('GET', `${api}/repos/${repo}/${path}`, { ok: [200, 404] });
+        if (res.status === 404) return undefined;
+        const v = await res.json();
+        if (typeof v?.value !== 'string') throw new Error(`variable ${path} has no value`);
+        return v.value;
+      };
+      let org = null;
+      const out = {};
+      for (const name of names) {
+        if (!/^[A-Z0-9_]+$/.test(name)) throw new Error(`bad variable name ${JSON.stringify(name)}`);
+        let value = environment ? await one(`environments/${encodeURIComponent(environment)}/variables/${name}`) : undefined;
+        if (value === undefined) value = await one(`actions/variables/${name}`);
+        if (value === undefined) {
+          if (!org) {
+            org = {};
+            let total = Infinity;
+            for (let page = 1, seen = 0; seen < total; page++) {
+              if (page > 20) throw new Error('too many organization variables to read');
+              const res = await request('GET', `${api}/repos/${repo}/actions/organization-variables?per_page=30&page=${page}`);
+              const data = await res.json();
+              const list = Array.isArray(data?.variables) ? data.variables : null;
+              if (!list || !Number.isInteger(data.total_count)) throw new Error('could not read the organization variables shared with this repository');
+              total = data.total_count;
+              for (const v of list) org[v.name] = v.value;
+              seen += list.length;
+              if (list.length === 0) break;
+            }
+            if (Object.keys(org).length < total) throw new Error('the organization variable list was cut short');
+          }
+          value = org[name];
+        }
+        out[name] = value;
+      }
+      return out;
     },
-    /** Runs of a workflow that are queued or in progress. */
+    /** Runs of a workflow that have not finished (queued, waiting, pending, requested or in progress). */
     async activeRuns(file) {
       const out = [];
-      for (const status of ['in_progress', 'queued']) {
+      for (const status of ['in_progress', 'queued', 'pending', 'waiting', 'requested']) {
         const res = await request('GET', `${api}/repos/${repo}/actions/workflows/${encodeURIComponent(file)}/runs?status=${status}&per_page=10`, { ok: [200, 404] });
         if (res.status === 404) continue;
         out.push(...((await res.json()).workflow_runs ?? []));

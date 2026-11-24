@@ -44,10 +44,37 @@ test('R-SNAP-08: no snapshot yet or an unreadable manifest is amber; a lane swit
 
 test('readSnapshotManifest reads what a snapshot run wrote', async () => {
   const f = fakeGh();
-  assert.deepEqual(await readSnapshotManifest(f.gh), { manifest: null });
+  assert.deepEqual(await readSnapshotManifest(f.gh), { manifest: null, missing: 'release' });
   f.pushState(cipher('g1'));
   await runSnapshot({ gh: f.gh, now: () => T0 });
   const { manifest: m } = await readSnapshotManifest(f.gh);
   assert.equal(m.snapshots.length, 1);
   assert.equal(snapshotCheck({ now: T0 + HOUR, manifest: m }).status, 'green');
+});
+
+test('R-SNAP-16: a current_at more than 5 minutes in the future is amber, not green', () => {
+  assert.equal(snapshotCheck({ now: T0, manifest: manifest(T0 + 4 * 60_000) }).status, 'green');
+  const item = snapshotCheck({ now: T0, manifest: manifest(T0 + 2 * HOUR) });
+  assert.equal(item.status, 'amber');
+  assert.match(item.summary, /in the future; not trusting it/);
+});
+
+test('R-SNAP-16: no release, no manifest and an empty manifest are told apart', async () => {
+  assert.match(snapshotCheck({ now: T0, manifest: null, missing: 'release' }).summary, /no release "state-snapshots" yet/);
+  assert.match(snapshotCheck({ now: T0, manifest: null, missing: 'manifest' }).summary, /has no manifest\.json: snapshots may exist/);
+  assert.match(snapshotCheck({ now: T0, manifest: { version: 1, snapshots: [] } }).summary, /lists no snapshots yet/);
+  const f = fakeGh();
+  f.pushState(cipher('g1'));
+  await runSnapshot({ gh: f.gh, now: () => T0 });
+  await f.gh.deleteAsset(f.assetsOf('state-snapshots').find((a) => a.name === 'manifest.json').id);
+  assert.deepEqual(await readSnapshotManifest(f.gh), { manifest: null, missing: 'manifest' });
+});
+
+test('R-SNAP-16: snapshotCheck never throws: null entries or a broken manifest object are amber', () => {
+  const broken = { version: 1, current_at: new Date(T0).toISOString(), snapshots: [null, null, { name: 1 }] };
+  const item = snapshotCheck({ now: T0, manifest: broken });
+  assert.equal(item.status, 'amber');
+  assert.equal(item.id, 'state-snapshot');
+  const hostile = { get snapshots() { throw new Error('boom'); } };
+  assert.equal(snapshotCheck({ now: T0, manifest: hostile }).status, 'amber');
 });
