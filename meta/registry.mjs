@@ -136,8 +136,12 @@ export async function registryEntries(http, repo) {
     headers: { accept: 'application/json' },
     extract: (doc) => ({ matches: extractMatches(doc) }),
   });
+  // Only 404 means the subject has no entry of that name. Any other answer (a
+  // 400 if the registry stopped accepting the encoded name, a 403, a 5xx) is a
+  // problem with this read, so the known answer is retried rather than left to
+  // a search others can crowd (R-META-09).
   if (answered(direct)) add(direct.value.matches);
-  else if (!(direct.status >= 400 && direct.status < 500)) throw new FetchProblem('upstream_unavailable', `MCP registry HTTP ${direct.status}`);
+  else if (direct.status !== 404) throw new FetchProblem('upstream_unavailable', `MCP registry HTTP ${direct.status} for the exact-name read`);
 
   const search = async (term) => {
     let cursor = null;

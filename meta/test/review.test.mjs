@@ -298,3 +298,23 @@ test('R-META-08: five spoofed entries cannot push a subject\'s own package out o
   assert.deepEqual(pk.npm.slice(0, 2), ['acme-server', 'acme-seeded']);
   assert.equal(pk.npm.length, 5);
 });
+
+test('R-META-09: only a 404 on the exact-name read means no own entry; any other 4xx is a retryable problem, not a fallback to search', async () => {
+  const OWN = 'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.isokron-ai%2Fmcp-check/versions';
+  for (const status of [400, 403, 410, 422]) {
+    const routes = registryRoutes();
+    routes[OWN] = { __status: status };
+    const f = registryFetch(routes);
+    const c = await collectSubject(createHttp({ fetch: f, sleep: async () => {}, retries: 0 }), 'isokron-ai/mcp-check');
+    const o = subjectOutput(c, '2026-11-24T00:00:00Z');
+    assert.deepEqual(o.skips.filter((x) => x.stage === 'mcp_registry'), [{ stage: 'mcp_registry', reason: 'upstream_unavailable', retryable: true }], `HTTP ${status}`);
+    assert.ok(!f.calls.some((x) => x.url.includes('?search=')), `HTTP ${status}: no search fallback`);
+    const r = await knownAnswerControl(laneOf('meta-registry'), { http: createHttp({ fetch: registryFetch(routes), sleep: async () => {}, retries: 0 }) });
+    assert.equal(r.unavailable, 'upstream_unavailable', `HTTP ${status}: the known answer is retried, not failed`);
+  }
+  const routes = registryRoutes();
+  routes[OWN] = { __status: 404 };
+  const c = await collectSubject(createHttp({ fetch: registryFetch(routes), sleep: async () => {} }), 'isokron-ai/mcp-check');
+  assert.equal(c.stages.mcp_registry, 'ok', 'a 404 is "no entry of that name", and the search still runs');
+  assert.equal(subjectOutput(c, '2026-11-24T00:00:00Z').records.find((x) => x.field === 'registry_entry_history').value.length, 1);
+});

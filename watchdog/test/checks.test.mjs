@@ -175,3 +175,14 @@ test('overall status: red beats amber beats green beats off', () => {
   assert.equal(overallStatus([{ status: 'amber' }, { status: 'red' }]), 'red');
   assert.equal(overallStatus([]), 'off');
 });
+
+test('R-SUB-11: a seed the pump could not load is red on the health issue, with why; a loaded seed is green', () => {
+  const failed = byId(evaluate(base({ state: { openSlots: [], openDispatches: [], kv: { 'pump.subjects': { ok: false, summary: 'seed not loaded, subjects left as they were: seed: size (the number of subjects) is required', at: ago(2 * MIN) } } } })));
+  assert.equal(failed.subjects.status, 'red');
+  assert.match(failed.subjects.summary, /could not load the seed subjects .*size \(the number of subjects\) is required/);
+  assert.equal(failed.subjects.at, ago(2 * MIN));
+  const fine = byId(evaluate(base({ state: { openSlots: [], openDispatches: [], kv: { 'pump.subjects': { ok: true, summary: 'seed-v1 already loaded (997 subjects)', at: ago(MIN) } } } })));
+  assert.equal(fine.subjects.status, 'green');
+  // No record yet (a pump older than this check): no item.
+  assert.equal(byId(evaluate(base({ state: { openSlots: [], openDispatches: [], kv: {} } }))).subjects, undefined);
+});

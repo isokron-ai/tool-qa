@@ -19,11 +19,11 @@ import { parseYaml } from '../scripts/lib/yaml-lite.mjs';
 import { isDateTime } from '../worker-kit/contract.mjs';
 
 export const REGISTRY_REPO = 'isokron-ai/mcp-results';
-export const REGISTRY_COMMIT = 'edfc392b0c31636da319cde53f457c891cd04e2f';
+export const REGISTRY_COMMIT = 'f2b16de2606d3b762def367be914ad7cae0ea24e';
 export const REGISTRY_PATH = 'fields/registry.yaml';
 export const REGISTRY_URL = `https://raw.githubusercontent.com/${REGISTRY_REPO}/${REGISTRY_COMMIT}/${REGISTRY_PATH}`;
 /** sha256 of fields/registry.yaml at REGISTRY_COMMIT. Move both together. */
-export const REGISTRY_SHA256 = '1e3e9643a160007f67d0931a9b217961ea8b17049b9b5094f875a46b9e66417a';
+export const REGISTRY_SHA256 = 'c79f5124d90bf5a8d2cb6e2e2a351228ceddc827ed52339990e9550a6b07d31f';
 
 export const FIELD_TYPES = Object.freeze(['string', 'integer', 'number', 'boolean', 'enum', 'array', 'object', 'timestamp', 'hash']);
 export const FIELD_STATUSES = Object.freeze(['planned', 'active', 'deprecated']);
@@ -136,11 +136,14 @@ const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
  * Errors name the file, line, reason and field, never the observed value.
  * Reasons: observation_format, undeclared_field, deprecated_field, field_type.
  * @param {Map<string, Buffer>|Iterable<[string, Buffer]>} files
- * @returns {{ok: boolean, errors: object[], records: number, truncated?: true}}
+ * measured counts the records with a value (not null): what was actually
+ * measured (R-SUB-10).
+ * @returns {{ok: boolean, errors: object[], records: number, measured: number, truncated?: true}}
  */
 export function validateObservations(files, registry, { maxErrors = 50 } = {}) {
   const errors = [];
   let records = 0;
+  let measured = 0;
   let truncated = false;
   const add = (e) => {
     if (errors.length < maxErrors) errors.push(e);
@@ -212,9 +215,10 @@ export function validateObservations(files, registry, { maxErrors = 50 } = {}) {
         continue;
       }
       records++;
+      measured++;
     }
   }
-  const out = { ok: errors.length === 0 && !truncated, errors, records };
+  const out = { ok: errors.length === 0 && !truncated, errors, records, measured };
   if (truncated) out.truncated = true;
   return out;
 }

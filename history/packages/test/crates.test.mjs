@@ -44,7 +44,7 @@ test('processDump computes the MCP subset, hash and metadata from a tar.gz', asy
   assert.ok(!('description' in r.rows[0]));
 });
 
-test('processDump keeps seeded crates the matcher misses, with reason seed', async () => {
+test('R-HIST-01: processDump keeps seeded crates the matcher misses, with reason seed', async () => {
   const r = await processDump(Readable.from([makeTarGz(files)]), { seedNames: new Set(['serde', 'tagged', 'not-in-dump']) });
   assert.deepEqual(r.rows.map((x) => [x.id, x.match, x.downloads_total]), [
     ['mcp-thing', ['name', 'description'], 500],
@@ -61,7 +61,7 @@ test('runCrates skips when ETag unchanged', async () => {
   assert.equal(f.calls[0].init.method, 'HEAD');
 });
 
-test('runCrates re-reads an unchanged dump when the seeded crates change', async () => {
+test('R-HIST-01: runCrates re-reads an unchanged dump when the seeded crates change', async () => {
   const gz = makeTarGz(files);
   const f = mockFetch((u, init) => ({ headers: { etag: '"e1"' }, body: '', stream: init.method === 'HEAD' ? null : Readable.from([gz]) }));
   const http = createHttp({ fetch: f, sleep: noSleep });

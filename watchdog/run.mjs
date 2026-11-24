@@ -71,7 +71,11 @@ export function readState(file) {
       // now: 0 returns every dispatch still waiting, expired or not; the checks
       // decide which are stuck.
       openDispatches: db.openDispatches({ now: 0 }),
-      kv: { 'pump.successor': db.getKv('pump.successor') ?? null, 'pump.conformance': db.getKv('pump.conformance') ?? null },
+      kv: {
+        'pump.successor': db.getKv('pump.successor') ?? null,
+        'pump.conformance': db.getKv('pump.conformance') ?? null,
+        'pump.subjects': db.getKv('pump.subjects') ?? null,
+      },
     };
   } finally {
     db.close();

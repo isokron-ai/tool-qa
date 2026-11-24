@@ -17,6 +17,9 @@
 //   run:<workflow>       the newest finished scheduled or dispatched run of a loop
 //                        workflow failed (cancelled and skipped runs are passed over).
 //   pump-successor       the pump could not dispatch the next pump run.
+//   subjects             the pump could not load the seed subjects at its last
+//                        start (pump/subjects.mjs): red, with why. It keeps
+//                        dispatching the subjects it already has (R-SUB-11).
 //   workflow:<file>      an expected workflow GitHub disabled for inactivity
 //                        (amber; the watchdog re-enables it) or one disabled by
 //                        hand (off).
@@ -149,6 +152,12 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
       checks.push(succ.ok
         ? { id: 'pump-successor', status: 'green', summary: 'the pump dispatched its successor', at: succ.at }
         : { id: 'pump-successor', status: 'red', summary: `the pump could not dispatch its successor: ${String(succ.error ?? 'unknown error').slice(0, 200)}`, at: succ.at });
+    }
+    const subj = state.kv?.['pump.subjects'];
+    if (subj && typeof subj === 'object') {
+      checks.push(subj.ok
+        ? { id: 'subjects', status: 'green', summary: String(subj.summary ?? 'seed subjects loaded').slice(0, 200), at: subj.at }
+        : { id: 'subjects', status: 'red', summary: `the pump could not load the seed subjects (it keeps dispatching the ones it has): ${String(subj.summary ?? 'unknown error').slice(0, 200)}`, at: subj.at });
     }
   }
 

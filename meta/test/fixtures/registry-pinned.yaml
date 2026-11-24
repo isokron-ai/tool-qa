@@ -144,6 +144,10 @@ fields:
   - {id: tool_meta_keys, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: tool_sha256, layer: protocol, type: hash, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: tool_wire_bytes, layer: protocol, type: integer, unit: bytes, source: scan-live, class: P, redaction: null, status: planned}
+  # The live tool list as one: how many tools, and its hash (the checker engine's catalog hash, sha256 of the
+  # canonical JSON of the list). Per-tool fields cannot give either. Written by the live-probe lane of mcp-check.
+  - {id: tool_count, layer: protocol, type: integer, unit: count, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: tool_list_sha256, layer: protocol, type: hash, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: pagination_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: [R2], status: planned}
   - {id: list_determinism, layer: protocol, type: boolean, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: resources_list, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: [R1], status: planned}

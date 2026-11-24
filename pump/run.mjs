@@ -244,6 +244,8 @@ export async function runPump({
     const seeded = seedFile ? syncSeedSubjects(db, { now: now(), file: seedFile }) : { summary: 'no seed file given' };
     say(`pump: subjects: ${seeded.summary}`);
     if (seeded.error) ok = false;
+    // For the watchdog's `subjects` check (R-SUB-11).
+    db.setKv('pump.subjects', { ok: !seeded.error, at: new Date(now()).toISOString(), summary: String(seeded.summary).slice(0, 300) }, { now: now() });
     for (;;) {
       const tickStart = now();
       ticks += 1;
