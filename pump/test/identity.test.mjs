@@ -13,6 +13,7 @@ import { dueFromState, loadConfig } from '../due.mjs';
 import { workerInputs } from '../dispatch.mjs';
 import { BATCH, buildIdQuery, buildNameQuery, IDENTITY_KV_KEY, identityEnabled, MAX_QUERIES, parseAnswer, refreshIdentities, RETRY_MS } from '../identity.mjs';
 import { runPump } from '../run.mjs';
+import { identityCheck } from '../../watchdog/identity.mjs';
 import { resolveSeedSubjects, syncSeedSubjects } from '../subjects.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
 
@@ -111,7 +112,7 @@ test('R-SUBJ-08: the backfill binds 250 subjects in 3 queries of up to 100 withi
   assert.ok(g.calls.every((c) => c.method === 'POST' && c.path === '/graphql' && c.family === 'graphql'));
   assert.equal(db.getSubject('org/repo-7').repo_id, 107);
   assert.equal(db.getKv(IDENTITY_KV_KEY).queries, 3);
-  assert.match(out.summary, /^3 lookup queries \(250 repositories, 3 points\): id_bound 250; 250 active, 0 without an id yet, 0 not found, 0 in conflict$/);
+  assert.match(out.summary, /^3 lookup queries \(250 repositories, 3 points\): id_bound 250; 250 active, 0 without an id yet, 0 not found, 0 in conflict, 0 merged$/);
 
   g.calls.length = 0;
   assert.equal((await refreshIdentities(db, { client: g.client, now: () => T + 60_000 })).queries, 0, 'nothing to do within the day');
@@ -293,4 +294,60 @@ test('R-SUBJ-08: in a pump run the lookups run after the seed load and before th
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('R-SUBJ-11: old and new name in the same batch, the newcomer applied first: the subject with the history ends up bound, the newcomer merged into it', async () => {
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'acme/zz-old', kind: 'github', source: 'seed-v1', tier: 3, now: T });
+  db.recordAttempt({ subject: 'acme/zz-old', holder: 'h', fence: 1, now: T });
+  db.setSubjectVersion({ id: 'acme/aa-new', kind: 'github', source: 'seed-v2', tier: 3, now: T + DAY });
+  const g = fakeGraph({ 'acme/zz-old': { databaseId: 31 } });
+  g.rename('acme/zz-old', 'acme/aa-new');
+  const out = await refreshIdentities(db, { client: g.client, now: () => T + 2 * DAY });
+  assert.equal(out.queries, 1);
+  assert.deepEqual(db.listSubjectEvents().map((e) => [e.subject, e.kind]), [
+    ['acme/aa-new', 'id_bound'], ['acme/aa-new', 'merged'], ['acme/zz-old', 'id_bound'], ['acme/zz-old', 'renamed'],
+  ]);
+  assert.deepEqual([db.getSubject('acme/zz-old').repo_id, db.getSubject('acme/zz-old').name], [31, 'acme/aa-new']);
+  assert.equal(db.getSubject('acme/aa-new').alias_of, 'acme/zz-old');
+  assert.equal(out.merged, 1);
+  const due = dueFromState(db, { now: T + 2 * DAY, ...scanStatic() });
+  assert.deepEqual(due.map((d) => [d.subject, d.name]), [['acme/zz-old', 'acme/aa-new']]);
+  db.close();
+});
+
+test('R-SUBJ-13: a batch mostly NOT_FOUND (a token or permission change) marks nothing gone: errors, retried in an hour, the pass stops, and the watchdog shows it red', async () => {
+  const db = openState(':memory:');
+  const all = names(30);
+  seedSubjects(db, all);
+  const g = fakeGraph(Object.fromEntries(all.map((n, i) => [n, { databaseId: 100 + i }])));
+  await refreshIdentities(db, { client: g.client, now: () => T });
+  for (const r of g.list) r.visible = false; // the token can no longer see them
+  const out = await refreshIdentities(db, { client: g.client, now: () => T + DAY + 1 });
+  assert.equal(out.stopped, 'mass_not_found');
+  assert.equal(out.suspect_not_found, 30);
+  assert.equal(out.gone, 0);
+  assert.ok(db.listSubjects().every((x) => x.gone_at === null && x.id_status === 'error'));
+  assert.equal(dueFromState(db, { now: T + DAY + 2, ...scanStatic() }).length, 30, 'still dispatched');
+  assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'red');
+  // Five or fewer, or 20% or less, is believed: those are gone.
+  for (const r of g.list) r.visible = true;
+  for (const r of g.list.slice(0, 5)) r.visible = false;
+  const few = await refreshIdentities(db, { client: g.client, now: () => T + DAY + 2 * 3_600_000 });
+  assert.equal(few.stopped, null);
+  assert.equal(few.gone, 5);
+  assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'green');
+  db.close();
+});
+
+test('R-SUBJ-13: the watchdog item: red on a mass NOT_FOUND pass or many gone, amber on any conflict, green with the counts, absent before any pass', () => {
+  assert.equal(identityCheck(null), null);
+  assert.equal(identityCheck({ stopped: 'mass_not_found', error: '30 of 30 answered NOT_FOUND', active: 30 }).status, 'red');
+  assert.equal(identityCheck({ gone: 6, active: 20, conflicts: 0 }).status, 'red');
+  assert.equal(identityCheck({ gone: 6, active: 100, conflicts: 0 }).status, 'green', '6% gone is believed');
+  assert.equal(identityCheck({ gone: 5, active: 10, conflicts: 0 }).status, 'green', 'five or fewer is never mass');
+  const amber = identityCheck({ gone: 0, active: 997, conflicts: 1, merged: 2 });
+  assert.equal(amber.status, 'amber');
+  assert.match(amber.summary, /0 not found, 1 in conflict, 2 merged of 997 active/);
+  assert.equal(identityCheck({ gone: 1, active: 997, conflicts: 0, merged: 0 }).id, 'subject-ids');
 });

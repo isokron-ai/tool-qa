@@ -160,6 +160,49 @@ test('R-SUBJ-06: an old name taken by a new repository, and an id that comes bac
     s = sim.readLive();
     assert.deepEqual(eventsOf(s, 'chaos-org/server-4'), ['id_bound', 'id_conflict'], 'the conflict is recorded once');
     assert.equal(s.subjects.length, 6);
+    assert.equal(sim.health().checks['subject-ids']?.status, 'amber', 'a conflict needs a look by hand');
+    assertRecovered(sim, { health: ['amber'] });
+  });
+});
+
+test('R-SUBJ-12: before the first lookup, a subject\'s repository moved and a newcomer took its old name: the newcomer is refused (id_conflict, amber), the others bind', CHAOS, async () => {
+  await withSim({ identity: IDENTITY }, async (sim) => {
+    sim.gh.renamePublicRepo('chaos-org/server-2', 'chaos-org/server-2-new');
+    sim.gh.addPublicRepo('chaos-org/server-2', { databaseId: 9200, createdAt: '2026-11-23T12:05:00Z' }); // after the subject was first seen
+    startPump(sim);
+    await sim.runFor(45 * MIN);
+    const s = sim.readLive();
+    const s2 = subjectOf(s, 'chaos-org/server-2');
+    assert.deepEqual([s2.repo_id, s2.id_status], [null, 'conflict']);
+    const ev = s.subjectEvents.find((e) => e.subject === 'chaos-org/server-2');
+    assert.equal(ev.kind, 'id_conflict');
+    assert.equal(JSON.parse(ev.detail).reason, 'created_after_first_seen');
+    assert.ok(!s.subjects.some((x) => x.repo_id === 9200 || x.repo_id === 9002));
+    assert.equal(s.subjects.filter((x) => x.repo_id !== null).length, 5);
+    assert.equal(sim.health().checks['subject-ids']?.status, 'amber');
+    assertRecovered(sim, { health: ['amber'] });
+  });
+});
+
+test('R-SUBJ-13: the pump\'s token stops seeing every repository: nothing is marked gone, dispatching goes on, and the health issue is red until it sees them again', CHAOS, async () => {
+  await withSim({ identity: IDENTITY }, async (sim) => {
+    await warmUp(sim);
+    for (const r of sim.gh.publicRepos) r.visible = false;
+    await sim.runFor(40 * MIN);
+    let s = sim.readLive();
+    assert.ok(s.subjects.every((x) => x.gone_at === null), 'nothing gone');
+    assert.equal(s.kv['pump.identity'].stopped, 'mass_not_found');
+    const mark = sim.workerRuns.length;
+    bumpTool(sim, 'chaos02');
+    await sim.runFor(30 * MIN);
+    assert.equal(new Set(sentNames(sim, mark)).size, 6, 'every subject is still dispatched');
+    await sim.runFor(10 * MIN);
+    assert.equal(sim.health().checks['subject-ids']?.status, 'red');
+    for (const r of sim.gh.publicRepos) r.visible = true;
+    await sim.runFor(2 * HOUR);
+    s = sim.readLive();
+    assert.equal(s.kv['pump.identity'].stopped, null);
+    assert.ok(s.subjects.every((x) => x.id_status === 'ok' && x.gone_at === null));
     assertRecovered(sim);
   });
 });

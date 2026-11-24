@@ -41,7 +41,9 @@ retired, loaded_at }` for the last load.
   (`id_bound`, `renamed`, `transferred`, `merged`, `not_found`,
   `found_again`, `id_conflict`), read with `db.listSubjectEvents(subject?)`.
 - `db.applyIdentityLookup(key, {status, node, via}, { now })` applies one
-  lookup (see its comment in `state/db.mjs` for the guards), and
+  lookup (see its comment in `state/db.mjs` for the guards: the merge keeps
+  the subject with history and moves the binding to it, a repository created
+  after the subject was first seen is refused), and
   `db.identityCandidates({ now, retryMs, limit })` lists who to look up.
 
 - `db.setSubjectVersion({ id, kind, source, tier, sha, artifactDigest, name, now })`

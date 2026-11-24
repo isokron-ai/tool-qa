@@ -456,6 +456,13 @@ export class StateDb {
     return plain(this.raw.prepare('SELECT * FROM subjects WHERE repo_id = ?').get(repoId));
   }
 
+  /** Whether any result or attempt names this subject key. */
+  hasSubjectHistory(key) {
+    return Boolean(this.raw.prepare(`
+      SELECT EXISTS (SELECT 1 FROM results WHERE subject = ?) OR EXISTS (SELECT 1 FROM attempts WHERE subject = ?) AS h
+    `).get(key, key).h);
+  }
+
   /** Append an identity event (never rewritten). */
   recordSubjectEvent({ subject, repoId = null, kind, oldName = null, newName = null, detail = null, now }) {
     this.raw.prepare(`
@@ -512,13 +519,19 @@ export class StateDb {
    *              owner changed) and becomes the name workers are sent; a
    *              subject that was not found is back (found_again).
    *              Guards: an id already bound to another subject with the same
-   *              creation time is the same repository listed twice: this
-   *              subject is merged into that one (alias_of, retired; event
-   *              merged), which is active again if this one was. With another
-   *              creation time, or when a bound subject's lookup answers
-   *              another id or creation time, the id would have been reused,
-   *              which GitHub never does: nothing is bound, renamed or merged
-   *              (id_status conflict, event id_conflict once).
+   *              creation time is the same repository listed twice: the two
+   *              are merged. The survivor is the one with history (results or
+   *              attempts), else the one first seen earlier, whichever was
+   *              bound first; the binding moves to it in this transaction if
+   *              needed, the other becomes its alias (alias_of, retired; event
+   *              merged), and the survivor is active if either was. With
+   *              another creation time, or when a bound subject's lookup
+   *              answers another id or creation time, the id would have been
+   *              reused, which GitHub never does; and a first binding to a
+   *              repository created after the subject was first seen would be
+   *              a newcomer squatting on the old name. Neither binds, renames
+   *              or merges anything (id_status conflict, event id_conflict
+   *              once).
    */
   applyIdentityLookup(key, lookup, { now } = {}) {
     const t = iso(now);
@@ -562,26 +575,53 @@ export class StateDb {
           return conflict({ expected: { repo_id: s.repo_id, created_at: s.repo_created_at }, got: { repo_id: n.repoId, created_at: n.createdAt } });
         }
       } else {
+        // A repository created after the subject was first seen cannot be the
+        // one the subject meant: its old name now belongs to a newcomer, which
+        // GitHub answers ahead of the redirect (R-SUBJ-12).
+        const squat = (x) => Date.parse(n.createdAt) > Date.parse(x.first_seen);
+        const squatConflict = () => conflict({ reason: 'created_after_first_seen', first_seen: s.first_seen, got: { repo_id: n.repoId, created_at: n.createdAt } });
         const other = this.getSubjectByRepoId(n.repoId);
         if (other && other.id !== key) {
           if (other.repo_created_at !== n.createdAt) {
             return conflict({ bound_to: other.id, expected: { created_at: other.repo_created_at }, got: { repo_id: n.repoId, created_at: n.createdAt } });
           }
-          // The same repository as `other`, which keeps the history: merge.
-          const wasActive = s.retired_at === null;
-          event({ kind: 'merged', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, into: other.id } });
-          set({ alias_of: other.id, id_status: 'duplicate', id_checked_at: t, retired_at: s.retired_at ?? t });
-          if (wasActive) {
-            this.raw.prepare('UPDATE subjects SET retired_at = NULL, tier = MIN(tier, ?) WHERE id = ?').run(s.tier, other.id);
+          // The same repository as `other`. The survivor is the one with
+          // history (results or attempts), else the one first seen earlier;
+          // whichever was bound first does not matter (R-SUBJ-07).
+          const sHist = this.hasSubjectHistory(key);
+          const oHist = this.hasSubjectHistory(other.id);
+          const sSurvives = sHist !== oHist ? sHist : s.first_seen < other.first_seen;
+          if (!sSurvives) {
+            const wasActive = s.retired_at === null;
+            event({ kind: 'merged', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, into: other.id } });
+            set({ alias_of: other.id, id_status: 'duplicate', id_checked_at: t, retired_at: s.retired_at ?? t });
+            this.raw.prepare('UPDATE subjects SET alias_of = ? WHERE alias_of = ?').run(other.id, key);
+            if (wasActive) {
+              this.raw.prepare('UPDATE subjects SET retired_at = NULL, tier = MIN(tier, ?) WHERE id = ?').run(s.tier, other.id);
+            }
+            if (other.name !== n.name) {
+              event({ subject: other.id, kind: renameKind(other.name, n.name), repoId: n.repoId, oldName: other.name, newName: n.name, detail: { via, seen_through: key } });
+              this.raw.prepare('UPDATE subjects SET name = ? WHERE id = ?').run(n.name, other.id);
+            }
+            return events;
           }
-          if (other.name !== n.name) {
-            event({ subject: other.id, kind: renameKind(other.name, n.name), repoId: n.repoId, oldName: other.name, newName: n.name, detail: { via, seen_through: key } });
-            this.raw.prepare('UPDATE subjects SET name = ? WHERE id = ?').run(n.name, other.id);
-          }
-          return events;
+          if (squat(s)) return squatConflict();
+          // This subject has the history: the binding moves here, in this
+          // transaction, and the one bound first becomes its alias.
+          const otherActive = other.retired_at === null;
+          this.raw.prepare(`
+            UPDATE subjects SET repo_id = NULL, node_id = NULL, repo_created_at = NULL, alias_of = ?, id_status = 'duplicate',
+              id_checked_at = ?, retired_at = COALESCE(retired_at, ?) WHERE id = ?
+          `).run(key, t, t, other.id);
+          this.raw.prepare('UPDATE subjects SET alias_of = ? WHERE alias_of = ?').run(key, other.id);
+          event({ subject: other.id, kind: 'merged', repoId: n.repoId, oldName: other.name, newName: n.name, detail: { via, into: key, binding_moved: true } });
+          event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, created_at: n.createdAt, moved_from: other.id } });
+          set({ repo_id: n.repoId, repo_created_at: n.createdAt, ...(otherActive ? { retired_at: null, tier: Math.min(s.tier, other.tier) } : {}) });
+        } else {
+          if (squat(s)) return squatConflict();
+          event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, created_at: n.createdAt } });
+          set({ repo_id: n.repoId, repo_created_at: n.createdAt });
         }
-        event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, created_at: n.createdAt } });
-        set({ repo_id: n.repoId, repo_created_at: n.createdAt });
       }
       if (s.name !== n.name) {
         event({ kind: renameKind(s.name, n.name), repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via } });

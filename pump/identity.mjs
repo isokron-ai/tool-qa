@@ -31,6 +31,11 @@
 // points an hour). A not-found repository (deleted, or turned private) is
 // looked at again a day later; an error an hour later.
 //
+// A batch in which more than 5 and more than 20% of the repositories answer
+// NOT_FOUND is not believed (a token or permission change, not a mass
+// deletion): those are errors, looked up again in an hour, and the pass stops.
+// The watchdog's `subject-ids` item (watchdog/identity.mjs) shows it red.
+//
 // It never throws and never holds the pump: any failure (a rate limit, the
 // budget, an outage, a bad answer) is logged and kept in kv `pump.identity`;
 // subjects not looked up yet are dispatched by name as before. Set
@@ -55,6 +60,9 @@ export const BATCH = 100;
 export const MAX_QUERIES = 4;
 /** How long to wait before looking a subject up again, by its last id_status. */
 export const RETRY_MS = Object.freeze({ none: 0, ok: DAY, error: HOUR, not_found: DAY, conflict: DAY });
+
+/** A batch with more NOT_FOUND than this (count and share) is not believed (R-SUBJ-13). */
+export const MASS_NOT_FOUND = Object.freeze({ min: 5, share: 0.2 });
 
 const FIELDS = 'databaseId id nameWithOwner createdAt';
 const NAME_RE = /^([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})$/;
@@ -127,7 +135,7 @@ export function parseAnswer(doc, count, kind) {
  *   unbound: number, gone: number, conflicts: number, stopped: string|null, summary: string}>}
  */
 export async function refreshIdentities(db, { client, now = Date.now, log = () => {}, batch = BATCH, maxQueries = MAX_QUERIES, retryMs = RETRY_MS } = {}) {
-  const out = { queries: 0, cost: 0, looked_up: 0, events: {}, unbound: 0, gone: 0, conflicts: 0, stopped: null, error: null };
+  const out = { queries: 0, cost: 0, looked_up: 0, events: {}, unbound: 0, gone: 0, conflicts: 0, merged: 0, suspect_not_found: 0, stopped: null, error: null };
   const size = Math.max(1, Math.min(BATCH, Math.trunc(Number(batch)) || BATCH));
   try {
     if (!client) {
@@ -164,6 +172,18 @@ export async function refreshIdentities(db, { client, now = Date.now, log = () =
             for (const s of list) db.applyIdentityLookup(s.id, { status: 'error', via: kind }, { now: now() });
             break;
           }
+          // Many NOT_FOUND in one batch is far more likely our token or its
+          // permissions than repositories deleted together: taken as an
+          // error (looked at again in an hour), never as gone, and the pass
+          // stops (R-SUBJ-13).
+          const nf = answers.filter((a) => a.status === 'not_found').length;
+          const mass = nf > MASS_NOT_FOUND.min && nf > MASS_NOT_FOUND.share * list.length;
+          if (mass) {
+            out.suspect_not_found += nf;
+            out.stopped = 'mass_not_found';
+            out.error = `${nf} of ${list.length} answered NOT_FOUND`;
+            for (const a of answers) if (a.status === 'not_found') a.status = 'error';
+          }
           db.tx(() => {
             list.forEach((s, i) => {
               out.looked_up += 1;
@@ -175,6 +195,7 @@ export async function refreshIdentities(db, { client, now = Date.now, log = () =
               }
             });
           });
+          if (mass) break;
         }
         if (out.stopped !== null) break;
       }
@@ -188,13 +209,14 @@ export async function refreshIdentities(db, { client, now = Date.now, log = () =
       SELECT SUM(repo_id IS NULL) AS unbound, SUM(gone_at IS NOT NULL) AS gone, SUM(id_status = 'conflict') AS conflicts, COUNT(*) AS active
       FROM subjects WHERE kind = 'github' AND retired_at IS NULL AND alias_of IS NULL
     `).get();
+    out.merged = Number(db.raw.prepare('SELECT COUNT(*) AS n FROM subjects WHERE alias_of IS NOT NULL').get().n ?? 0);
     out.unbound = Number(c.unbound ?? 0);
     out.gone = Number(c.gone ?? 0);
     out.conflicts = Number(c.conflicts ?? 0);
     out.active = Number(c.active ?? 0);
   } catch { /* counted as unknown below */ }
   const ev = Object.entries(out.events).sort().map(([k, v]) => `${k} ${v}`).join(', ');
-  out.summary = `${out.queries} lookup queries (${out.looked_up} repositories${out.cost ? `, ${out.cost} points` : ''})${ev ? `: ${ev}` : ''}; ${out.active ?? '?'} active, ${out.unbound} without an id yet, ${out.gone} not found, ${out.conflicts} in conflict${out.stopped ? `; stopped (${out.stopped}${out.error ? `: ${out.error}` : ''})` : ''}`;
+  out.summary = `${out.queries} lookup queries (${out.looked_up} repositories${out.cost ? `, ${out.cost} points` : ''})${ev ? `: ${ev}` : ''}; ${out.active ?? '?'} active, ${out.unbound} without an id yet, ${out.gone} not found, ${out.conflicts} in conflict, ${out.merged} merged${out.stopped ? `; stopped (${out.stopped}${out.error ? `: ${out.error}` : ''})` : ''}`;
   try {
     db.setKv(IDENTITY_KV_KEY, { at: new Date(now()).toISOString(), ...out }, { now: now() });
   } catch { /* the summary is still returned and logged */ }

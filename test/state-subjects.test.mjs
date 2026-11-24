@@ -9,7 +9,7 @@ import { join } from 'node:path';
 
 import { openState, StateDb, SCHEMA_VERSION } from '../state/db.mjs';
 import { dueFromState } from '../pump/due.mjs';
-import { buildHistory, DAY, T0 } from './lib/state-history.mjs';
+import { buildHistory, DAY, T0, tiers as TIERS } from './lib/state-history.mjs';
 
 const TABLES = ['counters', 'subjects', 'runs', 'leases', 'slot_ledger', 'attempts', 'run_keys', 'dispatches', 'dispatch_items', 'results', 'kv'];
 const node = (id, name, createdAt = '2025-03-01T00:00:00Z') => ({ databaseId: id, id: `R_test${id}`, nameWithOwner: name, createdAt });
@@ -179,6 +179,7 @@ test('R-SUBJ-06: an id already bound with another creation time, or a bound id a
 test('R-SUBJ-07: two subjects that turn out to be one repository are merged into the one with the history; it is active if either was', () => {
   const db = openState(':memory:');
   db.setSubjectVersion({ id: 'acme/old', kind: 'github', source: 'seed-v1', tier: 3, now: T0 });
+  db.recordAttempt({ subject: 'acme/old', holder: 'h', fence: 1, now: T0 }); // its history
   db.applyIdentityLookup('acme/old', ok(9, 'acme/old'), { now: T0 });
   db.retireSubjects({ sourcePrefix: 'seed-v', keep: [], now: T0 + 1 }); // a rebuilt seed lists only the new name...
   db.setSubjectVersion({ id: 'acme/new', kind: 'github', source: 'seed-v2', tier: 2, now: T0 + 1 }); // ...as a new subject
@@ -208,5 +209,55 @@ test('R-SUBJ-08: identityCandidates waits by the last outcome and skips retired,
   assert.deepEqual([c.byName.map((s) => s.id), c.byId.map((s) => s.id)], [['a/new', 'a/err'], []]);
   c = db.identityCandidates({ now: T0 + DAY, retryMs });
   assert.deepEqual(c.byId.map((s) => s.id), ['a/bound']);
+  db.close();
+});
+
+test('R-SUBJ-11: the newcomer bound first: the binding moves to the subject with the history, which stays due on its own run_keys; the newcomer becomes its alias', () => {
+  const db = openState(':memory:');
+  // The rebuilt seed added acme/aa-new (the new name); acme/zz-old has the results.
+  db.setSubjectVersion({ id: 'acme/zz-old', kind: 'github', source: 'seed-v1', tier: 3, now: T0 });
+  db.setSubjectVersion({ id: 'acme/aa-new', kind: 'github', source: 'seed-v2', tier: 2, now: T0 + DAY });
+  const key = 'd'.repeat(64);
+  const l = db.acquireLease(key, 'att-1', { ttlMs: 3_600_000, now: T0 });
+  db.createDispatch({
+    attemptId: 'att-1', shardId: 's-1', workflow: 'scan-static', repo: 'isokron-ai/mcp-check', workflowFile: 'scan-static.yml', ref: 'main',
+    expires: T0 + 3_600_000, items: [{ run_key: key, subject: 'acme/zz-old', fence: l.fence }], now: T0,
+  });
+  db.recordResult({ run_key: key, attempt_id: 'att-1', fence: l.fence, verdict: 'accepted', outcome: 'accepted', now: T0 + 1 });
+  // Something already aliased to the newcomer follows the binding.
+  db.setSubjectVersion({ id: 'acme/older-alias', kind: 'github', source: 'seed-v1', tier: 3, now: T0 });
+  db.raw.prepare("UPDATE subjects SET alias_of = 'acme/aa-new', retired_at = ? WHERE id = 'acme/older-alias'").run(new Date(T0).toISOString());
+
+  assert.deepEqual(db.applyIdentityLookup('acme/aa-new', ok(9, 'acme/aa-new'), { now: T0 + 2 * DAY }).map((e) => e.kind), ['id_bound']);
+  const ev = db.applyIdentityLookup('acme/zz-old', ok(9, 'acme/aa-new'), { now: T0 + 2 * DAY + 1 });
+  assert.deepEqual(ev.map((e) => [e.subject, e.kind]), [['acme/aa-new', 'merged'], ['acme/zz-old', 'id_bound'], ['acme/zz-old', 'renamed']]);
+  const old = db.getSubject('acme/zz-old');
+  const neu = db.getSubject('acme/aa-new');
+  assert.deepEqual([old.repo_id, old.node_id, old.repo_created_at, old.name, old.id_status, old.retired_at, old.tier], [9, 'R_test9', '2025-03-01T00:00:00Z', 'acme/aa-new', 'ok', null, 2]);
+  assert.deepEqual([neu.repo_id, neu.node_id, neu.alias_of, neu.id_status], [null, null, 'acme/zz-old', 'duplicate']);
+  assert.ok(neu.retired_at);
+  assert.equal(db.getSubject('acme/older-alias').alias_of, 'acme/zz-old');
+  assert.equal(db.getSubjectByRepoId(9).id, 'acme/zz-old');
+  // Neither is first_sight: the newcomer is out, the survivor keeps its result.
+  const wf = { 'scan-static': { enabled: true, runs_untrusted: false, versions: { tool: { 'mcp-check': '1' }, oracle: {}, probe: {} }, image_digest: null, settings_state: 'default' } };
+  const due = dueFromState(db, { now: T0 + 2 * DAY + 2, tiers: TIERS, workflows: wf });
+  assert.ok(!due.some((d) => d.subject === 'acme/aa-new'));
+  // R-SUBJ-11 (the due filter on alias_of is pinned too): an alias that is somehow not retired is still not due.
+  db.raw.prepare("UPDATE subjects SET retired_at = NULL WHERE id = 'acme/aa-new'").run();
+  assert.ok(!dueFromState(db, { now: T0 + 2 * DAY + 3, tiers: TIERS, workflows: wf }).some((d) => d.subject === 'acme/aa-new'));
+  db.close();
+});
+
+test('R-SUBJ-12: a first binding to a repository created after the subject was first seen (a newcomer squatting on its old name) is refused as id_conflict', () => {
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'acme/server', kind: 'github', source: 'seed-v1', tier: 3, now: T0 });
+  const ev = db.applyIdentityLookup('acme/server', ok(77, 'acme/server', new Date(T0 + DAY).toISOString()), { now: T0 + 2 * DAY });
+  assert.deepEqual(ev.map((e) => e.kind), ['id_conflict']);
+  assert.equal(ev[0].detail.reason, 'created_after_first_seen');
+  const s = db.getSubject('acme/server');
+  assert.deepEqual([s.repo_id, s.id_status, s.name], [null, 'conflict', 'acme/server']);
+  // A repository created before the subject was first seen binds.
+  db.setSubjectVersion({ id: 'acme/fine', kind: 'github', source: 'seed-v1', tier: 3, now: T0 });
+  assert.deepEqual(db.applyIdentityLookup('acme/fine', ok(78, 'acme/fine', new Date(T0 - DAY).toISOString()), { now: T0 }).map((e) => e.kind), ['id_bound']);
   db.close();
 });

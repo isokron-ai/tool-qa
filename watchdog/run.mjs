@@ -83,6 +83,7 @@ export function readState(file) {
         'pump.successor': db.getKv('pump.successor') ?? null,
         'pump.conformance': db.getKv('pump.conformance') ?? null,
         'pump.subjects': db.getKv('pump.subjects') ?? null,
+        'pump.identity': db.getKv('pump.identity') ?? null,
         'pump.last_tick': db.getKv('pump.last_tick') ?? null,
         'pump.api_budget': db.getKv('pump.api_budget') ?? null,
         'pump.last_run': db.getKv('pump.last_run') ?? null,
