@@ -412,3 +412,17 @@ test('R-SNAP-15: losing the race with the pump on both tries is a notice and exi
   assert.equal(code, 0);
   assert.ok(out.some((l) => l.startsWith('::notice title=state-snapshot::')));
 });
+
+test('R-CHAOS-09: the release client marks errors that may pass as transient, a network failure after the last try included; a refusal is not', async () => {
+  const noSleep = async () => {};
+  const net = createReleaseClient({ repo: 'o/r', token: 'tok123', sleep: noSleep, fetch: async () => { throw new TypeError('fetch failed'); } });
+  await assert.rejects(net.getRelease('state-snapshots'), (err) => err.transient === true && /failed: fetch failed/.test(err.message));
+  const s502 = createReleaseClient({ repo: 'o/r', token: 'tok123', sleep: noSleep, fetch: async () => new Response('bad', { status: 502 }) });
+  await assert.rejects(s502.getRelease('state-snapshots'), (err) => err.transient === true);
+  const limited = createReleaseClient({ repo: 'o/r', token: 'tok123', sleep: noSleep, fetch: async () => new Response('{"message":"API rate limit exceeded"}', { status: 403, headers: { 'x-ratelimit-remaining': '0' } }) });
+  await assert.rejects(limited.getRelease('state-snapshots'), (err) => err.transient === true);
+  for (const status of [401, 403]) {
+    const refused = createReleaseClient({ repo: 'o/r', token: 'tok123', sleep: noSleep, fetch: async () => new Response('no', { status }) });
+    await assert.rejects(refused.getRelease('state-snapshots'), (err) => err.transient !== true, String(status));
+  }
+});

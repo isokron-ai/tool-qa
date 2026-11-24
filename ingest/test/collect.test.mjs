@@ -1027,3 +1027,29 @@ test('R-CHAOS-07: a late dispatch whose look the API budget stopped is looked at
     }
   }
 });
+
+test('R-CHAOS-10: ingest passes the artifact upload time: a run that completed inside its lease but whose bundle was uploaded after it is lease_expired', async () => {
+  const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  // Lease 30 minutes from T0. The run says it completed at T0 + 20 minutes.
+  for (const [createdAt, want] of [[T0 + 25 * MIN, 'accepted'], [T0 + 33 * MIN, 'lease_expired']]) {
+    const { db, fence } = setup();
+    db.reapExpiredDispatches({ now: T0 + 31 * MIN });
+    const api = worker({
+      bundle: makeBundle({ identity: { fence } }),
+      run: defaultRun({ updated_at: iso(T0 + 20 * MIN) }),
+      artifacts: [artifactEntry({ created_at: iso(createdAt) })],
+    });
+    const h = harness({ api });
+    h.clock.t = T0 + 40 * MIN;
+    try {
+      const s = await h.collect(db);
+      assert.equal(s.recorded, 1);
+      const att = db.raw.prepare('SELECT accepted, reason FROM attempts WHERE attempt_id = ?').get('att-1');
+      if (want === 'accepted') assert.deepEqual({ ...att }, { accepted: 1, reason: null }, 'uploaded inside the lease: on time');
+      else assert.deepEqual({ ...att }, { accepted: 0, reason: 'lease_expired' }, 'uploaded after the lease: late, whatever the run says');
+    } finally {
+      h.cleanup();
+      db.close();
+    }
+  }
+});
