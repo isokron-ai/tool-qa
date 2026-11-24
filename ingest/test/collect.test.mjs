@@ -25,7 +25,7 @@ const PUBKEY = `age1${'q'.repeat(58)}`;
 const OTHER_PUBKEY = `age1${'p'.repeat(58)}`;
 
 /** One dispatch the way the pump makes it: a slot, a lease per run_key, the ledger row, the run id. */
-function setup({ runKeys = [RUN_KEY], ttlMs = 30 * MIN, runId = RUN_ID, now = T0, attemptId = 'att-1' } = {}) {
+function setup({ runKeys = [RUN_KEY], ttlMs = 30 * MIN, runId = RUN_ID, now = T0, attemptId = 'att-1', expectedSha = null } = {}) {
   const db = openState(':memory:');
   db.acquireSlot(attemptId, { budget: 5, ttlMs, now });
   const items = runKeys.map((runKey, i) => {
@@ -35,7 +35,7 @@ function setup({ runKeys = [RUN_KEY], ttlMs = 30 * MIN, runId = RUN_ID, now = T0
   });
   db.createDispatch({
     attemptId, shardId: 's1', workflow: 'qa', repo: WORKER_REPO, workflowFile: 'qa-worker.yml', ref: 'main',
-    expires: now + ttlMs, items, now,
+    expires: now + ttlMs, items, workflowSha: expectedSha, now,
   });
   db.markDispatched(attemptId, runId === null ? {} : { runId, workflowSha: WORKFLOW_SHA, correlatedBy: 'response' });
   return { db, fence: items[0].fence, items };
@@ -789,4 +789,42 @@ test('R-ING-06: a poison item is decided in its own tick and the items after it 
     h.cleanup();
     db.close();
   }
+});
+
+test('R-ING-12: a run found by its name is checked against the commit recorded at dispatch, not its own', async () => {
+  const forged = '2'.repeat(40);
+  const { db, fence } = setup({ runId: null, expectedSha: WORKFLOW_SHA });
+  // Someone with write access to the worker repo dispatched the same workflow,
+  // with the same run name, from another commit.
+  const runs = [{ id: RUN_ID, name: 'qa', display_title: 'shard s1', head_sha: forged, html_url: 'https://github.test/runs/4242' }];
+  const bundle = makeBundle({ identity: { fence }, workflow: { sha: forged } });
+  const api = worker({ bundle, runs, run: defaultRun({ head_sha: forged }) });
+  const h = harness({ api });
+  try {
+    const s = await h.collect(db);
+    assert.equal(s.correlated, 1);
+    assert.deepEqual(s.outcomes, { rejected: 1 });
+    const d = db.getDispatch('att-1');
+    assert.equal(d.run_id, String(RUN_ID));
+    assert.equal(d.workflow_sha, WORKFLOW_SHA, 'the expected commit is kept');
+    assert.equal(db.listAttempts('repo:1')[0].reason, 'run_sha_mismatch');
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('R-ING-12: setDispatchRun never sets the expected commit, and markDispatched never replaces it', () => {
+  const db = openState(':memory:');
+  db.acquireSlot('a', { budget: 5, ttlMs: 30 * MIN, now: T0 });
+  const l = db.acquireLease(RUN_KEY, 'a', { ttlMs: 30 * MIN, now: T0 });
+  db.createDispatch({
+    attemptId: 'a', shardId: 's', workflow: 'qa', repo: WORKER_REPO, workflowFile: 'qa-worker.yml', ref: 'main',
+    expires: T0 + 30 * MIN, items: [{ run_key: RUN_KEY, subject: 'repo:1', fence: l.fence }], workflowSha: WORKFLOW_SHA, now: T0,
+  });
+  db.markDispatched('a', { runId: null, workflowSha: '3'.repeat(40) });
+  assert.equal(db.getDispatch('a').workflow_sha, WORKFLOW_SHA);
+  db.setDispatchRun('a', { runId: 5, workflowSha: '4'.repeat(40) });
+  assert.equal(db.getDispatch('a').workflow_sha, WORKFLOW_SHA);
+  db.close();
 });

@@ -35,7 +35,25 @@ A worker workflow must:
   `${{ inputs.* }}` inside `run:`;
 - report one result per item, each in its own bundle, quoting `run_key`,
   `attempt_id` and `fence` exactly as given. A result for anything else is
-  rejected.
+  rejected;
+- run the server under test without the runner's environment (the sandbox
+  does this), and never run untrusted code in a job, or a step, that holds
+  `ACTIONS_RUNTIME_TOKEN`: with that token a server could upload a forged
+  result for a sibling item of the same run, under its real name and
+  identity. See "Running untrusted servers" in
+  [`worker-kit/README.md`](../worker-kit/README.md).
+
+Before sending, the pump records with the dispatch the commit `ref` points to
+(read from the branch, `GET /repos/{repo}/branches/{ref}`, which needs no
+permission on a public repository). Ingest rejects a run at any other commit
+(`run_sha_mismatch`), including a run found by its name: a run name is only
+a claim, so its own `head_sha` is never what it is checked against. If the
+ref moves between that read and GitHub starting the run, the run is
+rejected and the work is due again.
+
+Dispatch inputs show up in the worker repositories' public run pages and
+logs, so they carry only the shard and attempt ids, subject ids and opaque
+`run_key`s and fences: never canaries, tokens or anything private.
 
 The result format (files, artifact name, encryption, checks) is the worker
 contract in [`worker-kit/README.md`](../worker-kit/README.md) and
@@ -154,14 +172,15 @@ run_key's lease now (a newer one means this item is stale); `outcome` is
 [`ingest/ledger.mjs`](../ingest/ledger.mjs) (`dbLedger()`) adapts it for
 ingest.
 
-### `db.dispatchesAwaitingResults({ now, lateMs })` and `db.setDispatchRun(attemptId, { runId, runUrl, workflowSha, correlatedBy })`
+### `db.dispatchesAwaitingResults({ now, lateMs })` and `db.setDispatchRun(attemptId, { runId, runUrl, correlatedBy })`
 
 The first lists the dispatches ingest should look at: every open one
-(`pending` or `dispatched`, expired or not, since ingest runs before the reap)
+(`pending` or `dispatched`; the pump reaps expired ones before ingest runs)
 and those closed as expired within `lateMs` that have a run id and nothing
 recorded. The second stores the run found for a dispatch whose run id the
 dispatch response did not return; `correlatedBy` says how it was found
-(`run-name`).
+(`run-name`). It never changes `workflow_sha`, the commit recorded when the
+dispatch was created, which is what the run is checked against.
 
 ### `db.txAsync(fn)`
 

@@ -37,7 +37,11 @@ function recorder(behaviour = () => ({})) {
     async dispatch(req) {
       calls.push(req);
       const out = await behaviour(req, calls.length);
-      return { runId: 1000 + calls.length, runUrl: `https://github.test/run/${1000 + calls.length}`, workflowSha: 'f'.repeat(40), correlatedBy: 'response', ...out };
+      return { runId: 1000 + calls.length, runUrl: `https://github.test/run/${1000 + calls.length}`, workflowSha: 'b'.repeat(40), correlatedBy: 'response', ...out };
+    },
+    // The commit the ref points to now: recorded with the dispatch (R-ING-12).
+    async resolveRef() {
+      return 'f'.repeat(40);
     },
   };
 }
@@ -187,7 +191,7 @@ test('end to end with the real dispatcher against a fake API', async () => {
   let run = 700;
   const api = fakeApi([
     ['POST', '/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/dispatches', () => ({ status: 200, body: { workflow_run_id: ++run, html_url: `https://github.test/r/${run}` } })],
-    ['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/runs\/\d+$/, (req) => ({ body: { id: Number(req.path.split('/').pop()), head_sha: 'e'.repeat(40) } })],
+    ['GET', '/repos/isokron-ai/mcp-check/branches/main', () => ({ body: { name: 'main', commit: { sha: 'e'.repeat(40) } } })],
   ]);
   const mints = [];
   const dispatcher = createDispatcher({
@@ -206,5 +210,37 @@ test('end to end with the real dispatcher against a fake API', async () => {
   assert.equal(posts[0].json.return_run_details, true);
   assert.equal(db.getDispatch('att-001').run_id, '701');
   assert.equal(db.getDispatch('att-002').workflow_sha, 'e'.repeat(40));
+  assert.equal(api.calls.filter((r) => r.path.endsWith('/branches/main')).length, 1, 'the ref is resolved once per tick');
+  db.close();
+});
+
+test('R-ING-12: the dispatch records the commit its ref points to before sending, not what the run reports', async () => {
+  const { c, db, config, newId } = setup({ subjects: 2 });
+  const d = recorder(() => ({ workflowSha: '9'.repeat(40) })); // whatever the dispatcher says about the run
+  let pushedSha;
+  await runTick({
+    db, now: c.now, config, workerSlots: 1, dispatcher: d, newId,
+    beforeSend: () => {
+      pushedSha = db.getDispatch('att-001').workflow_sha;
+      return true;
+    },
+  });
+  assert.equal(pushedSha, 'f'.repeat(40), 'already in the state saved before sending');
+  assert.equal(db.getDispatch('att-001').workflow_sha, 'f'.repeat(40));
+  db.close();
+});
+
+test('R-ING-12: a ref that cannot be resolved is not dispatched this tick', async () => {
+  const { c, db, config, newId } = setup({ subjects: 2 });
+  const d = recorder();
+  d.resolveRef = async () => {
+    throw new Error('branch not found');
+  };
+  const lines = [];
+  const s = await runTick({ db, now: c.now, config, workerSlots: 2, dispatcher: d, newId, log: (l) => lines.push(l) });
+  assert.equal(d.calls.length, 0);
+  assert.deepEqual(s.skippedWorkflows, ['live-probe']);
+  assert.deepEqual(db.openSlots(), [], 'no slot is held');
+  assert.ok(lines.some((l) => /cannot resolve isokron-ai\/mcp-check main/.test(l)));
   db.close();
 });

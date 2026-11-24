@@ -9,6 +9,28 @@ A worker runs untrusted server code. So the bundle is only a claim: tool-qa's
 ingest (see [`../ingest/README.md`](../ingest/README.md)) checks every part of it
 against what was dispatched before anything is kept.
 
+## Running untrusted servers
+
+Run the server under test without the runner's environment, and never in
+the job that uploads results. GitHub gives every job of a run an
+`ACTIONS_RUNTIME_TOKEN` (and `ACTIONS_RESULTS_URL`) that can upload artifacts
+to that run. Code that can read it can upload, or replace, the result
+artifact of any item of the shard, with the right name and the run's real
+identity, and ingest could not tell. So:
+
+- start the server inside the sandbox with an empty environment, never as a
+  plain step of the job (a step inherits the runner's environment, and the
+  runner's files and processes are within reach of anything it runs);
+- build, encrypt and upload results in a job that never runs untrusted code,
+  or in steps that only start after every untrusted process has ended and
+  the sandbox is gone;
+- never pass `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_*`,
+  `GITHUB_TOKEN` or any secret into the sandbox.
+
+Ingest's identity, file and claim checks catch a careless forgery, not one
+made with the upload token, so this rule is what keeps one item's server
+from forging a sibling item's result.
+
 ## Files
 
 | Path | What it is |

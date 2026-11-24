@@ -28,12 +28,12 @@ test('a dispatch that returns run details is correlated from the response', asyn
   const c = fakeClock();
   const api = fakeApi([
     ['POST', DISPATCH, () => ({ status: 200, body: { workflow_run_id: 555, run_url: `${API}/repos/${REPO}/actions/runs/555`, html_url: 'https://github.test/run/555' } })],
-    ['GET', `/repos/${REPO}/actions/runs/555`, () => ({ body: { id: 555, head_sha: 'a'.repeat(40), display_title: 'shard s1' } })],
   ]);
   const out = await dispatchWorkflow(client(api, c), {
     repo: REPO, workflowFile: 'scan.yml', ref: 'main', shardId: 's1', inputs: { shard_id: 's1' }, now: c.now, sleep: c.sleep,
   });
-  assert.deepEqual(out, { runId: 555, runUrl: 'https://github.test/run/555', workflowSha: 'a'.repeat(40), correlatedBy: 'response' });
+  assert.deepEqual(out, { runId: 555, runUrl: 'https://github.test/run/555', correlatedBy: 'response' });
+  assert.equal(api.calls.length, 1, 'the run is not fetched: its own head_sha proves nothing');
   assert.deepEqual(api.calls[0].json, { ref: 'main', inputs: { shard_id: 's1' }, return_run_details: true });
 });
 
@@ -52,7 +52,7 @@ test('a dispatch without run details is correlated by polling for the shard run 
   const out = await dispatchWorkflow(client(api, c), {
     repo: REPO, workflowFile: 'scan.yml', ref: 'main', shardId: 's1', inputs: {}, now: c.now, sleep: c.sleep, pollIntervalMs: 3000,
   });
-  assert.deepEqual(out, { runId: 2, runUrl: 'u2', workflowSha: 'c'.repeat(40), correlatedBy: 'poll' });
+  assert.deepEqual(out, { runId: 2, runUrl: 'u2', correlatedBy: 'poll' });
   const q = api.calls[1].query;
   assert.equal(q.get('event'), 'workflow_dispatch');
   assert.match(q.get('created'), /^>=2026-03-02T09:59:00/);
@@ -67,7 +67,7 @@ test('an uncorrelated dispatch still counts as sent, with no run id', async () =
   const out = await dispatchWorkflow(client(api, c), {
     repo: REPO, workflowFile: 'scan.yml', ref: 'main', shardId: 's1', inputs: {}, now: c.now, sleep: c.sleep, pollAttempts: 3, pollIntervalMs: 1000,
   });
-  assert.deepEqual(out, { runId: null, runUrl: null, workflowSha: null, correlatedBy: null });
+  assert.deepEqual(out, { runId: null, runUrl: null, correlatedBy: null });
   assert.equal(api.calls.length, 4);
 });
 

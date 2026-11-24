@@ -339,7 +339,7 @@ What each token is used for:
 
 | Job | Repository | Permissions | For |
 |---|---|---|---|
-| pump | each worker repository | `actions: write` | dispatching shards and finding their runs |
+| pump | each worker repository | `actions: write` | dispatching shards and finding their runs; reading the commit the worker workflow's ref points to (no permission needed, the worker repositories are public; a private one would need Contents: read) |
 | pump (ingest) | each worker repository | `actions: read` | finding finished worker runs and downloading their result artifacts |
 | pump (successor) | `tool-qa` | `actions: write` | dispatching the next pump run |
 | pump (successor failed) | `tool-qa` | `issues: write` | marking `pump-successor` red on the health issue |

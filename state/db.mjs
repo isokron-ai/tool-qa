@@ -394,7 +394,7 @@ export class StateDb {
    * item_index. Their leases (keyed by run_key, held by attemptId) must already
    * be taken.
    */
-  createDispatch({ attemptId, shardId, workflow, repo, workflowFile, ref, expires, items, now }) {
+  createDispatch({ attemptId, shardId, workflow, repo, workflowFile, ref, expires, items, workflowSha = null, now }) {
     if (!attemptId || !shardId || !workflow || !repo || !workflowFile || !ref) {
       throw new TypeError('createDispatch needs attemptId, shardId, workflow, repo, workflowFile and ref');
     }
@@ -402,18 +402,23 @@ export class StateDb {
     const t = iso(now);
     this.tx(() => {
       this.raw.prepare(`
-        INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-      `).run(attemptId, shardId, workflow, repo, workflowFile, ref, t, iso(expires));
+        INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status, workflow_sha)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      `).run(attemptId, shardId, workflow, repo, workflowFile, ref, t, iso(expires), workflowSha);
       const ins = this.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence, item_index) VALUES (?, ?, ?, ?, ?, ?)');
       items.forEach((it, index) => ins.run(attemptId, it.run_key, it.subject, workflow, it.fence, index));
     });
   }
 
-  /** The worker run was created. runId may be null when it could not be correlated yet. */
+  /**
+   * The worker run was created. runId may be null when it could not be
+   * correlated yet. workflowSha only fills in a dispatch created without the
+   * expected commit; the one recorded at creation (the ref's commit before
+   * sending) is never replaced.
+   */
   markDispatched(attemptId, { runId = null, runUrl = null, workflowSha = null, correlatedBy = null } = {}) {
     const r = this.raw.prepare(`
-      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = ?, correlated_by = ?
+      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = COALESCE(workflow_sha, ?), correlated_by = ?
       WHERE attempt_id = ? AND status = 'pending'
     `).run(runId === null ? null : String(runId), runUrl, workflowSha, correlatedBy, attemptId);
     return r.changes > 0;
@@ -423,13 +428,18 @@ export class StateDb {
    * Fill in the run of a live dispatch that was sent without one (found later by
    * its run name). Never replaces a known run id. A pending dispatch becomes
    * dispatched. Returns true if the row changed.
+   *
+   * It never touches workflow_sha: a run found by its name is a claim to be
+   * checked, so its own head_sha must not become the commit it is checked
+   * against (R-ING-12). Ingest compares the run with the commit recorded when
+   * the dispatch was created.
    */
-  setDispatchRun(attemptId, { runId, runUrl = null, workflowSha = null, correlatedBy = null } = {}) {
+  setDispatchRun(attemptId, { runId, runUrl = null, correlatedBy = null } = {}) {
     if (runId === undefined || runId === null) throw new TypeError('setDispatchRun needs a runId');
     const r = this.raw.prepare(`
-      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = COALESCE(?, workflow_sha), correlated_by = ?
+      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, correlated_by = ?
       WHERE attempt_id = ? AND run_id IS NULL AND status IN ('pending', 'dispatched')
-    `).run(String(runId), runUrl, workflowSha, correlatedBy, attemptId);
+    `).run(String(runId), runUrl, correlatedBy, attemptId);
     return r.changes > 0;
   }
 

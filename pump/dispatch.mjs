@@ -33,8 +33,7 @@ function splitRepo(repo) {
 
 /**
  * Send one workflow_dispatch and correlate it with its run.
- * @returns {Promise<{ runId: number|null, runUrl: string|null, workflowSha: string|null,
- *   correlatedBy: 'response'|'poll'|null }>}
+ * @returns {Promise<{ runId: number|null, runUrl: string|null, correlatedBy: 'response'|'poll'|null }>}
  */
 export async function dispatchWorkflow(client, {
   repo,
@@ -57,14 +56,7 @@ export async function dispatchWorkflow(client, {
   const runName = `shard ${shardId}`;
   if (res.status === 200 && res.data?.workflow_run_id) {
     const runId = Number(res.data.workflow_run_id);
-    let workflowSha = null;
-    try {
-      const run = await client.request('GET', `/repos/${repo}/actions/runs/${runId}`, { family: 'actions' });
-      workflowSha = run.data?.head_sha ?? null;
-    } catch {
-      // Not fatal: ingest can still match the run by id.
-    }
-    return { runId, runUrl: res.data.html_url ?? res.data.run_url ?? null, workflowSha, correlatedBy: 'response' };
+    return { runId, runUrl: res.data.html_url ?? res.data.run_url ?? null, correlatedBy: 'response' };
   }
   for (let i = 0; i < pollAttempts; i++) {
     await sleep(pollIntervalMs);
@@ -73,9 +65,24 @@ export async function dispatchWorkflow(client, {
       query: { event: 'workflow_dispatch', created: `>=${since}`, per_page: 30 },
     });
     const run = (list.data?.workflow_runs ?? []).find((r) => r.display_title === runName || r.name === runName);
-    if (run) return { runId: Number(run.id), runUrl: run.html_url ?? null, workflowSha: run.head_sha ?? null, correlatedBy: 'poll' };
+    if (run) return { runId: Number(run.id), runUrl: run.html_url ?? null, correlatedBy: 'poll' };
   }
-  return { runId: null, runUrl: null, workflowSha: null, correlatedBy: null };
+  return { runId: null, runUrl: null, correlatedBy: null };
+}
+
+/**
+ * The commit a branch points to now: the commit a dispatch on that ref is
+ * expected to run. The pump records it with the dispatch before sending, and
+ * ingest checks the worker run against it (R-ING-12). The branch API needs no
+ * permission for a public repository (worker repositories are public); a
+ * private one needs Contents: read for the App.
+ */
+export async function resolveRef(client, { repo, ref }) {
+  splitRepo(repo);
+  const res = await client.request('GET', `/repos/${repo}/branches/${encodeURIComponent(ref)}`, { family: 'contents' });
+  const sha = res.data?.commit?.sha;
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) throw new Error(`${repo}: branch ${ref} has no commit SHA in the answer`);
+  return sha;
 }
 
 /**
@@ -114,6 +121,11 @@ export function createDispatcher({
     async dispatch({ repo, workflowFile, ref, inputs, shardId }) {
       const client = await clientFor(repo);
       return dispatchWorkflow(client, { repo, workflowFile, ref, inputs, shardId, now, sleep, pollAttempts, pollIntervalMs });
+    },
+    /** The commit `ref` points to now (resolveRef). */
+    async resolveRef({ repo, ref }) {
+      const client = await clientFor(repo);
+      return resolveRef(client, { repo, ref });
     },
   };
 }

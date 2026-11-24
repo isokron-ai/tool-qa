@@ -106,12 +106,34 @@ export async function runTick({
   // 1. Reserve: for each shard, while a slot is free, take the slot and the
   // leases and record the dispatch as pending. Nothing is sent yet.
   const reserved = [];
+  const shaByRef = new Map(); // `${repo}@${ref}` -> commit SHA, once per tick
+  const refSkip = new Set();
   for (const shard of shards) {
     const wf = config.workflows[shard.workflow];
+    if (refSkip.has(shard.workflow)) continue;
     const t = now();
     if (deadline !== undefined && t >= deadline) {
       summary.stopped = 'deadline';
       break;
+    }
+    // The commit the run must be at, recorded with the dispatch (R-ING-12).
+    let workflowSha = null;
+    if (typeof dispatcher?.resolveRef === 'function') {
+      const refKey = `${wf.repo}@${wf.ref}`;
+      try {
+        if (!shaByRef.has(refKey)) shaByRef.set(refKey, await dispatcher.resolveRef({ repo: wf.repo, ref: wf.ref }));
+        workflowSha = shaByRef.get(refKey);
+      } catch (err) {
+        log(`cannot resolve ${wf.repo} ${wf.ref} for ${shard.workflow}; not dispatching it this tick: ${err?.message ?? err}`);
+        const stop = stopReason(err);
+        if (stop) {
+          summary.stopped = stop;
+          break;
+        }
+        refSkip.add(shard.workflow);
+        summary.skippedWorkflows.push(shard.workflow);
+        continue;
+      }
     }
     const attemptId = String(newId());
     const shardId = `${shard.workflow}-${attemptId.replace(/[^A-Za-z0-9]/g, '').slice(0, 12)}`;
@@ -133,7 +155,7 @@ export async function runTick({
     try {
       db.createDispatch({
         attemptId, shardId, workflow: shard.workflow, repo: wf.repo, workflowFile: wf.file, ref: wf.ref,
-        expires: t + ttlMs, items: leased, now: t,
+        expires: t + ttlMs, items: leased, workflowSha, now: t,
       });
     } catch (err) {
       for (const l of leased) db.releaseLease(l.run_key, attemptId, l.fence, { now: t });
@@ -187,9 +209,8 @@ export async function runTick({
     try {
       const inputs = workerInputs({ shardId, attemptId, items: leased });
       const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile: wf.file, ref: wf.ref, inputs, shardId });
-      db.markDispatched(attemptId, {
-        runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, workflowSha: out?.workflowSha ?? null, correlatedBy: out?.correlatedBy ?? null,
-      });
+      // The expected commit was recorded at creation; markDispatched keeps it.
+      db.markDispatched(attemptId, { runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, correlatedBy: out?.correlatedBy ?? null });
       summary.dispatched += 1;
       log(`dispatched ${shardId}: ${leased.length} item(s) to ${wf.repo} ${wf.file}${out?.runId ? `, run ${out.runId}` : ', run not matched yet'}`);
     } catch (err) {

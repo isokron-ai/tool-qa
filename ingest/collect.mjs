@@ -228,7 +228,7 @@ export function createCollector({
             continue;
           }
           if (db.setDispatchRun(d.attempt_id, {
-            runId: found.id, runUrl: found.html_url ?? null, workflowSha: found.head_sha ?? null, correlatedBy: 'run-name',
+            runId: found.id, runUrl: found.html_url ?? null, correlatedBy: 'run-name',
           })) {
             summary.correlated += 1;
             summary.changed = true;
