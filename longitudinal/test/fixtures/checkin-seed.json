@@ -1,0 +1,68 @@
+{
+ "version": 1,
+ "size": 9,
+ "subjects": [
+  {
+   "id": "acme/py-one",
+   "tier": "sample",
+   "star_bucket": "0-9",
+   "stars": 3,
+   "language": "Python"
+  },
+  {
+   "id": "acme/py-two",
+   "tier": "sample",
+   "star_bucket": "100-999",
+   "stars": 500,
+   "language": "Python"
+  },
+  {
+   "id": "globex/py-three",
+   "tier": "sample",
+   "star_bucket": "0-9",
+   "stars": 0,
+   "language": "Python"
+  },
+  {
+   "id": "acme/dotnet-srv",
+   "tier": "sample",
+   "star_bucket": "1000+",
+   "stars": 9999,
+   "language": "C#"
+  },
+  {
+   "id": "modelcontextprotocol/servers",
+   "tier": "reference",
+   "star_bucket": "1000+",
+   "stars": 10000,
+   "language": "TypeScript"
+  },
+  {
+   "id": "acme/go-big",
+   "tier": "gold14",
+   "star_bucket": "100-999",
+   "stars": 322,
+   "language": "Go"
+  },
+  {
+   "id": "globex/go-two",
+   "tier": "sample",
+   "star_bucket": "0-9",
+   "stars": 1,
+   "language": "Go"
+  },
+  {
+   "id": "initech/secret-name-srv",
+   "tier": "sample",
+   "star_bucket": "0-9",
+   "stars": 0,
+   "language": "Python"
+  },
+  {
+   "id": "acme/clean",
+   "tier": "T0",
+   "stars": 0,
+   "language": "Rust"
+  }
+ ]
+}
