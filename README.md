@@ -28,20 +28,18 @@ More about IsoKron: [isokron.ai](https://isokron.ai/?utm_source=tool-qa&utm_medi
 ## How it works
 
 ```mermaid
-flowchart LR
-  subgraph trusted["tool-qa: trusted, never runs server code"]
-    H["History capture<br/>registry, packages, stars"] --> P
-    P["Pump<br/>only writer of the state"] --> S[("Encrypted state<br/>SQLite + age")]
-    W["Watchdog<br/>every 15 min"] -. reads .-> S
-  end
-  subgraph workers["Our tool repos: untrusted side"]
-    K["Worker jobs<br/>no secrets, no permissions"]
-  end
-  P -- "dispatch a shard<br/>lease + fencing token" --> K
-  K -- "sealed result bundle<br/>encrypted to the ingest key" --> I["Trusted ingest<br/>inside the pump"]
-  I --> S
+flowchart TD
+  H["History capture: registry, packages, stars"] --> P
+  P["Pump: the only writer of the state"]
+  P -- "1. dispatch a shard, with a lease and fencing token" --> K
+  K["Worker job in our tool repo: untrusted side, no secrets, no permissions"]
+  K -- "2. sealed result bundle, encrypted to the ingest key" --> I
+  I["Trusted ingest, inside the pump: decrypt, check, redact"]
+  I -- "3. accepted or rejected, every attempt kept" --> S
+  S[("Encrypted state: SQLite + age")]
+  S --> B["Hourly snapshots, off-site backup, keep-forever copies"]
+  W["Watchdog, every 15 minutes"] -. reads .-> S
   W --> HI["Loop health issue"]
-  S --> B["Hourly snapshots<br/>off-site backup<br/>keep-forever copies"]
 ```
 
 Each pump tick follows one piece of work through these steps:
