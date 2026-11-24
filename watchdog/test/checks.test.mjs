@@ -186,3 +186,14 @@ test('R-SUB-11: a seed the pump could not load is red on the health issue, with 
   // No record yet (a pump older than this check): no item.
   assert.equal(byId(evaluate(base({ state: { openSlots: [], openDispatches: [], kv: {} } }))).subjects, undefined);
 });
+
+test('R-SNAP-09: state-snapshot.yml is a loop workflow: its failed run is red and its lane switch is read', () => {
+  const failed = evaluate(base({ runs: { 'pump.yml': [run()], 'state-snapshot.yml': [run({ conclusion: 'failure' })] } }));
+  assert.equal(byId(failed)['run:state-snapshot'].status, 'red');
+  const off = evaluate(base({ lanes: { 'state-snapshot': false }, snapshot: { manifest: null } }));
+  assert.equal(byId(off)['state-snapshot'].status, 'off');
+  const none = evaluate(base({ snapshot: { manifest: null } }));
+  assert.equal(byId(none)['state-snapshot'].status, 'amber');
+  assert.equal(byId(evaluate(base()))['state-snapshot'], undefined, 'no item when nothing was read');
+});
+

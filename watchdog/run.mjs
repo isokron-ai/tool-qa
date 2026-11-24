@@ -13,6 +13,7 @@
 //   4. evaluates the checks (watchdog/checks.mjs);
 //      It also reads the public nightly sandbox conformance status (no token;
 //      pump/breaker.mjs), the same file the pump reads for its breaker;
+//      and the state snapshot manifest (snapshot/health.mjs) with the job token;
 //   5. dispatches pump.yml if no pump run started for 20 minutes, and
 //      re-enables loop workflows GitHub disabled for inactivity;
 //   6. rewrites the "Loop health" issue (watchdog/health.mjs).
@@ -45,6 +46,8 @@ import { judgeConformance, pinMismatches, readConformance as readConformanceStat
 import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
+import { createReleaseClient } from '../snapshot/github.mjs';
+import { readSnapshotManifest } from '../snapshot/health.mjs';
 
 const EXPECTED_FILE = new URL('./expected-workflows.json', import.meta.url);
 
@@ -100,6 +103,7 @@ export async function runWatchdog({
   verifyConformanceRun,
   workerWorkflows,
   loadWorkerConfig = () => loadConfig().workflows,
+  readSnapshot,
 } = {}) {
   const repo = env.GITHUB_REPOSITORY;
   if (!repo || !repo.includes('/')) throw new Error('GITHUB_REPOSITORY is required (owner/name)');
@@ -178,8 +182,18 @@ export async function runWatchdog({
     mismatch: verdict.tripped ? [] : pinMismatches(wfs, verdict.sandbox_sha),
   };
 
+  // The state snapshots: the manifest on the public "state-snapshots" release,
+  // read with the job token (contents: read).
+  let snapshot;
+  try {
+    snapshot = await (readSnapshot ?? (() => readSnapshotManifest(createReleaseClient({ repo, token: env.GITHUB_TOKEN || undefined, fetch, apiUrl, sleep }))))();
+  } catch (err) {
+    snapshot = { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) };
+  }
+  if (snapshot?.error) snapshot = { ...snapshot, error: scrub(String(snapshot.error), secrets).slice(0, 200) };
+
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected, breaker });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected, breaker, snapshot });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');

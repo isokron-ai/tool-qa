@@ -66,6 +66,7 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
       mints.push(args);
       return { token: 'ghs_synthetic_app_token', expiresAt: c.t + 3_600_000 };
     },
+    readSnapshot: async () => ({ manifest: { version: 1, current_at: ago(40), snapshots: [{ name: 'state-20260302T112000Z-0123abcd.sqlite.age', created: ago(40), sha256: 'a'.repeat(64), size: 1 }] } }),
     pull: async ({ file }) => {
       if (!seed) return { status: 'absent' };
       const db = openState(file);
@@ -281,4 +282,50 @@ test('R-WD-13: a workflows.json the pump cannot load is a red config check; the 
   assert.equal(out.overall, 'red');
   assert.equal(w.issues.length, 1, 'the issue is still written');
   w.cleanup();
+});
+
+test('R-SNAP-09: the watchdog shows the state snapshots on the health issue: amber after 3 hours, red after 6, off with the lane off', async () => {
+  for (const [hours, env, want] of [[1, {}, 'green'], [4, {}, 'amber'], [7, {}, 'red'], [7, { LANE_STATE_SNAPSHOT_ENABLED: 'false' }, 'off']]) {
+    const w = world({ seed: () => {} });
+    Object.assign(w.opts.env, env);
+    const at = new Date(w.c.t - hours * 60 * MIN).toISOString();
+    w.opts.readSnapshot = async () => ({ manifest: { version: 1, current_at: at, snapshots: [{ name: 'state-20260302T010000Z-0123abcd.sqlite.age', created: at, sha256: 'a'.repeat(64), size: 1 }] } });
+    const out = await runWatchdog(w.opts);
+    const item = parseBody(w.issues[0].body).checks.find((c) => c.id === 'state-snapshot');
+    assert.equal(item.status, want, `${hours} hours ${JSON.stringify(env)}`);
+    assert.equal(out.overall, want === 'off' ? 'green' : want);
+    w.cleanup();
+  }
+});
+
+test('R-SNAP-09: the watchdog reads the snapshot manifest from the release with the job token; an unreadable one is amber, not a failed run', async () => {
+  const w = world({ seed: () => {} });
+  delete w.opts.readSnapshot;
+  const manifest = { version: 1, current_at: new Date(w.c.t - 30 * MIN).toISOString(), snapshots: [{ name: 'state-20260302T113000Z-0123abcd.sqlite.age', created: '2026-03-02T11:30:00Z', sha256: 'a'.repeat(64), size: 1 }] };
+  const seen = [];
+  const orig = w.opts.fetch;
+  w.opts.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (u.includes('/releases/')) {
+      seen.push({ url: u, auth: init.headers?.Authorization ?? null });
+      if (u.endsWith('/releases/tags/state-snapshots')) return new Response(JSON.stringify({ id: 7, tag_name: 'state-snapshots', assets: [] }), { status: 200 });
+      if (u.includes('/releases/7/assets')) return new Response(JSON.stringify([{ id: 8, name: 'manifest.json', state: 'uploaded' }]), { status: 200 });
+      if (u.endsWith('/releases/assets/8')) return new Response(JSON.stringify(manifest), { status: 200 });
+    }
+    return orig(url, init);
+  };
+  await runWatchdog(w.opts);
+  assert.equal(parseBody(w.issues[0].body).checks.find((c) => c.id === 'state-snapshot').status, 'green');
+  assert.ok(seen.length >= 3);
+  assert.ok(seen.every((r) => r.auth === 'Bearer ghs_synthetic_job_token'), 'the job token, not the App token');
+  w.cleanup();
+
+  const w2 = world({ seed: () => {} });
+  w2.opts.readSnapshot = async () => { throw new Error('HTTP 502 ghs_synthetic_job_token'); };
+  const out = await runWatchdog(w2.opts);
+  const item = parseBody(w2.issues[0].body).checks.find((c) => c.id === 'state-snapshot');
+  assert.equal(item.status, 'amber');
+  assert.doesNotMatch(item.summary, /ghs_synthetic/);
+  assert.equal(out.overall, 'amber');
+  w2.cleanup();
 });

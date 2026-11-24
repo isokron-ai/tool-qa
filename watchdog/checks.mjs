@@ -30,6 +30,13 @@
 //                        it would hold lanes but none is enabled, or when it is
 //                        closed but an enabled lane pins another sandbox commit
 //                        than the one the nightly tested.
+//   state-snapshot       the hourly state snapshots (snapshot/health.mjs): amber
+//                        when no snapshot run has confirmed the live state is
+//                        captured for 3 hours (or there is no snapshot yet, or
+//                        the manifest cannot be read), red after 6. Off when the
+//                        state-snapshot lane is off.
+
+import { snapshotCheck } from '../snapshot/health.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -53,6 +60,7 @@ export const LOOP_WORKFLOWS = Object.freeze([
   { file: 'history-registry.yml', lane: 'history-registry' },
   { file: 'history-packages.yml', lane: 'history-packages' },
   { file: 'history-popularity.yml', lane: 'history-popularity' },
+  { file: 'state-snapshot.yml', lane: 'state-snapshot' },
 ]);
 
 const RANK = { off: 0, green: 1, amber: 2, red: 3 };
@@ -83,11 +91,12 @@ const baseName = (path) => String(path).split('/').pop();
 /**
  * @param {{ now: number, slots: number, lanes?: Record<string, boolean>,
  *   runs?: Record<string, object[]>, artifacts?: object[], state: object|null,
- *   workflows?: object[], expected?: string[] }} input
+ *   workflows?: object[], expected?: string[], breaker?: object,
+ *   snapshot?: { manifest?: object|null, error?: string|null } }} input
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker }) {
+export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -191,6 +200,9 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
 
   // the sandbox breaker
   if (breaker) checks.push(breakerCheck(breaker));
+
+  // the hourly state snapshots
+  if (snapshot) checks.push(snapshotCheck({ now, manifest: snapshot.manifest ?? null, error: snapshot.error ?? null, laneOn: laneOn(lanes, 'state-snapshot') }));
 
   return { checks, actions };
 }
