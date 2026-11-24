@@ -17,10 +17,12 @@
 //     the item. A row without `items` describes one item with run_key, fence,
 //     current_fence and outcome at the top level (index 0).
 //
-//   recordResult({run_key, attempt_id, fence, outcome, accepted, reason})
+//   recordResult({run_key, attempt_id, fence, outcome, accepted, reason,
+//                 resultOutcome?, fault?, coverage?})
 //     -> {accepted, reason}. One call per item. The store does its own fence
 //     check and may refuse (accepted: false, reason: 'stale_fence'); ingest
-//     follows its answer.
+//     follows its answer. An accepted item also carries its fault side and
+//     coverage state (worker-kit/contract.mjs resultFault, R-COV-02).
 //
 // state/db.mjs implements both as StateDb methods. The pump wraps its own open
 // StateDb with dbLedger(); the CLI's --state FILE opens one with openLedger().
@@ -138,11 +140,27 @@ function normalizeRecord(answer, requested) {
   return { accepted: answer.accepted, reason: answer.reason ?? null };
 }
 
-function wrap({ getAttempt, recordResult, close, now }) {
+/**
+ * When the result was in, for the store's lease check (R-CHAOS-02): the run's
+ * completion, or the item's artifact upload if that is later (R-CHAOS-10).
+ * null when the run's completion is not known (the store then uses now).
+ */
+export function resultInAt(completedAt, artifactCreatedAt) {
+  const done = completedAt === null || completedAt === undefined ? NaN : (typeof completedAt === 'number' ? completedAt : Date.parse(completedAt));
+  if (!Number.isFinite(done)) return null;
+  const art = artifactCreatedAt ? Date.parse(artifactCreatedAt) : NaN;
+  return Number.isFinite(art) ? Math.max(done, art) : done;
+}
+
+function wrap({ getAttempt, recordResult, close, now, completedAt }) {
   return {
     kind: 'state',
     getAttempt: (id) => normalizeAttempt(getAttempt(id)),
-    recordResult: (r) => normalizeRecord(recordResult(now ? { ...r, now: now() } : r), r),
+    recordResult: (r) => {
+      const { artifactCreatedAt, ...rest } = r;
+      const inAt = resultInAt(completedAt, artifactCreatedAt);
+      return normalizeRecord(recordResult({ ...rest, ...(now ? { now: now() } : {}), ...(inAt !== null ? { completedAt: inAt } : {}) }), r);
+    },
     close,
   };
 }
@@ -151,13 +169,15 @@ function wrap({ getAttempt, recordResult, close, now }) {
  * The ledger over a StateDb that is already open (the pump's). close() leaves
  * it open; its owner closes it.
  * @param {{getAttempt: Function, recordResult: Function}} db  a StateDb
- * @param {{now?: () => number|Date}} [opts]  the time recordResult stores
+ * @param {{now?: () => number|Date, completedAt?: number|string|null}} [opts]
+ *   now: the time recordResult stores; completedAt: when GitHub says the
+ *   worker run completed, which the store checks the lease against (R-CHAOS-02)
  */
-export function dbLedger(db, { now } = {}) {
+export function dbLedger(db, { now, completedAt = null } = {}) {
   if (typeof db?.getAttempt !== 'function' || typeof db?.recordResult !== 'function') {
     throw new LedgerError('ledger: the state store has no getAttempt()/recordResult()');
   }
-  return wrap({ getAttempt: (id) => db.getAttempt(id), recordResult: (r) => db.recordResult(r), close: () => {}, now });
+  return wrap({ getAttempt: (id) => db.getAttempt(id), recordResult: (r) => db.recordResult(r), close: () => {}, now, completedAt });
 }
 
 function stateLedger(mod, path) {
@@ -221,6 +241,8 @@ function jsonLedger(path, now) {
       }
       doc.results.push({
         run_key: r.run_key, attempt_id: r.attempt_id, fence: r.fence, outcome, accepted, reason,
+        ...(accepted && r.resultOutcome ? { result_outcome: r.resultOutcome } : {}),
+        ...(accepted && r.coverage ? { fault: r.fault ?? null, coverage: r.coverage } : {}),
         recorded_at: now().toISOString(),
       });
       save();

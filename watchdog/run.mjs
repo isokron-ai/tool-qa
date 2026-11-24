@@ -13,6 +13,7 @@
 //   4. evaluates the checks (watchdog/checks.mjs);
 //      It also reads the public nightly sandbox conformance status (no token;
 //      pump/breaker.mjs), the same file the pump reads for its breaker;
+//      and the state snapshot manifest (snapshot/health.mjs) with the job token;
 //   5. dispatches pump.yml if no pump run started for 20 minutes, and
 //      re-enables loop workflows GitHub disabled for inactivity;
 //   6. rewrites the "Loop health" issue (watchdog/health.mjs).
@@ -29,6 +30,9 @@
 //   AGE_IDENTITY        decrypts the state asset (age ciphertext, R-ING-15);
 //                       removed from the process environment once read
 //   AGE_BIN, AGE_KEYGEN_BIN   optional paths of age and age-keygen
+//   ARCHIVE_LAST_OK     the Mac archive pull's heartbeat, `${{ vars.ARCHIVE_LAST_OK }}`
+//                       (watchdog/archive.mjs)
+//   LANE_OFFSITE_ENABLED  the off-site backup's lane switch (watchdog/offsite.mjs)
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,6 +49,10 @@ import { judgeConformance, pinMismatches, readConformance as readConformanceStat
 import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
+import { archiveCheck } from './archive.mjs';
+import { offsiteCheck } from './offsite.mjs';
+import { createReleaseClient } from '../snapshot/github.mjs';
+import { readSnapshotManifest } from '../snapshot/health.mjs';
 
 const EXPECTED_FILE = new URL('./expected-workflows.json', import.meta.url);
 
@@ -75,6 +83,10 @@ export function readState(file) {
         'pump.successor': db.getKv('pump.successor') ?? null,
         'pump.conformance': db.getKv('pump.conformance') ?? null,
         'pump.subjects': db.getKv('pump.subjects') ?? null,
+        'pump.last_tick': db.getKv('pump.last_tick') ?? null,
+        'pump.api_budget': db.getKv('pump.api_budget') ?? null,
+        'pump.last_run': db.getKv('pump.last_run') ?? null,
+        'state.size': db.getKv('state.size') ?? null,
       },
     };
   } finally {
@@ -100,6 +112,7 @@ export async function runWatchdog({
   verifyConformanceRun,
   workerWorkflows,
   loadWorkerConfig = () => loadConfig().workflows,
+  readSnapshot,
 } = {}) {
   const repo = env.GITHUB_REPOSITORY;
   if (!repo || !repo.includes('/')) throw new Error('GITHUB_REPOSITORY is required (owner/name)');
@@ -137,7 +150,10 @@ export async function runWatchdog({
     mkdirSync(dir, { recursive: true });
     const file = join(dir, 'state.sqlite');
     const pulled = await pull({ repo, token: env.GITHUB_TOKEN || undefined, file, fetch, apiUrl, log: say, sleep, ...stateKeys });
-    if (pulled?.status !== 'absent') state = readState(file);
+    if (pulled?.status !== 'absent') {
+      state = readState(file);
+      state.asset = { bytes: Number.isSafeInteger(pulled?.bytes) ? pulled.bytes : null, compressed: pulled?.compressed ?? null };
+    }
   } catch (err) {
     // Still report everything else; the state checks are skipped this time.
     stateError = scrub(err?.message ?? String(err), secrets);
@@ -178,13 +194,26 @@ export async function runWatchdog({
     mismatch: verdict.tripped ? [] : pinMismatches(wfs, verdict.sandbox_sha),
   };
 
+  // The state snapshots: the manifest on the public "state-snapshots" release,
+  // read with the job token (contents: read).
+  let snapshot;
+  try {
+    snapshot = await (readSnapshot ?? (() => readSnapshotManifest(createReleaseClient({ repo, token: env.GITHUB_TOKEN || undefined, fetch, apiUrl, sleep }))))();
+  } catch (err) {
+    snapshot = { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) };
+  }
+  if (snapshot?.error) snapshot = { ...snapshot, error: scrub(String(snapshot.error), secrets).slice(0, 200) };
+
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected, breaker });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected, breaker, snapshot });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
     c.summary = `could not read the state asset: ${stateError.slice(0, 200)}`;
   }
+  // The Mac archive pull's heartbeat, a repository variable passed in by the workflow.
+  checks.push(archiveCheck({ now: now(), raw: env.ARCHIVE_LAST_OK }));
+  checks.push(await offsiteCheck({ client, repo, now: now(), env, fetch, sleep })); // the off-site backup's heartbeat artifact (watchdog/offsite.mjs)
 
   if (actions.dispatchPump) {
     const ref = env.GITHUB_REF_NAME || 'main';

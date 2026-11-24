@@ -72,11 +72,14 @@
               "start_requires_credentials", "no_local_backend", "heavy_backend",
               "timeout_start", "cluster_member", "quarantined", "lane_disabled",
               "policy_excluded", "trace_unavailable", "bridge_required",
-              "rate_limited", "upstream_unavailable"
+              "rate_limited", "upstream_unavailable",
+              "unsupported_language", "unsupported_layout", "reader_limit", "no_tools_found",
+              "too_large", "tool_error"
             ]
           },
           "evidence": { "$ref": "#/$defs/bundle_path" },
-          "retryable": { "type": "boolean" }
+          "retryable": { "type": "boolean" },
+          "fault": { "enum": ["tool", "subject", "infra", "policy"] }
         }
       }
     },

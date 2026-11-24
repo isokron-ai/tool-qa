@@ -108,8 +108,13 @@ One tick:
 5. Push the state if the tick changed anything.
 
 The dispatch is written before it is sent, so a pump that dies mid-send leaves
-a pending dispatch that simply expires. A failed send closes the dispatch and
-frees its leases and slot at once. Tokens for worker repositories are minted
+a pending dispatch that simply expires. A send GitHub refused (a 4xx) closes
+the dispatch and frees its leases and slot at once; so does any failure before
+the dispatch request goes out (re-reading the ref, minting the token;
+R-CHAOS-08). A dispatch request, or the poll for its run right after, that
+failed with a server or network error may have started a run anyway, so that
+dispatch stays pending like a send the pump died after: ingest finds the run
+by name, or the lease expires (R-CHAOS-05). Tokens for worker repositories are minted
 per repository from the loop's GitHub App with `actions: write` only to
 dispatch, and `actions: read` only for ingest
 ([`pump/app-token.mjs`](../pump/app-token.mjs)). The state asset itself is
@@ -185,12 +190,14 @@ It writes the result to one pinned issue, "Loop health"
 ([`watchdog/health.mjs`](../watchdog/health.mjs)), rewriting the body in place
 and commenting only when the overall status turns red or recovers.
 
-## Archive of history artifacts
+## Archive of history artifacts and ingest outputs
 
-Workflow artifacts expire after 30 days. [`scripts/archive-pull.mjs`](../scripts/archive-pull.mjs)
-copies the history artifacts to a folder on a machine we keep, checks every
-file against its manifest's sha256, and never overwrites or deletes anything
-there. See [OPERATIONS.md](OPERATIONS.md).
+Workflow artifacts expire (history after 30 days, the sealed ingest outputs
+after 90). [`scripts/archive-pull.mjs`](../scripts/archive-pull.mjs)
+copies both to a folder on a machine we keep, checks each download against
+GitHub's digest and every history file against its manifest's sha256, keeps
+ingest outputs age-encrypted with a manifest line per artifact, and never
+overwrites or deletes anything there. See [OPERATIONS.md](OPERATIONS.md).
 
 ## State store
 
@@ -201,6 +208,17 @@ paused). Between
 runs it is kept as the Release asset `state.sqlite` on the release tagged
 `state`. Code: [`state/schema.sql`](../state/schema.sql),
 [`state/db.mjs`](../state/db.mjs), [`scripts/state-asset.mjs`](../scripts/state-asset.mjs).
+Every hour [`state-snapshot.yml`](../.github/workflows/state-snapshot.yml)
+copies that asset, still encrypted, to the release `state-snapshots` (the 24
+newest copies, one a day for 14 days and one a week for 8 weeks);
+`snapshot/restore.mjs` checks one and puts it back. See
+[OPERATIONS.md](OPERATIONS.md), "State snapshots". The asset is the database
+gzipped, then encrypted. At the end of each run the pump moves closed history
+(dispatches, items, attempts, leases, slots and old run_key generations no
+decision reads any more) out of the state into sealed archives it uploads as
+artifacts, deleting rows only once their archive reads back
+([`state/prune.mjs`](../state/prune.mjs), [`pump/prune.mjs`](../pump/prune.mjs));
+see OPERATIONS.md, "State pruning and size".
 
 It uses Node's built-in `node:sqlite` module (Node 22.13 or newer), so there is
 no dependency to install. Ubuntu runners get that Node version through
@@ -233,6 +251,19 @@ and [`scripts/check-workflows.mjs`](../scripts/check-workflows.mjs): top-level
 actions pinned to full commit SHAs, no `pull_request_target`, no event data
 interpolated into `run:` (that covers `inputs`, `github.head_ref` and step or job
 outputs too), no `secrets: inherit` or `write-all`, and `concurrency` on every scheduled workflow.
+
+## Drift signals (longitudinal)
+
+`longitudinal/derive.mjs` compares each subject's successive accepted results,
+read from the archive (still encrypted there; decrypted in memory on the
+operator's machine), and derives three signals: a force-pushed version tag
+(`git_tag_moves`, from meta-github's `git_tag_targets`), an image tag that
+resolves to a new digest (`oci_tag_moves`, from meta-registry's
+`oci_tag_digests`), and a tool list that changes at an unchanged release
+(`catalog_drift_same_version`, from live-probe and scan-static). It is a
+separate step, not part of ingest: ingest keeps no observation history in the
+state store, and the archive is the only complete history. See
+[`longitudinal/README.md`](../longitudinal/README.md).
 
 ## Not done yet
 

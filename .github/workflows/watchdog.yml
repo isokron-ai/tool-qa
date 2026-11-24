@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 10
     environment: loop
     permissions:
-      contents: read # checkout and a read-only copy of the state asset
+      contents: read # checkout, a read-only copy of the state asset and the snapshot manifest
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,10 +57,15 @@ jobs:
           LANE_HISTORY_REGISTRY_ENABLED: ${{ vars.LANE_HISTORY_REGISTRY_ENABLED }}
           LANE_HISTORY_PACKAGES_ENABLED: ${{ vars.LANE_HISTORY_PACKAGES_ENABLED }}
           LANE_HISTORY_POPULARITY_ENABLED: ${{ vars.LANE_HISTORY_POPULARITY_ENABLED }}
+          LANE_STATE_SNAPSHOT_ENABLED: ${{ vars.LANE_STATE_SNAPSHOT_ENABLED }}
+          LANE_OFFSITE_ENABLED: ${{ vars.LANE_OFFSITE_ENABLED }}
           APP_ID: ${{ vars.APP_ID }}
           APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
           AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
           AGE_BIN: ${{ runner.temp }}/age/age
           AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
+          # The Mac archive pull's heartbeat (watchdog/archive.mjs). Read here, not
+          # through the API: the job token cannot read repository variables.
+          ARCHIVE_LAST_OK: ${{ vars.ARCHIVE_LAST_OK }}
         run: node watchdog/run.mjs

@@ -476,7 +476,7 @@ test('R-LED-02: with only a fork\'s pull request on ledger/refresh, the workflow
   assert.doesNotMatch(changed.out, /Updated pull request #7/);
 });
 
-test('R-LED-08: the refresh commit is made through the API so GitHub signs it, never with git commit and a push', () => {
+test('R-LED-09: the refresh commit is made through the API so GitHub signs it, never with git commit and a push', () => {
   assert.doesNotMatch(PUBLISH_STEP.run, /git\b[^\n]*\b(commit|push)\b/, 'no git commit or push in the step');
   assert.doesNotMatch(PUBLISH_STEP.run, /credential\.helper/);
 
@@ -533,7 +533,7 @@ test('R-LED-08: the refresh commit is made through the API so GitHub signs it, n
   assert.match(stale.calls, /git\/refs\/heads\/ledger\/refresh -f sha=/);
 });
 
-test('R-LED-09: after a new refresh commit the workflow dispatches test.yml and lint.yml on ledger/refresh, and their results show on the pull request as commit statuses', () => {
+test('R-LED-10: after a new refresh commit the workflow dispatches test.yml and lint.yml on ledger/refresh, and their results show on the pull request as commit statuses', () => {
   // The dispatched workflows: they can be dispatched, still run on pull requests, and a dispatched run reports its
   // result as a commit status (a dispatched run's check runs do not show on a pull request).
   for (const [f, need, ctx] of [['test.yml', 'node', 'dispatched/test'], ['lint.yml', 'workflows', 'dispatched/lint']]) {

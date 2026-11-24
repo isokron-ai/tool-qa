@@ -25,7 +25,7 @@ jobs:
 
   # A dispatched run's check runs do not show on a pull request (checked on
   # pull request 22), so a dispatched run reports its result as a commit
-  # status, which does (R-LED-09). The ledger workflow sets it to pending
+  # status, which does (R-LED-10). The ledger workflow sets it to pending
   # before it dispatches. This job checks out nothing and runs no repo code.
   report:
     name: report the dispatched result

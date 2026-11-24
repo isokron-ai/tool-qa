@@ -32,6 +32,7 @@ test('a clean bundle is accepted and recorded; outputs hold the bundle and a rep
   assert.equal(r.accepted, true);
   assert.deepEqual(ledger.records, [{
     run_key: 'a'.repeat(64), attempt_id: 'att-1', fence: 7, outcome: 'accepted', accepted: true, reason: null,
+    fault: null, coverage: 'assessed',
   }]);
   const paths = [...r.outputs.keys()].sort();
   assert.deepEqual(paths, [
@@ -714,4 +715,60 @@ test('R-SUB-10: skips_only needs nothing measured: null observations and a skip\
   const valued = base();
   valued['observations/check.ndjson'] = `${JSON.stringify({ field: 'tool_count', value: 2 })}\n`;
   assert.equal((await run({ bundle: makeBundle({ meta: retryMeta([skip]), files: valued }), ledger: ledger() })).ledger.records[0].resultOutcome, undefined);
+});
+
+// ---- R-COV-02: the fault side of skips is recorded ----
+
+test('R-COV-02: a tool-fault skip is accepted and recorded as unassessed_tool, never as the subject\'s or excluded', async () => {
+  const skip = { stage: 'static', reason: 'unsupported_language', fault: 'tool', evidence: 'results/report.json' };
+  const { r, ledger } = await run({ bundle: makeBundle({ meta: { skips: [skip] } }) });
+  assert.equal(r.outcome, 'accepted');
+  assert.equal(ledger.records[0].fault, 'tool');
+  assert.equal(ledger.records[0].coverage, 'unassessed_tool');
+  const report = json(r.outputs.get('accepted/att-1/0/ingest.json'));
+  assert.equal(report.bundle.fault, 'tool');
+  assert.equal(report.bundle.coverage, 'unassessed_tool');
+  assert.deepEqual(report.bundle.skip_faults, { tool: 1 });
+  assert.equal(report.bundle.declared_faults, 1);
+  // Beside a policy skip and a subject skip, the result is still ours.
+  const mixed = await run({ bundle: makeBundle({ meta: { skips: [
+    { stage: 'meta', reason: 'policy_excluded' }, { stage: 'fetch', reason: 'remote_only' }, { stage: 'static', reason: 'tool_error' },
+  ] } }) });
+  assert.equal(mixed.ledger.records[0].fault, 'tool');
+  assert.equal(mixed.ledger.records[0].coverage, 'unassessed_tool');
+});
+
+test('R-COV-02: an older worker kit\'s bundle (no fault) is accepted; an ambiguous reason is recorded as unknown, a clear one by the fixed map', async () => {
+  // scan-static before R-COV-01: every permanent skip, its own reader limits included, as no_runnable_artifact.
+  const legacy = await run({ bundle: makeBundle({ meta: { skips: [{ stage: 'static', reason: 'no_runnable_artifact', evidence: 'results/report.json', retryable: false }] } }) });
+  assert.equal(legacy.r.outcome, 'accepted');
+  assert.equal(legacy.ledger.records[0].fault, 'unknown');
+  assert.equal(legacy.ledger.records[0].coverage, 'unassessed_unknown');
+  assert.equal(json(legacy.r.outputs.get('accepted/att-1/0/ingest.json')).bundle.declared_faults, 0);
+  for (const [reason, fault, coverage] of [
+    ['remote_only', 'subject', 'subject'], ['policy_excluded', 'policy', 'excluded'], ['bridge_required', 'tool', 'unassessed_tool'],
+  ]) {
+    const one = await run({ bundle: makeBundle({ meta: { skips: [{ stage: 's', reason }] } }) });
+    assert.deepEqual([one.ledger.records[0].fault, one.ledger.records[0].coverage], [fault, coverage], reason);
+  }
+  // No skip: assessed, no fault.
+  const clean = await run();
+  assert.deepEqual([clean.ledger.records[0].fault, clean.ledger.records[0].coverage], [null, 'assessed']);
+});
+
+test('R-COV-02: a skip that puts our own limit down to the subject is rejected as manifest_invalid', async () => {
+  const bundle = makeBundle({ mutateManifest: (m) => { m.skips = [{ stage: 'static', reason: 'unsupported_language', fault: 'subject' }]; } });
+  const { r, ledger } = await run({ bundle });
+  assert.equal(r.outcome, 'rejected');
+  assert.equal(r.reason, 'manifest_invalid');
+  assert.equal(ledger.records[0].fault, undefined);
+  assert.match(JSON.stringify(json(r.outputs.get('rejected/att-1/0/ingest.json')).problems), /skips\[0\]\.fault/);
+});
+
+test('R-COV-02: a rejected item carries no fault or coverage to the ledger (only accepted results are stored)', async () => {
+  const bundle = makeBundle({ meta: { skips: [{ stage: 'static', reason: 'reader_limit', retryable: true }] } });
+  const { r, ledger } = await run({ bundle });
+  assert.equal(r.reason, 'retry_later');
+  assert.equal(ledger.records[0].fault, undefined);
+  assert.equal(ledger.records[0].coverage, undefined);
 });

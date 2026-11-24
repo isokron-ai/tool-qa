@@ -57,7 +57,114 @@ export const SKIP_REASONS = Object.freeze([
   // registry), or an upstream that timed out or answered 5xx. Usually marked
   // retryable (below).
   'rate_limited', 'upstream_unavailable',
+  // Our own limits (R-COV-01): the stage did not run, or ran and could not
+  // finish, because of our tool, not the subject. Their fault is always
+  // "tool" (no_tools_found may also say "subject"; see SKIP_FAULTS).
+  //   unsupported_language  our reader does not read the subject's language
+  //   unsupported_layout    a layout we do not grade yet (several servers in
+  //                         one repository, a monorepo)
+  //   reader_limit          the reader stopped short (file limits, tool names
+  //                         without schemas, a registration idiom it does
+  //                         not follow)
+  //   no_tools_found        the reader found no tool registration; we cannot
+  //                         tell "not a server" from "our reader missed it",
+  //                         so it is ours unless the worker can show otherwise
+  //   too_large             over one of our own size caps
+  //   tool_error            our reader, grader or bundle builder failed
+  'unsupported_language', 'unsupported_layout', 'reader_limit', 'no_tools_found',
+  'too_large', 'tool_error',
 ]);
+
+/**
+ * Who a skip is down to (R-COV-01). A skip may say it with `fault`:
+ *   tool     our tools: a reader, grader, harness or size cap of ours
+ *   subject  the server itself: gone, empty, needs credentials, build fails
+ *   infra    passing conditions outside both: a rate limit, an outage
+ *   policy   we chose not to run it (lane disabled, quarantined, excluded)
+ * `fault` is optional, so bundles built by an older worker kit stay valid.
+ * Ingest records "unknown" for a skip that does not say and whose reason has
+ * no single fault (SKIP_FAULTS).
+ */
+export const FAULT_SIDES = Object.freeze(['tool', 'subject', 'infra', 'policy']);
+/** What ingest records for a skip with no `fault` whose reason has no single fault. */
+export const UNKNOWN_FAULT = 'unknown';
+
+/**
+ * Per skip reason: the fault ingest records when a skip does not say
+ * (`default`; "unknown" where the reason is ambiguous, which is how bundles
+ * from before R-COV-01 are read), and the faults a skip may declare
+ * (`allowed`). A declared fault outside `allowed` makes the manifest invalid,
+ * so none of our own limits can be put down to the server.
+ */
+export const SKIP_FAULTS = Object.freeze(Object.fromEntries(Object.entries({
+  remote_only: ['subject', ['subject', 'policy']],
+  // Ambiguous: scan-static recorded its own reader limits under it before
+  // R-COV-01, so an undeclared one is "unknown", never the subject's.
+  no_runnable_artifact: [UNKNOWN_FAULT, ['subject', 'tool', 'policy']],
+  unsupported_transport: ['tool', ['tool', 'subject']],
+  build_failed_upstream: ['subject', ['subject', 'tool', 'infra']],
+  install_failed_registry: [UNKNOWN_FAULT, ['subject', 'tool', 'infra']],
+  start_requires_credentials: ['subject', ['subject']],
+  no_local_backend: ['subject', ['subject', 'tool']],
+  heavy_backend: ['policy', ['policy']],
+  timeout_start: [UNKNOWN_FAULT, ['subject', 'tool', 'infra']],
+  cluster_member: ['policy', ['policy']],
+  quarantined: ['policy', ['policy']],
+  lane_disabled: ['policy', ['policy']],
+  policy_excluded: ['policy', ['policy']],
+  trace_unavailable: ['tool', ['tool', 'infra']],
+  bridge_required: ['tool', ['tool']],
+  rate_limited: ['infra', ['infra']],
+  upstream_unavailable: ['infra', ['infra', 'subject', 'tool']],
+  unsupported_language: ['tool', ['tool']],
+  unsupported_layout: ['tool', ['tool']],
+  reader_limit: ['tool', ['tool']],
+  no_tools_found: ['tool', ['tool', 'subject']],
+  too_large: ['tool', ['tool']],
+  tool_error: ['tool', ['tool']],
+}).map(([reason, [def, allowed]]) => [reason, Object.freeze({ default: def, allowed: Object.freeze(allowed) })])));
+
+/** The fault ingest records for one skip: the declared one, else the reason's default. */
+export function skipFault(skip) {
+  if (FAULT_SIDES.includes(skip?.fault)) return skip.fault;
+  return Object.hasOwn(SKIP_FAULTS, skip?.reason) ? SKIP_FAULTS[skip.reason].default : UNKNOWN_FAULT;
+}
+
+/**
+ * When skips have different faults, the result's fault is the first in this
+ * order: our own limits are never hidden behind a subject or policy skip.
+ */
+export const FAULT_PRECEDENCE = Object.freeze(['tool', UNKNOWN_FAULT, 'infra', 'subject', 'policy']);
+
+/**
+ * What a result means for coverage (DESIGN §4.7), from its fault:
+ *   assessed            no skip
+ *   unassessed_tool     our limit: never excluded, never the server's failure
+ *   unassessed_unknown  the fault was not stated (bundles from before R-COV-01); counted with ours
+ *   unassessed_infra    a passing condition (rate limit, outage) whose retries ran out
+ *   subject             the server's side (gone, empty, needs credentials, build fails)
+ *   excluded            our policy (lane disabled, quarantined, policy_excluded)
+ */
+export const COVERAGE_STATES = Object.freeze(['assessed', 'unassessed_tool', 'unassessed_unknown', 'unassessed_infra', 'subject', 'excluded']);
+const COVERAGE_BY_FAULT = Object.freeze({
+  tool: 'unassessed_tool', [UNKNOWN_FAULT]: 'unassessed_unknown', infra: 'unassessed_infra', subject: 'subject', policy: 'excluded',
+});
+
+/**
+ * The fault and coverage state of a result with these skips: fault null and
+ * coverage "assessed" when there is none; otherwise the first fault in
+ * FAULT_PRECEDENCE among them, and `faults`, the count of skips per fault.
+ * @returns {{fault: string|null, coverage: string, faults: Record<string, number>}}
+ */
+export function resultFault(skips = []) {
+  const faults = {};
+  for (const s of skips) {
+    const f = skipFault(s);
+    faults[f] = (faults[f] ?? 0) + 1;
+  }
+  const fault = FAULT_PRECEDENCE.find((f) => faults[f] > 0) ?? null;
+  return { fault, coverage: fault === null ? 'assessed' : COVERAGE_BY_FAULT[fault], faults };
+}
 
 /**
  * A skip may carry `retryable: true`: the stage did not run for a passing
@@ -255,6 +362,10 @@ export function validateManifest(manifest) {
   manifest.skips.forEach((s, i) => {
     if (s.evidence !== undefined && !listed.has(s.evidence)) {
       errors.push({ path: `$.skips[${i}].evidence`, message: `${s.evidence} is not listed in files` });
+    }
+    // A declared fault must be one the reason allows (R-COV-01).
+    if (s.fault !== undefined && !SKIP_FAULTS[s.reason].allowed.includes(s.fault)) {
+      errors.push({ path: `$.skips[${i}].fault`, message: `${s.fault} is not a fault ${s.reason} may have (${SKIP_FAULTS[s.reason].allowed.join(', ')})` });
     }
   });
   return { ok: errors.length === 0, errors };

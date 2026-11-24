@@ -1,0 +1,154 @@
+name: offsite-backup
+
+# Off-site encrypted backup into a Cloudflare R2 bucket, outside GitHub and
+# outside the operator's Mac: the state snapshots and their manifest, the
+# ingest artifacts (age ciphertext) and the history artifacts, byte for byte,
+# never decrypted (offsite/backup.mjs). Every 6 hours; the operator's stand-in
+# scheduler also dispatches it while the GitHub schedule is unreliable.
+# Until the R2 settings exist it exits 0 with a notice and the watchdog shows
+# amber. The prune job is off unless OFFSITE_PRUNE_ENABLED is "true", or a
+# dispatch asks for a dry run. See docs/OPERATIONS.md, "Off-site backup".
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      prune:
+        description: 'Prune: off, dry-run (list what would go), or apply (needs OFFSITE_PRUNE_ENABLED=true)'
+        type: choice
+        options: ['off', 'dry-run', 'apply']
+        default: 'off'
+
+permissions: {}
+
+concurrency:
+  group: offsite-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: backup
+    # Not ubuntu-slim: its jobs stop at 15 minutes, and a first backfill paces
+    # itself under the API budget. The run itself stops taking items after 30
+    # minutes, so it always writes its manifest part and cursor in time.
+    # Only from main: a dispatch on another branch never gets the R2 credentials.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read # checkout and the public state-snapshots release
+      actions: read # list and download the ingest and history artifacts
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Kill switch
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_OFFSITE_ENABLED: ${{ vars.LANE_OFFSITE_ENABLED }}
+        run: node scripts/guard.mjs --job offsite --no-slots
+      - name: Set up Node
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      # The AWS SDK S3 client, exact version, every package checked against
+      # offsite/package-lock.json; no install scripts run.
+      - name: Install the S3 client (lockfile)
+        if: steps.guard.outputs.proceed == 'true'
+        run: npm ci --prefix offsite --ignore-scripts --no-audit --no-fund
+      # The only step that holds the R2 credentials.
+      - name: Back up
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # A secret, never a variable: GitHub prints a step's env in its log,
+          # the repository is public, and only secrets are masked.
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          OFFSITE_MAX_BYTES: ${{ vars.OFFSITE_MAX_BYTES }}
+          OFFSITE_MAX_RUN_BYTES: ${{ vars.OFFSITE_MAX_RUN_BYTES }}
+          OFFSITE_MAX_CLASS_A: ${{ vars.OFFSITE_MAX_CLASS_A }}
+          OFFSITE_MAX_CLASS_B: ${{ vars.OFFSITE_MAX_CLASS_B }}
+          OFFSITE_SHA256_HEADER: ${{ vars.OFFSITE_SHA256_HEADER }}
+          OFFSITE_HEARTBEAT_FILE: ${{ runner.temp }}/offsite-heartbeat/offsite-heartbeat-${{ github.run_id }}-${{ github.run_attempt }}.json
+        run: node offsite/backup.mjs
+      # A step that died before writing its heartbeat still leaves one.
+      - name: Heartbeat (fallback)
+        if: always() && steps.guard.outputs.proceed == 'true'
+        env:
+          HB: ${{ runner.temp }}/offsite-heartbeat/offsite-heartbeat-${{ github.run_id }}-${{ github.run_attempt }}.json
+        run: |
+          if [ ! -s "$HB" ]; then
+            mkdir -p "$(dirname "$HB")"
+            printf '{"version":1,"at":"%s","status":"error","reason":"the backup step ended without a heartbeat"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$HB"
+          fi
+      # The watchdog reads this (watchdog/offsite.mjs): the job token cannot
+      # write a repository variable.
+      - name: Upload heartbeat
+        if: always() && steps.guard.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/offsite-heartbeat/offsite-heartbeat-${{ github.run_id }}-${{ github.run_attempt }}.json
+          archive: false
+          retention-days: 7
+          if-no-files-found: error
+
+  prune:
+    name: prune
+    needs: backup
+    # Opt-in: apply only with OFFSITE_PRUNE_ENABLED=true (on the schedule, or a
+    # dispatch with prune=apply); a dispatch with prune=dry-run only lists.
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' && (
+        (vars.OFFSITE_PRUNE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.prune == 'apply')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.prune == 'dry-run')
+      )
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    permissions:
+      contents: read # checkout
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Kill switch
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_OFFSITE_ENABLED: ${{ vars.LANE_OFFSITE_ENABLED }}
+        run: node scripts/guard.mjs --job offsite --no-slots
+      - name: Set up Node
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install the S3 client (lockfile)
+        if: steps.guard.outputs.proceed == 'true'
+        run: npm ci --prefix offsite --ignore-scripts --no-audit --no-fund
+      # The only step of this job that holds the R2 credentials.
+      - name: Prune
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          MODE: ${{ (vars.OFFSITE_PRUNE_ENABLED == 'true' && inputs.prune != 'dry-run') && 'apply' || 'dry-run' }}
+          # A secret, never a variable: GitHub prints a step's env in its log,
+          # the repository is public, and only secrets are masked.
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          OFFSITE_MAX_BYTES: ${{ vars.OFFSITE_MAX_BYTES }}
+          OFFSITE_PRUNE_AT_BYTES: ${{ vars.OFFSITE_PRUNE_AT_BYTES }}
+          OFFSITE_PRUNE_TO_BYTES: ${{ vars.OFFSITE_PRUNE_TO_BYTES }}
+          OFFSITE_PRUNE_KEEP_SNAPSHOTS: ${{ vars.OFFSITE_PRUNE_KEEP_SNAPSHOTS }}
+        run: node offsite/prune.mjs --mode "$MODE"

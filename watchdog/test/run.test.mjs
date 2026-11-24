@@ -53,7 +53,13 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'watchdog-'));
   const mints = [];
   const opts = {
-    env: { GITHUB_REPOSITORY: REPO, LOOP_SLOTS: '4', GITHUB_REF_NAME: 'main', GITHUB_TOKEN: 'ghs_synthetic_job_token' },
+    env: {
+      GITHUB_REPOSITORY: REPO, LOOP_SLOTS: '4', GITHUB_REF_NAME: 'main', GITHUB_TOKEN: 'ghs_synthetic_job_token',
+      // a fresh heartbeat from the Mac archive pull (watchdog/archive.mjs)
+      ARCHIVE_LAST_OK: JSON.stringify({ at: ago(60), pulled: 2, quarantined: 0, refused_foreign: 0 }),
+      // the off-site backup has its own tests (watchdog/test/offsite.test.mjs)
+      LANE_OFFSITE_ENABLED: 'false',
+    },
     now: c.now,
     sleep: c.sleep,
     fetch: api.fetch,
@@ -66,6 +72,7 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
       mints.push(args);
       return { token: 'ghs_synthetic_app_token', expiresAt: c.t + 3_600_000 };
     },
+    readSnapshot: async () => ({ manifest: { version: 1, current_at: ago(40), snapshots: [{ name: 'state-20260302T112000Z-0123abcd.sqlite.age', created: ago(40), sha256: 'a'.repeat(64), size: 1 }] } }),
     pull: async ({ file }) => {
       if (!seed) return { status: 'absent' };
       const db = openState(file);
@@ -282,3 +289,110 @@ test('R-WD-13: a workflows.json the pump cannot load is a red config check; the 
   assert.equal(w.issues.length, 1, 'the issue is still written');
   w.cleanup();
 });
+
+test('R-ARC-22: the watchdog shows the archive heartbeat from vars.ARCHIVE_LAST_OK: amber after 12 hours, red after 24 or when it is empty or unreadable', async () => {
+  const { archiveCheck } = await import('../archive.mjs');
+  const now = Date.parse('2026-03-02T12:00:00Z');
+  const hb = (hoursAgo, extra = {}) => JSON.stringify({ at: new Date(now - hoursAgo * 3_600_000).toISOString(), pulled: 3, quarantined: 1, refused_foreign: 0, ...extra });
+  const status = (raw) => archiveCheck({ now, raw }).status;
+  assert.equal(status(hb(1)), 'green');
+  assert.match(archiveCheck({ now, raw: hb(1) }).summary, /^last good archive pull 60 minutes ago \(pulled 3, quarantined 1, refused as not ours 0\)$/);
+  assert.equal(status(hb(12)), 'green');
+  assert.equal(status(hb(12.1)), 'amber');
+  assert.equal(status(hb(24)), 'amber');
+  assert.equal(status(hb(24.1)), 'red');
+  assert.match(archiveCheck({ now, raw: hb(30) }).summary, /no good archive pull for 30\.0 hours/);
+  for (const raw of [undefined, '', '   ']) assert.equal(status(raw), 'red', JSON.stringify(raw));
+  assert.match(archiveCheck({ now, raw: '' }).summary, /ARCHIVE_LAST_OK is empty/);
+  assert.match(archiveCheck({ now, raw: '2026-03-02T11:00:00Z' }).summary, /is not JSON/);
+  for (const raw of ['{}', '{"at":"yesterday"}', '{"at":12345}', 'null', '[1]']) assert.equal(status(raw), 'red', raw);
+  assert.match(archiveCheck({ now, raw: '{"at":"yesterday"}' }).summary, /no valid date/);
+  assert.equal(status(hb(-1)), 'amber', 'an hour in the future: the Mac clock');
+  assert.equal(status(hb(-0.1)), 'green', 'a few minutes of clock skew is fine');
+  assert.equal(status('off'), 'off');
+
+  // end to end: the item is on the health issue, and a stale heartbeat makes the issue red
+  const w = world();
+  w.opts.env.ARCHIVE_LAST_OK = JSON.stringify({ at: new Date(w.c.t - 30 * 3_600_000).toISOString(), pulled: 0 });
+  const out = await runWatchdog(w.opts);
+  const item = out.checks.find((c) => c.id === 'archive');
+  assert.equal(item.status, 'red');
+  assert.equal(out.overall, 'red');
+  assert.match(w.issues[0].body, /archive/);
+  // the run reads no repository variable through the API
+  assert.equal(w.api.calls.filter((c) => c.path.includes('/actions/variables')).length, 0);
+  w.cleanup();
+});
+
+test('R-ARC-22: watchdog.yml passes vars.ARCHIVE_LAST_OK to the watchdog step through env', async () => {
+  const { readFileSync } = await import('node:fs');
+  const yml = readFileSync(new URL('../../.github/workflows/watchdog.yml', import.meta.url), 'utf8');
+  const step = yml.slice(yml.indexOf('- name: Watchdog'));
+  assert.match(step, /\n\s+ARCHIVE_LAST_OK: \$\{\{ vars\.ARCHIVE_LAST_OK \}\}\n/);
+  assert.ok(step.indexOf('ARCHIVE_LAST_OK') < step.indexOf('run: node watchdog/run.mjs'));
+});
+test('R-SNAP-09: the watchdog shows the state snapshots on the health issue: amber after 3 hours, red after 6, off with the lane off', async () => {
+  for (const [hours, env, want] of [[1, {}, 'green'], [4, {}, 'amber'], [7, {}, 'red'], [7, { LANE_STATE_SNAPSHOT_ENABLED: 'false' }, 'off']]) {
+    const w = world({ seed: () => {} });
+    Object.assign(w.opts.env, env);
+    const at = new Date(w.c.t - hours * 60 * MIN).toISOString();
+    w.opts.readSnapshot = async () => ({ manifest: { version: 1, current_at: at, snapshots: [{ name: 'state-20260302T010000Z-0123abcd.sqlite.age', created: at, sha256: 'a'.repeat(64), size: 1 }] } });
+    const out = await runWatchdog(w.opts);
+    const item = parseBody(w.issues[0].body).checks.find((c) => c.id === 'state-snapshot');
+    assert.equal(item.status, want, `${hours} hours ${JSON.stringify(env)}`);
+    assert.equal(out.overall, want === 'off' ? 'green' : want);
+    w.cleanup();
+  }
+});
+
+test('R-SNAP-09: the watchdog reads the snapshot manifest from the release with the job token; an unreadable one is amber, not a failed run', async () => {
+  const w = world({ seed: () => {} });
+  delete w.opts.readSnapshot;
+  const manifest = { version: 1, current_at: new Date(w.c.t - 30 * MIN).toISOString(), snapshots: [{ name: 'state-20260302T113000Z-0123abcd.sqlite.age', created: '2026-03-02T11:30:00Z', sha256: `0123abcd${'a'.repeat(56)}`, size: 1 }] };
+  const seen = [];
+  const orig = w.opts.fetch;
+  w.opts.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (u.includes('/releases/')) {
+      seen.push({ url: u, auth: init.headers?.Authorization ?? null });
+      if (u.endsWith('/releases/tags/state-snapshots')) return new Response(JSON.stringify({ id: 7, tag_name: 'state-snapshots', assets: [] }), { status: 200 });
+      if (u.includes('/releases/7/assets')) return new Response(JSON.stringify([{ id: 8, name: 'manifest.json', state: 'uploaded' }]), { status: 200 });
+      if (u.endsWith('/releases/assets/8')) return new Response(JSON.stringify(manifest), { status: 200 });
+    }
+    return orig(url, init);
+  };
+  await runWatchdog(w.opts);
+  assert.equal(parseBody(w.issues[0].body).checks.find((c) => c.id === 'state-snapshot').status, 'green');
+  assert.ok(seen.length >= 3);
+  assert.ok(seen.every((r) => r.auth === 'Bearer ghs_synthetic_job_token'), 'the job token, not the App token');
+  w.cleanup();
+
+  const w2 = world({ seed: () => {} });
+  w2.opts.readSnapshot = async () => { throw new Error('HTTP 502 ghs_synthetic_job_token'); };
+  const out = await runWatchdog(w2.opts);
+  const item = parseBody(w2.issues[0].body).checks.find((c) => c.id === 'state-snapshot');
+  assert.equal(item.status, 'amber');
+  assert.doesNotMatch(item.summary, /ghs_synthetic/);
+  assert.equal(out.overall, 'amber');
+  w2.cleanup();
+});
+
+test('R-SNAP-17: a snapshot manifest with null entries, one that throws, or a time in the future is amber; the watchdog run still writes the issue', async () => {
+  const cases = [
+    ['null entries', async () => ({ manifest: { version: 1, current_at: '2026-03-02T11:50:00Z', snapshots: [null, null, null] } })],
+    ['a hostile object', async () => ({ manifest: { version: 1, get snapshots() { throw new Error('boom'); } } })],
+    ['the future', async () => ({ manifest: { version: 1, current_at: '2026-03-02T15:00:00Z', snapshots: [{ name: 'state-20260302T113000Z-0123abcd.sqlite.age', created: '2026-03-02T11:30:00Z', sha256: 'a'.repeat(64), size: 1 }] } })],
+    ['no manifest', async () => ({ manifest: null, missing: 'manifest' })],
+  ];
+  for (const [what, readSnapshot] of cases) {
+    const w = world({ seed: () => {} });
+    w.opts.readSnapshot = readSnapshot;
+    const out = await runWatchdog(w.opts);
+    const item = parseBody(w.issues[0].body).checks.find((c) => c.id === 'state-snapshot');
+    assert.equal(item.status, 'amber', what);
+    assert.equal(out.overall, 'amber', what);
+    if (what === 'no manifest') assert.match(item.summary, /has no manifest\.json/);
+    w.cleanup();
+  }
+});
+

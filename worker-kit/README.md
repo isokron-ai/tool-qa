@@ -71,7 +71,7 @@ action for it:
   "settings_manifest_digest": "<sha256 hex of the settings used>",
   "started_at": "2026-01-01T00:00:00Z",
   "finished_at": "2026-01-01T00:05:00Z",
-  "skips": [{ "stage": "start", "reason": "timeout_start", "evidence": "logs/start.log" }],
+  "skips": [{ "stage": "start", "reason": "timeout_start", "fault": "subject", "evidence": "logs/start.log" }],
   "controls": [
     { "kind": "forgery", "expected": "contained", "observed": "contained",
       "output": "controls/forgery.json", "marker": "<marker the forgery target prints>" }
@@ -85,6 +85,50 @@ action for it:
   a rate limit stopped it (GitHub, a package registry) and
   `upstream_unavailable` when an upstream timed out or answered 5xx; don't
   borrow another code, since the codes feed the coverage counts.
+- **Our own limits have their own codes** (R-COV-01): `unsupported_language`
+  (our reader does not read the language), `unsupported_layout` (several
+  servers in one repository, a monorepo), `reader_limit` (the reader stopped
+  short: file limits, names without schemas, an idiom it does not follow),
+  `no_tools_found` (no tool registration found; ours unless the worker can
+  show the subject is not a server), `too_large` (over one of our size caps)
+  and `tool_error` (our reader, grader or bundle builder failed). Never record
+  one of these under `no_runnable_artifact` or `policy_excluded`.
+- `skips[].fault` (optional) says who the skip is down to: `tool` (our tools),
+  `subject` (the server itself: gone, empty, needs credentials, its build
+  fails), `infra` (a rate limit, an outage) or `policy` (we chose not to run
+  it). Each reason allows only some faults (`SKIP_FAULTS` in `contract.mjs`):
+  our own limits only `tool`, so none can be put down to the server; a fault
+  the reason does not allow makes the manifest invalid. Without `fault`,
+  ingest records the reason's default from the same map, and `unknown` for a
+  reason that has no single fault (`no_runnable_artifact`, `timeout_start`,
+  `install_failed_registry`). Set it on every skip.
+
+  | Reason | Recorded without `fault` | May declare |
+  |---|---|---|
+  | `remote_only` | subject | subject, policy |
+  | `no_runnable_artifact` | unknown | subject, tool, policy |
+  | `unsupported_transport` | tool | tool, subject |
+  | `build_failed_upstream` | subject | subject, tool, infra |
+  | `install_failed_registry` | unknown | subject, tool, infra |
+  | `start_requires_credentials` | subject | subject |
+  | `no_local_backend` | subject | subject, tool |
+  | `heavy_backend`, `cluster_member`, `quarantined`, `lane_disabled`, `policy_excluded` | policy | policy |
+  | `timeout_start` | unknown | subject, tool, infra |
+  | `trace_unavailable` | tool | tool, infra |
+  | `bridge_required` | tool | tool |
+  | `rate_limited` | infra | infra |
+  | `upstream_unavailable` | infra | infra, subject, tool |
+  | `unsupported_language`, `unsupported_layout`, `reader_limit`, `too_large`, `tool_error` | tool | tool |
+  | `no_tools_found` | tool | tool, subject |
+
+  Ingest stores the result's fault (the first of tool, unknown, infra,
+  subject, policy among its skips, so our limits are never hidden behind
+  another skip) and its coverage state: `assessed` (no skip),
+  `unassessed_tool`, `unassessed_unknown`, `unassessed_infra`, `subject` or
+  `excluded` (policy only). A tool-fault skip is never `excluded` and never
+  counts as the server's failure. `fault` is optional so that workers pinned
+  to an older kit keep working; an older kit refuses a manifest that has it,
+  so set it only after moving the pin.
 - `skips[].retryable` (optional, `true` or `false`, default `false`) says the
   stage did not run for a passing reason and may succeed later. Mark it per
   skip; it usually goes with `rate_limited` or `upstream_unavailable`. When

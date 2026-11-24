@@ -17,6 +17,11 @@
 //   run:<workflow>       the newest finished scheduled or dispatched run of a loop
 //                        workflow failed (cancelled and skipped runs are passed over).
 //   pump-successor       the pump could not dispatch the next pump run.
+//   api-budget           amber while a rate-limit block the pump saved
+//                        (pump.api_budget) is in force, or its latest tick
+//                        (within 30 minutes) stopped dispatching or ingest
+//                        early on the GitHub API budget or a rate limit
+//                        (pump.last_tick); not shown otherwise.
 //   subjects             the pump could not load the seed subjects at its last
 //                        start (pump/subjects.mjs): red, with why. It keeps
 //                        dispatching the subjects it already has (R-SUB-11).
@@ -30,6 +35,21 @@
 //                        it would hold lanes but none is enabled, or when it is
 //                        closed but an enabled lane pins another sandbox commit
 //                        than the one the nightly tested.
+//   state-snapshot       the hourly state snapshots (snapshot/health.mjs): amber
+//                        when no snapshot run has confirmed the live state is
+//                        captured for 3 hours (or there is no snapshot yet, the
+//                        release or manifest is missing or unreadable, or its
+//                        time is in the future), red after 6. Off when the
+//                        state-snapshot lane is off.
+//   state-size           the state database's size, rows and last prune pass
+//                        as the pump recorded them (kv state.size), the asset
+//                        it was pulled from, and the snapshot release's total
+//                        (watchdog/size.mjs): amber over 256 MiB or 2 GB of
+//                        snapshots or a failed prune pass, red over 768 MiB or
+//                        6 GB of snapshots.
+
+import { snapshotCheck } from '../snapshot/health.mjs';
+import { sizeCheck } from './size.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -38,6 +58,7 @@ export const THRESHOLDS = Object.freeze({
   pumpAmberMs: 20 * MIN,
   pumpRedMs: 40 * MIN,
   stuckGraceMs: 15 * MIN,
+  budgetHeldMs: 30 * MIN,
   history: Object.freeze([
     { id: 'history-registry-delta', lane: 'history-registry', prefix: 'registry-delta-', label: 'registry-delta', greenMs: 45 * MIN, redMs: 90 * MIN },
     { id: 'history-registry-full', lane: 'history-registry', prefix: 'registry-full-', label: 'registry-full', greenMs: 26 * HOUR, redMs: 50 * HOUR },
@@ -53,6 +74,7 @@ export const LOOP_WORKFLOWS = Object.freeze([
   { file: 'history-registry.yml', lane: 'history-registry' },
   { file: 'history-packages.yml', lane: 'history-packages' },
   { file: 'history-popularity.yml', lane: 'history-popularity' },
+  { file: 'state-snapshot.yml', lane: 'state-snapshot' },
 ]);
 
 const RANK = { off: 0, green: 1, amber: 2, red: 3 };
@@ -83,11 +105,12 @@ const baseName = (path) => String(path).split('/').pop();
 /**
  * @param {{ now: number, slots: number, lanes?: Record<string, boolean>,
  *   runs?: Record<string, object[]>, artifacts?: object[], state: object|null,
- *   workflows?: object[], expected?: string[] }} input
+ *   workflows?: object[], expected?: string[], breaker?: object,
+ *   snapshot?: { manifest?: object|null, error?: string|null, missing?: string|null } }} input
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker }) {
+export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -153,6 +176,29 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
         ? { id: 'pump-successor', status: 'green', summary: 'the pump dispatched its successor', at: succ.at }
         : { id: 'pump-successor', status: 'red', summary: `the pump could not dispatch its successor: ${String(succ.error ?? 'unknown error').slice(0, 200)}`, at: succ.at });
     }
+    // The pump held by GitHub's rate limit or its own API budget (R-CHAOS-04):
+    // results wait and leases may run out, so it is not green. Shown only
+    // while it holds: a rate-limit block the pump saved (pump.api_budget) is
+    // still in force, or the pump's latest tick (within 30 minutes) stopped
+    // dispatching or ingest early for it.
+    const tick = state.kv?.['pump.last_tick'];
+    const tickAge = tick && typeof tick === 'object' ? age(now, tick.at) : Infinity;
+    const stopped = [tick?.stopped === 'budget' || tick?.stopped === 'rate_limited' ? `dispatching (${tick.stopped})` : null, tick?.ingest?.stopped === 'budget' ? 'ingest' : null].filter(Boolean);
+    const blocks = Object.values(state.kv?.['pump.api_budget']?.blocked ?? {}).map(Number).filter(Number.isFinite);
+    const blockedUntil = blocks.length ? Math.max(...blocks) : 0;
+    if (blockedUntil > now) {
+      checks.push({ id: 'api-budget', status: 'amber', summary: `GitHub rate-limited the pump: its API calls are held until ${new Date(blockedUntil).toISOString()}; results and dispatches wait until then` });
+    } else if (stopped.length && tickAge <= THRESHOLDS.budgetHeldMs) {
+      checks.push({ id: 'api-budget', status: 'amber', summary: `the pump's latest tick (${minutes(tickAge)}) stopped ${stopped.join(' and ')} early on the GitHub API budget or a rate limit; work waits until it passes`, at: tick.at });
+    }
+    // The state's size (loop upgrade #14), fenced like the snapshot item.
+    let size;
+    try {
+      size = sizeCheck({ size: state.kv?.['state.size'] ?? null, lastRun: state.kv?.['pump.last_run'] ?? null, asset: state.asset ?? null, snapshots: snapshot?.total_bytes !== undefined ? snapshot : null });
+    } catch (err) {
+      size = { id: 'state-size', status: 'amber', summary: `could not judge the state size: ${String(err?.message ?? err).slice(0, 200)}` };
+    }
+    checks.push(size);
     const subj = state.kv?.['pump.subjects'];
     if (subj && typeof subj === 'object') {
       checks.push(subj.ok
@@ -191,6 +237,19 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
 
   // the sandbox breaker
   if (breaker) checks.push(breakerCheck(breaker));
+
+  // the hourly state snapshots
+  // snapshotCheck does not throw, but a bad manifest must never take the
+  // whole watchdog run down, so it is fenced here too (R-SNAP-17).
+  if (snapshot) {
+    let item;
+    try {
+      item = snapshotCheck({ now, manifest: snapshot.manifest ?? null, error: snapshot.error ?? null, missing: snapshot.missing ?? null, laneOn: laneOn(lanes, 'state-snapshot') });
+    } catch (err) {
+      item = { id: 'state-snapshot', status: 'amber', summary: `could not judge the snapshot manifest: ${String(err?.message ?? err).slice(0, 200)}` };
+    }
+    checks.push(item);
+  }
 
   return { checks, actions };
 }

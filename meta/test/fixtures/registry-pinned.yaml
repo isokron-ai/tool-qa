@@ -1,9 +1,8 @@
 # Field registry, version 0.
 #
-# One entry per field that the tool-qa loop plans to capture about an MCP
-# server. Every entry is "planned": nothing here is collected or published yet.
-# The catalogue follows the capture plan; fields are not added here unless the
-# plan has them.
+# One entry per field that the tool-qa loop captures, or plans to capture,
+# about an MCP server. Nothing here is published yet. The catalogue follows the
+# capture plan; fields are not added here unless the plan has them.
 #
 # Entry keys
 #   id         snake_case name of the field
@@ -16,7 +15,13 @@
 #   class      publish class, explained below
 #   redaction  null, or a list of redaction rule ids (R1 to R4) applied before
 #              the value is stored
-#   status     planned | active | deprecated
+#   status     planned: not emitted by any merged worker code or by ingest yet
+#              active: emitted by merged worker code (scan-static, live-probe,
+#                meta-github, meta-registry) or set by tool-qa ingest. The lane
+#                may be disabled: which lanes the live loop runs is in tool-qa
+#                pump/workflows.json (`enabled`), not here, so "active" does
+#                not mean collected today
+#              deprecated: no longer emitted; ingest refuses it
 #
 # Publish classes, in plain words
 #   P    Public for each server, automatically, once the release checks and the
@@ -59,20 +64,20 @@
 
 version: 0
 fields:
-  - {id: registry_name, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: [R1], status: planned}
+  - {id: registry_name, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: [R1], status: active}
   - {id: registry_title, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: [R1], status: planned}
   - {id: registry_description, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: [R1], status: planned}
-  - {id: registry_version, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
+  - {id: registry_version, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: active}
   - {id: registry_website_url, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: registry_repository, layer: identity_discovery, type: object, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: registry_icons, layer: identity_discovery, type: array, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: registry_schema_version, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: registry_status_meta, layer: identity_discovery, type: object, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: registry_package_register_type, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: registry_package_identifier, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: registry_package_version, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: registry_package_transport, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: registry_package_runtime_hint, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
+  - {id: registry_package_register_type, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: active}
+  - {id: registry_package_identifier, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: active}
+  - {id: registry_package_version, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: active}
+  - {id: registry_package_transport, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: active}
+  - {id: registry_package_runtime_hint, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: active}
   - {id: registry_package_runtime_arguments, layer: identity_discovery, type: array, unit: none, source: discover, class: P, redaction: [R1], status: planned}
   - {id: registry_package_package_arguments, layer: identity_discovery, type: array, unit: none, source: discover, class: P, redaction: [R1], status: planned}
   - {id: registry_package_base_url, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
@@ -89,10 +94,10 @@ fields:
   - {id: namespace_matches_repo_owner, layer: identity_discovery, type: boolean, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: discovery_observation, layer: identity_discovery, type: object, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: server_key, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: subject_id, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
+  - {id: subject_id, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: active}
   - {id: swhid, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: package_purl, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: oci_digest, layer: identity_discovery, type: hash, unit: none, source: discover, class: P, redaction: null, status: planned}
+  - {id: package_purl, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: active}
+  - {id: oci_digest, layer: identity_discovery, type: hash, unit: none, source: discover, class: P, redaction: null, status: active}
   - {id: upstream_spdx, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: spdx_basis, layer: identity_discovery, type: enum, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: spdx_confidence, layer: identity_discovery, type: enum, unit: none, source: discover, class: P, redaction: null, status: planned}
@@ -101,11 +106,11 @@ fields:
   - {id: docker_catalog_pin, layer: identity_discovery, type: object, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: monorepo_map, layer: identity_discovery, type: object, unit: none, source: discover, class: P, redaction: null, status: planned}
   - {id: tool_surface_cluster_id, layer: identity_discovery, type: string, unit: none, source: discover, class: P, redaction: null, status: planned}
-  - {id: protocol_era, layer: protocol, type: enum, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: protocol_negotiated, layer: protocol, type: string, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: protocol_era, layer: protocol, type: enum, unit: none, source: scan-live, class: P, redaction: null, status: active}
+  - {id: protocol_negotiated, layer: protocol, type: string, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: protocol_offers, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: client_newest_version, layer: protocol, type: string, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: client_version, layer: protocol, type: string, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: client_version, layer: protocol, type: string, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: protocol_version_list_version, layer: protocol, type: integer, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: protocol_supported_range, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: protocol_accepted_set, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: null, status: planned}
@@ -115,15 +120,15 @@ fields:
   - {id: protocol_accepts_unknown, layer: protocol, type: boolean, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: protocol_echo_behaviour, layer: protocol, type: enum, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: days_behind_spec, layer: protocol, type: integer, unit: days, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: server_info, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: [R1], status: planned}
+  - {id: server_info, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: [R1], status: active}
   - {id: serverinfo_version_matches_package, layer: protocol, type: boolean, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: instructions_text, layer: protocol, type: string, unit: none, source: scan-live, class: P-t, redaction: [R1], status: planned}
-  - {id: instructions_sha256, layer: protocol, type: hash, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: instructions_len_chars, layer: protocol, type: integer, unit: chars, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: instructions_sha256, layer: protocol, type: hash, unit: none, source: scan-live, class: P, redaction: null, status: active}
+  - {id: instructions_len_chars, layer: protocol, type: integer, unit: chars, source: scan-live, class: P, redaction: null, status: active}
   - {id: instructions_tokens, layer: protocol, type: integer, unit: tokens, source: scan-live, class: P, redaction: null, status: planned}
   - {id: capabilities_object, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: capabilities_jcs_sha256, layer: protocol, type: hash, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: capabilities_flags, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: capabilities_jcs_sha256, layer: protocol, type: hash, unit: none, source: scan-live, class: P, redaction: null, status: active}
+  - {id: capabilities_flags, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: result_type_present, layer: protocol, type: boolean, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: list_ttl_ms, layer: protocol, type: integer, unit: ms, source: scan-live, class: P, redaction: null, status: planned}
   - {id: list_cache_scope, layer: protocol, type: enum, unit: none, source: scan-live, class: P, redaction: null, status: planned}
@@ -146,9 +151,14 @@ fields:
   - {id: tool_wire_bytes, layer: protocol, type: integer, unit: bytes, source: scan-live, class: P, redaction: null, status: planned}
   # The live tool list as one: how many tools, and its hash (the checker engine's catalog hash, sha256 of the
   # canonical JSON of the list). Per-tool fields cannot give either. Written by the live-probe lane of mcp-check.
-  - {id: tool_count, layer: protocol, type: integer, unit: count, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: tool_list_sha256, layer: protocol, type: hash, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: pagination_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: [R2], status: planned}
+  # tool_list_sha256 is not catalog_snapshot_id. tool_list_sha256 is measured by the worker: the checker engine's
+  # hash of the tools alone, as the engine reads them (each tool's definition, canonical JSON), so two servers or two
+  # runs with the same tools have the same value whatever else they answer. catalog_snapshot_id (longitudinal) is
+  # set by ingest: the content address of a stored snapshot, sha256 of the JCS of the initialize answer together with
+  # the tools/list answer, so it changes when serverInfo, capabilities or instructions change though the tools do not.
+  - {id: tool_count, layer: protocol, type: integer, unit: count, source: scan-live, class: P, redaction: null, status: active}
+  - {id: tool_list_sha256, layer: protocol, type: hash, unit: none, source: scan-live, class: P, redaction: null, status: active}
+  - {id: pagination_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: [R2], status: active}
   - {id: list_determinism, layer: protocol, type: boolean, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: resources_list, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: [R1], status: planned}
   - {id: resources_description_text, layer: protocol, type: string, unit: none, source: scan-live, class: P-t, redaction: [R1], status: planned}
@@ -163,7 +173,7 @@ fields:
   - {id: logging_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: logging_message_text, layer: protocol, type: string, unit: none, source: scan-live, class: X, redaction: [R1, R2], status: planned}
   - {id: subscriptions_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: list_changed_notifications, layer: protocol, type: integer, unit: count, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: list_changed_notifications, layer: protocol, type: integer, unit: count, source: scan-live, class: P, redaction: null, status: active}
   - {id: client_feature_use, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: [R1], status: planned}
   - {id: tasks_extension_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: cancellation_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
@@ -171,23 +181,23 @@ fields:
   - {id: input_validation_honesty, layer: protocol, type: object, unit: none, source: scan-live, class: P-h, redaction: [R1], status: planned}
   - {id: output_contract, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: output_content, layer: protocol, type: string, unit: none, source: scan-live, class: X, redaction: null, status: planned}
-  - {id: stdout_noise_lines, layer: protocol, type: integer, unit: count, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: latency_cold_ms, layer: protocol, type: number, unit: ms, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: stdout_noise_lines, layer: protocol, type: integer, unit: count, source: scan-live, class: P, redaction: null, status: active}
+  - {id: latency_cold_ms, layer: protocol, type: number, unit: ms, source: scan-live, class: P, redaction: null, status: active}
   - {id: latency_warm_p50_ms, layer: protocol, type: number, unit: ms, source: scan-live, class: P, redaction: null, status: planned}
   - {id: latency_warm_p95_ms, layer: protocol, type: number, unit: ms, source: scan-live, class: P, redaction: null, status: planned}
   - {id: response_bytes_per_method, layer: protocol, type: object, unit: bytes, source: scan-live, class: P, redaction: null, status: planned}
   - {id: tokens_model_visible, layer: protocol, type: object, unit: tokens, source: scan-live, class: P, redaction: null, status: planned}
   - {id: tokens_wire, layer: protocol, type: object, unit: tokens, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: transports_offered, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: transports_offered, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: transports_offered_source, layer: protocol, type: array, unit: none, source: scan-live, class: P-s, redaction: null, status: planned}
   - {id: http_specifics, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: http_exposed_without_auth_write_tools, layer: protocol, type: boolean, unit: none, source: scan-live, class: S, redaction: null, status: planned}
   - {id: auth_metadata_local, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: auth_metadata_remote, layer: protocol, type: object, unit: none, source: remote-meta, class: P, redaction: null, status: planned}
   - {id: server_card, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: startup_without_config, layer: protocol, type: enum, unit: none, source: scan-live, class: P, redaction: [R2], status: planned}
-  - {id: config_state, layer: protocol, type: enum, unit: none, source: scan-live, class: P, redaction: [R4], status: planned}
-  - {id: catalog_per_config_state, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: startup_without_config, layer: protocol, type: enum, unit: none, source: scan-live, class: P, redaction: [R2], status: active}
+  - {id: config_state, layer: protocol, type: enum, unit: none, source: scan-live, class: P, redaction: [R4], status: active}
+  - {id: catalog_per_config_state, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: tokens_est_per_config_state, layer: protocol, type: object, unit: tokens, source: scan-live, class: P, redaction: null, status: planned}
   - {id: help_output_text, layer: protocol, type: string, unit: none, source: scan-live, class: X, redaction: [R1, R2], status: planned}
   - {id: help_output_flags, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
@@ -219,11 +229,11 @@ fields:
   - {id: injection_like_text_confirmed, layer: derived_semantics, type: array, unit: none, source: ingest-compact, class: M, redaction: null, status: planned}
   - {id: read_only_mode_available, layer: derived_semantics, type: boolean, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: read_only_mode_tool_diff, layer: derived_semantics, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
-  - {id: static_vs_live_agreement, layer: derived_semantics, type: object, unit: none, source: ingest-compact, class: PA, redaction: null, status: planned}
+  - {id: static_vs_live_agreement, layer: derived_semantics, type: object, unit: none, source: ingest-compact, class: PA, redaction: null, status: active}
   - {id: category, layer: derived_semantics, type: string, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: category_rule_version, layer: derived_semantics, type: string, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
-  - {id: commit_sha, layer: source_build, type: string, unit: none, source: scan-static, class: P, redaction: null, status: planned}
-  - {id: commit_date, layer: source_build, type: timestamp, unit: none, source: scan-static, class: P, redaction: null, status: planned}
+  - {id: commit_sha, layer: source_build, type: string, unit: none, source: scan-static, class: P, redaction: null, status: active}
+  - {id: commit_date, layer: source_build, type: timestamp, unit: none, source: scan-static, class: P, redaction: null, status: active}
   - {id: release_tag, layer: source_build, type: string, unit: none, source: scan-static, class: P, redaction: null, status: planned}
   - {id: commit_basis, layer: source_build, type: enum, unit: none, source: scan-static, class: P, redaction: null, status: planned}
   - {id: swhid_tested_dir, layer: source_build, type: string, unit: none, source: scan-static, class: P, redaction: null, status: planned}
@@ -238,7 +248,7 @@ fields:
   - {id: sdk_resolved_version, layer: source_build, type: string, unit: none, source: scan-static, class: P, redaction: null, status: planned}
   - {id: framework, layer: source_build, type: string, unit: none, source: scan-static, class: P, redaction: null, status: planned}
   - {id: registration_styles, layer: source_build, type: object, unit: none, source: scan-static, class: P-s, redaction: null, status: planned}
-  - {id: registration_provenance, layer: source_build, type: object, unit: none, source: scan-static, class: P-s, redaction: null, status: planned}
+  - {id: registration_provenance, layer: source_build, type: object, unit: none, source: scan-static, class: P-s, redaction: null, status: active}
   - {id: reader_confidence, layer: source_build, type: number, unit: ratio, source: scan-static, class: P-s, redaction: null, status: planned}
   - {id: transport_code_paths, layer: source_build, type: array, unit: none, source: scan-static, class: P-s, redaction: null, status: planned}
   - {id: auth_code_paths, layer: source_build, type: array, unit: none, source: scan-static, class: P-s, redaction: null, status: planned}
@@ -283,41 +293,51 @@ fields:
   - {id: install_footprint, layer: source_build, type: object, unit: bytes, source: scan-live, class: P, redaction: null, status: planned}
   - {id: own_test_suite_counts, layer: source_build, type: object, unit: count, source: build-probe, class: PA, redaction: null, status: planned}
   - {id: repro_check, layer: source_build, type: object, unit: none, source: build-probe, class: P, redaction: null, status: planned}
-  - {id: repo_core, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: [R3], status: planned}
-  - {id: repo_owner_type, layer: repo_ecosystem, type: enum, unit: none, source: meta-github, class: P, redaction: [R3], status: planned}
-  - {id: repo_popularity, layer: repo_ecosystem, type: object, unit: count, source: meta-github, class: P, redaction: null, status: planned}
+  - {id: repo_core, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: [R3], status: active}
+  - {id: repo_owner_type, layer: repo_ecosystem, type: enum, unit: none, source: meta-github, class: P, redaction: [R3], status: active}
+  - {id: repo_popularity, layer: repo_ecosystem, type: object, unit: count, source: meta-github, class: P, redaction: null, status: active}
   - {id: star_fork_history_timestamps, layer: repo_ecosystem, type: array, unit: none, source: meta-github, class: PA, redaction: [R3], status: planned}
-  - {id: contributors_counts, layer: repo_ecosystem, type: object, unit: count, source: meta-github, class: P, redaction: [R3], status: planned}
+  - {id: contributors_counts, layer: repo_ecosystem, type: object, unit: count, source: meta-github, class: P, redaction: [R3], status: active}
   - {id: contributor_logins, layer: repo_ecosystem, type: array, unit: none, source: meta-github, class: X, redaction: [R3], status: planned}
   - {id: commit_cadence_weekly, layer: repo_ecosystem, type: array, unit: count, source: meta-github, class: P, redaction: null, status: planned}
-  - {id: releases_summary, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
-  - {id: issues_prs_summary, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
+  - {id: releases_summary, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
+  # Release tags and their targets, so a force-pushed tag can be seen between two observations (git_tag_moves).
+  # git_tag_targets: the newest tags by commit date (at most 100), each with the commit it points to (an annotated tag
+  # peeled once), the tag object for an annotated tag, and the commit and tagger dates. git_tag_map_sha256: sha256 of
+  # the canonical JSON of that tag -> target list, a cheap "did any tag change" value.
+  - {id: git_tag_targets, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
+  - {id: git_tag_map_sha256, layer: repo_ecosystem, type: hash, unit: none, source: meta-github, class: P, redaction: null, status: planned}
+  - {id: issues_prs_summary, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
   - {id: issue_details, layer: repo_ecosystem, type: array, unit: none, source: meta-github, class: X, redaction: [R3], status: planned}
-  - {id: security_posture, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
-  - {id: branch_rules_public, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
-  - {id: community_profile, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
-  - {id: workflow_health, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
-  - {id: owner_org_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: [R3], status: planned}
+  - {id: security_posture, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
+  - {id: branch_rules_public, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
+  - {id: community_profile, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
+  - {id: workflow_health, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
+  - {id: owner_org_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: [R3], status: active}
   - {id: gharchive_event_history, layer: repo_ecosystem, type: object, unit: count, source: meta-registry, class: PA, redaction: null, status: planned}
   - {id: gharchive_actor_logins, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: X, redaction: [R3], status: planned}
-  - {id: npm_version_doc, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  - {id: npm_version_doc, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: npm_maintainers, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: X, redaction: [R3], status: planned}
-  - {id: npm_maintainer_count_and_change, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  - {id: npm_maintainer_count_and_change, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: npm_downloads, layer: repo_ecosystem, type: object, unit: count, source: meta-registry, class: P, redaction: null, status: planned}
   - {id: npm_per_version_downloads_weekly, layer: repo_ecosystem, type: object, unit: count, source: meta-registry, class: P, redaction: null, status: planned}
-  - {id: npm_attestations, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
-  - {id: pypi_info, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  - {id: npm_attestations, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
+  - {id: pypi_info, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: pypi_author_emails, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: X, redaction: [R3], status: planned}
-  - {id: pypi_project_status, layer: repo_ecosystem, type: enum, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
-  - {id: pypi_provenance, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  - {id: pypi_project_status, layer: repo_ecosystem, type: enum, unit: none, source: meta-registry, class: P, redaction: null, status: active}
+  - {id: pypi_provenance, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: pypi_downloads, layer: repo_ecosystem, type: object, unit: count, source: meta-registry, class: P, redaction: null, status: planned}
-  - {id: crates_crate_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  - {id: crates_crate_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: crates_publisher_identities, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: X, redaction: [R3], status: planned}
-  - {id: go_module_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  - {id: go_module_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: nuget_maven_oci_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
-  - {id: depsdev_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  # The digest each OCI tag a registry entry declares resolves to, read with a registry HEAD (or manifest) request on
+  # the allowlisted hosts only; no layer is pulled. One element per image reference and tag; an empty list means the
+  # subject declares no OCI package. A tag that resolves to a new digest is an oci_tag_moves event.
+  - {id: oci_tag_digests, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
+  - {id: depsdev_facts, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: active}
   - {id: scorecard_result, layer: repo_ecosystem, type: object, unit: none, source: scan-deep, class: P, redaction: null, status: planned}
-  - {id: scorecard_api_result, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: planned}
+  - {id: scorecard_api_result, layer: repo_ecosystem, type: object, unit: none, source: meta-github, class: P, redaction: null, status: active}
   - {id: best_practices_badge_level, layer: repo_ecosystem, type: enum, unit: none, source: meta-github, class: P, redaction: null, status: planned}
   - {id: osv_package_vulnerabilities, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
   - {id: registry_listing_elsewhere, layer: repo_ecosystem, type: object, unit: none, source: discover, class: P, redaction: null, status: planned}
@@ -326,8 +346,8 @@ fields:
   - {id: vendor_docs_link_to_repo, layer: repo_ecosystem, type: boolean, unit: none, source: meta-github, class: P, redaction: null, status: planned}
   - {id: maintainer_change_events, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: PA, redaction: null, status: planned}
   - {id: metadata_observation, layer: repo_ecosystem, type: object, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
-  - {id: registry_entry_history, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: P, redaction: null, status: planned}
-  - {id: startup_ms, layer: runtime, type: integer, unit: ms, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: registry_entry_history, layer: repo_ecosystem, type: array, unit: none, source: meta-registry, class: P, redaction: null, status: active}
+  - {id: startup_ms, layer: runtime, type: integer, unit: ms, source: scan-live, class: P, redaction: null, status: active}
   - {id: cold_vs_warm_start, layer: runtime, type: object, unit: ms, source: scan-live, class: P, redaction: null, status: planned}
   - {id: cpu_time_summary, layer: runtime, type: object, unit: ms, source: scan-live, class: P, redaction: null, status: planned}
   - {id: cpu_series, layer: runtime, type: array, unit: none, source: scan-live, class: X, redaction: null, status: planned}
@@ -342,35 +362,43 @@ fields:
   - {id: files_raw, layer: runtime, type: array, unit: none, source: scan-live, class: X, redaction: [R4], status: planned}
   - {id: credential_path_reads, layer: runtime, type: array, unit: none, source: scan-live, class: M, redaction: null, status: planned}
   - {id: files_written_deleted_summary, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: network_event, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: [R2, R4], status: planned}
+  - {id: network_event, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: [R2, R4], status: active}
   - {id: network_payloads, layer: runtime, type: string, unit: none, source: scan-live, class: X, redaction: [R2], status: planned}
   - {id: phone_home_classification, layer: runtime, type: enum, unit: none, source: scan-live, class: P-h, redaction: null, status: planned}
   - {id: canary_hits, layer: runtime, type: array, unit: none, source: scan-live, class: S, redaction: [R4], status: planned}
   - {id: env_vars_read_runtime, layer: runtime, type: array, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: child_processes_summary, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: [R2], status: planned}
   - {id: child_process_args, layer: runtime, type: array, unit: none, source: scan-live, class: X, redaction: [R2], status: planned}
-  - {id: install_phase_behaviour, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: install_phase_behaviour, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: crash_summary, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: [R1], status: planned}
   - {id: crash_stack, layer: runtime, type: string, unit: none, source: scan-live, class: X, redaction: [R1], status: planned}
-  - {id: stderr_counts, layer: runtime, type: object, unit: count, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: stderr_counts, layer: runtime, type: object, unit: count, source: scan-live, class: P, redaction: null, status: active}
   - {id: stderr_text, layer: runtime, type: string, unit: none, source: scan-live, class: X, redaction: [R1, R2, R4], status: planned}
   - {id: shutdown_behaviour, layer: runtime, type: object, unit: ms, source: scan-live, class: P, redaction: null, status: planned}
   - {id: robustness_under_load, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: self_update_at_runtime, layer: runtime, type: boolean, unit: none, source: scan-live, class: P-h, redaction: null, status: planned}
   - {id: sandbox_escape_indicators, layer: runtime, type: array, unit: none, source: scan-live, class: S, redaction: null, status: planned}
   - {id: disk_footprint_bytes, layer: runtime, type: integer, unit: bytes, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: observation_coverage, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: our_tool_versions, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: observation_coverage, layer: runtime, type: object, unit: none, source: scan-live, class: P, redaction: null, status: active}
+  - {id: our_tool_versions, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: release_gate_passed, layer: tool_telemetry, type: boolean, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: real_repo_qa_run_id, layer: tool_telemetry, type: string, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
-  - {id: step_telemetry, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: error_taxonomy_code, layer: tool_telemetry, type: enum, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: step_telemetry, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: active}
+  - {id: error_taxonomy_code, layer: tool_telemetry, type: enum, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: fail_reason, layer: tool_telemetry, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
+  # Who a result's skips are down to, and what the result means for coverage (DESIGN 4.7). Set by tool-qa ingest
+  # for every accepted result from the skips' fault (worker-kit/contract.mjs resultFault, tool-qa R-COV-02), not
+  # written by workers as observations. fault_side: tool | unknown | infra | subject | policy, the first of these
+  # among the skips (our own limits first), null with no skip; unknown is a skip from an older worker kit whose
+  # reason has no single fault. coverage_state: assessed | unassessed_tool | unassessed_unknown | unassessed_infra
+  # | subject | excluded. A tool-fault skip is unassessed_tool: never excluded, never the server's failure.
+  - {id: fault_side, layer: tool_telemetry, type: enum, unit: none, source: ingest-compact, class: P, redaction: null, status: active}
+  - {id: coverage_state, layer: tool_telemetry, type: enum, unit: none, source: ingest-compact, class: P, redaction: null, status: active}
   - {id: differential_disagreements, layer: tool_telemetry, type: array, unit: none, source: ingest-compact, class: X, redaction: null, status: planned}
   - {id: differential_disagreement_rates, layer: tool_telemetry, type: object, unit: ratio, source: ingest-compact, class: PA, redaction: null, status: planned}
   - {id: coverage_contribution, layer: tool_telemetry, type: object, unit: none, source: ingest-compact, class: PA, redaction: null, status: planned}
   - {id: canary_run_outcomes, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
-  - {id: runner_env, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: runner_env, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: queue_wait_ms, layer: tool_telemetry, type: integer, unit: ms, source: loop-telemetry, class: P, redaction: null, status: planned}
   - {id: run_attempts, layer: tool_telemetry, type: object, unit: count, source: loop-telemetry, class: P, redaction: null, status: planned}
   - {id: chain_gaps, layer: tool_telemetry, type: object, unit: ms, source: loop-telemetry, class: P, redaction: null, status: planned}
@@ -378,7 +406,7 @@ fields:
   - {id: cache_hit_rates, layer: tool_telemetry, type: object, unit: ratio, source: loop-telemetry, class: X, redaction: null, status: planned}
   - {id: rate_limit_telemetry, layer: tool_telemetry, type: object, unit: none, source: loop-telemetry, class: X, redaction: null, status: planned}
   - {id: redaction_telemetry, layer: tool_telemetry, type: object, unit: count, source: ingest-compact, class: X, redaction: null, status: planned}
-  - {id: sandbox_tier, layer: tool_telemetry, type: enum, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: sandbox_tier, layer: tool_telemetry, type: enum, unit: none, source: scan-live, class: P, redaction: null, status: active}
   - {id: requirement_verdicts, layer: write_tests, type: array, unit: none, source: writecheck, class: B, redaction: null, status: planned}
   - {id: record_id, layer: write_tests, type: string, unit: none, source: writecheck, class: B, redaction: null, status: planned}
   - {id: conflict_behaviour, layer: write_tests, type: object, unit: none, source: writecheck, class: B, redaction: null, status: planned}
@@ -393,12 +421,22 @@ fields:
   - {id: plan_hash_and_drift, layer: write_tests, type: object, unit: none, source: writecheck, class: X, redaction: null, status: planned}
   - {id: barrier_pair_repetitions, layer: write_tests, type: array, unit: none, source: writecheck, class: B, redaction: null, status: planned}
   - {id: annotation_honesty_behaviour_confirmed, layer: write_tests, type: object, unit: none, source: writecheck, class: B, redaction: null, status: planned}
+  # catalog_snapshot_id: sha256(JCS(initialize + tools/list)), set by ingest; see tool_list_sha256 for the difference.
   - {id: catalog_snapshot_id, layer: longitudinal, type: hash, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: catalog_fingerprints, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: tools_added_removed_renamed, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: schema_change_classification, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: description_drift, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: annotation_flips, layer: longitudinal, type: array, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
+  # Drift at an unchanged release, derived by comparing a subject's successive observations (tool-qa longitudinal/).
+  # git_tag_moves: a version-like git tag (semver, optionally v-prefixed or package-prefixed) whose target commit
+  # changed. oci_tag_moves: a version-like image tag that resolves to a new digest. Floating tags (latest, v1, 1.2) are
+  # expected to move and are never events. A move within an hour of the release is kept but ranked low (a fix-up).
+  # catalog_drift_same_version: the tool list hash changed while the package version, image digest, tag and commit did
+  # not; a change explained by a new version of our own tools is excluded, and a same-version change of an npm or PyPI
+  # package is never an event (a published version's content cannot change there).
+  - {id: git_tag_moves, layer: longitudinal, type: array, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
+  - {id: oci_tag_moves, layer: longitudinal, type: array, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: catalog_drift_same_version, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P-h, redaction: null, status: planned}
   - {id: protocol_upgrade_timeline, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}
   - {id: sdk_adoption_timeline, layer: longitudinal, type: object, unit: none, source: ingest-compact, class: P, redaction: null, status: planned}

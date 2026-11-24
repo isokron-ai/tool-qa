@@ -1,0 +1,55 @@
+name: state-snapshot
+
+# Hourly versioned snapshots of the loop state asset. Copies `state.sqlite` from
+# the "state" release, still age-encrypted (this workflow holds no key and never
+# decrypts), to the "state-snapshots" release as
+# state-<UTC time>-<sha8>.sqlite.age, with a manifest.json. Skips the upload when
+# the state is unchanged since the newest snapshot; keeps the 24 newest
+# snapshots, the newest of each UTC day for 14 days and of each UTC week for
+# 8 weeks. The GitHub schedule on
+# this repository has not fired reliably, so the operator's stand-in scheduler
+# also dispatches it every hour. See docs/OPERATIONS.md, "State snapshots".
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+# Not the pump's group: a snapshot must never hold up the pump. A push during
+# the copy is caught by the sha256 and asset checks and the copy is retried.
+concurrency:
+  group: state-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    name: snapshot
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    permissions:
+      contents: write # read the "state" release asset; write the "state-snapshots" release
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Kill switch
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_STATE_SNAPSHOT_ENABLED: ${{ vars.LANE_STATE_SNAPSHOT_ENABLED }}
+        run: node scripts/guard.mjs --job state-snapshot --no-slots
+      - name: Set up Node
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Snapshot
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node snapshot/snapshot.mjs

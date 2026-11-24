@@ -12,19 +12,25 @@
 //                          attestations, deprecations and yanks;
 //   Go module proxy        github.com/<owner>/<name> through /cached-only/, so
 //                          the proxy never fetches from the origin for us;
-//   deps.dev               the package versions above and the GitHub project.
+//   deps.dev               the package versions above and the GitHub project;
+//   OCI registries         the digest each declared image tag resolves to (a
+//                          HEAD of the manifest on the allowlisted hosts in
+//                          lib/oci.mjs; no layer is pulled), at most five
+//                          image tags per subject (oci_tag_digests).
 //
 // Nothing is installed or run. Every request is conditional where the server
 // gives an ETag or Last-Modified, crates.io gets at most one request a second
-// (its data-access policy), and no GitHub API is called at all.
+// (its data-access policy), and no GitHub API is called at all. ghcr.io is a
+// container registry here, not the GitHub API.
 
 import { readFileSync } from 'node:fs';
 
 import { FetchProblem } from './lib/http.mjs';
+import { OCI_HOSTS, ociTarget, resolveTags } from './lib/oci.mjs';
 import { bool, githubRepoOf, int, record, skipFor, str, textDigest, time } from './lib/common.mjs';
 
 export const LANE = 'meta-registry';
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 export const MCP_REGISTRY = 'https://registry.modelcontextprotocol.io/v0.1/servers';
 const NPM = 'https://registry.npmjs.org';
 const PYPI = 'https://pypi.org';
@@ -35,10 +41,13 @@ export const MIN_INTERVAL_MS = Object.freeze({ 'crates.io': 1000 });
 const SEARCH_PAGES = 3;
 const PER_ECOSYSTEM = 5;
 const RECENT = 30;
+/** Image tags read per subject (oci_tag_digests). */
+export const OCI_PER_SUBJECT = 5;
 
 export const SETTINGS = Object.freeze({
   lane: LANE, version: VERSION, search_pages: SEARCH_PAGES, packages_per_ecosystem: PER_ECOSYSTEM, recent_versions: RECENT,
-  sources: ['mcp-registry-official', 'npm-registry', 'pypi-json-api', 'crates-io-api', 'go-module-proxy', 'deps-dev'],
+  oci_tags_per_subject: OCI_PER_SUBJECT, oci_hosts: OCI_HOSTS,
+  sources: ['mcp-registry-official', 'npm-registry', 'pypi-json-api', 'crates-io-api', 'go-module-proxy', 'deps-dev', 'oci-registries'],
 });
 
 const NPM_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]{0,213}\/)?[a-z0-9-~][a-z0-9-._~]{0,213}$/;
@@ -587,6 +596,41 @@ export function packagesFor(servers, seedPackages = [], repo = null) {
   return Object.fromEntries(Object.entries(want).map(([k, list]) => [k, list.slice(0, PER_ECOSYSTEM)]));
 }
 
+/**
+ * The image tags to resolve, at most OCI_PER_SUBJECT, in the order of
+ * packagesFor: entries in the subject owner's own namespace, then the seed
+ * list, then other entries that claim the repository. Within an entry, newest
+ * version first, so the tags of recent releases are the ones watched. Each is
+ * {reference (host/path), tag, host, path, server_name, registry_version}.
+ */
+export function ociTargetsFor(servers, seedPackages = [], repo = null) {
+  const out = [];
+  const seen = new Set();
+  const push = (identifier, version, serverName, registryVersion) => {
+    if (out.length >= OCI_PER_SUBJECT) return;
+    const t = ociTarget(identifier, version);
+    if (!t) return;
+    const reference = `${t.host}/${t.path}`;
+    const key = `${reference}:${t.tag}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ reference, tag: t.tag, host: t.host, path: t.path, server_name: serverName, registry_version: registryVersion });
+  };
+  const newestFirst = (versions) => [...versions].sort((a, b) => String(b.published_at ?? '').localeCompare(String(a.published_at ?? '')));
+  const entries = [...servers];
+  const own = entries.filter(([name]) => repo && namespaceMatches(name, repo) === true);
+  const others = entries.filter(([name]) => !(repo && namespaceMatches(name, repo) === true));
+  const fromEntries = (list) => {
+    for (const [name, versions] of list) {
+      for (const v of newestFirst(versions)) for (const p of v.packages ?? []) if (p.registry_type === 'oci') push(p.identifier, p.version, name, v.version);
+    }
+  };
+  fromEntries(own);
+  for (const p of seedPackages) if (p.registry === 'oci') push(p.identifier, p.version ?? null, null, null);
+  fromEntries(others);
+  return out;
+}
+
 /** Read everything for one subject. Never throws for an upstream problem: problems are per stage. */
 export async function collectSubject(http, repo, { seed = new Map() } = {}) {
   const stages = {};
@@ -608,6 +652,9 @@ export async function collectSubject(http, repo, { seed = new Map() } = {}) {
   out.crates = [];
   for (const name of pk.cargo) out.crates.push({ name, ...(await crateRead(http, name, repo)) });
   out.go = await goRead(http, repo);
+  const oci = ociTargetsFor(out.registry.servers, seed.get(repo.toLowerCase()) ?? [], repo);
+  const resolved = oci.length ? await resolveTags(http, oci) : [];
+  out.oci = oci.map((t, i) => ({ ...t, ...resolved[i] }));
   try {
     const found = [
       ...out.npm.filter((x) => x.status === 'ok').map((x) => ['npm', x.name]),
@@ -625,6 +672,7 @@ export async function collectSubject(http, repo, { seed = new Map() } = {}) {
   // Per package, so a control can look at one package's outcome alone (R-META-07).
   stages.npm_packages = out.npm.map((x) => ({ package: x.name, status: x.problem ?? x.status }));
   stages.go = out.go.problem ?? out.go.status;
+  stages.oci = out.oci.length === 0 ? 'not_applicable' : out.oci.map((x) => x.status).join(',');
   stages.depsdev = out.depsdev.problem ?? 'ok';
   return out;
 }
@@ -698,6 +746,19 @@ export function subjectOutput(c, observedAt) {
     records.push(record('go_module_facts', null, `the Go module proxy was not read: ${c.go.problem}`));
   } else {
     records.push(record('go_module_facts', { module: c.go.module, found: c.go.status === 'ok', basis: 'proxy.golang.org/cached-only', ...(c.go.status === 'ok' ? c.go.value : {}) }));
+  }
+  // Image tags: one element per reference and tag; a rate limit or an outage is a retryable skip (R-DRIFT-10).
+  const oci = c.oci ?? [];
+  for (const code of new Set(oci.map((x) => x.status).filter((st) => st === 'rate_limited' || st === 'upstream_unavailable'))) skip('oci', code);
+  // A token answer we cannot use fails the same way on every run: our side, not retried (R-DRIFT-16).
+  if (oci.some((x) => x.status === 'token_unreadable')) skips.push({ stage: 'oci', reason: 'tool_error', fault: 'tool' });
+  if (c.registry.problem && oci.length === 0) {
+    records.push(record('oci_tag_digests', null, `the official MCP registry was not read: ${c.registry.problem}`));
+  } else {
+    records.push(record('oci_tag_digests', oci.map((x) => ({
+      server_name: x.server_name, registry_version: x.registry_version, reference: x.reference, tag: x.tag,
+      digest: x.digest ?? null, media_type: x.media_type ?? null, via: x.via ?? null, status: x.status,
+    }))));
   }
   if (c.depsdev.problem) {
     skip('depsdev', c.depsdev.problem);

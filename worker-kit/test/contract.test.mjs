@@ -8,6 +8,7 @@ import {
   MANIFEST_SCHEMA_VERSION, SKIP_REASONS, CONTROL_KINDS, SUPPORTED_KEYWORDS,
   loadSchema, validateAgainstSchema, validateManifest, isBundlePath, sha256Hex,
   workflowFromEnv, collectFiles, buildManifest, artifactName, legacyArtifactName,
+  FAULT_SIDES, UNKNOWN_FAULT, SKIP_FAULTS, COVERAGE_STATES, skipFault, resultFault,
 } from '../contract.mjs';
 
 const SHA40 = 'a'.repeat(40);
@@ -276,4 +277,56 @@ test('R-ING-16: rate_limited and upstream_unavailable are skip reasons, and a sk
   assert.deepEqual(validateManifest(ok).errors, []);
   const bad = validManifest({ skips: [{ stage: 'fetch', reason: 'rate_limited', retryable: 'yes' }] });
   assert.equal(validateManifest(bad).ok, false);
+});
+
+// ---- R-COV-01: skips carry a fault side ----
+
+test('R-COV-01: every skip reason has a fixed fault map; our own limits are reasons of their own and always the tool\'s', () => {
+  assert.deepEqual(Object.keys(SKIP_FAULTS).sort(), [...SKIP_REASONS].sort());
+  for (const [reason, f] of Object.entries(SKIP_FAULTS)) {
+    assert.ok([...FAULT_SIDES, UNKNOWN_FAULT].includes(f.default), reason);
+    assert.ok(f.allowed.length > 0 && f.allowed.every((x) => FAULT_SIDES.includes(x)), reason);
+    assert.ok(f.default === UNKNOWN_FAULT || f.allowed.includes(f.default), reason);
+  }
+  for (const reason of ['unsupported_language', 'unsupported_layout', 'reader_limit', 'too_large', 'tool_error']) {
+    assert.ok(SKIP_REASONS.includes(reason), reason);
+    assert.deepEqual([SKIP_FAULTS[reason].default, [...SKIP_FAULTS[reason].allowed]], ['tool', ['tool']], reason);
+  }
+  assert.equal(SKIP_FAULTS.no_tools_found.default, 'tool');
+  // The reason scan-static used for everything before R-COV-01 reads as unknown, never as the subject's.
+  assert.equal(SKIP_FAULTS.no_runnable_artifact.default, UNKNOWN_FAULT);
+  const schema = loadSchema();
+  assert.deepEqual(schema.properties.skips.items.properties.fault.enum, [...FAULT_SIDES]);
+  assert.ok(!schema.properties.skips.items.required.includes('fault'), 'fault stays optional for pinned older workers');
+});
+
+test('R-COV-01: a manifest without fault (an older worker kit) is valid; a declared fault must be one its reason allows', () => {
+  assert.equal(validateManifest(validManifest({ skips: [{ stage: 'static', reason: 'no_runnable_artifact', retryable: false }] })).ok, true);
+  assert.equal(validateManifest(validManifest({ skips: [{ stage: 'static', reason: 'no_runnable_artifact', fault: 'tool' }] })).ok, true);
+  assert.equal(validateManifest(validManifest({ skips: [{ stage: 'static', reason: 'unsupported_layout', fault: 'tool' }] })).ok, true);
+  const blamed = validateManifest(validManifest({ skips: [{ stage: 'static', reason: 'tool_error', fault: 'subject' }] }));
+  assert.equal(blamed.ok, false);
+  assert.match(blamed.errors.map((e) => `${e.path} ${e.message}`).join('\n'), /skips\[0\]\.fault subject is not a fault tool_error may have/);
+  const unknown = validateManifest(validManifest({ skips: [{ stage: 'static', reason: 'remote_only', fault: 'unknown' }] }));
+  assert.equal(unknown.ok, false, 'unknown is recorded by ingest, never declared');
+});
+
+test('R-COV-01: skipFault and resultFault: declared first, then the fixed map; our limits win over every other side', () => {
+  assert.equal(skipFault({ reason: 'no_runnable_artifact' }), 'unknown');
+  assert.equal(skipFault({ reason: 'no_runnable_artifact', fault: 'subject' }), 'subject');
+  assert.equal(skipFault({ reason: 'rate_limited' }), 'infra');
+  assert.equal(skipFault({ reason: 'not_a_reason' }), 'unknown');
+  assert.deepEqual(resultFault([]), { fault: null, coverage: 'assessed', faults: {} });
+  assert.deepEqual(resultFault([{ reason: 'policy_excluded' }, { reason: 'remote_only' }]), { fault: 'subject', coverage: 'subject', faults: { policy: 1, subject: 1 } });
+  assert.deepEqual(resultFault([{ reason: 'rate_limited' }, { reason: 'remote_only' }]).coverage, 'unassessed_infra');
+  assert.deepEqual(resultFault([{ reason: 'remote_only' }, { reason: 'timeout_start' }]).coverage, 'unassessed_unknown');
+  assert.deepEqual(resultFault([{ reason: 'policy_excluded' }, { reason: 'remote_only' }, { reason: 'too_large' }, { reason: 'timeout_start' }]),
+    { fault: 'tool', coverage: 'unassessed_tool', faults: { policy: 1, subject: 1, tool: 1, unknown: 1 } });
+  assert.deepEqual(resultFault([{ reason: 'policy_excluded' }]).coverage, 'excluded');
+  // A tool fault is never excluded and never the subject's, whatever it sits beside.
+  for (const reason of SKIP_REASONS) {
+    const c = resultFault([{ reason: 'tool_error' }, { reason }]).coverage;
+    assert.equal(c, 'unassessed_tool', reason);
+  }
+  assert.deepEqual([...COVERAGE_STATES], ['assessed', 'unassessed_tool', 'unassessed_unknown', 'unassessed_infra', 'subject', 'excluded']);
 });

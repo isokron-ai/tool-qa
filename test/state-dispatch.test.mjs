@@ -34,8 +34,8 @@ function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 
 
 test('schema v3 adds the dispatch ledger tables and columns', () => {
   const db = fresh();
-  assert.equal(SCHEMA_VERSION, 6);
-  assert.equal(db.schemaVersion(), 6);
+  assert.equal(SCHEMA_VERSION, 7);
+  assert.equal(db.schemaVersion(), 7);
   const tables = db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const t of ['dispatches', 'dispatch_items', 'results', 'run_keys', 'kv']) assert.ok(tables.includes(t), t);
   const cols = (t) => db.raw.prepare(`PRAGMA table_info(${t})`).all().map((r) => r.name);
@@ -320,5 +320,20 @@ test('kv stores small loop metadata', () => {
   assert.equal(db.getKv('pump.last_tick'), undefined);
   db.setKv('pump.last_tick', { at: 'x', n: 1 }, { now: T0 });
   assert.deepEqual(db.getKv('pump.last_tick'), { at: 'x', n: 1 });
+  db.close();
+});
+
+test('R-COV-02: migration from version 6 keeps results and adds fault, coverage and assessed_at as NULL', () => {
+  const raw = new DatabaseSync(':memory:');
+  raw.exec(readFileSync(new URL('../state/schema.sql', import.meta.url), 'utf8'));
+  raw.exec("INSERT INTO counters (name, value) VALUES ('fence', 3)");
+  for (const v of [2, 3, 4, 5, 6]) raw.exec(readFileSync(new URL(`../state/schema-v${v}.sql`, import.meta.url), 'utf8'));
+  raw.exec('PRAGMA user_version = 6');
+  raw.prepare("INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, digest, accepted_at) VALUES (?, 's', 'scan-static', 'a', 1, 'accepted', NULL, '2026-11-23T00:00:00.000Z')").run('e'.repeat(64));
+  const db = new StateDb(':memory:');
+  db.raw = raw;
+  assert.equal(db.migrate(), 7);
+  const r = db.getResult('e'.repeat(64));
+  assert.deepEqual([r.outcome, r.fault, r.coverage, r.assessed_at], ['accepted', null, null, null]);
   db.close();
 });
