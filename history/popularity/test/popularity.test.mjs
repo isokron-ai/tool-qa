@@ -45,7 +45,7 @@ test('pypistats and per-item errors', async () => {
   const e = await pypiPopularity(createHttp({ fetch: boom.f, sleep: noSleep, retries: 0 }), ['x'], { now: 0, sleep: noSleep });
   assert.equal(e.errors.length, 1, 'a server error is still an error');
 });
-test('npm: a gone package is missing, not an error', async () => {
+test('R-HIST-02: npm: a gone package is missing, not an error', async () => {
   const { http } = mk(() => ({ status: 404, body: {} }));
   const r = await npmPopularity(http, ['gone'], { now: 0, sleep: noSleep });
   assert.deepEqual([r.rows.length, r.errors, r.missing], [0, [], ['npm:gone']]);
@@ -85,7 +85,7 @@ test('github: 404 release is null, rate limit stops the loop', async () => {
   assert.equal(lim.f.calls.length, 1);
   assert.equal(b.errors.length, 1, 'a stop before any repo was read is an error (broken token)');
 });
-test('github: a stop after some rows is a warning, a gone repo is missing', async () => {
+test('R-HIST-02: github: a stop after some rows is a warning, a gone repo is missing', async () => {
   let n = 0;
   const { http } = mk((u) => {
     if (u.includes('/o/gone')) return { status: 404, body: {}, headers: { 'x-ratelimit-remaining': '900' } };

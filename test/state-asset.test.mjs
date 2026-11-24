@@ -400,7 +400,7 @@ test('CLI: push without a pull record exits 1 with a clear message', () => {
   assert.match(r.stderr, /pull record/);
 });
 
-test('pull from an empty release then push succeeds (first-ever push)', async () => {
+test('R-STATE-01: pull from an empty release then push succeeds (first-ever push)', async () => {
   const dir = tmp();
   const api = fakeGitHub();
   const file = join(dir, 'state.sqlite');
