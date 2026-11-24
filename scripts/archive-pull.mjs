@@ -408,7 +408,8 @@ export async function archivePull({
       manifest(marker, place.dir);
       out.pulled.push(a.name);
       out.bytes += zip.length;
-      log(`archive-pull: ${a.name}: ${entries.length} files into ${place.dir}${verified === 'none' ? ' (no manifest to check against)' : ''}`);
+      const note = kindOf(a.name) === 'ingest' ? ` (sealed${digest ? ', digest checked' : ', no digest to check'})` : verified === 'none' ? ' (no manifest to check against)' : '';
+      log(`archive-pull: ${a.name}: ${entries.length} files into ${place.dir}${note}`);
     } catch (err) {
       out.failed.push({ name: a.name, id: a.id, error: String(err?.message ?? err) });
       log(`archive-pull: ${a.name}: FAILED: ${err?.message ?? err}`);
