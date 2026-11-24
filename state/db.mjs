@@ -23,7 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const MAX_SLOTS = 15;
 
 const MIGRATIONS = [
@@ -31,6 +31,7 @@ const MIGRATIONS = [
   { version: 2, sql: () => readFileSync(new URL('./schema-v2.sql', import.meta.url), 'utf8') },
   { version: 3, sql: () => readFileSync(new URL('./schema-v3.sql', import.meta.url), 'utf8') },
   { version: 4, sql: () => readFileSync(new URL('./schema-v4.sql', import.meta.url), 'utf8') },
+  { version: 5, sql: () => readFileSync(new URL('./schema-v5.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -352,7 +353,8 @@ export class StateDb {
 
   /**
    * Insert or update a subject with its tier and current version. A new SHA or
-   * artifact digest counts as a change event and moves `changed_at`.
+   * artifact digest counts as a change event and moves `changed_at`. A retired
+   * subject is active again.
    */
   setSubjectVersion({ id, kind, source, tier, sha = null, artifactDigest = null, now }) {
     if (!Number.isInteger(tier) || tier < 0 || tier > 4) throw new TypeError(`tier must be 0..4, got ${tier}`);
@@ -362,7 +364,7 @@ export class StateDb {
       const cur = this.getSubject(id);
       const changed = cur.sha !== sha || cur.artifact_digest !== artifactDigest;
       this.raw.prepare(`
-        UPDATE subjects SET tier = ?, sha = ?, artifact_digest = ?,
+        UPDATE subjects SET tier = ?, sha = ?, artifact_digest = ?, retired_at = NULL,
           changed_at = CASE WHEN ? THEN ? ELSE changed_at END,
           change_reason = CASE WHEN ? THEN 'new_version' ELSE change_reason END
         WHERE id = ?
@@ -374,6 +376,27 @@ export class StateDb {
   noteChange(id, { reason, now } = {}) {
     const r = this.raw.prepare('UPDATE subjects SET changed_at = ?, change_reason = ? WHERE id = ?').run(iso(now), String(reason || 'change'), id);
     return r.changes > 0;
+  }
+
+  /**
+   * Retire every active subject first seen from a source starting with
+   * `sourcePrefix` that is not in `keep`: it stays, with its results, but the
+   * due list no longer picks it. Returns how many were retired.
+   */
+  retireSubjects({ sourcePrefix, keep, now } = {}) {
+    if (typeof sourcePrefix !== 'string' || sourcePrefix === '') throw new TypeError('retireSubjects: sourcePrefix is required');
+    const t = iso(now);
+    const kept = new Set(keep);
+    return this.tx(() => {
+      let n = 0;
+      const rows = this.raw.prepare('SELECT id, source FROM subjects WHERE retired_at IS NULL').all();
+      const stmt = this.raw.prepare('UPDATE subjects SET retired_at = ? WHERE id = ? AND retired_at IS NULL');
+      for (const r of rows) {
+        if (!r.source.startsWith(sourcePrefix) || kept.has(r.id)) continue;
+        n += Number(stmt.run(t, r.id).changes);
+      }
+      return n;
+    });
   }
 
   listSubjects() {
