@@ -75,8 +75,8 @@ export async function knownAnswerControl(lane, { http, token, budget, spec = loa
     const outs = await lane.collect({ http, repos: [subject], token, budget });
     const o = outs.get(subject);
     if (!o) throw new Error('the lane returned nothing for the known-answer subject');
-    const passing = o.skips.find((sk) => sk.retryable === true && lane.factStages.includes(sk.stage));
-    if (passing) return { unavailable: passing.reason, stage: passing.stage, control: null, files: {} };
+    const passing = lane.factProblem(o, want);
+    if (passing) return { unavailable: passing, control: null, files: {} };
     observed = lane.facts(o);
     mismatches = compareFacts(want, observed);
   } catch (err) {

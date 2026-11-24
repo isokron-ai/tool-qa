@@ -1,5 +1,5 @@
 {
- "about": "Known answers for the metadata lanes' known-answer control (meta/controls.mjs): facts about our own repository that do not change (ids, creation times, first published versions), or only grow (release count). exact: equal; at_least: a number no smaller; contains: these elements are in the observed list.",
+ "about": "Known answers for the metadata lanes' known-answer control (meta/controls.mjs): facts about our own repository that do not change (ids, creation times, first published versions), or only grow (release count). exact: equal; at_least: a number no smaller; contains: these elements are in the observed list. meta-registry facts come only from entries in the subject owner's own io.github namespace, and only the expected npm package is compared.",
  "subject": "isokron-ai/mcp-check",
  "meta-github": {
   "exact": {
@@ -18,8 +18,7 @@
  },
  "meta-registry": {
   "exact": {
-   "mcp_registry_stage": "ok",
-   "npm_stage": "ok"
+   "mcp_registry_stage": "ok"
   },
   "contains": {
    "registry_first": [

@@ -102,11 +102,43 @@ export function namespaceMatches(serverName, repo) {
   return m[1].toLowerCase() === String(repo).split('/')[0].toLowerCase();
 }
 
-/** Every version of every registry entry whose repository is `repo`. */
+/**
+ * Every version of every registry entry whose repository is `repo`.
+ *
+ * First the conventional entry io.github.<owner>/<name> is read by its exact
+ * name (/servers/{name}/versions), so the subject's own entry is found however
+ * many other entries a search returns (R-META-07). Then a search by
+ * owner/name (and by name, if nothing was found), at most three pages each.
+ * Anyone can publish an entry that claims a repository, so a search can be
+ * crowded or fail on its own: its problem is `search_problem`, and the entries
+ * already found are kept. A problem reading the exact name is `problem`.
+ */
 export async function registryEntries(http, repo) {
   const want = repo.toLowerCase();
   const servers = new Map();
   let truncated = false;
+  const add = (matches) => {
+    for (const m of matches) {
+      if (!m.name) continue;
+      const list = servers.get(m.name) ?? [];
+      const { name, ...v } = m;
+      if (!list.some((x) => x.version === v.version)) list.push(v);
+      servers.set(m.name, list);
+    }
+  };
+  const extractMatches = (doc) => (Array.isArray(doc?.servers) ? doc.servers : [])
+    .filter((e) => githubRepoOf(e?.server?.repository?.url) === want)
+    .map((e) => ({ name: str(e.server.name, 200), ...registryVersion(e) }));
+
+  const own = `io.github.${repo}`;
+  const direct = await http.getSummary(`${MCP_REGISTRY}/${encodeURIComponent(own)}/versions`, {
+    version: 'mcp-registry-name/1',
+    headers: { accept: 'application/json' },
+    extract: (doc) => ({ matches: extractMatches(doc) }),
+  });
+  if (answered(direct)) add(direct.value.matches);
+  else if (!(direct.status >= 400 && direct.status < 500)) throw new FetchProblem('upstream_unavailable', `MCP registry HTTP ${direct.status}`);
+
   const search = async (term) => {
     let cursor = null;
     for (let page = 0; page < SEARCH_PAGES; page++) {
@@ -117,31 +149,28 @@ export async function registryEntries(http, repo) {
         headers: { accept: 'application/json' },
         extract: (doc) => ({
           next: typeof doc?.metadata?.nextCursor === 'string' ? doc.metadata.nextCursor : null,
-          matches: (Array.isArray(doc?.servers) ? doc.servers : [])
-            .filter((e) => githubRepoOf(e?.server?.repository?.url) === want)
-            .map((e) => ({ name: str(e.server.name, 200), ...registryVersion(e) })),
+          matches: extractMatches(doc),
         }),
       });
       if (!answered(r)) {
         if (r.status >= 400 && r.status < 500) return;
         throw new FetchProblem('upstream_unavailable', `MCP registry HTTP ${r.status}`);
       }
-      for (const m of r.value.matches) {
-        if (!m.name) continue;
-        const list = servers.get(m.name) ?? [];
-        const { name, ...v } = m;
-        if (!list.some((x) => x.version === v.version)) list.push(v);
-        servers.set(m.name, list);
-      }
+      add(r.value.matches);
       cursor = r.value.next;
       if (!cursor) return;
     }
     truncated = true;
   };
-  await search(repo);
-  if (servers.size === 0) await search(repo.split('/')[1]);
+  let searchProblem = null;
+  try {
+    await search(repo);
+    if (servers.size === 0) await search(repo.split('/')[1]);
+  } catch (err) {
+    searchProblem = problemOf(err).problem;
+  }
   for (const list of servers.values()) list.sort((a, b) => String(a.published_at).localeCompare(String(b.published_at)));
-  return { servers, truncated };
+  return { servers, truncated, ...(searchProblem ? { search_problem: searchProblem } : {}) };
 }
 
 // ---------------------------------------------------------------- npm
@@ -534,14 +563,24 @@ export async function depsdevProject(http, repo) {
 // ---------------------------------------------------------------- one subject
 
 /** The packages to read: newest registry versions' packages, then the seed list's. */
-export function packagesFor(servers, seedPackages = []) {
-  const want = { npm: new Set(), pypi: new Set(), cargo: new Set() };
-  for (const versions of servers.values()) {
-    const newest = versions.find((v) => v.is_latest) ?? versions.at(-1);
-    for (const p of newest?.packages ?? []) if (want[p.registry_type] && p.identifier) want[p.registry_type].add(p.identifier);
-  }
-  for (const p of seedPackages) if (want[p.registry]) want[p.registry].add(p.identifier);
-  return Object.fromEntries(Object.entries(want).map(([k, s]) => [k, [...s].slice(0, PER_ECOSYSTEM)]));
+/**
+ * The packages to read, at most PER_ECOSYSTEM per ecosystem, in this order
+ * (R-META-07, R-META-08): those declared by the newest version of entries in
+ * the subject owner's own io.github namespace, then the seed list's, then
+ * those of any other entry that claims the repository. So entries published
+ * by others cannot crowd out the subject's own packages.
+ */
+export function packagesFor(servers, seedPackages = [], repo = null) {
+  const want = { npm: [], pypi: [], cargo: [] };
+  const push = (type, id) => { if (want[type] && id && !want[type].includes(id)) want[type].push(id); };
+  const newestOf = (versions) => versions.find((v) => v.is_latest) ?? versions.at(-1);
+  const entries = [...servers];
+  const own = entries.filter(([name]) => repo && namespaceMatches(name, repo) === true);
+  const others = entries.filter(([name]) => !(repo && namespaceMatches(name, repo) === true));
+  for (const [, versions] of own) for (const p of newestOf(versions)?.packages ?? []) push(p.registry_type, p.identifier);
+  for (const p of seedPackages) push(p.registry, p.identifier);
+  for (const [, versions] of others) for (const p of newestOf(versions)?.packages ?? []) push(p.registry_type, p.identifier);
+  return Object.fromEntries(Object.entries(want).map(([k, list]) => [k, list.slice(0, PER_ECOSYSTEM)]));
 }
 
 /** Read everything for one subject. Never throws for an upstream problem: problems are per stage. */
@@ -556,7 +595,8 @@ export async function collectSubject(http, repo, { seed = new Map() } = {}) {
     out.registry = { servers: new Map(), truncated: false, ...p };
     stages.mcp_registry = p.problem;
   }
-  const pk = packagesFor(out.registry.servers, seed.get(repo.toLowerCase()) ?? []);
+  if (out.registry.search_problem) stages.mcp_registry_search = out.registry.search_problem;
+  const pk = packagesFor(out.registry.servers, seed.get(repo.toLowerCase()) ?? [], repo);
   out.npm = [];
   for (const name of pk.npm) out.npm.push({ name, ...(await npmRead(http, name, repo)) });
   out.pypi = [];
@@ -578,6 +618,8 @@ export async function collectSubject(http, repo, { seed = new Map() } = {}) {
     out.depsdev = problemOf(err);
   }
   for (const k of ['npm', 'pypi', 'crates']) stages[k] = out[k].length === 0 ? 'not_applicable' : out[k].map((x) => x.problem ?? x.status).join(',');
+  // Per package, so a control can look at one package's outcome alone (R-META-07).
+  stages.npm_packages = out.npm.map((x) => ({ package: x.name, status: x.problem ?? x.status }));
   stages.go = out.go.problem ?? out.go.status;
   stages.depsdev = out.depsdev.problem ?? 'ok';
   return out;
@@ -600,6 +642,7 @@ export function subjectOutput(c, observedAt) {
   const skips = [];
   const skip = (stage, code) => skips.push(skipFor(stage, code));
 
+  if (c.registry.search_problem) skip('mcp_registry_search', c.registry.search_problem);
   if (c.registry.problem) {
     skip('mcp_registry', c.registry.problem);
     records.push(record('registry_entry_history', null, `the official MCP registry was not read: ${c.registry.problem}`));

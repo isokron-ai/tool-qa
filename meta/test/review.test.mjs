@@ -8,8 +8,9 @@ import { join } from 'node:path';
 import { createCache, createHttp, FetchProblem, readCapped } from '../lib/http.mjs';
 import { laneOf } from '../lanes.mjs';
 import { createBudget, reserveFor } from '../github.mjs';
-import { collectSubject, namespaceMatches, subjectOutput } from '../registry.mjs';
+import { collectSubject, namespaceMatches, packagesFor, subjectOutput } from '../registry.mjs';
 import { runShard } from '../run.mjs';
+import { knownAnswerControl } from '../controls.mjs';
 import { ghNode, githubFetch, judgeItem, registryFetch, registryRoutes, runKey } from './helpers.mjs';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'meta-review-'));
@@ -238,4 +239,62 @@ test('R-META-06: the request cache holds no upstream free text (licence texts, s
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+const SEARCH_OURS = 'https://registry.modelcontextprotocol.io/v0.1/servers?search=isokron-ai%2Fmcp-check&limit=100';
+/** Entries others publish that claim our repository: their own namespaces, bogus npm packages listed first. */
+function spoofed(n, { perEntry = 1 } = {}) {
+  return Array.from({ length: n }, (_, i) => ({
+    server: {
+      name: `io.github.spoofer${i}/mcp-check`, repository: { url: 'https://github.com/isokron-ai/mcp-check' }, version: '9.9.9',
+      packages: Array.from({ length: perEntry }, (_, k) => ({ registryType: 'npm', identifier: `bogus-${i}-${k}`, transport: { type: 'stdio' } })),
+    },
+    _meta: { 'io.modelcontextprotocol.registry/official': { status: 'active', publishedAt: '2026-11-20T00:00:00Z', isLatest: true } },
+  }));
+}
+
+test('R-META-07: entries others publish for our repository cannot break the meta-registry known-answer control', async () => {
+  const lane = laneOf('meta-registry');
+  const routes = registryRoutes();
+  // Six spoofed entries ahead of ours in the search, each naming a package npm does not have.
+  routes[SEARCH_OURS].servers.unshift(...spoofed(6, { perEntry: 5 }));
+  const r = await knownAnswerControl(lane, { http: createHttp({ fetch: registryFetch(routes), sleep: async () => {} }) });
+  assert.equal(r.control.observed, 'match', r.files['controls/known-answer.json']);
+});
+
+test('R-META-07: a spoofed package that npm answers with an outage does not make the control unavailable', async () => {
+  const routes = registryRoutes();
+  routes[SEARCH_OURS].servers.unshift(...spoofed(1));
+  routes['https://registry.npmjs.org/bogus-0-0'] = { __status: 503 };
+  const http = createHttp({ fetch: registryFetch(routes), sleep: async () => {}, retries: 0 });
+  const r = await knownAnswerControl(laneOf('meta-registry'), { http });
+  assert.equal(r.unavailable, undefined);
+  assert.equal(r.control.observed, 'match');
+});
+
+test('R-META-07: a search crowded past three pages, or failing, still finds the subject\'s own entry by its exact name', async () => {
+  const flood = (url) => {
+    if (!url.startsWith('https://registry.modelcontextprotocol.io/v0.1/servers?')) return undefined;
+    return new Response(JSON.stringify({ servers: spoofed(100), metadata: { nextCursor: 'more' } }), { status: 200 });
+  };
+  const routes = registryRoutes();
+  delete routes[SEARCH_OURS];
+  const r = await knownAnswerControl(laneOf('meta-registry'), { http: createHttp({ fetch: registryFetch(routes, { fallback: flood }), sleep: async () => {} }) });
+  assert.equal(r.control.observed, 'match');
+  const failing = (url) => (url.startsWith('https://registry.modelcontextprotocol.io/v0.1/servers?') ? new Response('', { status: 503 }) : undefined);
+  const http = createHttp({ fetch: registryFetch(routes, { fallback: failing }), sleep: async () => {}, retries: 0 });
+  const c = await collectSubject(http, 'isokron-ai/mcp-check');
+  const o = subjectOutput(c, '2026-11-24T00:00:00Z');
+  assert.deepEqual(o.skips, [{ stage: 'mcp_registry_search', reason: 'upstream_unavailable', retryable: true }]);
+  assert.equal(o.records.find((x) => x.field === 'registry_entry_history').value[0].server_name, 'io.github.isokron-ai/mcp-check');
+  assert.equal((await knownAnswerControl(laneOf('meta-registry'), { http: createHttp({ fetch: registryFetch(routes, { fallback: failing }), sleep: async () => {}, retries: 0 }) })).control.observed, 'match');
+});
+
+test('R-META-08: five spoofed entries cannot push a subject\'s own package out of the ones read', () => {
+  const own = ['io.github.acme/server', [{ version: '1', is_latest: true, packages: [{ registry_type: 'npm', identifier: 'acme-server' }] }]];
+  const others = Array.from({ length: 5 }, (_, i) => [`io.github.spoofer${i}/server`, [{ version: '1', is_latest: true,
+    packages: Array.from({ length: 5 }, (_, k) => ({ registry_type: 'npm', identifier: `bogus-${i}-${k}` })) }]]);
+  const pk = packagesFor(new Map([...others, own]), [{ registry: 'npm', identifier: 'acme-seeded' }], 'acme/server');
+  assert.deepEqual(pk.npm.slice(0, 2), ['acme-server', 'acme-seeded']);
+  assert.equal(pk.npm.length, 5);
 });

@@ -93,6 +93,14 @@ export function registryRoutes() {
       ],
       metadata: { count: 3 },
     },
+    // The subject's own entry, read by its exact name.
+    'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.isokron-ai%2Fmcp-check/versions': {
+      servers: [
+        { server: { $schema: 'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json', name: 'io.github.isokron-ai/mcp-check', repository: { url: 'https://github.com/isokron-ai/mcp-check' }, version: '1.0.0', packages: [{ registryType: 'npm', identifier: '@isokron/mcp-check', version: '1.0.0', transport: { type: 'stdio' } }] }, _meta: { 'io.modelcontextprotocol.registry/official': { status: 'active', publishedAt: '2026-11-19T06:13:37.110314Z', isLatest: false } } },
+        { server: { name: 'io.github.isokron-ai/mcp-check', repository: { url: 'https://github.com/isokron-ai/mcp-check' }, version: '1.3.1', packages: [{ registryType: 'npm', identifier: '@isokron/mcp-check', version: '1.3.1', transport: { type: 'stdio' } }] }, _meta: { 'io.modelcontextprotocol.registry/official': { status: 'active', publishedAt: '2026-11-22T19:50:40.853009Z', isLatest: true } } },
+      ],
+      metadata: { count: 2 },
+    },
     // npm's abbreviated document (the lane asks for application/vnd.npm.install-v1+json).
     'https://registry.npmjs.org/@isokron%2Fmcp-check': {
       name: '@isokron/mcp-check',

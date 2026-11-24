@@ -91,6 +91,12 @@ at most one request a second. No GitHub API is called.
   descriptions are digests there too.
 - No answer is read past 20 MiB. A larger one stops that stage with a
   `policy_excluded` skip that is not retried.
+- Anyone can publish a registry entry that claims a repository. The subject's
+  own entry, `io.github.<owner>/<name>`, is read by its exact name first, so a
+  crowded or failing search cannot hide it (a failing search is its own
+  `mcp_registry_search` skip). Packages are read in this order: those of
+  entries in the owner's own namespace, then the seed list's, then any other
+  entry's, at most five per ecosystem.
 - Each `registry_entry_history` element carries `namespace_matches_subject`:
   `false` for an `io.github.<owner>/...` entry whose owner is not the
   subject's (an entry that claims someone else's repository), `null` for a
@@ -108,6 +114,13 @@ repository or package that does not exist is data (`null` with a `why`), not
 a skip. A subject whose data makes the lane fail is that subject's own skip
 (`upstream_unavailable`, not retryable), never a failed shard.
 
+Retries are bounded by ingest, not here: after three `retry_later` decisions
+for the same run_key, ingest accepts the next bundle whose skips are all
+retryable, even one with no records (for example a subject the known-answer
+outage skipped), and that subject is not due again until `max_age_days`
+(`pump/tiers.json`). The retry cap lives in `ingest/`, where it is being
+changed separately.
+
 ## Controls
 
 Both run before any subject is read. If one fails, nothing is written and the
@@ -119,7 +132,10 @@ not count towards parking). A fact that does not match stays a failure.
 
 - **known-answer** (`known_good`, expected `match`): the lane reads our own
   repository `isokron-ai/mcp-check`, live, and compares facts that do not
-  change, or only grow, with [`fixtures/known-answer.json`](fixtures/known-answer.json).
+  change, or only grow, with [`fixtures/known-answer.json`](fixtures/known-answer.json). For
+  meta-registry the facts come only from entries in the owner's own
+  namespace, and only `@isokron/mcp-check`'s npm outcome counts, so entries
+  others publish for the repository cannot break the control.
 - **forgery** (`forgery`, expected `contained`), fresh marker per item: the
   lane reads a planted subject offline from `fixtures/forgery-<lane>.json`,
   whose answers pose as another attempt's result. Contained: the answers were

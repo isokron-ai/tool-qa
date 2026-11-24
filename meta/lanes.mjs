@@ -14,8 +14,10 @@ const GITHUB = {
   version: gh.VERSION,
   settings: gh.SETTINGS,
   needsToken: true,
-  // Stages the known-answer facts come from: a passing problem there makes the control unavailable, not failed.
-  factStages: ['graphql', 'contributors'],
+  /** A passing problem (rate limit, outage) in a stage the known-answer facts come from, or null. */
+  factProblem(output) {
+    return output.skips.find((sk) => sk.retryable === true && ['graphql', 'contributors'].includes(sk.stage))?.reason ?? null;
+  },
   minIntervalMs: {},
   async collect({ http, repos, token, budget = gh.createBudget(), deadline = () => false, log = () => {}, now = () => new Date() }) {
     const raw = await gh.collect({ http, repos, token, budget, deadline, log });
@@ -53,7 +55,18 @@ const REGISTRY = {
   version: reg.VERSION,
   settings: reg.SETTINGS,
   needsToken: false,
-  factStages: ['mcp_registry', 'npm'],
+  /**
+   * A passing problem in what the known-answer facts come from: the read of the
+   * subject's own registry entry, or one of the expected npm packages. Other
+   * packages, and searches others can crowd, do not count (R-META-07).
+   */
+  factProblem(output, want) {
+    const reg = output.skips.find((sk) => sk.retryable === true && sk.stage === 'mcp_registry');
+    if (reg) return reg.reason;
+    const mine = new Set((want?.contains?.npm ?? []).map((x) => x.package));
+    const hit = (output.stages.npm_packages ?? []).find((x) => mine.has(x.package) && ['rate_limited', 'upstream_unavailable'].includes(x.status));
+    return hit ? hit.status : null;
+  },
   minIntervalMs: reg.MIN_INTERVAL_MS,
   async collect({ http, repos, deadline = () => false, log = () => {}, seed = new Map(), now = () => new Date(), concurrency = 4 }) {
     const out = new Map();
@@ -69,13 +82,14 @@ const REGISTRY = {
         o = reg.subjectErrorOutput();
       }
       out.set(repo, { ...o, sha: null });
-      log(`subject ${i}: ${Object.entries(o.stages).map(([k, s]) => `${k}=${s}`).join(' ')}`);
+      log(`subject ${i}: ${Object.entries(o.stages).filter(([, s]) => typeof s === 'string').map(([k, s]) => `${k}=${s}`).join(' ')}`);
     });
     return out;
   },
   facts(output) {
     const recs = output.records;
-    const entries = recs.find((r) => r.field === 'registry_entry_history')?.value ?? [];
+    // Only entries in the subject owner's own namespace: anyone can publish an entry that claims the repository (R-META-07).
+    const entries = (recs.find((r) => r.field === 'registry_entry_history')?.value ?? []).filter((e) => e.namespace_matches_subject === true);
     const first = entries.map((e) => ({ entity: `mcp-registry:${e.server_name}`, first: e.versions[0] ?? null }));
     const npm = recs.filter((r) => r.field === 'npm_version_doc' && r.value).map((r) => r.value);
     return {
@@ -84,7 +98,6 @@ const REGISTRY = {
       npm: npm.map((n) => ({ package: n.package, created_at: n.created_at, repository_matches_subject: n.repository_matches_subject }))
         .sort((a, b) => String(a.package).localeCompare(String(b.package))),
       mcp_registry_stage: output.stages.mcp_registry ?? null,
-      npm_stage: output.stages.npm ?? null,
     };
   },
 };
