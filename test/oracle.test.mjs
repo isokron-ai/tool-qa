@@ -107,8 +107,7 @@ test('R-ORD-03: the store derives one record per subject from the latest facts o
   assert.deepEqual([row.status, row.reason], ['cleared', 'oracles_agree']);
   assert.ok(row.cleared_at);
   const clearedAt = row.cleared_at;
-  accept(db, 'repo:a', 'live-probe', liveFacts(), t += 1000);
-  assert.equal(db.listOracleDisagreements()[0].cleared_at, clearedAt, 'a cleared record is not touched by results that still agree (R-ORD-09)');
+  assert.ok(clearedAt);
   // It comes back open when they disagree again, as a new episode.
   accept(db, 'repo:a', 'scan-static', staticFacts(H2, 3), t += 1000);
   [row] = db.listOracleDisagreements();
@@ -265,5 +264,21 @@ test('R-ORD-06: an open disagreement makes its oracle-lane pairs due again soone
   // Once the reader is fixed the record clears and the re-checks stop.
   accept(db, 'repo:a', 'scan-static', staticFacts(H1, 3), T0 + 3 * DAY);
   assert.deepEqual(view(T0 + 3 * DAY + 2 * DAY).filter((x) => x.startsWith('repo:a') && x.includes('oracle_recheck')), []);
+  db.close();
+});
+
+test('R-ORD-09: a cleared record keeps its cleared_at and kinds while results go on agreeing', () => {
+  const db = openState(':memory:');
+  seed(db, ['repo:a']);
+  let t = T0;
+  accept(db, 'repo:a', 'scan-static', staticFacts(H2, 2), t += 1000);
+  accept(db, 'repo:a', 'live-probe', liveFacts(), t += 1000);
+  accept(db, 'repo:a', 'scan-static', staticFacts(H1, 3), t += 1000);
+  const [cleared] = db.listOracleDisagreements();
+  assert.equal(cleared.status, 'cleared');
+  assert.deepEqual(cleared.kinds, [{ kind: 'tool_count', oracles: ['live', 'reader'] }], 'the cleared episode keeps what it was');
+  for (let i = 0; i < 3; i++) accept(db, 'repo:a', i % 2 ? 'live-probe' : 'scan-static', i % 2 ? liveFacts() : staticFacts(H1, 3), t += 1000);
+  const [later] = db.listOracleDisagreements();
+  assert.deepEqual([later.cleared_at, later.updated_at, later.kinds], [cleared.cleared_at, cleared.updated_at, cleared.kinds]);
   db.close();
 });
