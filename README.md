@@ -2,8 +2,8 @@
 
 **IsoKron's continuous testing loop.** It runs our open-source MCP tools against
 nearly a thousand open-source MCP servers, around the clock, on free GitHub
-Actions runners. When one of our tools gets a server wrong, that becomes a fix,
-a named regression test and a new release. Every result is kept.
+Actions runners. When one of our tools gets a server wrong, that becomes a fix
+and a named regression test. Every result is kept.
 
 [![pump](https://github.com/isokron-ai/tool-qa/actions/workflows/pump.yml/badge.svg)](https://github.com/isokron-ai/tool-qa/actions/workflows/pump.yml)
 [![watchdog](https://github.com/isokron-ai/tool-qa/actions/workflows/watchdog.yml/badge.svg)](https://github.com/isokron-ai/tool-qa/actions/workflows/watchdog.yml)
@@ -22,8 +22,8 @@ More about IsoKron: [isokron.ai](https://isokron.ai/?utm_source=tool-qa&utm_medi
 | Results recorded | **2,872** accepted results; every attempt, accepted or rejected, is kept |
 | Official MCP registry | captured **every 15 minutes**, plus a full copy daily |
 | Bugs fixed and pinned by a test | **330**, across 5 of our repos ([regression ledger](docs/LEDGER.md)) |
-| Tests in this repo | **1,200+**, plus a randomized [chaos soak](chaos/) of the whole loop |
-| Hosting cost | **$0**: free public Actions runners and free storage tiers |
+| Tests in this repo | **about 1,200**, plus a randomized [chaos soak](chaos/) of the whole loop |
+| Hosting cost | **$0** while within free tiers: public Actions runners, and 0.28 GB of the off-site bucket's free 8 GB |
 
 ## How it works
 
@@ -65,7 +65,8 @@ Each pump tick follows one piece of work through these steps:
    its result is accepted.
 7. **Record and save.** Every attempt is stored, never overwritten. The state
    is saved before the next dispatch goes out, so a killed job can't leave
-   work the state doesn't know about.
+   work the state doesn't know about. Closed history leaves the live database
+   only after it has been sealed into an encrypted archive that reads back.
 
 The architecture in full: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 [docs/INTERFACES.md](docs/INTERFACES.md).
@@ -144,7 +145,7 @@ Variables), or with `gh variable set NAME --body VALUE --repo isokron-ai/tool-qa
 | Variable | Effect |
 |---|---|
 | `LOOP_ENABLED` | Must be exactly `true` for anything to run. **Set it to `false` to stop everything in one step.** Unset means off. |
-| `LOOP_SLOTS` | Whole number of worker slots, 0 to 15. Default 0: no work is sent out, and the pump only tidies up (judges finished worker runs, reaps expired leases and slots). Values above 15 count as 15. Set it to 5 or less to shrink the loop at once. |
+| `LOOP_SLOTS` | Whole number of worker slots, 0 to 15. Default 0: no work is sent out, and the pump only tidies up (judges finished worker runs, reaps expired leases and slots). Values above 15 count as 15. Set it lower to shrink the loop at once. |
 | `LOOP_PAUSE_UNTIL` | Optional ISO 8601 time, such as `2026-12-01T09:00:00Z`. The loop does nothing until then. A value the guard can't read keeps the loop paused. |
 | `LANE_<JOB>_ENABLED` | Optional per-job switch, for example `LANE_HISTORY_ENABLED=false`. Unset leaves the job on. |
 
