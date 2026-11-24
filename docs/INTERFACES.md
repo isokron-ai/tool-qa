@@ -233,4 +233,5 @@ instead of after the lease expires. It wraps `db.closeDispatch()` and returns
 | `pump.successor` | `{ ok, at, ref, runId?, error? }` from `pump/successor.mjs` for the current run. The watchdog reports `ok: false` as red. |
 | `pump.last_tick` | The last tick's summary: due, planned, dispatched, failed, reaped, why it stopped early; `ingest` (checked, judged, recorded, outcomes, errors, why ingest stopped, or `null` if it did not run) and `blocked` (why nothing may be dispatched this run, or `null`). |
 | `pump.last_run` | Start, finish, ticks, dispatched, failed and slot numbers of the last pump run. |
+| `pump.api_budget` | The pump's API budget (`ApiBudget.snapshot()`): the time of every API call in the last hour, per endpoint family, and any rate-limit block still in force. Saved before every push and restored at the start of the next run, so the hourly caps hold across runs rather than per run. |
 | `ingest.failures:<attempt_id>:<index>` | `{ count, first, last, error }`: how often the pump failed to judge that item (not counting transient errors). Removed when the item is decided; at 3 it is recorded as `ingest_error`. |

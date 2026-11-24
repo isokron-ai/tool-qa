@@ -16,6 +16,10 @@
 //
 // A cap that would need a long wait throws BudgetExceededError instead of
 // sleeping, so a pump tick ends early and the next tick tries again.
+//
+// The hourly caps are per hour, not per process: the pump saves snapshot() in
+// the state (kv pump.api_budget) and the next run restore()s it, so five pump
+// runs an hour share one budget instead of getting five.
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -225,20 +229,65 @@ export class ApiBudget {
     return header(res, 'retry-after') !== null || header(res, 'x-ratelimit-remaining') === '0' || SECONDARY_RE.test(String(bodyText ?? ''));
   }
 
+  /**
+   * What the budget knows, JSON-safe. `calls` holds the time of every call in
+   * the last hour (per family, and `total`), and `blocked` the blocks still in
+   * force, so restore() in the next pump run can carry the hourly caps across
+   * runs (R-ING-11).
+   */
   snapshot() {
     const now = this.now();
     const used = {};
-    for (const [f, s] of this.state) used[f] = s.hour.filter((t) => t > now - HOUR).length;
+    const calls = { total: this.total.filter((t) => t > now - HOUR), families: {} };
+    for (const [f, s] of this.state) {
+      const hour = s.hour.filter((t) => t > now - HOUR);
+      used[f] = hour.length;
+      calls.families[f] = hour;
+    }
     let blockedUntil = 0;
-    for (const v of this.blocked.values()) blockedUntil = Math.max(blockedUntil, v);
+    const blocked = {};
+    for (const [k, v] of this.blocked) {
+      blockedUntil = Math.max(blockedUntil, v);
+      if (v > now) blocked[k] = v;
+    }
     return {
+      at: now,
       totalPerHour: this.totalPerHour,
-      totalUsed: this.total.filter((t) => t > now - HOUR).length,
+      totalUsed: calls.total.length,
       used,
       blockedUntil,
       secondaryHits: this.secondaryHits,
       resources: Object.fromEntries(this.resources),
+      calls,
+      blocked,
     };
+  }
+
+  /**
+   * Seed the budget with an earlier snapshot() (from another process): its
+   * calls of the last hour count against the hourly caps, and its blocks stay
+   * in force. Anything malformed is ignored. Per-minute windows and spacing
+   * start afresh.
+   */
+  restore(snap) {
+    if (!snap || typeof snap !== 'object') return this;
+    const now = this.now();
+    const recent = (list) => (Array.isArray(list) ? list : [])
+      .filter((t) => Number.isFinite(t) && t > now - HOUR && t <= now);
+    const merge = (into, list) => [...into, ...recent(list)].sort((a, b) => a - b);
+    this.total = merge(this.total, snap.calls?.total);
+    for (const [f, list] of Object.entries(snap.calls?.families ?? {})) {
+      if (!this.families[f]) continue;
+      const s = this.fam(f);
+      s.hour = merge(s.hour, list);
+    }
+    for (const [k, until] of Object.entries(snap.blocked ?? {})) {
+      if (Number.isFinite(until) && until > now) this.block(k, until);
+    }
+    if (Number.isSafeInteger(snap.secondaryHits) && snap.secondaryHits > 0 && Number(snap.at) > now - HOUR) {
+      this.secondaryHits = Math.max(this.secondaryHits, snap.secondaryHits);
+    }
+    return this;
   }
 }
 

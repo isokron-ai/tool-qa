@@ -141,3 +141,37 @@ test('budgetedFetch refuses before sending and learns from responses', async () 
   await assert.rejects(f(`${API}/repos/o/r/contents/x`), (err) => err instanceof BudgetExceededError && err.reason === 'blocked');
   assert.equal(api.calls.length, 1);
 });
+
+test('R-ING-11: a restored snapshot carries the hourly caps into a new budget', async () => {
+  const c = fakeClock();
+  const first = new ApiBudget({ now: c.now, sleep: c.sleep });
+  for (let i = 0; i < 200; i++) {
+    await first.take('artifacts');
+    c.t += 1000; // under the per-minute cap
+  }
+  await assert.rejects(first.take('artifacts'), (err) => err instanceof BudgetExceededError && err.reason === 'hourly');
+  const snap = JSON.parse(JSON.stringify(first.snapshot())); // as stored in kv
+
+  // The next pump run: a fresh budget, seeded from the snapshot.
+  c.t += 60_000;
+  const next = new ApiBudget({ now: c.now, sleep: c.sleep }).restore(snap);
+  assert.equal(next.snapshot().used.artifacts, 200);
+  assert.equal(next.snapshot().totalUsed, 200);
+  await assert.rejects(next.take('artifacts'), (err) => err instanceof BudgetExceededError && err.reason === 'hourly');
+
+  // A rate-limit block still in force carries over too.
+  first.block('core', c.t + 5 * 60_000);
+  const blocked = new ApiBudget({ now: c.now, sleep: c.sleep }).restore(JSON.parse(JSON.stringify(first.snapshot())));
+  assert.ok(blocked.blockedUntil('core') > c.t);
+
+  // An hour after those calls, they no longer count.
+  c.t += 60 * 60_000;
+  await next.take('artifacts');
+
+  // Without a snapshot, a fresh budget would have allowed them all again;
+  // malformed snapshots are ignored.
+  for (const bad of [undefined, null, 'x', { calls: { total: 'no', families: { artifacts: [Number.NaN, 'a'], nope: [c.t] } } }]) {
+    const b = new ApiBudget({ now: c.now, sleep: c.sleep }).restore(bad);
+    assert.equal(b.snapshot().totalUsed, 0);
+  }
+});

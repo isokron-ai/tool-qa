@@ -388,3 +388,21 @@ test('R-ING-10: dispatches are in the saved state before they are sent', async (
   assert.equal(after.pending, 0, 'the next push has them as dispatched');
   h.cleanup();
 });
+
+test('R-ING-11: the API budget is saved with the state and seeds the next run', async () => {
+  const h = harness({ slots: '0' });
+  const first = new ApiBudget({ now: h.c.now, sleep: h.c.sleep });
+  for (let i = 0; i < 7; i++) await first.take('contents');
+  await runPump({ ...h.opts, budget: first });
+  const db = openState(h.stateFile);
+  const saved = db.getKv('pump.api_budget');
+  db.close();
+  assert.equal(saved.used.contents, 7);
+  assert.equal(saved.calls.families.contents.length, 7);
+
+  h.c.t += 10 * 60_000;
+  const second = new ApiBudget({ now: h.c.now, sleep: h.c.sleep });
+  await runPump({ ...h.opts, budget: second });
+  assert.equal(second.snapshot().used.contents, 7, 'the second run counts the first run\'s calls');
+  h.cleanup();
+});

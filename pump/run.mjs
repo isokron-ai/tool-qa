@@ -65,6 +65,7 @@ import { computeBudget, reapExpired } from './slots.mjs';
 import { planShards, runTick } from './tick.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
+export const BUDGET_KEY = 'pump.api_budget';
 
 const isSetupError = (err) => err instanceof IngestSetupError || err?.name === 'IngestSetupError';
 
@@ -166,13 +167,20 @@ export async function runPump({
 
   await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, ...stateKeys });
   const db = openState(stateFile);
+  // The hourly API caps hold across runs (R-ING-11): this run starts with the
+  // calls earlier runs made in the last hour, and leaves its own for the next.
+  if (typeof bud.restore === 'function') bud.restore(db.getKv(BUDGET_KEY));
+  const keepBudget = () => {
+    if (typeof bud.snapshot === 'function') db.setKv(BUDGET_KEY, bud.snapshot(), { now: now() });
+  };
   let ticks = 0;
   let dispatched = 0;
   let failed = 0;
   // After any failed push nothing more is dispatched: work sent now could be
   // missing from the saved state. The run ends after one housekeeping tick.
   let pushFailed = false;
-  const save = async (why) => {
+  const save = async (why, { open = true } = {}) => {
+    if (open) keepBudget();
     try {
       await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), ...stateKeys });
       return true;
@@ -231,11 +239,12 @@ export async function runPump({
       if (next >= deadline) break;
       await sleep(Math.max(0, next - now()));
     }
+    keepBudget();
     db.setKv('pump.last_run', { started: new Date(start).toISOString(), finished: new Date(now()).toISOString(), ticks, dispatched, failed, workerSlots, loopBudget }, { now: now() });
   } finally {
     db.close();
   }
-  await save('end of run');
+  await save('end of run', { open: false });
   return { ok, ticks, dispatched, failed, workerSlots, loopBudget };
 }
 
