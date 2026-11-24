@@ -28,7 +28,8 @@
 // Environment: GITHUB_TOKEN or GH_TOKEN (optional; raises the API limit),
 // LEDGER_API_BUDGET (default 300 calls a run). A rate limit, or the budget
 // running out, leaves the rest unresolved for the next run; it does not fail.
-// Exit codes: 0 written, 1 a ledger could not be fetched or read, 2 usage.
+// Exit codes: 0 written; 1 written, but a source's ledger could not be fetched or read (that source is
+// recorded as unreadable, the others are built); 2 usage.
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -57,7 +58,33 @@ const TEST_FORMS = [
 
 const SEVERITY = /^(CRITICAL|HIGH|LOW-MEDIUM|MEDIUM|LOW)\b(?:\s*\(([^)]*)\))?\.\s*/;
 const FOUND_BY_MARK = /\s*Found by:?\s+([A-Za-z][A-Za-z -]*?)\.(?=\s|$)/i;
-const SHA = /\b[0-9a-f]{7,40}\b/g;
+
+/**
+ * Commit SHAs in a Fix cell. A cell that is only a list of hex words ("70d658a", "20a0fa4, 5426adf") is a list of
+ * SHAs, all-digit short SHAs such as 0866426 included. In any other text a SHA must be in backticks, in a commit
+ * link, or a bare word with a letter a-f and a digit, so a date (20261123), a pull request number (#1234567) or a
+ * hex-looking word (defaced) is not taken for one.
+ */
+export function fixCommits(text) {
+  const t = String(text).trim();
+  const LIST = /^[0-9a-f]{7,40}(?:\s*(?:,|;|\+|&|and)\s*[0-9a-f]{7,40})*$/;
+  if (LIST.test(t)) return [...new Set(t.match(/[0-9a-f]{7,40}/g))];
+  const out = [];
+  const re = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/commit\/([0-9a-f]{7,40})\b|`([0-9a-f]{7,40})`|(?<![\w#/.:-])([0-9a-f]{7,40})(?![\w/.-])/g;
+  for (const m of t.matchAll(re)) {
+    const sha = m[1] ?? m[2] ?? m[3];
+    if (!/[a-f]/.test(sha) || (m[3] && !/\d/.test(sha))) continue;
+    if (!out.includes(sha)) out.push(sha);
+  }
+  return out;
+}
+
+/** A test file path a row may name: relative, inside the repository, and nothing a URL would read as more. */
+export function validTestPath(file) {
+  return typeof file === 'string' && file.length > 0 && file.length <= 300
+    && !file.startsWith('/') && !/[?#\\\0]/.test(file) && !/[\x00-\x1f]/.test(file)
+    && !file.split('/').some((seg) => seg === '..' || seg === '.' || seg === '');
+}
 
 /** Split a Markdown table row into cells: pipes inside backticks or escaped (\|) do not split. */
 export function splitRow(line) {
@@ -103,12 +130,15 @@ export function normaliseFoundBy(raw) {
   return t;
 }
 
-/** Parse one test reference. Returns {file, name, form} or {file: null, name: text, form: null}. */
+/**
+ * Parse one test reference. Returns {file, name, form}; {file: null, name: text, form: null} when it is in no
+ * known form; and {file: null, name, form, rejected: file} when the path is not one a row may name.
+ */
 export function parseTestRef(text) {
   const t = text.trim();
   for (const [form, re] of TEST_FORMS) {
     const m = re.exec(t);
-    if (m) return { file: m[1], name: m[2], form };
+    if (m) return validTestPath(m[1]) ? { file: m[1], name: m[2], form } : { file: null, name: m[2], form, rejected: m[1] };
   }
   return { file: null, name: t, form: null };
 }
@@ -138,8 +168,10 @@ export function parseLedger(text, { repo = '<repo>' } = {}) {
     const m = /^\s*[-*]\s+`(R-[A-Z]+)-\*`\s*:\s*(.+)$/.exec(line);
     if (m) families[m[1]] = m[2].trim();
   }
-  const sep = lines.findIndex((l, i) => i > 0 && /^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$/.test(l) && /^\s*\|/.test(lines[i - 1]));
-  if (sep < 0) throw new Error(`${repo}: REGRESSIONS.md has no table`);
+  // The ledger table is the first table whose header has an ID column; other tables on the page are skipped.
+  const isSep = (l) => /^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$/.test(l);
+  const sep = lines.findIndex((l, i) => i > 0 && isSep(l) && /^\s*\|/.test(lines[i - 1]) && splitRow(lines[i - 1]).some((h) => /^id$/i.test(h)));
+  if (sep < 0) throw new Error(`${repo}: REGRESSIONS.md has no table with an ID column`);
   const header = splitRow(lines[sep - 1]);
   const col = {};
   for (const [role, re] of ROLES) {
@@ -187,7 +219,7 @@ export function parseLedger(text, { repo = '<repo>' } = {}) {
       .map(parseTestRef);
     for (const t of tests) forms.add(t.form ?? 'unrecognised');
     const fixText = cells[col.fix] ?? '';
-    const fixCommits = [...new Set(fixText.match(SHA) ?? [])];
+    const commits = fixCommits(fixText);
     rows.push({
       id,
       severity,
@@ -197,7 +229,7 @@ export function parseLedger(text, { repo = '<repo>' } = {}) {
       description: what,
       tests,
       fix_text: fixText,
-      fix_commits: fixCommits,
+      fix_commits: commits,
     });
   }
   const testForms = [...forms];
@@ -313,7 +345,8 @@ export async function releaseContains(repo, tag, sha, gh, cache) {
 
 // ---------------------------------------------------------------- fetching sources
 
-export const rawUrl = (repo, ref, path) => `https://raw.githubusercontent.com/${repo}/${ref}/${path}`;
+const encodePath = (p) => String(p).split('/').map(encodeURIComponent).join('/');
+export const rawUrl = (repo, ref, path) => `https://raw.githubusercontent.com/${repo}/${encodePath(ref)}/${encodePath(path)}`;
 
 /** Fetch a public file; null on 404. */
 export async function fetchRaw(url, { fetch = globalThis.fetch } = {}) {
@@ -332,10 +365,30 @@ export async function fetchRaw(url, { fetch = globalThis.fetch } = {}) {
   }
 }
 
-/** Is a test named `name` in this source text? (Quotes inside the name may be escaped in the source.) */
+// test(), it(), describe(), suite(), and helpers named ...Test() that wrap test() (mcp-surface-corpus's caseTest).
+const CALL = String.raw`(?<![\w$.])(?:t\.)?(?:test|it|describe|suite|[A-Za-z_$][\w$]*Test)(?:\.(?:only|skip|todo))?\(\s*`;
+
+/**
+ * The names a test file gives its tests: the first argument of test(), it(), describe(), suite() and helpers
+ * named ...Test() (and their .only/.skip/.todo forms). Quoted names are kept exactly; a template literal becomes a pattern in which each
+ * `${...}` stands for any text, for names built in a loop.
+ */
+export function testNamesIn(src) {
+  const exact = new Set();
+  const patterns = [];
+  for (const m of src.matchAll(new RegExp(`${CALL}(['"])((?:\\\\.|(?!\\1)[^\\\\])*)\\1`, 'g'))) exact.add(m[2].replace(/\\(.)/g, '$1'));
+  for (const m of src.matchAll(new RegExp(`${CALL}\`((?:\\\\.|[^\\\\\`])*)\``, 'g'))) {
+    if (!m[1].includes('${')) { exact.add(m[1].replace(/\\(.)/g, '$1')); continue; }
+    const parts = m[1].split(/\$\{[^}]*\}/).map((p) => p.replace(/\\(.)/g, '$1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    patterns.push(new RegExp(`^${parts.join('.+')}$`, 's'));
+  }
+  return { exact, patterns };
+}
+
+/** Does this test file have a test named exactly `name`? */
 export function sourceHasTest(src, name) {
-  if (src.includes(name)) return true;
-  return [`\\'`, `\\"`].some((q) => src.includes(name.replaceAll(q[1], q)));
+  const { exact, patterns } = typeof src === 'string' ? testNamesIn(src) : src;
+  return exact.has(name) || patterns.some((p) => p.test(name));
 }
 
 // ---------------------------------------------------------------- building
@@ -356,14 +409,26 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
     const { repo } = source;
     const ref = source.ref ?? 'main';
     const path = source.path ?? 'REGRESSIONS.md';
-    const text = await readLedger(source);
+    let text;
+    let parsed;
+    try {
+      text = await readLedger(source);
+      if (text !== null) parsed = parseLedger(text, { repo });
+    } catch (err) {
+      // One ledger that cannot be fetched or read does not stop the others; the run still ends red (main()).
+      const error = String(err?.message ?? err).replace(/\s+/g, ' ').slice(0, 300);
+      out.sources.push({ repo, ref, path, status: 'unreadable', error });
+      out.counts[repo] = 0;
+      out.unresolved.push({ repo, id: null, what: 'ledger', detail: error });
+      log(`${repo}: ${path} on ${ref} is unreadable: ${error}`);
+      continue;
+    }
     if (text === null) {
       out.sources.push({ repo, ref, path, status: 'absent' });
       out.counts[repo] = 0;
       log(`${repo}: no ${path} on ${ref}`);
       continue;
     }
-    const parsed = parseLedger(text, { repo });
     out.sources.push({
       repo, ref, path, status: 'ok',
       sha256: createHash('sha256').update(text).digest('hex'),
@@ -398,12 +463,28 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
       for (const t of row.tests) {
         let found = null;
         if (t.file) {
-          if (!fileCache.has(t.file)) fileCache.set(t.file, await readFile(repo, ref, t.file));
-          const src = fileCache.get(t.file);
-          found = src === null ? false : sourceHasTest(src, t.name);
+          if (!fileCache.has(t.file)) {
+            let names = null;
+            try {
+              const src = await readFile(repo, ref, t.file);
+              names = src === null ? null : testNamesIn(src);
+            } catch (err) {
+              names = { error: String(err?.message ?? err) };
+            }
+            fileCache.set(t.file, names);
+          }
+          const names = fileCache.get(t.file);
+          found = names === null ? false : names.error ? null : sourceHasTest(names, t.name);
         }
         rec.test.push({ file: t.file, name: t.name, found });
-        if (found !== true) out.unresolved.push({ repo, id: row.id, what: 'test', detail: t.file ? `${t.file} › ${t.name}: ${found === false ? 'not found on ' + ref : 'not checked'}` : `not a file › name reference: ${t.name}` });
+        if (found !== true) {
+          let detail;
+          if (t.rejected !== undefined) detail = `test path rejected (${JSON.stringify(t.rejected)}): ${t.name}`;
+          else if (!t.file) detail = `not a file › name reference: ${t.name}`;
+          else if (found === false) detail = `${t.file} › ${t.name}: no test of exactly that name on ${ref}`;
+          else detail = `${t.file} › ${t.name}: not checked (${fileCache.get(t.file)?.error ?? 'unknown'})`;
+          out.unresolved.push({ repo, id: row.id, what: 'test', detail });
+        }
       }
       if (row.tests.length === 0) out.unresolved.push({ repo, id: row.id, what: 'test', detail: 'the row names no test' });
 
@@ -416,8 +497,10 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
           try {
             resolved.push(await resolveCommit(repo, sha, out.api_stopped ? null : gh, cache, ref));
           } catch (err) {
-            if (!stop(err)) throw err;
-            resolved.push(await resolveCommit(repo, sha, null, cache, ref));
+            // A rate limit or an empty budget stops the lookups (cache only from here); any other API error is
+            // recorded for this commit and the run goes on.
+            if (stop(err)) resolved.push(await resolveCommit(repo, sha, null, cache, ref));
+            else resolved.push({ error: `${sha}: ${String(err?.message ?? err).slice(0, 200)}` });
           }
         }
         for (const r of resolved) {
@@ -444,7 +527,7 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
               if (all) { rec.released_in = rel.tag; break; }
             }
           } catch (err) {
-            if (!stop(err)) throw err;
+            if (!stop(err)) out.unresolved.push({ repo, id: row.id, what: 'released_in', detail: String(err?.message ?? err).slice(0, 200) });
           }
         }
       }
@@ -476,7 +559,8 @@ export function renderMarkdown(ledger) {
     const recs = ledger.records.filter((r) => r.repo === s.repo);
     const n = (f) => recs.filter(f).length;
     const unresolvedIds = new Set(ledger.unresolved.filter((u) => u.repo === s.repo).map((u) => u.id));
-    out.push(`| [${s.repo.split('/')[1]}](https://github.com/${s.repo}) | ${recs.length}${s.status === 'absent' ? ' (no ledger yet)' : ''} | ${n((r) => r.severity === 'critical')} | ${n((r) => r.severity === 'high')} | ${n((r) => r.severity === 'medium' || r.severity === 'low-medium')} | ${n((r) => r.severity === 'low')} | ${n((r) => !r.severity)} | ${unresolvedIds.size} |`);
+    const note = s.status === 'absent' ? ' (no ledger yet)' : s.status === 'unreadable' ? ' (ledger unreadable)' : '';
+    out.push(`| [${s.repo.split('/')[1]}](https://github.com/${s.repo}) | ${recs.length}${note} | ${n((r) => r.severity === 'critical')} | ${n((r) => r.severity === 'high')} | ${n((r) => r.severity === 'medium' || r.severity === 'low-medium')} | ${n((r) => r.severity === 'low')} | ${n((r) => !r.severity)} | ${unresolvedIds.size} |`);
   }
   out.push('');
   const byFound = {};
@@ -490,6 +574,7 @@ export function renderMarkdown(ledger) {
   out.push('');
   for (const s of ledger.sources) {
     if (s.status === 'absent') { out.push(`- ${s.repo}: no \`${s.path}\` on \`${s.ref}\`.`); continue; }
+    if (s.status === 'unreadable') { out.push(`- ${s.repo}: **unreadable**: ${esc(s.error)}`); continue; }
     out.push(`- ${s.repo}: ${s.normalised.length ? `normalised: ${s.normalised.join('; ')}.` : 'already in that shape.'}`);
   }
   out.push('');
@@ -514,7 +599,7 @@ export function renderMarkdown(ledger) {
   out.push('## Unresolved');
   out.push('');
   if (!ledger.unresolved.length) out.push('Nothing: every row\'s tests were found and every fix commit has a merged pull request.');
-  else for (const u of ledger.unresolved) out.push(`- ${u.repo} ${u.id} (${u.what}): ${esc(u.detail)}`);
+  else for (const u of ledger.unresolved) out.push(`- ${u.repo}${u.id ? ` ${u.id}` : ''} (${u.what}): ${esc(u.detail)}`);
   if (ledger.api_stopped) { out.push(''); out.push(`API lookups stopped early (${ledger.api_stopped}); the next run picks up the rest.`); }
   out.push('');
   return out.join('\n');
@@ -560,8 +645,13 @@ export async function main(argv = process.argv.slice(2), env = process.env, { fe
   writeFileSync(join(args.out, 'ledger', 'ledger.json'), `${JSON.stringify(ledger, null, 2)}\n`);
   writeFileSync(join(args.out, 'docs', 'LEDGER.md'), renderMarkdown(ledger));
   writeFileSync(cachePath, `${JSON.stringify(sortedCache(cache), null, 2)}\n`);
-  const per = ledger.sources.map((s) => `${s.repo.split('/')[1]} ${ledger.counts[s.repo]}`).join(', ');
+  const per = ledger.sources.map((s) => `${s.repo.split('/')[1]} ${s.status === 'unreadable' ? 'UNREADABLE' : ledger.counts[s.repo]}`).join(', ');
   log(`ledger: ${ledger.counts.total} rows (${per}); ${ledger.unresolved.length} unresolved; ${gh ? gh.state.calls : 0} API calls${ledger.api_stopped ? `; stopped early: ${ledger.api_stopped}` : ''}`);
+  const unreadable = ledger.sources.filter((s) => s.status === 'unreadable');
+  if (unreadable.length) {
+    log(`ledger: written, but ${unreadable.map((s) => s.repo).join(', ')} could not be read; failing the run`);
+    return 1;
+  }
   return 0;
 }
 

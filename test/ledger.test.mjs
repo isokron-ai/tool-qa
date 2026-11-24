@@ -8,7 +8,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { classifyFamily, foundByOf, main, parseLedger, parseTestRef, resolveCommit, splitRow } from '../scripts/ledger.mjs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync } from 'node:fs';
+
+import { classifyFamily, fixCommits, foundByOf, main, parseLedger, parseTestRef, resolveCommit, sourceHasTest, splitRow, testNamesIn, validTestPath } from '../scripts/ledger.mjs';
+import { ownPr } from '../scripts/ledger-own-pr.mjs';
+import { parseYaml } from '../scripts/lib/yaml-lite.mjs';
 
 const FIX = fileURLToPath(new URL('./fixtures/ledger/', import.meta.url));
 const fixture = (repo) => readFileSync(join(FIX, `isokron-ai__${repo}.md`), 'utf8');
@@ -118,7 +123,7 @@ function json(status, body, headers = {}) {
 }
 
 /** A fake raw.githubusercontent.com and api.github.com. Every test a fixture row names exists, except one. */
-function fakeGitHub({ rateLimit = false } = {}) {
+function fakeGitHub({ rateLimit = false, override = {} } = {}) {
   const calls = [];
   const ledgers = {
     'isokron-ai/tool-qa': fixture('tool-qa'),
@@ -137,6 +142,7 @@ function fakeGitHub({ rateLimit = false } = {}) {
       }
     }
   }
+  Object.assign(ledgers, override);
   // Commits: 0866426 and cd85233 are in mcp-check release v1.4.0; 99f6817 was pushed to main with no pull request.
   const prs = {
     'isokron-ai/mcp-check': { 3: { merged_at: '2026-11-23T10:00:00Z', merge_commit_sha: 'm3'.padEnd(40, '0') } },
@@ -249,7 +255,7 @@ test('a full run: every repo read, rows resolved to pull requests, merges and re
     assert.match(md, /- isokron-ai\/tool-qa: already in that shape\./);
     assert.match(md, /\| R-SS-01 \| high \| .* \| review \| .* \| \[0866426\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/commit\/0866426\) \| \[#3\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/pull\/3\) \| 2026-11-23 \| v1\.4\.0 \|/);
     assert.match(md, /## Unresolved\n\n- /);
-    assert.match(md, /R-ING-19 \(test\): pump\/test\/dispatch\.test\.mjs › .* not found on main/);
+    assert.match(md, /R-ING-19 \(test\): pump\/test\/dispatch\.test\.mjs › .*: no test of exactly that name on main/);
 
     // The cache holds only what cannot change.
     const cache = JSON.parse(readFileSync(join(dir, 'ledger/cache.json'), 'utf8'));
@@ -311,6 +317,8 @@ test('a ledger that cannot be fetched fails the run; a bad argument is a usage e
     const { code, logs } = await run(dir, broken);
     assert.equal(code, 1);
     assert.match(logs.join('\n'), /HTTP 403/);
+    const l = JSON.parse(readFileSync(join(dir, 'ledger/ledger.json'), 'utf8'));
+    assert.deepEqual(l.sources.map((x) => x.status), ['unreadable', 'unreadable', 'unreadable', 'unreadable', 'unreadable']);
     assert.equal((await run(dir, fakeGitHub(), ['--nope'])).code, 2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -323,4 +331,152 @@ test('the committed sources list every tool repository once', () => {
   assert.deepEqual(repos, ['isokron-ai/tool-qa', 'isokron-ai/mcp-check', 'isokron-ai/mcp-surface-corpus', 'isokron-ai/mcp-writecheck-action', 'isokron-ai/mcp-write-safety']);
   const vocab = new Set(['review', 'CI', 'self-test', 'mutation', 'live run', 'unknown']);
   for (const r of s.repos) for (const v of Object.values(r.found_by ?? {})) assert.ok(vocab.has(v), `${r.repo}: ${v}`);
+});
+
+// ---- review fixes (R-LED)
+
+test('R-LED-01: one unreadable ledger is recorded as such; the others are built and written, and the run fails', async () => {
+  const dir = scratch();
+  try {
+    const gh = fakeGitHub({ override: { 'isokron-ai/mcp-check': '# Regressions\n\n| ID | What it was | Fix |\n|---|---|---|\n| R-SS-01 | x | abc1234 |\n' } });
+    const { code, logs } = await run(dir, gh);
+    assert.equal(code, 1, 'the run shows red');
+    assert.match(logs.join('\n'), /mcp-check could not be read; failing the run/);
+    const l = JSON.parse(readFileSync(join(dir, 'ledger/ledger.json'), 'utf8'));
+    const mc = l.sources.find((x) => x.repo === 'isokron-ai/mcp-check');
+    assert.equal(mc.status, 'unreadable');
+    assert.match(mc.error, /no "tests" column/);
+    assert.deepEqual(l.unresolved.filter((u) => u.what === 'ledger').map((u) => [u.repo, u.id]), [['isokron-ai/mcp-check', null]]);
+    assert.equal(l.counts['isokron-ai/mcp-check'], 0);
+    assert.equal(l.counts['isokron-ai/tool-qa'], 5, 'the other sources are still built');
+    assert.equal(l.counts['isokron-ai/mcp-surface-corpus'], 5);
+    const md = readFileSync(join(dir, 'docs/LEDGER.md'), 'utf8');
+    assert.match(md, /mcp-check\) \| 0 \(ledger unreadable\)/);
+    assert.match(md, /- isokron-ai\/mcp-check: \*\*unreadable\*\*: /);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-LED-01: the ledger table is the one whose header has an ID column, not the first table on the page', () => {
+  const text = '# Regressions\n\n| Prefix | Meaning |\n|---|---|\n| R-X | things |\n\n| ID | What it was | Pinned by | Fix |\n|---|---|---|---|\n| R-X-01 | LOW. A thing. | `test/a.test.mjs` › `R-X-01: a` | abc1234 |\n';
+  const p = parseLedger(text, { repo: 'r' });
+  assert.deepEqual(p.rows.map((r) => r.id), ['R-X-01']);
+  assert.throws(() => parseLedger('| Prefix | Meaning |\n|---|---|\n| R-X | things |\n', { repo: 'r' }), /no table with an ID column/);
+});
+
+test('R-LED-02: only an open pull request from this repository counts as the workflow\'s own, never a fork\'s', () => {
+  const fork = { number: 7, isCrossRepository: true, headRepositoryOwner: { login: 'someone' } };
+  const forkSameOwnerName = { number: 8, isCrossRepository: true, headRepositoryOwner: { login: 'isokron-ai' } };
+  const mine = { number: 12, isCrossRepository: false, headRepositoryOwner: { login: 'isokron-ai' } };
+  assert.equal(ownPr([fork, forkSameOwnerName], 'isokron-ai'), null);
+  assert.equal(ownPr([fork, mine], 'isokron-ai'), 12);
+  assert.equal(ownPr([mine], 'ISOKRON-AI'), 12);
+  assert.equal(ownPr([{ ...mine, headRepositoryOwner: { login: 'other' } }], 'isokron-ai'), null);
+  assert.equal(ownPr('nope', 'isokron-ai'), null);
+});
+
+const WF = parseYaml(readFileSync(fileURLToPath(new URL('../.github/workflows/ledger.yml', import.meta.url)), 'utf8'));
+
+test('R-LED-02: with only a fork\'s pull request on ledger/refresh, the workflow neither closes it nor counts it as its own', () => {
+  const step = WF.jobs.publish.steps.find((s) => s.name === 'Open or update the pull request');
+  assert.match(step.run, /--json number,isCrossRepository,headRepositoryOwner \| node scripts\/ledger-own-pr\.mjs "\$OWNER"/);
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-wf-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    const fork = JSON.stringify([{ number: 7, isCrossRepository: true, headRepositoryOwner: { login: 'someone' } }]);
+    writeFileSync(join(bin, 'gh'), `#!/usr/bin/env bash\necho "gh $*" >> "${dir}/calls"\nif [ "$1 $2" = "pr list" ]; then echo '${fork}'; fi\nexit 0\n`);
+    writeFileSync(join(bin, 'git'), `#!/usr/bin/env bash\necho "git $*" >> "${dir}/calls"\nif [ "$1" = status ]; then printf '%s' "$GIT_STATUS"; fi\nexit 0\n`);
+    chmodSync(join(bin, 'gh'), 0o755);
+    chmodSync(join(bin, 'git'), 0o755);
+    const go = (status) => {
+      writeFileSync(join(dir, 'calls'), '');
+      writeFileSync(join(dir, 'summary'), '');
+      const r = spawnSync('bash', ['-e', '-c', step.run], {
+        cwd: fileURLToPath(new URL('../', import.meta.url)),
+        encoding: 'utf8',
+        env: { PATH: `${bin}:${process.env.PATH}`, REPO: 'isokron-ai/tool-qa', OWNER: 'isokron-ai', BRANCH: 'ledger/refresh', GIT_STATUS: status, GITHUB_STEP_SUMMARY: join(dir, 'summary') },
+      });
+      return { status: r.status, out: r.stdout + r.stderr, calls: readFileSync(join(dir, 'calls'), 'utf8') };
+    };
+    const same = go('');
+    assert.equal(same.status, 0, same.out);
+    assert.doesNotMatch(same.calls, /gh pr close/, 'the fork\'s pull request is not closed');
+    const changed = go(' M docs/LEDGER.md\n');
+    assert.equal(changed.status, 0, changed.out);
+    assert.match(changed.calls, /gh pr create -R isokron-ai\/tool-qa --base main --head ledger\/refresh/, 'a pull request of its own is opened');
+    assert.doesNotMatch(changed.out, /Updated pull request #7/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-LED-03: a Fix cell yields commit SHAs only, not dates, pull request numbers or hex-looking words', () => {
+  assert.deepEqual(fixCommits('70d658a, 20a0fa4'), ['70d658a', '20a0fa4']);
+  assert.deepEqual(fixCommits('merged 20261123 in #1234567 (defaced)'), []);
+  assert.deepEqual(fixCommits('`deadbee` and https://github.com/isokron-ai/tool-qa/commit/0123abc'), ['deadbee', '0123abc']);
+  assert.deepEqual(fixCommits('`1234567` in prose'), [], 'in prose, all digits is not taken for a SHA');
+  assert.deepEqual(fixCommits('0866426'), ['0866426'], 'a cell that is only SHAs may hold an all-digit one');
+  assert.deepEqual(fixCommits('1411417, 6d10237, 0f0f83c'), ['1411417', '6d10237', '0f0f83c']);
+  assert.deepEqual(fixCommits('a8305a847eb48019fa454736699fded8032cb6dc'), ['a8305a847eb48019fa454736699fded8032cb6dc']);
+  const p = parseLedger('| ID | What it was | Pinned by | Fix |\n|---|---|---|---|\n| R-X-01 | x | `t/a.test.mjs` › `n` | 20261123, pull request 1234567 |\n', { repo: 'r' });
+  assert.deepEqual(p.rows[0].fix_commits, []);
+});
+
+test('R-LED-04: a test path with .., a leading /, ? or # is rejected and never fetched', async () => {
+  for (const bad of ['../x.test.mjs', 'a/../../b.test.mjs', '/etc/passwd', 'a.test.mjs?x=1', 'a.test.mjs#frag', './a.test.mjs', 'a//b.test.mjs', 'a\\b.test.mjs']) {
+    assert.equal(validTestPath(bad), false, bad);
+  }
+  assert.equal(validTestPath('ingest/test/redact.test.mjs'), true);
+  assert.deepEqual(parseTestRef('`../secret.test.mjs` › `R-X-01: n`'), { file: null, name: 'R-X-01: n', form: '`file` › `name`', rejected: '../secret.test.mjs' });
+
+  const dir = scratch();
+  try {
+    const bad = `${fixture('tool-qa').trimEnd()}\n| R-ING-21 | LOW. x. | \`../../other/repo.test.mjs\` › \`R-ING-21: n\`<br>\`test/q.test.mjs?ref=x\` › \`R-ING-21: m\` | 70d658a |\n`;
+    const gh = fakeGitHub({ override: { 'isokron-ai/tool-qa': bad } });
+    assert.equal((await run(dir, gh)).code, 0);
+    assert.ok(!gh.calls.some((c) => c.startsWith('raw:') && /other\/repo|q\.test/.test(c)), 'no request for a rejected path');
+    const l = JSON.parse(readFileSync(join(dir, 'ledger/ledger.json'), 'utf8'));
+    const details = l.unresolved.filter((u) => u.id === 'R-ING-21').map((u) => u.detail);
+    assert.deepEqual(details, ['test path rejected ("../../other/repo.test.mjs"): R-ING-21: n', 'test path rejected ("test/q.test.mjs?ref=x"): R-ING-21: m']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-LED-05: generate holds a read-only token; only publish can write, and it runs no ledger code', () => {
+  const { generate, publish } = WF.jobs;
+  assert.deepEqual(Object.keys(WF.jobs), ['generate', 'publish']);
+  assert.deepEqual(generate.permissions, { contents: 'read' });
+  assert.deepEqual(publish.permissions, { contents: 'write', 'pull-requests': 'write' });
+  assert.equal(publish.needs, 'generate');
+  for (const job of [generate, publish]) {
+    const guard = job.steps[1];
+    assert.equal(guard.id, 'guard');
+    assert.match(guard.run, /node scripts\/guard\.mjs --job ledger --no-slots/);
+    for (const v of ['LOOP_ENABLED', 'LOOP_PAUSE_UNTIL', 'LANE_LEDGER_ENABLED']) assert.equal(guard.env[v], `\${{ vars.${v} }}`);
+  }
+  assert.ok(generate.steps.some((s) => /node scripts\/ledger\.mjs/.test(s.run ?? '')));
+  const publishRuns = publish.steps.map((s) => s.run ?? '').join('\n');
+  assert.doesNotMatch(publishRuns, /node scripts\/ledger\.mjs|node --test/);
+  const up = generate.steps.find((s) => /upload-artifact@/.test(s.uses ?? ''));
+  const down = publish.steps.find((s) => /download-artifact@/.test(s.uses ?? ''));
+  assert.equal(up.with.name, down.with.name);
+  assert.equal(up.with.path.trim().split('\n').join(' '), 'ledger/ledger.json ledger/cache.json docs/LEDGER.md');
+  assert.match(publishRuns, /for f in ledger\/ledger\.json ledger\/cache\.json docs\/LEDGER\.md; do/);
+});
+
+test('R-LED-06: a test is found only under exactly its name, not as part of a longer one', () => {
+  const src = "test('R-X-01: the whole name, and more', () => {});\nit(\"R-X-02: it's here\", () => {});\nfor (const n of ['a.yml']) test(`${n}: built in a loop`, () => {});\nconst s = 'R-X-03: only in a string';\n";
+  assert.equal(sourceHasTest(src, 'R-X-01: the whole name'), false);
+  assert.equal(sourceHasTest(src, 'R-X-01: the whole name, and more'), true);
+  assert.equal(sourceHasTest(src, "R-X-02: it's here"), true);
+  assert.equal(sourceHasTest(src, 'corpus.yml: built in a loop'), true);
+  assert.equal(sourceHasTest(src, 'built in a loop'), false);
+  assert.equal(sourceHasTest(src, 'R-X-03: only in a string'), false, 'a string that is not a test name does not count');
+  assert.equal(sourceHasTest("caseTest('R-CASE-01 direct-ip: refused', 'direct-ip', () => {});", 'R-CASE-01 direct-ip: refused'), true, 'a helper named ...Test that wraps test()');
+  assert.equal(sourceHasTest("t.test('sub', () => {});", 'sub'), true);
+  assert.equal(sourceHasTest("latest('x');", 'x'), false, 'latest() is not a test helper');
+  assert.deepEqual([...testNamesIn(src).exact], ['R-X-01: the whole name, and more', "R-X-02: it's here"]);
 });

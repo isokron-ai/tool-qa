@@ -3,23 +3,39 @@
   "repos": [
     {
       "repo": "isokron-ai/tool-qa",
-      "found_by": { "R-ING": "review", "R-WD": "review", "R-META": "review" }
+      "found_by": {
+        "R-ING": "review",
+        "R-WD": "review",
+        "R-META": "review"
+      }
     },
     {
       "repo": "isokron-ai/mcp-check",
-      "found_by": { "R-SS": "review" }
+      "found_by": {
+        "R-SS": "review"
+      }
     },
     {
       "repo": "isokron-ai/mcp-surface-corpus",
-      "found_by": { "R-SBX": "review", "R-CASE": "self-test", "R-CI": "CI", "R-MUT": "mutation" }
+      "found_by": {
+        "R-SBX": "review",
+        "R-CASE": "self-test",
+        "R-CI": "CI",
+        "R-MUT": "mutation"
+      }
     },
     {
       "repo": "isokron-ai/mcp-writecheck-action",
-      "found_by": { "R-WC": "CI" }
+      "found_by": {
+        "R-WC": "CI",
+        "R-INP": "review"
+      }
     },
     {
       "repo": "isokron-ai/mcp-write-safety",
-      "found_by": {}
+      "found_by": {
+        "R-INP": "review"
+      }
     }
   ]
 }
