@@ -1,0 +1,100 @@
+{
+ "about": "R-DRIFT-01: release tag v1.2.0 is force-pushed to another commit a week after its release; v1.1.0 is unchanged.",
+ "subject": "acme/tagged-server",
+ "items": [
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-20T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 2,
+      "sample_size": 2,
+      "truncated": false,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "v1.2.0",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-11-10T10:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v1.1.0",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tag_object": null,
+        "commit_date": "2026-11-01T10:00:00Z",
+        "tagged_at": null
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-27T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 2,
+      "sample_size": 2,
+      "truncated": false,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "v1.2.0",
+        "commit": "cccccccccccccccccccccccccccccccccccccccc",
+        "tag_object": null,
+        "commit_date": "2026-11-26T09:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v1.1.0",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tag_object": null,
+        "commit_date": "2026-11-01T10:00:00Z",
+        "tagged_at": null
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "git_tag_moves": [
+   {
+    "tag": "v1.2.0",
+    "rank": "high",
+    "from": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "to": "cccccccccccccccccccccccccccccccccccccccc"
+   }
+  ]
+ }
+}

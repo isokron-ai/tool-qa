@@ -1,0 +1,92 @@
+{
+ "about": "R-DRIFT-05: the old digest of v0.3.1 was seen 15 minutes after its registry release, and a fixed image replaced it; kept, ranked low.",
+ "subject": "acme/quick-image",
+ "items": [
+  {
+   "lane": "meta-registry",
+   "observed_at": "2026-11-20T12:15:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-registry",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "registry_entry_history",
+     "value": [
+      {
+       "server_name": "io.github.acme/quick-image",
+       "namespace_matches_subject": true,
+       "versions": [
+        {
+         "version": "0.3.1",
+         "published_at": "2026-11-20T12:00:00Z",
+         "packages": []
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "field": "oci_tag_digests",
+     "value": [
+      {
+       "server_name": "io.github.acme/quick-image",
+       "registry_version": "0.3.1",
+       "reference": "docker.io/acme/quick-image",
+       "tag": "v0.3.1",
+       "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+       "media_type": null,
+       "via": "head",
+       "status": "ok"
+      }
+     ]
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-registry",
+   "observed_at": "2026-11-21T12:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-registry",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "oci_tag_digests",
+     "value": [
+      {
+       "server_name": "io.github.acme/quick-image",
+       "registry_version": "0.3.1",
+       "reference": "docker.io/acme/quick-image",
+       "tag": "v0.3.1",
+       "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+       "media_type": null,
+       "via": "head",
+       "status": "ok"
+      }
+     ]
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "oci_tag_moves": [
+   {
+    "tag": "v0.3.1",
+    "rank": "low",
+    "from": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "to": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+   }
+  ]
+ }
+}

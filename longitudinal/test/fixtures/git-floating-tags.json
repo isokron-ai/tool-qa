@@ -1,0 +1,151 @@
+{
+ "about": "R-DRIFT-04: floating tags (latest, v1, v1.4, nightly, main) move between observations; none is an event. A re-annotated version tag on the same commit is counted, not an event.",
+ "subject": "acme/floating-server",
+ "items": [
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-20T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 6,
+      "sample_size": 6,
+      "truncated": false,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "latest",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-11-19T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v1",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-11-19T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v1.4",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-11-19T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "nightly",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-11-19T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "main",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-11-19T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v1.4.2",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": "dddddddddddddddddddddddddddddddddddddddd",
+        "commit_date": "2026-11-19T00:00:00Z",
+        "tagged_at": "2026-11-19T00:00:00Z"
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-27T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 6,
+      "sample_size": 6,
+      "truncated": false,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "latest",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tag_object": null,
+        "commit_date": "2026-11-26T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v1",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tag_object": null,
+        "commit_date": "2026-11-26T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v1.4",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tag_object": null,
+        "commit_date": "2026-11-26T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "nightly",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tag_object": null,
+        "commit_date": "2026-11-26T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "main",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tag_object": null,
+        "commit_date": "2026-11-26T00:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v1.4.2",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "commit_date": "2026-11-19T00:00:00Z",
+        "tagged_at": "2026-11-26T00:00:00Z"
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "git_tag_moves": [],
+  "floating_moved": 5,
+  "reannotated": 1
+ }
+}

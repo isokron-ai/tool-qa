@@ -1,0 +1,149 @@
+{
+ "about": "R-DRIFT-02, R-DRIFT-19: image tag 1.4.0 resolves to a new digest two weeks after release (ranked medium: base images are rebuilt routinely); latest also moved (expected, not an event); 1.3.0 unchanged.",
+ "subject": "acme/image-server",
+ "items": [
+  {
+   "lane": "meta-registry",
+   "observed_at": "2026-11-15T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-registry",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "registry_entry_history",
+     "value": [
+      {
+       "server_name": "io.github.acme/image-server",
+       "namespace_matches_subject": true,
+       "versions": [
+        {
+         "version": "1.4.0",
+         "published_at": "2026-11-10T00:00:00Z",
+         "packages": []
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "field": "oci_tag_digests",
+     "value": [
+      {
+       "server_name": "io.github.acme/image-server",
+       "registry_version": "1.4.0",
+       "reference": "ghcr.io/acme/image-server",
+       "tag": "1.4.0",
+       "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+       "media_type": "application/vnd.oci.image.index.v1+json",
+       "via": "head",
+       "status": "ok"
+      },
+      {
+       "server_name": "io.github.acme/image-server",
+       "registry_version": "1.3.0",
+       "reference": "ghcr.io/acme/image-server",
+       "tag": "1.3.0",
+       "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+       "media_type": "application/vnd.oci.image.index.v1+json",
+       "via": "head",
+       "status": "ok"
+      },
+      {
+       "server_name": null,
+       "registry_version": null,
+       "reference": "ghcr.io/acme/image-server",
+       "tag": "latest",
+       "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+       "media_type": "application/vnd.oci.image.index.v1+json",
+       "via": "head",
+       "status": "ok"
+      }
+     ]
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-registry",
+   "observed_at": "2026-11-29T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-registry",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "registry_entry_history",
+     "value": [
+      {
+       "server_name": "io.github.acme/image-server",
+       "namespace_matches_subject": true,
+       "versions": [
+        {
+         "version": "1.4.0",
+         "published_at": "2026-11-10T00:00:00Z",
+         "packages": []
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "field": "oci_tag_digests",
+     "value": [
+      {
+       "server_name": "io.github.acme/image-server",
+       "registry_version": "1.4.0",
+       "reference": "ghcr.io/acme/image-server",
+       "tag": "1.4.0",
+       "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+       "media_type": "application/vnd.oci.image.index.v1+json",
+       "via": "head",
+       "status": "ok"
+      },
+      {
+       "server_name": "io.github.acme/image-server",
+       "registry_version": "1.3.0",
+       "reference": "ghcr.io/acme/image-server",
+       "tag": "1.3.0",
+       "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+       "media_type": "application/vnd.oci.image.index.v1+json",
+       "via": "head",
+       "status": "ok"
+      },
+      {
+       "server_name": null,
+       "registry_version": null,
+       "reference": "ghcr.io/acme/image-server",
+       "tag": "latest",
+       "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+       "media_type": "application/vnd.oci.image.index.v1+json",
+       "via": "head",
+       "status": "ok"
+      }
+     ]
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "oci_tag_moves": [
+   {
+    "tag": "1.4.0",
+    "rank": "medium",
+    "from": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "to": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+   }
+  ],
+  "floating_moved": 1
+ }
+}

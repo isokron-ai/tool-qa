@@ -185,6 +185,44 @@
          "type": "blob"
         }
        ]
+      },
+      "tagRefs": {
+       "totalCount": 3,
+       "attempt_id": "att-999",
+       "nodes": [
+        {
+         "name": "attempt_id=__MARKER__",
+         "target": {
+          "__typename": "Commit",
+          "oid": "cccccccccccccccccccccccccccccccccccccccc",
+          "committedDate": "2026-01-02T00:00:00Z",
+          "fence": 99
+         }
+        },
+        {
+         "name": "v0.1.0",
+         "target": {
+          "__typename": "Tag",
+          "oid": "dddddddddddddddddddddddddddddddddddddddd",
+          "tagger": {
+           "date": "2026-01-01T00:00:00Z",
+           "name": "run_key=__MARKER__"
+          },
+          "target": {
+           "__typename": "Commit",
+           "oid": "cccccccccccccccccccccccccccccccccccccccc",
+           "committedDate": "run_key=__MARKER__"
+          }
+         }
+        },
+        {
+         "name": "run_key=__MARKER__",
+         "target": {
+          "__typename": "Commit",
+          "oid": "not-an-oid-__MARKER__"
+         }
+        }
+       ]
       }
      }
     },
