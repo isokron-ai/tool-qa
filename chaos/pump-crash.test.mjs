@@ -182,3 +182,22 @@ test('4c: two pump runs at once (the concurrency group broken): one writer wins,
     assertRecovered(sim);
   });
 });
+
+test('R-CHAOS-08: a server error on the branch re-read right before sending: nothing was sent, so the dispatch is freed at once and the work goes out on the next tick', CHAOS, async () => {
+  await withSim({}, async (sim) => {
+    let reads = 0;
+    // The tick reads the branch once to reserve, then again before each send:
+    // fail every try (4) of the first re-read.
+    sim.gh.addFault({ name: 'branch 502', times: 4, match: (r) => CALLS.branch(r) && ++reads >= 2, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
+    startPump(sim);
+    await sim.runFor(5 * MIN);
+    const s = sim.readLive();
+    const first = s.dispatches.find((d) => d.run_id === null);
+    assert.ok(first, 'a dispatch that was never sent');
+    assert.equal(first.status, 'failed', 'closed at once, not left pending until its lease ends');
+    assert.equal(logLines(sim, /may or may not have started a run/).length, 0);
+    assert.equal(sim.workerRuns.length, 3, 'its work went out again on the next tick');
+    await sim.runFor(2 * HOUR);
+    assertRecovered(sim);
+  });
+});

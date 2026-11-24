@@ -434,3 +434,22 @@ test('R-CHAOS-02: a result whose run completed before the lease ran out is on ti
   for (const x of [db, db2, db3, db4]) x.close();
 });
 
+
+test('R-CHAOS-10: a result counts as in when both its run completed and its artifact was uploaded; an artifact dated after the lease makes it late', async () => {
+  const { resultInAt } = await import('../ingest/ledger.mjs');
+  assert.equal(resultInAt(T0, '2026-11-23T12:05:00Z'), Date.parse('2026-11-23T12:05:00Z'), 'the later of the two');
+  assert.equal(resultInAt(T0 + 10 * MIN, '2026-11-23T12:05:00Z'), T0 + 10 * MIN);
+  assert.equal(resultInAt(null, '2026-11-23T12:05:00Z'), null, 'no run completion: the store uses now');
+  assert.equal(resultInAt(T0, 'not a time'), T0);
+  const ttlMs = 10 * MIN;
+  const later = T0 + 15 * MIN;
+  for (const [created, ok] of [['2026-11-23T12:07:00Z', true], ['2026-11-23T12:12:00Z', false]]) {
+    const db = openState(':memory:');
+    const [a] = dispatch(db, { ttlMs });
+    db.reapExpiredDispatches({ now: later });
+    const ledger = dbLedger(db, { now: () => later, completedAt: T0 + 8 * MIN });
+    const out = ledger.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: a.fence, outcome: 'accepted', accepted: true, reason: null, artifactCreatedAt: created });
+    assert.deepEqual([out.accepted, out.reason], ok ? [true, null] : [false, 'lease_expired'], created);
+    db.close();
+  }
+});

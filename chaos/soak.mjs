@@ -26,6 +26,12 @@ import { fileURLToPath } from 'node:url';
 import { applySchedule, drawSchedule } from './lib/faults.mjs';
 import { HOUR, rng, Sim, TOOLQA } from './lib/sim.mjs';
 
+// Nothing here may reach a network, imported or run: any stray real call
+// fails loudly (the same tripwire as chaos/lib/harness.mjs).
+globalThis.fetch = async (url) => {
+  throw new Error(`chaos soak: no network (${url})`);
+};
+
 export async function soakOne(seed, { faults = 14, hours = 5, recoverHours = 4, verbose = false, kinds } = {}) {
   const sim = new Sim({ seed, subjects: 8, verbose });
   const r = rng(seed * 7919 + 13);
@@ -86,8 +92,6 @@ export async function main(argv = process.argv.slice(2)) {
     process.stderr.write(`soak: ${err.message}\n`);
     return 2;
   }
-  // Nothing here may reach a network: any stray real call fails loudly.
-  globalThis.fetch = async (url) => { throw new Error(`chaos soak: no network (${url})`); };
   const seeds = o.seed !== null ? [o.seed] : Array.from({ length: o.seeds }, (_, i) => o.from + i);
   const started = Date.now();
   const failed = [];

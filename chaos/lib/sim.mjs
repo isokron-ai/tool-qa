@@ -653,6 +653,22 @@ export class Sim {
     return up;
   }
 
+  /**
+   * A person puts a fresh, empty state in place by hand, as OPERATIONS.md says:
+   * `scripts/state-asset.mjs push --force` of a new database (no pull).
+   */
+  operatorPushFresh() {
+    const task = this.spawn('operator-fresh', async (t) => {
+      const file = join(this.dir, `fresh-${++this.seq}.sqlite`);
+      openState(file).close();
+      return pushState({
+        repo: TOOLQA, token: 'ghs_operator', file, fetch: t.fetch, apiUrl: API_HOST, sleep: t.sleep, log: (l) => this.log('operator', l),
+        now: this.t, force: true, crypto: fakeStateCrypto({ identity: null, recipients: this.statePub }),
+      });
+    });
+    return task.finished.then((o) => (o.error ? { error: o.error } : { report: o.value }));
+  }
+
   /** The live state asset is deleted (an injected fault). */
   deleteState() {
     const rel = this.stateRelease();

@@ -25,7 +25,10 @@ export async function withSim(opts, fn) {
   try {
     await fn(sim);
   } catch (err) {
-    err.message = `${err.message}\n--- simulated loop log (last lines) ---\n${sim.tail(150)}`;
+    // The reporter prints the stack, which was built with the old message.
+    const tail = `\n--- simulated loop log (last lines) ---\n${sim.tail(150)}`;
+    err.message = `${err.message}${tail}`;
+    if (typeof err.stack === 'string') err.stack = `${err.stack}${tail}`;
     throw err;
   } finally {
     await sim.close();

@@ -57,6 +57,12 @@ test('R-CHAOS-03: a pump that cannot read its state cancels the successor it dis
     // restart it; each failing run takes back its successor.
     assert.ok(runs.length <= 8, `${runs.length} pump runs in an hour: ${runs.join(', ')}`);
     assert.ok(logLines(sim, /pump: cancelled the successor run/).length >= 2);
+    // Each cancel hit exactly the successor the failing run itself dispatched.
+    const cancelled = sim.gh.calls.filter((c) => c.method === 'POST' && /\/actions\/runs\/\d+\/cancel$/.test(c.path)).map((c) => Number(c.path.split('/').at(-2)));
+    const couldNotStart = new Set(logLines(sim, /pump: cannot start:/).map((l) => Number(/pump#(\d+)/.exec(l)[1])));
+    const failing = sim.pumpRuns.filter((r) => couldNotStart.has(r.id) && r.successor?.runId);
+    assert.ok(cancelled.length >= 2);
+    assert.deepEqual(cancelled.sort(), failing.map((r) => r.successor.runId).sort(), 'the cancelled ids are the failing runs\' own successors');
     assert.equal(healthOf(sim), 'red');
   });
 });
@@ -201,5 +207,48 @@ test('R-CHAOS-06: a damaged live asset that kept its label: the restore drill ch
     await sim.runFor(3 * HOUR);
     assert.ok(logLines(sim, /operator: restored state-.*\(applied true\)/).length === 1, 'the drill put the snapshot back');
     assertRecovered(sim, { allowOrphans: true });
+  });
+});
+
+test('R-CHAOS-09: a passing GitHub error while counting snapshots (state asset missing) does not cancel the successor', CHAOS, async () => {
+  await withSim({}, async (sim) => {
+    await warmUp(sim);
+    sim.deleteState();
+    sim.cronOn.pump = false;
+    sim.cronOn.watchdog = false;
+    // Every try of the snapshot release read fails with a server error, once.
+    sim.gh.addFault({ name: 'snapshots 502', times: 3, match: (r) => r.method === 'GET' && r.path === `/repos/${TOOLQA}/releases/tags/state-snapshots`, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
+    await sim.runFor(30 * MIN);
+    const hit = logLines(sim, /pump: cannot start: GitHub GET .*state-snapshots failed: HTTP 502/);
+    assert.equal(hit.length, 1);
+    const run = sim.pumpRuns.find((r) => r.id === Number(/pump#(\d+)/.exec(hit[0])[1]));
+    assert.equal(run.conclusion, 'failure');
+    assert.equal(logLines(sim, new RegExp(`pump#${run.id}: pump: cancelled`)).length, 0, 'the chain goes on: the error may pass');
+    const next = sim.pumpRuns.find((r) => r.id === run.successor.runId);
+    assert.ok(next?.guard?.proceed, 'its successor ran');
+    assert.ok(logLines(sim, /the state asset is missing, but \d+ snapshot\(s\)/).length >= 1, 'the next run sees the snapshots and refuses');
+    assert.ok(logLines(sim, /cancelled the successor/).length >= 1, 'and that refusal stops the chain');
+    assert.equal(sim.liveAsset(), null, 'nothing was pushed');
+  });
+});
+
+test('R-CHAOS-11: a deliberate fresh start keeps the snapshots: a fresh state pushed by hand with --force, then the pump carries on from it', CHAOS, async () => {
+  await withSim({}, async (sim) => {
+    await warmUp(sim);
+    const snaps = () => (sim.gh.release(TOOLQA, 'state-snapshots')?.assets ?? []).filter((a) => a.name.startsWith('state-')).length;
+    const kept = snaps();
+    sim.setVar('LANE_PUMP_ENABLED', 'false');
+    await sim.runFor(15 * MIN);
+    sim.deleteState();
+    // OPERATIONS.md, "State snapshots": an empty state, pushed with --force (no pull).
+    const pushedAt = sim.t;
+    const r = await sim.operatorPushFresh();
+    assert.equal(r.error, undefined, r.error?.message);
+    sim.allowRollback = 1; // the person chose to start from empty
+    sim.setVar('LANE_PUMP_ENABLED', 'true');
+    await sim.runFor(HOUR);
+    assert.ok(snaps() >= kept, 'every snapshot is still there');
+    assert.equal(logLines(sim, /the state asset is missing/).length, 0);
+    assert.ok(sim.pumpRuns.some((x) => Date.parse(x.created_at) >= pushedAt && x.conclusion === 'success' && x.pump?.ok), 'the pump runs on the fresh state');
   });
 });
