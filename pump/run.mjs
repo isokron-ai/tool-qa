@@ -57,7 +57,9 @@
 // Environment:
 //   LOOP_SLOTS          worker slots (the guard step's `slots` output)
 //   GITHUB_REPOSITORY   this repository (holds the state asset)
-//   GITHUB_TOKEN        job token with contents: write, for the state asset only
+//   GITHUB_TOKEN        job token with contents: write, for the state asset, and
+//                       the subject id lookups (GraphQL reads of public
+//                       repositories, pump/identity.mjs)
 //   APP_ID, APP_INSTALLATION_ID, APP_PRIVATE_KEY
 //                       the loop's GitHub App; tokens are minted per worker
 //                       repository: actions: write to dispatch, actions: read
@@ -67,6 +69,8 @@
 //   AGE_BIN, AGE_KEYGEN_BIN, GITHUB_API_URL, RUNNER_TEMP   optional
 //   GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT   name the state archive this run stages
 //   LANE_STATE_PRUNE_ENABLED   anything but unset, empty or "true" stops pruning
+//   LANE_SUBJECT_IDS_ENABLED   anything but unset, empty or "true" stops the
+//                      subject id lookups (pump/identity.mjs)
 //
 // Ingest outputs are sealed to worker-kit/ingest.pub and written to --ingest-out
 // (default $RUNNER_TEMP/ingest-out); pump.yml uploads that directory.
@@ -89,6 +93,7 @@ import { createReleaseClient } from '../snapshot/github.mjs';
 import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.mjs';
 import { computeBudget, reapExpired } from './slots.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
+import { identityEnabled, refreshIdentities } from './identity.mjs';
 import { planShards, runTick } from './tick.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
@@ -101,6 +106,10 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
 /**
  * seedFile: the seed list loaded into the subjects table at start-up
  * (pump/subjects.mjs); null loads nothing.
+ * identity: the subject id lookups at start-up (pump/identity.mjs): undefined
+ * for the defaults, null for none, or options for refreshIdentities()
+ * (batch, maxQueries, retryMs). They use GITHUB_TOKEN through the run's API
+ * budget and never hold the run.
  * ingest: undefined for the pump's own collector (ingest/collect.mjs, built
  * with `ingestOptions`), null for none, a function (called as collect()), or an
  * object with collect() and optionally check().
@@ -116,6 +125,7 @@ export async function runPump({
   log = (line) => process.stderr.write(`${line}\n`),
   stateFile = DEFAULT_STATE,
   seedFile = SEED_FILE,
+  identity,
   config,
   pull = pullState,
   push = pushState,
@@ -286,6 +296,15 @@ export async function runPump({
     if (seeded.error) ok = false;
     // For the watchdog's `subjects` check (R-SUB-11).
     db.setKv('pump.subjects', { ok: !seeded.error, at: new Date(now()).toISOString(), summary: String(seeded.summary).slice(0, 300) }, { now: now() });
+    // Subject ids (pump/identity.mjs): backfill and daily re-check, a few
+    // GraphQL queries at most; never fails or holds the run (loop upgrade #15).
+    if (identity !== null && identityEnabled(env)) {
+      const client = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep }) : null;
+      const ids = await refreshIdentities(db, { client, now, log: say, ...(identity ?? {}) });
+      say(`pump: subject ids: ${ids.summary}`);
+    } else if (identity !== null) {
+      say('pump: subject ids: lookups are off (LANE_SUBJECT_IDS_ENABLED); ids already found are still used');
+    }
     for (;;) {
       const tickStart = now();
       ticks += 1;

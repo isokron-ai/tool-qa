@@ -18,6 +18,11 @@
 //   branches              GET /branches/{ref}
 //   variables             environment and repository variables, org variables
 //   issues                list, create, edit, comment; /graphql pinIssue
+//   public repositories   the subjects' repositories as /graphql answers them
+//                         to the pump's id lookups (pump/identity.mjs):
+//                         repository(owner, name) follows renames and
+//                         transfers as GitHub does; nodes(ids) by node id; a
+//                         deleted or private one is NOT_FOUND
 //
 // Faults: addFault({ name, match(req), times, mode, respond }) where mode is
 //   'refuse'   answer with respond(req) and do nothing (a 5xx, a 403/429)
@@ -67,7 +72,59 @@ export class FakeGitHub {
     this.calls = [];
     this.faults = [];
     this.hooks = { onDispatch: null, onCancel: null, onChange: null };
+    this.publicRepos = []; // {databaseId, nodeId, name, createdAt, visible, oldNames: Set}
     this.fetch = this.fetch.bind(this);
+  }
+
+  // ---- public repositories (the subjects) ----
+
+  addPublicRepo(name, { databaseId, nodeId = `R_chaos${databaseId}`, createdAt = '2025-01-01T00:00:00Z' } = {}) {
+    const r = { databaseId, nodeId, name, createdAt, visible: true, oldNames: new Set() };
+    this.publicRepos.push(r);
+    return r;
+  }
+
+  publicRepo(name) {
+    const lower = String(name).toLowerCase();
+    return this.publicRepos.find((r) => r.name.toLowerCase() === lower) ?? null;
+  }
+
+  /** Rename or transfer: the old name keeps redirecting, as on GitHub, until another repository takes it. */
+  renamePublicRepo(from, to) {
+    const r = this.publicRepo(from);
+    if (!r) throw new Error(`fake github: no public repo ${from}`);
+    r.oldNames.add(r.name.toLowerCase());
+    r.name = to;
+    return r;
+  }
+
+  /** What repository(owner, name) answers: the visible repository with that name, else one that had it. */
+  lookupPublicName(name) {
+    const lower = String(name).toLowerCase();
+    const live = this.publicRepos.filter((r) => r.visible);
+    return live.find((r) => r.name.toLowerCase() === lower) ?? live.find((r) => r.oldNames.has(lower)) ?? null;
+  }
+
+  graphqlIdentity(req) {
+    const q = String(req.json?.query ?? '');
+    const vars = req.json?.variables ?? {};
+    const node = (r) => ({ __typename: 'Repository', databaseId: r.databaseId, id: r.nodeId, nameWithOwner: r.name, createdAt: r.createdAt });
+    const data = { rateLimit: { cost: 1, remaining: 4999 } };
+    const errors = [];
+    if (/nodes\(ids:/.test(q)) {
+      data.nodes = (vars.ids ?? []).map((id, i) => {
+        const r = this.publicRepos.find((x) => x.visible && x.nodeId === id);
+        if (!r) errors.push({ type: 'NOT_FOUND', path: ['nodes', i], message: `Could not resolve to a node with the global id of '${id}'` });
+        return r ? node(r) : null;
+      });
+    } else {
+      for (let i = 0; vars[`o${i}`] !== undefined; i++) {
+        const r = this.lookupPublicName(`${vars[`o${i}`]}/${vars[`n${i}`]}`);
+        data[`r${i}`] = r ? node(r) : null;
+        if (!r) errors.push({ type: 'NOT_FOUND', path: [`r${i}`], message: 'Could not resolve to a Repository' });
+      }
+    }
+    return { body: errors.length ? { data, errors } : { data } };
   }
 
   id() {
@@ -300,7 +357,10 @@ export class FakeGitHub {
       }
       return notFound();
     }
-    if (method === 'POST' && path === '/graphql') return { body: { data: { pinIssue: { issue: { number: 1 } } } } };
+    if (method === 'POST' && path === '/graphql') {
+      if (/pinIssue/.test(String(req.json?.query ?? ''))) return { body: { data: { pinIssue: { issue: { number: 1 } } } } };
+      return this.graphqlIdentity(req);
+    }
     m = /^\/repos\/([^/]+\/[^/]+)(\/.*)?$/.exec(path);
     if (!m) return notFound();
     const r = this.repos.get(m[1]);

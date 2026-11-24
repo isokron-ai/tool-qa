@@ -143,8 +143,10 @@ export class SimDeadlock extends Error {}
 export class Sim {
   constructor({
     seed = 1, subjects = 6, slots = '3', shardSize = 2, start = START, vars = {}, verbose = false,
-    workflow = {}, pumpSkewMs = 0, prune = {}, lateMs,
+    workflow = {}, pumpSkewMs = 0, prune = {}, lateMs, identity = {},
   } = {}) {
+    // runPump's `identity` options (pump/identity.mjs): the subject id lookups.
+    this.identityOpts = identity;
     this.pumpSkewMs = pumpSkewMs;
     // Pruning (pump/prune.mjs): runPump's `prune` options, the late-result
     // window ingest uses (it bounds the prune age), and whether the upload
@@ -205,6 +207,8 @@ export class Sim {
     this.subjects = [];
     for (let i = 0; i < subjects; i++) {
       this.subjects.push({ id: `chaos-org/server-${i}`, kind: 'github', source: 'seed:chaos', tier: 1, sha: createHash('sha1').update(`s${i}`).digest('hex') });
+      // Its public repository, which the pump's id lookups find (state schema v8).
+      this.gh.addPublicRepo(`chaos-org/server-${i}`, { databaseId: 9000 + i });
     }
     const seedFile = join(this.dir, 'seed.sqlite');
     const db = openState(seedFile);
@@ -534,6 +538,7 @@ export class Sim {
         log: say,
         stateFile: join(dir, 'state.sqlite'),
         seedFile: null,
+        identity: this.identityOpts,
         config: this.config,
         pull: this.pullFor(task),
         push: this.pushFor(task),
@@ -855,7 +860,9 @@ export class Sim {
           attempts: has('attempts') ? all('SELECT id, run_key, fence, attempt_id, accepted, reason, received, outcome FROM attempts ORDER BY id') : [],
           results: has('results') ? all('SELECT run_key, subject, attempt_id, fence, accepted_at, outcome FROM results') : [],
           dispatches: has('dispatches') ? all('SELECT attempt_id, shard_id, status, created, expires, closed, close_reason, run_id FROM dispatches') : [],
-          items: has('dispatch_items') ? all('SELECT attempt_id, run_key, subject, fence, resolved FROM dispatch_items') : [],
+          items: has('dispatch_items') ? all('SELECT * FROM dispatch_items') : [],
+          subjects: has('subjects') ? all('SELECT * FROM subjects ORDER BY id') : [],
+          subjectEvents: has('subject_events') ? all('SELECT * FROM subject_events ORDER BY id') : [],
           slots: has('slot_ledger') ? all('SELECT * FROM slot_ledger WHERE released IS NULL') : [],
           kv: has('kv') ? Object.fromEntries(all('SELECT key, value FROM kv').map((r) => [r.key, safeJson(r.value)])) : {},
         };
