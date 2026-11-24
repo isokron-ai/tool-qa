@@ -73,13 +73,32 @@ export async function dispatchWorkflow(client, {
 /**
  * The commit a branch points to now: the commit a dispatch on that ref is
  * expected to run. The pump records it with the dispatch before sending, and
- * ingest checks the worker run against it (R-ING-12). The branch API needs no
- * permission for a public repository (worker repositories are public); a
- * private one needs Contents: read for the App.
+ * ingest checks the worker run against it (R-ING-12).
+ *
+ * It is read with the dispatcher's own token ({ actions: write } on the worker
+ * repository, nothing else; R-ING-19). That works because worker repositories
+ * are public, and GitHub answers reads of a public repository's branches
+ * whatever the token's permissions. We keep it that way rather than mint
+ * contents: read as well: the App has no Contents permission at all (adding one
+ * is an App-wide change for every installation), and a worker repository
+ * should stay public anyway, since its runs are the published evidence. If a
+ * worker repository ever turns private, GitHub answers 404 here, the error
+ * says what to do, and nothing is dispatched to it (the tick skips that
+ * workflow): it fails closed.
  */
 export async function resolveRef(client, { repo, ref }) {
   splitRepo(repo);
-  const res = await client.request('GET', `/repos/${repo}/branches/${encodeURIComponent(ref)}`, { family: 'contents' });
+  let res;
+  try {
+    res = await client.request('GET', `/repos/${repo}/branches/${encodeURIComponent(ref)}`, { family: 'contents' });
+  } catch (err) {
+    if (err?.status === 404 || (err?.status === 403 && !/rate limit/i.test(String(err?.message)))) {
+      const e = new Error(`${repo}: cannot read branch ${ref} (HTTP ${err.status}). The dispatch token has actions: write only, which reads a public repository's branches; a private worker repository needs the App's Contents: read permission and the dispatcher to ask for it (pump/dispatch.mjs resolveRef)`);
+      e.status = err.status;
+      throw e;
+    }
+    throw err;
+  }
   const sha = res.data?.commit?.sha;
   if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) throw new Error(`${repo}: branch ${ref} has no commit SHA in the answer`);
   return sha;

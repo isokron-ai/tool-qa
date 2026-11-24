@@ -66,8 +66,12 @@ function checkTtl(ttlMs) {
 // Rejection reasons that say nothing about the run_key's own work (identity or
 // fencing failures), so they don't count towards parking it.
 // retry_later (the worker hit a passing condition) is bounded on its own
-// (ingest MAX_RETRIES) and is not counted either.
-const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'", "'retry_later'"].join(', ');
+// (ingest MAX_RETRIES) and is not counted either. Nor is run_sha_mismatch
+// (R-ING-18): the run was at another commit than the one recorded at dispatch,
+// because the worker branch moved between the pump reading it and GitHub
+// starting the run, or because someone else's run took the shard's run name.
+// Neither says anything about the run_key's own work.
+const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'", "'retry_later'", "'run_sha_mismatch'"].join(', ');
 
 function plain(row) {
   return row ? { ...row } : undefined;

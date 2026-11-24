@@ -150,3 +150,31 @@ test('a budget refusal from the fetch layer is not retried as a network error', 
   assert.deepEqual(sleeps, []);
 });
 
+
+test('R-ING-17: no request is sent once the caller\'s deadline has passed, and a hanging one is cut off by it', async () => {
+  // Already past: nothing is sent.
+  const past = new AbortController();
+  past.abort();
+  const none = fakeFetch([]);
+  const gh1 = makeGithub({ token: TOKEN, fetch: none, sleep: noSleep, deadlineSignal: () => past.signal });
+  await assert.rejects(gh1.getRun('isokron-ai/mcp-check', 5), (err) => err instanceof GithubError && err.transient && err.code === 'deadline');
+  assert.equal(none.calls.length, 0);
+
+  // A request that would hang for its own 60 s ends when the deadline fires, with no retry.
+  const dl = new AbortController();
+  let sent = 0;
+  const hang = async (url, opts) => {
+    sent += 1;
+    return new Promise((_, reject) => opts.signal.addEventListener('abort', () => reject(opts.signal.reason)));
+  };
+  const gh2 = makeGithub({ token: TOKEN, fetch: hang, sleep: noSleep, deadlineSignal: () => dl.signal });
+  setTimeout(() => dl.abort(), 50);
+  const t0 = Date.now();
+  await assert.rejects(gh2.listRunArtifacts('isokron-ai/mcp-check', 5), (err) => err instanceof GithubError && err.transient);
+  assert.ok(Date.now() - t0 < 5000);
+  assert.equal(sent, 1, 'not retried after the deadline');
+
+  // Downloads too.
+  const gh3 = makeGithub({ token: TOKEN, fetch: fakeFetch([]), sleep: noSleep, deadlineSignal: () => past.signal });
+  await assert.rejects(gh3.downloadArtifact('isokron-ai/mcp-check', 9), (err) => err.code === 'deadline');
+});

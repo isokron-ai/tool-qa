@@ -229,6 +229,7 @@ an earlier rejection into an acceptance.
 | `duplicate_result` | This item is already resolved without a recorded decision for this fence (not expected; repeats of a recorded decision return it with `duplicate: true` instead). | no |
 | `stale_fence` | A newer lease exists; the work was sent out again. | no |
 | `lease_expired`, `lease_released`, `no_lease`, `unknown_fence`, `holder_mismatch` | The lease is not live any more. | yes |
+| `run_sha_mismatch` | The worker run was at another commit than the one recorded at dispatch: the worker branch moved between the pump reading it and GitHub starting the run, or someone else's run took the shard's run name. The work is due again. | no |
 | `retry_later` | Every skip in the bundle is retryable (a rate limit, an upstream outage): the item is sent out again after a backoff (`retry_backoff_minutes` in `pump/tiers.json`, doubled for each retry), at most three times per run_key, then the bundle is accepted with its skips. | no |
 | ingest's `reason`, or `rejected_by_ingest` | Ingest rejected the result. | yes |
 

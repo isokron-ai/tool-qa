@@ -348,3 +348,16 @@ test('R-ING-16: the due list skips a run_key sent back as retry_later until its 
   assert.deepEqual(due(T0 + 31 * MIN), [key], 'due again after 30 minutes');
   db.close();
 });
+
+test('R-ING-18: run_sha_mismatch does not count towards parking the run_key', () => {
+  const db = openState(':memory:');
+  for (const [i, reason] of ['run_sha_mismatch', 'run_sha_mismatch', 'run_sha_mismatch', 'no_artifact'].entries()) {
+    const attemptId = `att-${i}`;
+    const [item] = dispatch(db, { attemptId, now: T0 + i * 60 * MIN });
+    db.recordResult({ run_key: KEY_A, attempt_id: attemptId, fence: item.fence, outcome: 'rejected', accepted: false, reason, now: T0 + i * 60 * MIN + MIN });
+  }
+  assert.equal(db.rejectedCount(KEY_A), 1, 'only no_artifact counts');
+  assert.deepEqual(db.rejectedRunKeys(1).map((r) => [r.run_key, r.n]), [[KEY_A, 1]]);
+  assert.deepEqual(db.rejectedRunKeys(2), []);
+  db.close();
+});

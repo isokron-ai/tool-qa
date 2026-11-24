@@ -110,3 +110,25 @@ test('the dispatcher mints one narrowed token per repository and reuses it until
   assert.equal(mints.length, 3);
   assert.equal(api.calls.filter((r) => r.method === 'POST').at(-1).headers.get('authorization'), 'Bearer ghs_synthetic_3');
 });
+
+test('R-ING-19: the branch is read with the actions-only dispatch token; a private worker repo fails closed with what to do', async () => {
+  const c = fakeClock();
+  const mints = [];
+  const api = fakeApi([
+    ['GET', '/repos/isokron-ai/mcp-check/branches/main', () => ({ body: { name: 'main', commit: { sha: 'a'.repeat(40) } } })],
+    ['GET', '/repos/isokron-ai/private-worker/branches/main', () => ({ status: 404, body: { message: 'Not Found' } })],
+  ]);
+  const d = createDispatcher({
+    mintToken: async (args) => {
+      mints.push(args);
+      return { token: `ghs_synthetic_${mints.length}`, expiresAt: c.t + 60 * 60_000 };
+    },
+    fetch: api.fetch, apiUrl: API, now: c.now, sleep: c.sleep,
+  });
+  assert.equal(await d.resolveRef({ repo: 'isokron-ai/mcp-check', ref: 'main' }), 'a'.repeat(40));
+  assert.deepEqual(mints[0].permissions, { actions: 'write' }, 'no contents permission is asked for');
+  await assert.rejects(
+    d.resolveRef({ repo: 'isokron-ai/private-worker', ref: 'main' }),
+    (err) => err.status === 404 && /cannot read branch main \(HTTP 404\).*Contents: read/.test(err.message),
+  );
+});

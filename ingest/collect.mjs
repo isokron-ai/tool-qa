@@ -61,6 +61,12 @@ const TOKEN_MARGIN_MS = 5 * MINUTE;
  * ingest_error. Three ticks rule out a passing glitch.
  */
 export const MAX_ITEM_FAILURES = 3;
+/**
+ * collect()'s deadline is when it starts nothing new (the pump's run end minus
+ * two minutes). A GitHub call already running may finish within this grace,
+ * which takes it to the pump run's end; then it is aborted (R-ING-17).
+ */
+export const CALL_GRACE_MS = 2 * MINUTE;
 const SEAL_TO = fileURLToPath(new URL('../worker-kit/ingest.pub', import.meta.url));
 
 /** Ingest cannot work as set up (keys, contract). The pump must not dispatch work. */
@@ -95,6 +101,7 @@ function isoSeconds(ms) {
  * @param {number} [o.maxItemFailures] failed judgings of one item before it is
  *                                    recorded as rejected ingest_error
  * @param {{analyze?: Function, judgeTimeoutMs?: number}} [o.judge]  passed to openAttempt (tests)
+ * @param {number} [o.callGraceMs]     how long after collect()'s deadline a GitHub call may still run
  */
 export function createCollector({
   env = process.env,
@@ -113,6 +120,7 @@ export function createCollector({
   recheckLateMs = 10 * MINUTE,
   maxItemFailures = MAX_ITEM_FAILURES,
   judge = {},
+  callGraceMs = CALL_GRACE_MS,
 } = {}) {
   const ageBin = env.AGE_BIN || 'age';
   const keygenBin = env.AGE_KEYGEN_BIN || 'age-keygen';
@@ -125,6 +133,7 @@ export function createCollector({
   let reg = registry;
   const tokens = new Map(); // repo (lower case) -> { client, expiresAt }
   const lateSeen = new Map(); // attempt_id -> when a late dispatch was last looked at
+  let callDeadline = null; // the AbortSignal of the running collect()'s hard deadline
 
   /**
    * Throw IngestSetupError unless results can be decrypted and sealed. Local
@@ -161,7 +170,7 @@ export function createCollector({
     if (hit && (hit.expiresAt === null || hit.expiresAt - TOKEN_MARGIN_MS > at)) return hit.client;
     const name = repo.split('/')[1];
     const minted = await mintToken({ repositories: [name], permissions: { actions: 'read' } });
-    const client = makeGithub({ token: minted.token, fetch, apiUrl, sleep, retries });
+    const client = makeGithub({ token: minted.token, fetch, apiUrl, sleep, retries, deadlineSignal: () => callDeadline });
     const expiresAt = Number(minted.expiresAt);
     tokens.set(key, { client, expiresAt: Number.isFinite(expiresAt) ? expiresAt : null });
     return client;
@@ -187,6 +196,10 @@ export function createCollector({
    * on a later tick.
    */
   async function collect({ db, now = Date.now, log = () => {}, mintToken, deadline = Infinity } = {}) {
+    // No GitHub call outlives `deadline` + callGraceMs (R-ING-17): in the pump
+    // that is the run's end, four minutes before the job's time limit.
+    const end = deadline + callGraceMs;
+    callDeadline = Number.isFinite(end) ? AbortSignal.timeout(Math.max(0, end - now())) : null;
     const summary = {
       checked: 0, waiting: 0, judged: 0, recorded: 0, closed: 0, correlated: 0, errors: 0,
       stopped: null, outcomes: {}, changed: false,
