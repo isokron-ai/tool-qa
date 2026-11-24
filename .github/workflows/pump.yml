@@ -79,11 +79,11 @@ jobs:
       # Sealed ingest outputs (ingest-<attempt>-<index>.tar.age), readable only with
       # AGE_IDENTITY. Uploaded even if the pump step failed, so outputs of
       # decisions it already pushed are kept.
-      - name: Upload sealed ingest outputs (30 days)
+      - name: Upload sealed ingest outputs (90 days)
         if: always() && steps.guard.outputs.proceed == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ingest-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ingest-out/
-          retention-days: 30
+          retention-days: 90
           if-no-files-found: ignore
