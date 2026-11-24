@@ -36,6 +36,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { collectTimes, cycleStats } from './ledger-times.mjs';
+
 export const SCHEMA = 1;
 
 // ---------------------------------------------------------------- parsing
@@ -456,8 +458,12 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
         fix_commits: row.fix_commits,
         fix_pr: null,
         fix_prs: [],
+        found_at: null,
+        found_at_source: null,
+        pinned_at: null,
         merged_at: null,
         released_in: null,
+        released_at: null,
         url: `https://github.com/${repo}/blob/${ref}/${path}`,
       };
       // Tests: does each named test exist on the same branch?
@@ -525,7 +531,7 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
                 const has = await releaseContains(repo, rel.tag, m.merge_commit_sha ?? m.sha, out.api_stopped ? null : gh, cache);
                 if (!has) { all = false; break; }
               }
-              if (all) { rec.released_in = rel.tag; break; }
+              if (all) { rec.released_in = rel.tag; rec.released_at = rel.published_at; break; }
             }
           } catch (err) {
             if (!stop(err)) out.unresolved.push({ repo, id: row.id, what: 'released_in', detail: String(err?.message ?? err).slice(0, 200) });
@@ -535,12 +541,17 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
       out.records.push(rec);
     }
   }
+  // Cycle times: found, pinned, merged, released. Asked last, so the lookups above are never starved.
+  const times = await collectTimes({ records: out.records, sources, readFile, gh: out.api_stopped ? null : gh, cache, testHas: sourceHasTest, log });
+  if (times.stopped && !out.api_stopped) out.api_stopped = times.stopped;
+  out.cycle = cycleStats(out.records);
   return out;
 }
 
 // ---------------------------------------------------------------- Markdown
 
 const esc = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+const day = (iso) => (typeof iso === 'string' ? iso.slice(0, 10) : '');
 const short = (sha) => (sha ? sha.slice(0, 7) : '');
 
 export function renderMarkdown(ledger) {
@@ -569,6 +580,19 @@ export function renderMarkdown(ledger) {
   out.push(`Found by: ${Object.entries(byFound).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, v]) => `${k} ${v}`).join(', ') || 'none'}.`);
   out.push('');
 
+  out.push('## Cycle time');
+  out.push('');
+  out.push('Hours from a row being found (the earlier of its first commit in `REGRESSIONS.md` and its fix pull request being opened) to the fix merging, and from the merge to the first release that contains it. A row with no date yet, or with a gap that runs backwards, is left out of that figure and counted ("Left out" counts rows, once each). Medians and p90 (nearest rank) are over the rows counted.');
+  out.push('');
+  out.push('| Tool | Rows | Found → merged (rows) | Median | p90 | Merged → released (rows) | Median | p90 | Merged, not released | No date | Left out |');
+  out.push('|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
+  const fmt = (d) => (d === null ? '–' : d.toFixed(1));
+  for (const [key, c] of Object.entries(ledger.cycle ?? {})) {
+    const name = key === 'all' ? 'All tools' : `[${key.split('/')[1]}](https://github.com/${key})`;
+    out.push(`| ${name} | ${c.rows} | ${c.found_to_merged.n} | ${fmt(c.found_to_merged.median)} | ${fmt(c.found_to_merged.p90)} | ${c.merged_to_released.n} | ${fmt(c.merged_to_released.median)} | ${fmt(c.merged_to_released.p90)} | ${c.merged_not_released} | ${c.without_dates} | ${c.excluded} |`);
+  }
+  out.push('');
+
   out.push('## Column shapes');
   out.push('');
   out.push(`Every ledger is read into one shape: \`${CANONICAL_HEADER.join(' | ')}\`, with tests written \`file\` › \`name\`.`);
@@ -585,14 +609,14 @@ export function renderMarkdown(ledger) {
     if (!recs.length) continue;
     out.push(`## ${s.repo.split('/')[1]} (${recs.length})`);
     out.push('');
-    out.push('| ID | Severity | What it was | Found by | Pinned by | Fix | PR | Merged | Released in |');
-    out.push('|---|---|---|---|---|---|---|---|---|');
+    out.push('| ID | Severity | What it was | Found by | Pinned by | Fix | PR | Found | Pinned | Merged | Released in |');
+    out.push('|---|---|---|---|---|---|---|---|---|---|---|');
     for (const r of recs) {
       const tests = r.test.map((t) => (t.file ? `\`${esc(t.file)}\` › ${esc(t.name)}` : esc(t.name)) + (t.found === false ? ' (not found)' : '')).join('<br>');
       const fixes = r.fix_commits.map((c) => `[${short(c)}](https://github.com/${r.repo}/commit/${c})`).join(', ') || 'unresolved';
       const prs = r.fix_prs.map((n) => `[#${n}](https://github.com/${r.repo}/pull/${n})`).join(', ');
       const sev = r.severity ? r.severity + (r.severity_note ? ` (${esc(r.severity_note)})` : '') : '';
-      out.push(`| ${r.id} | ${sev} | ${esc(r.title)} | ${r.found_by} | ${tests} | ${fixes} | ${prs} | ${r.merged_at ? r.merged_at.slice(0, 10) : ''} | ${r.released_in ?? ''} |`);
+      out.push(`| ${r.id} | ${sev} | ${esc(r.title)} | ${r.found_by} | ${tests} | ${fixes} | ${prs} | ${day(r.found_at)} | ${day(r.pinned_at)} | ${day(r.merged_at)} | ${r.released_in ? `${r.released_in}${r.released_at ? ` (${day(r.released_at)})` : ''}` : ''} |`);
     }
     out.push('');
   }
@@ -610,7 +634,7 @@ export function renderMarkdown(ledger) {
 
 function sortedCache(cache) {
   const sort = (o) => Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b)));
-  return { commits: sort(cache.commits), contains: sort(cache.contains) };
+  return { commits: sort(cache.commits), contains: sort(cache.contains), prs: sort(cache.prs ?? {}), times: sort(cache.times ?? {}) };
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env, { fetch = globalThis.fetch, log = (m) => process.stderr.write(`${m}\n`) } = {}) {
@@ -625,9 +649,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, { fe
   }
   const sources = JSON.parse(readFileSync(args.sources, 'utf8'));
   const cachePath = join(args.out, 'ledger', 'cache.json');
-  const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, 'utf8')) : { commits: {}, contains: {} };
+  const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, 'utf8')) : { commits: {}, contains: {}, prs: {}, times: {} };
   cache.commits ??= {};
   cache.contains ??= {};
+  cache.prs ??= {};
+  cache.times ??= {};
   const token = env.GITHUB_TOKEN || env.GH_TOKEN || '';
   const gh = args.offline ? null : makeGitHub({ fetch, token, budget: Number(env.LEDGER_API_BUDGET) || 300 });
 

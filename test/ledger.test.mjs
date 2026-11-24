@@ -224,7 +224,7 @@ test('a full run: every repo read, rows resolved to pull requests, merges and re
     assert.deepEqual(l.counts, { total: 14, 'isokron-ai/tool-qa': 5, 'isokron-ai/mcp-check': 2, 'isokron-ai/mcp-surface-corpus': 5, 'isokron-ai/mcp-writecheck-action': 2, 'isokron-ai/mcp-write-safety': 0 });
     assert.deepEqual(l.sources.find((s) => s.repo === 'isokron-ai/mcp-write-safety'), { repo: 'isokron-ai/mcp-write-safety', ref: 'main', path: 'REGRESSIONS.md', status: 'absent' });
     const rec = (id) => l.records.find((r) => r.id === id);
-    const keys = ['repo', 'id', 'title', 'description', 'severity', 'severity_note', 'found_by', 'test', 'fix_commit', 'fix_commits', 'fix_pr', 'fix_prs', 'merged_at', 'released_in', 'url'];
+    const keys = ['repo', 'id', 'title', 'description', 'severity', 'severity_note', 'found_by', 'test', 'fix_commit', 'fix_commits', 'fix_pr', 'fix_prs', 'found_at', 'found_at_source', 'pinned_at', 'merged_at', 'released_in', 'released_at', 'url'];
     for (const r of l.records) assert.deepEqual(Object.keys(r), keys);
 
     // Two fix commits in two pull requests: the row is merged when the last one is.
@@ -253,7 +253,7 @@ test('a full run: every repo read, rows resolved to pull requests, merges and re
     assert.match(md, /mcp-write-safety\) \| 0 \(no ledger yet\)/);
     assert.match(md, /- isokron-ai\/mcp-surface-corpus: normalised: test references written `file` `name` read as `file` › `name`\./);
     assert.match(md, /- isokron-ai\/tool-qa: already in that shape\./);
-    assert.match(md, /\| R-SS-01 \| high \| .* \| review \| .* \| \[0866426\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/commit\/0866426\) \| \[#3\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/pull\/3\) \| 2026-11-23 \| v1\.4\.0 \|/);
+    assert.match(md, /\| R-SS-01 \| high \| .* \| review \| .* \| \[0866426\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/commit\/0866426\) \| \[#3\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/pull\/3\) \|  \|  \| 2026-11-23 \| v1\.4\.0 \(2026-11-25\) \|/);
     assert.match(md, /## Unresolved\n\n- /);
     assert.match(md, /R-ING-19 \(test\): pump\/test\/dispatch\.test\.mjs › .*: no test of exactly that name on main/);
 
