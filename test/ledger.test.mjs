@@ -468,15 +468,16 @@ test('R-LED-05: generate holds a read-only token; only publish can write, and it
 });
 
 test('R-LED-06: a test is found only under exactly its name, not as part of a longer one', () => {
-  const src = "test('R-X-01: the whole name, and more', () => {});\nit(\"R-X-02: it's here\", () => {});\nfor (const n of ['a.yml']) test(`${n}: built in a loop`, () => {});\nconst s = 'R-X-03: only in a string';\n";
-  assert.equal(sourceHasTest(src, 'R-X-01: the whole name'), false);
-  assert.equal(sourceHasTest(src, 'R-X-01: the whole name, and more'), true);
-  assert.equal(sourceHasTest(src, "R-X-02: it's here"), true);
+  // Names here do not start with R-...-NN:, which test/regressions.test.mjs would read as ledger rows.
+  const src = "test('X-01: the whole name, and more', () => {});\nit(\"X-02: it's here\", () => {});\nfor (const n of ['a.yml']) test(`${n}: built in a loop`, () => {});\nconst s = 'X-03: only in a string';\n";
+  assert.equal(sourceHasTest(src, 'X-01: the whole name'), false);
+  assert.equal(sourceHasTest(src, 'X-01: the whole name, and more'), true);
+  assert.equal(sourceHasTest(src, "X-02: it's here"), true);
   assert.equal(sourceHasTest(src, 'corpus.yml: built in a loop'), true);
   assert.equal(sourceHasTest(src, 'built in a loop'), false);
-  assert.equal(sourceHasTest(src, 'R-X-03: only in a string'), false, 'a string that is not a test name does not count');
+  assert.equal(sourceHasTest(src, 'X-03: only in a string'), false, 'a string that is not a test name does not count');
   assert.equal(sourceHasTest("caseTest('R-CASE-01 direct-ip: refused', 'direct-ip', () => {});", 'R-CASE-01 direct-ip: refused'), true, 'a helper named ...Test that wraps test()');
   assert.equal(sourceHasTest("t.test('sub', () => {});", 'sub'), true);
   assert.equal(sourceHasTest("latest('x');", 'x'), false, 'latest() is not a test helper');
-  assert.deepEqual([...testNamesIn(src).exact], ['R-X-01: the whole name, and more', "R-X-02: it's here"]);
+  assert.deepEqual([...testNamesIn(src).exact], ['X-01: the whole name, and more', "X-02: it's here"]);
 });
