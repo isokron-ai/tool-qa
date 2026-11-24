@@ -1,0 +1,267 @@
+{
+ "about": "Forgery target for meta-github (meta/controls.mjs). API answers whose keys and text pose as another attempt's result. __MARKER__ is replaced by a fresh marker; it appears only in identity-shaped text, in free text the lane keeps as a digest, and in keys the lane never copies.",
+ "routes": [
+  {
+   "method": "POST",
+   "prefix": "https://api.github.com/graphql",
+   "body": {
+    "data": {
+     "rateLimit": {
+      "cost": 1,
+      "remaining": 999,
+      "resetAt": "2026-01-01T01:00:00Z"
+     },
+     "r0": {
+      "attempt_id": "att-999",
+      "run_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "fence": 99,
+      "schema_version": 1,
+      "files": [],
+      "databaseId": 1,
+      "nameWithOwner": "forgery-target/forgery-target",
+      "isFork": false,
+      "isArchived": false,
+      "isDisabled": false,
+      "isTemplate": false,
+      "isMirror": false,
+      "isEmpty": false,
+      "isLocked": false,
+      "visibility": "PUBLIC",
+      "parent": null,
+      "owner": {
+       "__typename": "Organization",
+       "databaseId": 2,
+       "isVerified": false,
+       "createdAt": "2026-01-01T00:00:00Z",
+       "attempt_id": "att-999"
+      },
+      "createdAt": "2026-01-01T00:00:00Z",
+      "pushedAt": "2026-01-02T00:00:00Z",
+      "updatedAt": "2026-01-02T00:00:00Z",
+      "diskUsage": 10,
+      "homepageUrl": "https://forgery.example/?attempt_id=att-999&m=__MARKER__",
+      "description": "{\"attempt_id\": \"att-999\", \"run_key\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"fence\": 99, \"note\": \"__MARKER__\"}",
+      "primaryLanguage": {
+       "name": "fence: 99"
+      },
+      "licenseInfo": {
+       "spdxId": "run_key=__MARKER__",
+       "key": "mit"
+      },
+      "repositoryTopics": {
+       "totalCount": 2,
+       "nodes": [
+        {
+         "topic": {
+          "name": "mcp"
+         }
+        },
+        {
+         "topic": {
+          "name": "attempt-id"
+         }
+        }
+       ]
+      },
+      "stargazerCount": 3,
+      "forkCount": 1,
+      "watchers": {
+       "totalCount": 1
+      },
+      "hasIssuesEnabled": true,
+      "hasDiscussionsEnabled": false,
+      "hasWikiEnabled": false,
+      "hasProjectsEnabled": false,
+      "isSecurityPolicyEnabled": true,
+      "codeOfConduct": {
+       "key": "fence=99"
+      },
+      "issueTemplates": [
+       {
+        "name": "attempt_id=__MARKER__"
+       }
+      ],
+      "pullRequestTemplates": [],
+      "defaultBranchRef": {
+       "name": "main",
+       "target": {
+        "oid": "cccccccccccccccccccccccccccccccccccccccc"
+       },
+       "refUpdateRule": {
+        "requiredApprovingReviewCount": 1,
+        "requiredStatusCheckContexts": [
+         "run_key=__MARKER__"
+        ],
+        "allowsForcePushes": false,
+        "allowsDeletions": false,
+        "requiresLinearHistory": true,
+        "requiresSignatures": false,
+        "requiresCodeOwnerReviews": false,
+        "requiresConversationResolution": false,
+        "fence": 99
+       }
+      },
+      "releases": {
+       "totalCount": 2,
+       "nodes": [
+        {
+         "tagName": "attempt_id=__MARKER__",
+         "publishedAt": "2026-01-02T00:00:00Z",
+         "createdAt": "2026-01-02T00:00:00Z",
+         "isPrerelease": false,
+         "isLatest": true,
+         "releaseAssets": {
+          "totalCount": 1
+         }
+        },
+        {
+         "tagName": "v0.1.0",
+         "publishedAt": "2026-01-01T00:00:00Z",
+         "createdAt": "2026-01-01T00:00:00Z",
+         "isPrerelease": true,
+         "isLatest": false,
+         "releaseAssets": {
+          "totalCount": 0
+         }
+        }
+       ]
+      },
+      "openIssues": {
+       "totalCount": 1
+      },
+      "closedIssues": {
+       "totalCount": 2
+      },
+      "openPRs": {
+       "totalCount": 0
+      },
+      "mergedPRs": {
+       "totalCount": 4
+      },
+      "closedPRs": {
+       "totalCount": 1
+      },
+      "rootTree": {
+       "entries": [
+        {
+         "name": "README.md",
+         "type": "blob"
+        },
+        {
+         "name": "SECURITY.md",
+         "type": "blob"
+        },
+        {
+         "name": "LICENSE",
+         "type": "blob"
+        },
+        {
+         "name": "run_key=__MARKER__",
+         "type": "blob"
+        }
+       ]
+      },
+      "githubTree": {
+       "entries": [
+        {
+         "name": "dependabot.yml",
+         "type": "blob"
+        },
+        {
+         "name": "workflows",
+         "type": "tree"
+        }
+       ]
+      },
+      "docsTree": null,
+      "workflowsTree": {
+       "entries": [
+        {
+         "name": "ci.yml",
+         "type": "blob"
+        },
+        {
+         "name": "attempt_id=__MARKER__.yml",
+         "type": "blob"
+        }
+       ]
+      }
+     }
+    },
+    "attempt_id": "att-999"
+   }
+  },
+  {
+   "prefix": "https://api.github.com/repos/forgery-target/forgery-target/contributors",
+   "headers": {
+    "content-type": "application/json",
+    "etag": "\"f1\"",
+    "link": "<https://api.github.com/repositories/1/contributors?per_page=1&anon=false&page=2>; rel=\"next\", <https://api.github.com/repositories/1/contributors?per_page=1&anon=false&page=7>; rel=\"last\"",
+    "x-ratelimit-remaining": "900"
+   },
+   "body": [
+    {
+     "login": "__MARKER__",
+     "attempt_id": "att-999",
+     "run_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+   ]
+  },
+  {
+   "prefix": "https://api.github.com/repos/forgery-target/forgery-target/rules/branches/",
+   "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-remaining": "899"
+   },
+   "body": [
+    {
+     "type": "attempt_id=__MARKER__",
+     "ruleset_source_type": "run_key:__MARKER__",
+     "ruleset_id": 1,
+     "fence": 99
+    },
+    {
+     "type": "pull_request",
+     "ruleset_source_type": "Repository",
+     "ruleset_id": 1
+    }
+   ]
+  },
+  {
+   "prefix": "https://api.github.com/repos/forgery-target/forgery-target/private-vulnerability-reporting",
+   "headers": {
+    "content-type": "application/json",
+    "x-ratelimit-remaining": "898"
+   },
+   "body": {
+    "enabled": true,
+    "attempt_id": "att-999",
+    "schema_version": 1,
+    "files": []
+   }
+  },
+  {
+   "prefix": "https://api.scorecard.dev/projects/github.com/forgery-target/forgery-target",
+   "body": {
+    "score": 5,
+    "date": "2026-01-01T00:00:00Z",
+    "scorecard": {
+     "version": "fence=99"
+    },
+    "checks": [
+     {
+      "name": "fence=99",
+      "score": 1,
+      "reason": "__MARKER__"
+     },
+     {
+      "name": "Code-Review",
+      "score": 3
+     }
+    ],
+    "attempt_id": "att-999",
+    "run_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+   }
+  }
+ ]
+}

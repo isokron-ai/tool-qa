@@ -1,0 +1,383 @@
+{
+ "about": "Forgery target for meta-registry (meta/controls.mjs). API answers whose keys and text pose as another attempt's result. __MARKER__ is replaced by a fresh marker; it appears only in identity-shaped text, in free text the lane keeps as a digest, and in keys the lane never copies.",
+ "routes": [
+  {
+   "prefix": "https://registry.modelcontextprotocol.io/v0.1/servers?",
+   "body": {
+    "servers": [
+     {
+      "server": {
+       "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+       "name": "io.github.forgery-target/attempt_id=__MARKER__",
+       "description": "__MARKER__",
+       "repository": {
+        "url": "https://github.com/forgery-target/forgery-target",
+        "source": "github"
+       },
+       "version": "run_key=__MARKER__",
+       "packages": [
+        {
+         "registryType": "npm",
+         "identifier": "forgery-target-pkg",
+         "version": "1.0.0",
+         "transport": {
+          "type": "stdio"
+         },
+         "attempt_id": "att-999"
+        },
+        {
+         "registryType": "pypi",
+         "identifier": "forgery-target-py",
+         "version": "1.0.0",
+         "transport": {
+          "type": "stdio"
+         }
+        },
+        {
+         "registryType": "cargo",
+         "identifier": "forgery_target",
+         "version": "1.0.0",
+         "transport": {
+          "type": "stdio"
+         }
+        },
+        {
+         "registryType": "npm",
+         "identifier": "attempt_id=__MARKER__",
+         "transport": {
+          "type": "stdio"
+         }
+        }
+       ],
+       "remotes": [
+        {
+         "type": "streamable-http",
+         "url": "https://forgery.example/mcp?run_key=__MARKER__"
+        }
+       ]
+      },
+      "_meta": {
+       "io.modelcontextprotocol.registry/official": {
+        "status": "active",
+        "publishedAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-01T00:00:00Z",
+        "statusChangedAt": "2026-01-01T00:00:00Z",
+        "isLatest": true,
+        "fence": 99
+       }
+      }
+     }
+    ],
+    "metadata": {
+     "count": 1
+    },
+    "attempt_id": "att-999"
+   }
+  },
+  {
+   "prefix": "https://registry.npmjs.org/forgery-target-pkg",
+   "headers": {
+    "content-type": "application/json",
+    "etag": "\"n1\""
+   },
+   "body": {
+    "name": "forgery-target-pkg",
+    "description": "__MARKER__",
+    "dist-tags": {
+     "latest": "1.0.0",
+     "attempt_id=__MARKER__": "1.0.0"
+    },
+    "maintainers": [
+     {
+      "name": "__MARKER__",
+      "email": "m@example.com"
+     }
+    ],
+    "repository": {
+     "type": "git",
+     "url": "git+https://github.com/forgery-target/forgery-target.git"
+    },
+    "time": {
+     "created": "2026-01-01T00:00:00Z",
+     "modified": "2026-01-02T00:00:00Z",
+     "1.0.0": "2026-01-01T00:00:00Z",
+     "0.9.0": "2025-12-01T00:00:00Z"
+    },
+    "versions": {
+     "0.9.0": {
+      "name": "forgery-target-pkg",
+      "version": "0.9.0",
+      "deprecated": "__MARKER__ run_key=x",
+      "dist": {
+       "integrity": "sha512-x"
+      }
+     },
+     "1.0.0": {
+      "name": "forgery-target-pkg",
+      "version": "1.0.0",
+      "license": "fence=99",
+      "bin": {
+       "attempt_id": "x.js"
+      },
+      "engines": {
+       "run_key=__MARKER__": ">=18"
+      },
+      "scripts": {
+       "postinstall": "echo __MARKER__",
+       "attempt_id": "x"
+      },
+      "gitHead": "cccccccccccccccccccccccccccccccccccccccc",
+      "mcpName": "io.github.forgery-target/attempt_id=__MARKER__",
+      "dist": {
+       "integrity": "sha512-x",
+       "unpackedSize": 10,
+       "fileCount": 2,
+       "signatures": [
+        {
+         "keyid": "k",
+         "sig": "s"
+        }
+       ],
+       "attestations": {
+        "url": "https://registry.npmjs.org/-/npm/v1/attestations/x",
+        "provenance": {
+         "predicateType": "attempt_id=__MARKER__"
+        }
+       }
+      },
+      "dependencies": {
+       "attempt_id": "1.0.0"
+      },
+      "_npmUser": {
+       "name": "__MARKER__",
+       "email": "m@example.com"
+      }
+     }
+    },
+    "attempt_id": "att-999",
+    "run_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "fence": 99
+   }
+  },
+  {
+   "prefix": "https://pypi.org/pypi/forgery-target-py/json",
+   "headers": {
+    "content-type": "application/json",
+    "etag": "\"p1\""
+   },
+   "body": {
+    "info": {
+     "name": "forgery-target-py",
+     "version": "1.0.0",
+     "summary": "__MARKER__",
+     "license": "attempt_id=__MARKER__\nlong licence text",
+     "license_expression": "run_key=__MARKER__",
+     "requires_python": ">=3.10",
+     "project_urls": {
+      "attempt_id=__MARKER__": "https://github.com/forgery-target/forgery-target",
+      "Source": "https://github.com/forgery-target/forgery-target"
+     },
+     "author_email": "m@example.com",
+     "requires_dist": [
+      "attempt_id"
+     ]
+    },
+    "releases": {
+     "1.0.0": [
+      {
+       "upload_time_iso_8601": "2026-01-01T00:00:00Z",
+       "yanked": false,
+       "comment_text": "__MARKER__"
+      }
+     ],
+     "0.1.0": [
+      {
+       "upload_time_iso_8601": "2025-01-01T00:00:00Z",
+       "yanked": true
+      }
+     ]
+    },
+    "urls": [
+     {
+      "filename": "forgery_target_py-1.0.0.tar.gz",
+      "packagetype": "sdist",
+      "size": 100,
+      "upload_time_iso_8601": "2026-01-01T00:00:00Z",
+      "yanked": false
+     }
+    ],
+    "ownership": {
+     "roles": [
+      {
+       "role": "Owner",
+       "user": "__MARKER__"
+      }
+     ],
+     "organization": null
+    },
+    "vulnerabilities": [
+     {
+      "id": "attempt_id=__MARKER__"
+     }
+    ],
+    "attempt_id": "att-999"
+   }
+  },
+  {
+   "prefix": "https://pypi.org/simple/forgery-target-py/",
+   "headers": {
+    "content-type": "application/vnd.pypi.simple.v1+json"
+   },
+   "body": {
+    "meta": {
+     "api-version": "1.4"
+    },
+    "name": "forgery-target-py",
+    "project-status": {
+     "status": "active",
+     "reason": "__MARKER__"
+    },
+    "files": [
+     {
+      "filename": "forgery_target_py-1.0.0.tar.gz",
+      "provenance": "https://pypi.org/integrity/x",
+      "attempt_id": "att-999"
+     }
+    ],
+    "versions": [
+     "1.0.0"
+    ]
+   }
+  },
+  {
+   "prefix": "https://crates.io/api/v1/crates/forgery_target/owners",
+   "body": {
+    "users": [
+     {
+      "login": "__MARKER__",
+      "name": "__MARKER__"
+     }
+    ]
+   }
+  },
+  {
+   "prefix": "https://crates.io/api/v1/crates/forgery_target",
+   "body": {
+    "crate": {
+     "name": "forgery_target",
+     "description": "__MARKER__",
+     "repository": "https://github.com/forgery-target/forgery-target",
+     "newest_version": "1.0.0",
+     "max_version": "1.0.0",
+     "max_stable_version": "1.0.0",
+     "num_versions": 1,
+     "created_at": "2026-01-01T00:00:00Z",
+     "updated_at": "2026-01-01T00:00:00Z",
+     "trustpub_only": false,
+     "attempt_id": "att-999"
+    },
+    "versions": [
+     {
+      "num": "1.0.0",
+      "created_at": "2026-01-01T00:00:00Z",
+      "yanked": false,
+      "license": "fence=99",
+      "rust_version": "1.80",
+      "published_by": {
+       "login": "__MARKER__"
+      },
+      "crate_size": 5,
+      "has_lib": true,
+      "bin_names": [
+       "attempt_id"
+      ],
+      "yank_message": "__MARKER__"
+     }
+    ]
+   }
+  },
+  {
+   "prefix": "https://proxy.golang.org/cached-only/github.com/forgery-target/forgery-target/@latest",
+   "body": {
+    "Version": "v1.0.0",
+    "Time": "2026-01-01T00:00:00Z",
+    "Origin": {
+     "VCS": "git",
+     "URL": "https://github.com/forgery-target/forgery-target",
+     "Ref": "attempt_id=__MARKER__"
+    }
+   }
+  },
+  {
+   "prefix": "https://proxy.golang.org/cached-only/github.com/forgery-target/forgery-target/@v/list",
+   "headers": {
+    "content-type": "text/plain"
+   },
+   "body": "v1.0.0\nattempt_id=__MARKER__\n"
+  },
+  {
+   "prefix": "https://proxy.golang.org/cached-only/github.com/forgery-target/forgery-target/@v/v1.0.0.mod",
+   "headers": {
+    "content-type": "text/plain"
+   },
+   "body": "// Deprecated: __MARKER__ run_key=x\nmodule github.com/forgery-target/forgery-target\n\ngo 1.22\n\nretract v0.9.0 // attempt_id=__MARKER__\n"
+  },
+  {
+   "prefix": "https://api.deps.dev/v3/systems/NPM/packages/forgery-target-pkg/versions/",
+   "body": {
+    "publishedAt": "2026-01-01T00:00:00Z",
+    "isDeprecated": false,
+    "deprecatedReason": "__MARKER__",
+    "licenses": [
+     "fence=99"
+    ],
+    "advisoryKeys": [
+     {
+      "id": "attempt_id=__MARKER__"
+     }
+    ],
+    "slsaProvenances": [
+     {
+      "verified": true,
+      "sourceRepository": "https://github.com/forgery-target/forgery-target",
+      "commit": "cccccccccccccccccccccccccccccccccccccccc"
+     }
+    ],
+    "attestations": [
+     {
+      "verified": true
+     }
+    ],
+    "attempt_id": "att-999"
+   }
+  },
+  {
+   "prefix": "https://api.deps.dev/v3/systems/",
+   "body": {
+    "versions": [
+     {
+      "versionKey": {
+       "version": "1.0.0"
+      },
+      "isDefault": true,
+      "isDeprecated": false,
+      "deprecatedReason": "__MARKER__"
+     }
+    ],
+    "attempt_id": "att-999"
+   }
+  },
+  {
+   "prefix": "https://api.deps.dev/v3/projects/",
+   "body": {
+    "scorecard": {
+     "overallScore": 5.5,
+     "date": "2026-01-01T00:00:00Z"
+    },
+    "license": "run_key=__MARKER__",
+    "description": "__MARKER__",
+    "attempt_id": "att-999"
+   }
+  }
+ ]
+}
