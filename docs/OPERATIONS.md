@@ -744,6 +744,7 @@ person. off: switched off on purpose.
 | `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
 | `config` | Red: the pump cannot load `pump/workflows.json` (for example `enabled` or `runs_untrusted` is not a real boolean), so it dispatches nothing. | Fix the file; the details name the entry. |
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
+| `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
