@@ -141,9 +141,10 @@ each subject). Then come the 100 worker-kit slots. The kit pinned at b1f25a9
 downloads and checks age in every slot (`install-age.sh` has no "already
 installed" check, and the action calls it with its own path, so a copy on
 `PATH` is not used), then encrypts and uploads. The fixture's upload mode
-measures a slot on GitHub. With N seconds a slot, a full shard takes at most
-22 + 100 × N / 60 minutes plus about 1 minute of setup: it fits in 40 minutes
-while N is at most 10. If N is higher, lower `shard_size` in
+measures a slot on GitHub: 2 to 4 seconds (2.5 s on average over 6 slots,
+23 Nov 2026). With N seconds a slot, a full shard takes at most
+22 + 100 × N / 60 minutes plus about 1 minute of setup, so about 30 minutes
+at the measured worst of 4 s: it fits in 40 minutes while N is at most 10. If N is higher, lower `shard_size` in
 `pump/workflows.json` to (40 − 23) × 60 / N, or skip the install in the kit
 and move the pin.
 
