@@ -182,7 +182,7 @@ const ENUMS = Object.freeze({
   from: ['catalog', 'source', 'committed', 'snapshots', 'live', 'registry'],
   fidelity: ['exact', 'derived', 'literal', 'names'],
   via: ['github', 'git', 'api', 'archive', 'tarball', 'zip', 'local'],
-  language: ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'c#', 'c++', 'c', 'swift', 'php', 'ruby', 'scala', 'dart', 'elixir', 'shell', 'other'],
+  language: ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'c#', 'c++', 'c', 'swift', 'php', 'ruby', 'scala', 'dart', 'elixir', 'shell', 'ts/js', 'java/kotlin', 'other'],
   detail: ['no_tools', 'multiple_servers', 'unsupported_language', 'names_only', 'too_large', 'tool_error', 'rate_limited', 'needs_credentials', 'quarantined'],
 });
 const CLASSES = [...SKIP_REASONS];
