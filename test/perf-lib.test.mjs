@@ -216,7 +216,7 @@ test('plan: a bad version from the registry stops the run', async () => {
 
 import { manifest } from '../perf/prepare-install.mjs';
 
-test('prepare-install writes one pinned dependency and refuses a loose name or version', () => {
+test('R-PERF-04: a version with a trailing newline is not a version; prepare-install refuses it and any loose name or version', () => {
   assert.deepEqual(manifest('@mcp-write-safety/tiny-tracker', '0.3.0').dependencies, { '@mcp-write-safety/tiny-tracker': '0.3.0' });
   assert.throws(() => manifest('sea-lite', '^0.7.0'));
   assert.throws(() => manifest('sea-lite', 'latest'));
