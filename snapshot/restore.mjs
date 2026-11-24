@@ -10,7 +10,8 @@
 // drill  downloads one snapshot (default: the newest), checks it against the
 //        manifest (sha256, size, name) and its asset label, decrypts it locally
 //        with the age identity (default ~/.isokron/loop-age-identity.key; the key
-//        is never printed), checks the database opens and passes
+//        is never printed), gunzips it if it is compressed (snapshots taken
+//        since loop upgrade #14; older ones are not), checks the database opens and passes
 //        `PRAGMA integrity_check`, and reports its schema version, the fence
 //        counter and the row count of every table (subjects and results first).
 //        The decrypted copy is written to a private temporary directory and
@@ -39,7 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 import { evaluateGuard, parseIsoTime } from '../scripts/guard.mjs';
-import { stateCrypto } from '../scripts/state-asset.mjs';
+import { decodeState, stateCrypto } from '../scripts/state-asset.mjs';
 import { createReleaseClient } from './github.mjs';
 import {
   MANIFEST, SNAPSHOT_TAG, SOURCE_ASSET, SOURCE_TAG, SOURCE_UPLOAD_PREFIX,
@@ -197,8 +198,11 @@ export async function drill({
       }
     }
     const file = join(dir, 'state.sqlite');
-    writeFileSync(file, plain, { mode: 0o600 });
+    const { data, compressed } = decodeState(Buffer.from(plain));
+    writeFileSync(file, data, { mode: 0o600 });
     report.decrypted_bytes = plain.length;
+    report.compressed = compressed;
+    report.database_bytes = data.length;
     Object.assign(report, inspectDatabase(file));
   } finally {
     rmSync(dir, { recursive: true, force: true });

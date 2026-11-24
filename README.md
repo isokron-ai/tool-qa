@@ -66,8 +66,8 @@ Details, and what to do in an emergency: [docs/OPERATIONS.md](docs/OPERATIONS.md
 | `scripts/state-asset.mjs` | Pulls and pushes the state database as a Release asset |
 | `snapshot/`, `.github/workflows/state-snapshot.yml` | Hourly versioned snapshots of the encrypted state asset (release `state-snapshots`, retention, manifest) and the restore drill |
 | `scripts/archive-pull.mjs` | Copies history artifacts into a local archive folder and checks them |
-| `state/schema*.sql`, `state/db.mjs` | State store: subjects, runs, leases with fencing, slot ledger, attempts, dispatch ledger, results |
-| `pump/` | The pump: subjects from the seed list, due list, shards, slots, dispatch to workers, ingest of finished runs, API budgets, App tokens |
+| `state/schema*.sql`, `state/db.mjs`, `state/prune.mjs` | State store: subjects, runs, leases with fencing, slot ledger, attempts, dispatch ledger, results; pruning of closed history |
+| `pump/` | The pump: subjects from the seed list, due list, shards, slots, dispatch to workers, ingest of finished runs, API budgets, App tokens, state pruning and the size metric |
 | `watchdog/` | Loop health checks and the "Loop health" issue |
 | `.github/workflows/pump.yml`, `watchdog.yml` | The pump (back to back, restarted every 30 minutes) and the watchdog (every 15 minutes) |
 | `worker-kit/` | Result contract (manifest schema), bundle builder and sealing action for workers, ingest public key |

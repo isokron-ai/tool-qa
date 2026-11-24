@@ -44,11 +44,13 @@ test('R-SNAP-08: no snapshot yet or an unreadable manifest is amber; a lane swit
 
 test('readSnapshotManifest reads what a snapshot run wrote', async () => {
   const f = fakeGh();
-  assert.deepEqual(await readSnapshotManifest(f.gh), { manifest: null, missing: 'release' });
+  assert.deepEqual(await readSnapshotManifest(f.gh), { manifest: null, missing: 'release', total_bytes: 0, count: 0 });
   f.pushState(cipher('g1'));
   await runSnapshot({ gh: f.gh, now: () => T0 });
-  const { manifest: m } = await readSnapshotManifest(f.gh);
+  const { manifest: m, total_bytes: total, count } = await readSnapshotManifest(f.gh);
   assert.equal(m.snapshots.length, 1);
+  assert.equal(count, 1);
+  assert.equal(total, f.assetsOf('state-snapshots').reduce((n, a) => n + a.size, 0), 'the release total counts every asset, the manifest too');
   assert.equal(snapshotCheck({ now: T0 + HOUR, manifest: m }).status, 'green');
 });
 
@@ -67,7 +69,10 @@ test('R-SNAP-16: no release, no manifest and an empty manifest are told apart', 
   f.pushState(cipher('g1'));
   await runSnapshot({ gh: f.gh, now: () => T0 });
   await f.gh.deleteAsset(f.assetsOf('state-snapshots').find((a) => a.name === 'manifest.json').id);
-  assert.deepEqual(await readSnapshotManifest(f.gh), { manifest: null, missing: 'manifest' });
+  const r = await readSnapshotManifest(f.gh);
+  assert.equal(r.manifest, null);
+  assert.equal(r.missing, 'manifest');
+  assert.equal(r.count, 1);
 });
 
 test('R-SNAP-16: snapshotCheck never throws: null entries or a broken manifest object are amber', () => {

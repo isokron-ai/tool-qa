@@ -3,6 +3,7 @@
 //
 //   node pump/run.mjs [--state state/state.sqlite] [--successor-result <file>]
 //                     [--max-minutes 11] [--tick-seconds 150] [--ingest-out <dir>]
+//                     [--state-archive-out <dir>]
 //   node pump/run.mjs --plan [--state <file>]   print the due list from a local file
 //
 // A run pulls the state database from its Release asset, then ticks every
@@ -20,6 +21,12 @@
 //               work into free slots (pump/tick.mjs).
 //   4. push     the state, if the tick recorded, dispatched, failed or reaped
 //               anything, so a run that dies loses little.
+//
+// At the end of the run, before the last push, it prunes closed history out of
+// the state (pump/prune.mjs, state/prune.mjs): it deletes the rows a sealed
+// archive staged by an earlier run holds, once that archive's artifact reads
+// back, and stages the next archive into --state-archive-out, which pump.yml
+// uploads. Then it records the state's size (kv state.size) for the watchdog.
 //
 // Dispatches are saved before they are sent: the tick records them as
 // pending, the pump pushes the state, and only then are they sent (R-ING-10).
@@ -58,6 +65,8 @@
 //   AGE_IDENTITY        the ingest age identity (decrypts results, and the state
 //                       asset); removed from the process environment once read
 //   AGE_BIN, AGE_KEYGEN_BIN, GITHUB_API_URL, RUNNER_TEMP   optional
+//   GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT   name the state archive this run stages
+//   LANE_STATE_PRUNE_ENABLED   anything but unset, empty or "true" stops pruning
 //
 // Ingest outputs are sealed to worker-kit/ingest.pub and written to --ingest-out
 // (default $RUNNER_TEMP/ingest-out); pump.yml uploads that directory.
@@ -66,9 +75,10 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { createCollector, IngestSetupError, LATE_MS } from '../ingest/collect.mjs';
+import { artifactFetcher, pruneStep, recordStateSize } from './prune.mjs';
 import { sleepUnless } from '../ingest/github.mjs';
 import { openState } from '../state/db.mjs';
-import { pullState, pushState } from '../scripts/state-asset.mjs';
+import { pullState, pushState, stateCrypto } from '../scripts/state-asset.mjs';
 import { appTokenMinter } from './app-token.mjs';
 import { ApiBudget, budgetedFetch } from './budgets.mjs';
 import { allowedWorkflows, judgeConformance, pinMismatches, readConformance as readConformanceStatus, untrustedWorkflows, verifyRun } from './breaker.mjs';
@@ -122,6 +132,10 @@ export async function runPump({
   readConformance,
   verifyConformanceRun,
   countSnapshots,
+  archiveDir,
+  prune = {},
+  crypto,
+  fetchArchive,
 } = {}) {
   const start = now();
   const deadline = start + maxRunMs;
@@ -214,8 +228,9 @@ export async function runPump({
   // starts the next one at once, a failing run a minute until a person steps
   // in. The schedule and the watchdog still try every 30 minutes.
   let db;
+  let pulled;
   try {
-    const pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, ...stateKeys });
+    pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, ...stateKeys });
     // No state asset, but snapshots of one: the state was lost, not never
     // made. Starting from empty would silently throw away every result and
     // the fence counter (R-CHAOS-01); a person restores a snapshot instead.
@@ -334,6 +349,21 @@ export async function runPump({
       if (next >= deadline) break;
       await sleep(Math.max(0, next - now()));
     }
+    // Prune closed history and record the state's size (pump/prune.mjs). Not
+    // after a failed push: this run's state may not be the one on the release.
+    let pruned = null;
+    if (!pushFailed) {
+      pruned = await pruneStep({
+        db, now, env, repo, archiveDir, lateMs: ingestOptions.lateMs ?? LATE_MS, log: say, ...prune,
+        crypto: crypto ?? stateCrypto(stateKeys),
+        fetchArchive: fetchArchive ?? artifactFetcher({ repo, mintToken: lazyMint, fetch, apiUrl, budget: bud, now, sleep }),
+      });
+    }
+    try {
+      recordStateSize(db, { now: now(), assetBytes: Number.isSafeInteger(pulled?.bytes) ? pulled.bytes : null, prune: pruned });
+    } catch (err) {
+      say(`pump: could not record the state size: ${err?.message ?? err}`);
+    }
     keepBudget();
     db.setKv('pump.last_run', { started: new Date(start).toISOString(), finished: new Date(now()).toISOString(), ticks, dispatched, failed, workerSlots, loopBudget }, { now: now() });
   } finally {
@@ -413,7 +443,7 @@ export function plan({ stateFile = DEFAULT_STATE, now = Date.now(), config = loa
 }
 
 function parseArgs(argv) {
-  const opts = { stateFile: DEFAULT_STATE, successorFile: undefined, maxMinutes: 11, tickSeconds: 150, ingestOut: undefined, plan: false };
+  const opts = { stateFile: DEFAULT_STATE, successorFile: undefined, maxMinutes: 11, tickSeconds: 150, ingestOut: undefined, archiveOut: undefined, plan: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => {
@@ -426,6 +456,7 @@ function parseArgs(argv) {
     else if (a === '--max-minutes') opts.maxMinutes = Number(val());
     else if (a === '--tick-seconds') opts.tickSeconds = Number(val());
     else if (a === '--ingest-out') opts.ingestOut = val();
+    else if (a === '--state-archive-out') opts.archiveOut = val();
     else if (a === '--plan') opts.plan = true;
     else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
@@ -459,6 +490,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       maxRunMs: opts.maxMinutes * 60_000,
       tickIntervalMs: opts.tickSeconds * 1000,
       ingestOptions: opts.ingestOut ? { outDir: opts.ingestOut } : {},
+      archiveDir: opts.archiveOut,
     });
     return out.ok ? 0 : 1;
   } catch (err) {

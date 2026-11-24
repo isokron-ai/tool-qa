@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { pullState, pushState, migrateState, ASSET_NAME, TAG } from '../scripts/state-asset.mjs';
+import { pullState, pushState, migrateState, decodeState, encodeState, ASSET_NAME, TAG } from '../scripts/state-asset.mjs';
 import { fakeDecrypt, fakeEncrypt } from '../ingest/testkit.mjs';
 import { openState } from '../state/db.mjs';
 
@@ -232,7 +232,7 @@ test('push creates the state release when missing and uploads state.sqlite', asy
   const names = gh.state.release.assets.map((a) => a.name);
   assert.deepEqual(names, [ASSET_NAME]);
   const stored = gh.state.release.assets[0];
-  assert.deepEqual(stored.data, fakeEncrypt(readFileSync(file)), 'only the encrypted copy is uploaded');
+  assert.ok(stored.data.equals(fakeEncrypt(encodeState(readFileSync(file)))), 'only the encrypted (gzipped) copy is uploaded');
   assert.equal(stored.label, `sha256:${sha256(stored.data)}`);
 });
 
@@ -246,7 +246,7 @@ test('push replaces the existing asset and removes leftover uploads', async () =
   ] } });
   await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, now: Date.parse('2026-11-23T12:00:00Z'), force: true });
   assert.deepEqual(gh.state.release.assets.map((a) => a.name), [ASSET_NAME]);
-  assert.deepEqual(gh.state.release.assets[0].data, fakeEncrypt(readFileSync(file)));
+  assert.ok(gh.state.release.assets[0].data.equals(fakeEncrypt(encodeState(readFileSync(file)))));
   // Order: upload under a temporary name first, then delete the old asset, then rename.
   const seq = gh.state.calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${new URL(c.url).pathname}`);
   assert.deepEqual(seq.slice(0, 3), [
@@ -448,7 +448,7 @@ test('R-ING-15: migrate replaces a plaintext asset with an encrypted one, once',
   const r = await migrateState(args);
   assert.equal(r.status, 'migrated');
   const [stored] = gh.state.release.assets;
-  assert.deepEqual(stored.data, fakeEncrypt(data));
+  assert.ok(stored.data.equals(fakeEncrypt(encodeState(data))));
   const again = await migrateState(args);
   assert.equal(again.status, 'already_encrypted');
   const out = join(dir, 'after.sqlite');
@@ -497,4 +497,65 @@ test('R-ING-15: the committed state.pub lists the ingest key, so the pump can re
   const state = readSealRecipients(fileURLToPath(new URL('../state/state.pub', import.meta.url)));
   const ingest = readSealRecipients(fileURLToPath(new URL('../worker-kit/ingest.pub', import.meta.url)));
   assert.ok(ingest.every((k) => state.includes(k)), 'every ingest recipient is a state recipient');
+});
+
+// ---- compression (loop upgrade #14) ----
+
+test('compression: push gzips the database inside the age envelope; pull reads it back whole', async () => {
+  const dir = tmp();
+  const file = makeDb(dir, 'state.sqlite', 'gzipped');
+  const db = openState(file);
+  for (let i = 0; i < 400; i++) db.upsertSubject({ id: `org/repo-${i}`, kind: 'repo', source: 'test', now: i });
+  db.close();
+  const gh = fakeGitHub();
+  const r = await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep, force: true });
+  assert.equal(r.compressed, true);
+  const [stored] = gh.state.release.assets;
+  const inside = fakeDecrypt(stored.data);
+  assert.deepEqual([...inside.subarray(0, 2)], [0x1f, 0x8b], 'gzip inside the envelope');
+  assert.ok(stored.data.length < readFileSync(file).length / 2, `${stored.data.length} bytes for a ${readFileSync(file).length}-byte database`);
+  const out = join(dir, 'pulled.sqlite');
+  const p = await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: out, fetch: gh.fetch, apiUrl: API, log: () => {}, sleep: noSleep });
+  assert.equal(p.compressed, true);
+  assert.ok(readFileSync(out).equals(readFileSync(file)), 'byte for byte the database that was pushed');
+  assert.equal(JSON.parse(readFileSync(`${out}.pulled.json`, 'utf8')).compressed, true);
+});
+
+test('compression: old and new forms mixed: an uncompressed asset still pulls, is pushed back compressed, and --no-compress writes the old form', async () => {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir, 'old.sqlite', 'from-before-gzip'));
+  const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, data)] } });
+  const file = join(dir, 'state.sqlite');
+  const p1 = await pull(gh, file);
+  assert.equal(p1.compressed, false);
+  assert.ok(readFileSync(file).equals(data));
+  await push(gh, file);
+  assert.deepEqual([...fakeDecrypt(gh.state.release.assets[0].data).subarray(0, 2)], [0x1f, 0x8b]);
+  const p2 = await pull(gh, file);
+  assert.equal(p2.compressed, true);
+  assert.ok(readFileSync(file).equals(data));
+  // Back to the old form, for going back to code from before compression.
+  const r = await push(gh, file, { compress: false });
+  assert.equal(r.compressed, false);
+  assert.ok(fakeDecrypt(gh.state.release.assets[0].data).equals(data));
+  assert.equal((await pull(gh, file)).compressed, false);
+  // The CLI flag is parsed.
+  const cli = spawnSync(process.execPath, [SCRIPT, 'push', '--no-compress', '--bogus'], { env: { PATH: process.env.PATH, GITHUB_REPOSITORY: REPO }, encoding: 'utf8' });
+  assert.equal(cli.status, 2);
+  assert.match(cli.stderr, /unknown argument "--bogus"/);
+});
+
+test('compression: a gzip that is cut short, or that would grow past the limit, is refused and the local file is left alone', async () => {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir, 'seed.sqlite'));
+  const packed = encodeState(data);
+  const cut = packed.subarray(0, Math.floor(packed.length / 2));
+  const gh = fakeGitHub({ release: { id: 7, assets: [asset(1, ASSET_NAME, cut)] } });
+  const file = join(dir, 'state.sqlite');
+  writeFileSync(file, 'previous');
+  await assert.rejects(pull(gh, file), /gzip that does not decompress/);
+  assert.equal(readFileSync(file, 'utf8'), 'previous');
+  assert.throws(() => decodeState(packed, { maxBytes: 100 }), /does not decompress/);
+  assert.deepEqual(decodeState(data), { data, compressed: false });
+  assert.ok(decodeState(packed).data.equals(data));
 });

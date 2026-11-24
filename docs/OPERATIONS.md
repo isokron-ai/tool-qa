@@ -170,6 +170,14 @@ encrypts the database before upload, and `pull` decrypts it with
 `AGE_IDENTITY`, so both need age (`AGE_BIN`, `AGE_KEYGEN_BIN`) and `pull`
 needs the identity.
 
+Since loop upgrade #14 `push` gzips the database before it encrypts it (a
+state database compresses about 4x), and checks that the gzip reads back to
+the same bytes first. `pull`, the watchdog and the restore drill tell the two
+forms apart after decrypting by their first bytes, so an asset or snapshot
+from before compression still reads. `push --no-compress` writes the old form;
+it is only for going back to code from before #14 ("State pruning and size",
+"Going back").
+
 `push` needs a token with `contents: write`. It uploads under a temporary name,
 then deletes the old asset and renames the new one, so a failed push keeps the
 last good copy. `pull` checks the sha256 in the asset label and that the file
@@ -207,7 +215,8 @@ GITHUB_REPOSITORY=isokron-ai/tool-qa AGE_IDENTITY="$(cat my-identity.txt)" \
 ```
 
 Nothing else reads the state asset: the archive pull copies history
-artifacts and the sealed ingest outputs only, and needs no key.
+artifacts, the sealed ingest outputs and the sealed state archives
+(`ingest-state-archive-*`, "State pruning and size") only, and needs no key.
 
 **One-time migration** from the plaintext asset of earlier versions. Pause
 the pump (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going,
@@ -239,6 +248,89 @@ results itself, in the same process, so ingest never needs a second writer. To
 push state by hand or run the manual re-ingest workflow, first switch the pump
 off (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going. The
 watchdog only downloads a copy and never pushes.
+
+## State pruning and size
+
+The state grew by about 2.2 KB per attempt and nothing removed rows (1.0 MB at
+350 attempts, 3.3 MB at 1,400). Since loop upgrade #14 the pump moves closed
+history out of it ([`state/prune.mjs`](../state/prune.mjs),
+[`pump/prune.mjs`](../pump/prune.mjs)), and records its size every run.
+
+**What stays, and why.** A row leaves only when nothing the loop decides reads
+it any more:
+
+| Table | Kept | Because |
+|---|---|---|
+| `counters` | always | the fence counter only grows |
+| `subjects`, `results`, `runs` | always | `results` holds the latest accepted result of every run_key, with coverage, fault, `assessed_at`, `measured_at` and `skips_streak`; the due list and `ever_assessed` read all of them |
+| `dispatches`, `dispatch_items` | while open, and for 7 days after they closed | ingest still judges a late result for 6 hours after an expired dispatch closed (R-CHAOS-02), duplicate detection and `getAttempt` read them; worker artifacts last 3 days, so after 7 nothing can be judged or re-ingested |
+| `leases` | for every run_key a kept item names, and while held and unexpired | fencing and stale-fence detection for in-flight and late work. A run_key with no lease row gets a fresh fence from the counter, as one never leased |
+| `attempts` | while their dispatch is kept; and, however old, every counted rejection after the run_key's last acceptance and every `retry_later` / `retry_throttled` after its last measured result | duplicates and late results; parking (`max_rejections`), the retry budget, the throttle window and the backoff count exactly these |
+| `slot_ledger` | open rows always; released rows for 7 days | |
+| `run_keys` | the run_key(s) of each (subject, workflow)'s newest result, any run_key a kept item names, and while it has a lease | the due list reads the newest result's fields; a run_key's fields are a function of the key, so one due again is recorded again unchanged |
+| `kv` | everything but `ingest.failures:<attempt>:<index>` of a pruned dispatch | the API budget and rate-limit blocks, pauses, the breaker memory, the successor and the seed state are never touched |
+
+The prune age is 7 days and can never be set below the late-result window plus
+an hour. A test builds weeks of history with every kind of result and checks
+that every reader (the due list, parking, the retry counters and backoff, the
+late-result query, `getAttempt` of every dispatch left, fencing, in-flight
+work, slots, results) answers the same before and after
+(`test/state-prune.test.mjs`).
+
+**How a pass runs.** At the end of each pump run, before the last push, and
+never after a push that failed:
+
+1. If an earlier run staged an archive, the pump looks for that artifact on
+   that run (an installation token with `actions: read`), downloads it, checks
+   its sha256 against the note in the state, decrypts it with
+   `AGE_IDENTITY` and reads every row back. Only then does it delete, in one
+   transaction, each archived row that is still exactly as archived and still
+   meets its rule. Then it runs `VACUUM` if at least a tenth of the file (and
+   256 KiB) is free.
+2. If no archive is waiting, it selects the next rows (oldest first, at most
+   50,000 rows and 30 seconds) and writes them as one archive into
+   `--state-archive-out`; `pump.yml` uploads it as the artifact
+   `ingest-state-archive-<run id>-<run attempt>` (90 days). Nothing is deleted
+   in this run.
+
+An archive that is not on its run within 6 hours, or does not read back, is
+given up: nothing is deleted, the `state-size` check turns amber once, and the
+rows are staged again. If a run dies after staging but before its push, the
+archive is uploaded but not noted; the rows are staged again later, so an
+archive can hold rows another one holds too. Readers keep one copy per table
+and key.
+
+**The archive.** `state-archive-<run id>-<attempt>.tar.age`, age-encrypted to
+`state/state.pub`, holds `state-archive.json` (what it is: the cutoff, the
+schema version, the run, rows per table, the sha256 of the rows) and
+`rows.ndjson.gz`, one `{"table", "row"}` line per row with every column. The
+artifact name starts with `ingest-`, so the archive pull and the off-site
+backup copy it like the ingest outputs, unchanged. To read one:
+
+```sh
+age -d -i ~/.isokron/loop-age-identity.key state-archive-<run>-1.tar.age | tar -xOf - rows.ndjson.gz | gunzip | head
+```
+
+**Switch.** `LANE_STATE_PRUNE_ENABLED` (repository variable): unset, empty or
+`true` is on; anything else stops staging and deleting. The size is still
+recorded.
+
+**The size metric.** Every pump run records kv `state.size`: database bytes,
+free pages, rows per table, the size of the asset it pulled, and the last
+prune result (kv `state.prune.last`). The watchdog's `state-size` check reads
+it, with the size of the asset it pulled and the total of the
+`state-snapshots` release. The thresholds: the pump refuses a state that
+decrypts or decompresses to more than 1 GiB (GitHub's own limit is 2 GiB per
+asset), so the database is amber over 256 MiB and red over 768 MiB; the
+off-site backup holds at most 8 GB and copies every snapshot, so the snapshot
+release is amber over 2 GB and red over 6 GB.
+
+**Going back.** A pump from before #14 cannot read a gzipped asset. To go back:
+pause the pump (`LANE_PUMP_ENABLED=false`) and wait until no pump run is
+going, then with this code `pull` and `push --no-compress` the state, then
+merge the revert, then turn the pump back on. Pruned rows stay in their
+archives; nothing needs them back. To stop pruning without going back, set
+`LANE_STATE_PRUNE_ENABLED=false`.
 
 ## State snapshots
 
@@ -286,7 +378,9 @@ versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
   time a run saw the newest snapshot equal the live state.
 - **Still encrypted.** A snapshot is the state asset's age ciphertext, byte for
   byte. The workflow holds no key and never decrypts; its job has only
-  `contents: write` and no environment or secrets.
+  `contents: write` and no environment or secrets. Since loop upgrade #14 the
+  pump gzips the database inside the encryption, so snapshots are about a
+  quarter of the size; older ones stay as they were, and the drill reads both.
 - **Copy check.** The run downloads the live asset, checks the bytes against
   its `sha256:` label, and checks the asset is still the same one (id, label,
   `updated_at`) after the download. If the pump pushed in between, it copies
@@ -303,8 +397,9 @@ versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
   from its name, and one dated in the future is ignored.
 - **Dedupe.** If the newest snapshot already has the live sha256, nothing is
   uploaded; only `current_at` in the manifest moves on.
-- **Retention.** The 48 newest snapshots, plus the newest snapshot of each UTC
-  day of the last 30 days; the rest are deleted. The count is of snapshots,
+- **Retention.** The 24 newest snapshots, plus the newest snapshot of each UTC
+  day of the last 14 days and of each UTC week (Monday to Sunday) of the last
+  8 weeks; the rest are deleted. The newest is never deleted. The count is of snapshots,
   not hours: an idle loop makes no new ones, so it never ages out the copies
   it would need. The manifest is written before anything is deleted, and the
   next run picks up any asset a failed delete left behind.
@@ -774,6 +869,7 @@ person. off: switched off on purpose.
 | `archive` | The Mac archive pull's last good run (repository variable `ARCHIVE_LAST_OK`, set by `scripts/archive-pull.mjs`) is more than 12 hours old, or dated in the future (amber); more than 24 hours old, or the variable is empty, not JSON or has no valid `at` (red). `off` when the variable is `off` (stop the Mac's agent first, or its next good pull sets the variable again). | On the Mac: `tail ~/Library/Logs/tool-qa-archive-pull.log`, `launchctl print gui/$(id -u)/ai.isokron.tool-qa.archive-pull`, then `launchctl kickstart` it. See "Archive of history artifacts and ingest outputs". |
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 | `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
+| `state-size` | The state database (or the asset it was pulled from) is over 256 MiB, the `state-snapshots` release holds over 2 GB, the last prune pass failed or gave up its archive, or a pump run finished without recording a size (amber); the database is over 768 MiB or the snapshots over 6 GB (red). The details show the database and asset size, the main row counts, the last prune result and the snapshot total. | A failed or given-up pass needs nothing if the next one succeeds; otherwise read the pump log's `prune:` lines. If the size keeps growing, check that pruning is on (`LANE_STATE_PRUNE_ENABLED`) and that `ingest-state-archive-*` artifacts are uploaded. Red: act before it reaches 1 GiB (see "State pruning and size"). |
 | `offsite-backup` | The off-site backup to R2: no good run for 12 hours, not configured yet, near the cost cap, or a run stopped early (amber); no good run for 24 hours, over the cost cap, or a verification failure (red). | Open the newest `offsite-backup` run's summary. See "Off-site backup". |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
@@ -800,8 +896,9 @@ artifact that is not in the folder's `index.ndjson` yet:
 - `history-*` and `registry-*` into `<dest>/<artifact name>/`, each file
   checked against the sha256 in the artifact's manifest;
 - `ingest-*` into `<dest>/ingest/<YYYY-MM-DD>/<artifact name>/` (the UTC day
-  the artifact was made; the pump's are named `ingest-<run id>-<run attempt>`),
-  still age-encrypted: nothing is decrypted. Each one gets a line in
+  the artifact was made; the pump's are named `ingest-<run id>-<run attempt>`,
+  and its state archives `ingest-state-archive-<run id>-<run attempt>`, "State
+  pruning and size"), still age-encrypted: nothing is decrypted. Each one gets a line in
   `<dest>/ingest/manifest.ndjson`: `artifact_id`, `artifact`, `run_id`,
   `run_attempt` (or `attempt_id` for a manual re-ingest), `created_at`,
   `date`, `dir`, `artifact_bytes`, `artifact_sha256`, and `files` (each

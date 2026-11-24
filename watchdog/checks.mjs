@@ -41,8 +41,15 @@
 //                        release or manifest is missing or unreadable, or its
 //                        time is in the future), red after 6. Off when the
 //                        state-snapshot lane is off.
+//   state-size           the state database's size, rows and last prune pass
+//                        as the pump recorded them (kv state.size), the asset
+//                        it was pulled from, and the snapshot release's total
+//                        (watchdog/size.mjs): amber over 256 MiB or 2 GB of
+//                        snapshots or a failed prune pass, red over 768 MiB or
+//                        6 GB of snapshots.
 
 import { snapshotCheck } from '../snapshot/health.mjs';
+import { sizeCheck } from './size.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -184,6 +191,14 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
     } else if (stopped.length && tickAge <= THRESHOLDS.budgetHeldMs) {
       checks.push({ id: 'api-budget', status: 'amber', summary: `the pump's latest tick (${minutes(tickAge)}) stopped ${stopped.join(' and ')} early on the GitHub API budget or a rate limit; work waits until it passes`, at: tick.at });
     }
+    // The state's size (loop upgrade #14), fenced like the snapshot item.
+    let size;
+    try {
+      size = sizeCheck({ size: state.kv?.['state.size'] ?? null, lastRun: state.kv?.['pump.last_run'] ?? null, asset: state.asset ?? null, snapshots: snapshot?.total_bytes !== undefined ? snapshot : null });
+    } catch (err) {
+      size = { id: 'state-size', status: 'amber', summary: `could not judge the state size: ${String(err?.message ?? err).slice(0, 200)}` };
+    }
+    checks.push(size);
     const subj = state.kv?.['pump.subjects'];
     if (subj && typeof subj === 'object') {
       checks.push(subj.ok
