@@ -957,3 +957,21 @@ test('R-ING-24: the shards a merge overtook (all recorded at the old commit) cou
   assert.deepEqual([db.getKv('pump.sha_mismatch:qa').count, db.getKv('pump.sha_mismatch:qa').last_sha], [1, OLD]);
   db.close();
 });
+
+test('R-ING-25: the same recorded commit in separate ticks keeps counting, and pauses at three', () => {
+  const db = openState(':memory:');
+  const SHA = '3'.repeat(40);
+  // A cause that persists at a fixed commit: every run lands elsewhere, one dispatch per tick.
+  for (const [i, at] of [T0, T0 + 10 * MIN, T0 + 20 * MIN].entries()) {
+    const r = db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + 5 * MIN });
+    assert.equal(r.count, i + 1);
+  }
+  const [p] = db.pausedWorkflows({ now: T0 + 26 * MIN });
+  assert.equal(p?.workflow, 'qa', 'paused');
+  // One burst (dispatches made within one tick) still counts once.
+  db.deleteKv('pump.paused:qa');
+  for (const at of [T0 + 100 * MIN, T0 + 100 * MIN + 2_000, T0 + 100 * MIN + 4_000]) db.noteShaMismatch('qa', { sha: SHA, created: at, now: at + 5 * MIN });
+  assert.equal(db.getKv('pump.sha_mismatch:qa').count, 1);
+  assert.deepEqual(db.pausedWorkflows({ now: T0 + 106 * MIN }), []);
+  db.close();
+});

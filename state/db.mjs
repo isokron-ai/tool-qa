@@ -757,22 +757,32 @@ export class StateDb {
 
   /**
    * One more dispatch of `workflow` rejected as run_sha_mismatch. `sha` is the
-   * commit recorded with that dispatch: each recorded commit counts once
-   * (R-ING-24), so the shards of one tick that a merge overtook (all recorded
-   * at the old commit, all run at the new one) count as one, not three.
+   * commit recorded with that dispatch and `created` when the dispatch was
+   * made. The shards of one tick that a merge overtook (all recorded at the old
+   * commit within one tick, all run at the new one) are one burst and count
+   * once (R-ING-24): a mismatch is a repeat only when it has the same recorded
+   * commit as the previous one AND its dispatch was made within `burstMs` (one
+   * pump tick) of that one's. The same commit in a later tick counts again, so
+   * a cause that persists at a fixed commit (someone taking the run names, a
+   * ref GitHub resolves differently) still pauses the workflow (R-ING-25).
    * Returns {count, paused}.
    */
-  noteShaMismatch(workflow, { sha = null, now, limit = 3, pauseMs = 6 * 3_600_000 } = {}) {
+  noteShaMismatch(workflow, { sha = null, created = null, now, limit = 3, pauseMs = 6 * 3_600_000, burstMs = 150_000 } = {}) {
     const key = `pump.sha_mismatch:${workflow}`;
     const prev = this.getKv(key);
     const before = Number.isSafeInteger(prev?.count) ? prev.count : 0;
-    if (before > 0 && sha !== null && prev.last_sha === sha) {
-      this.setKv(key, { ...prev, last: iso(now) }, { now });
+    const at = created === null || created === undefined ? NaN : toMs(created);
+    const prevAt = prev?.last_created ? Date.parse(prev.last_created) : NaN;
+    const sameBurst = Number.isFinite(at) && Number.isFinite(prevAt) && Math.abs(at - prevAt) <= burstMs;
+    if (before > 0 && sha !== null && prev.last_sha === sha && sameBurst) {
+      this.setKv(key, { ...prev, last: iso(now), last_created: iso(Math.max(at, prevAt)) }, { now });
       return { count: before, paused: false };
     }
     const count = before + 1;
     if (count < limit) {
-      this.setKv(key, { count, first: prev?.first ?? iso(now), last: iso(now), last_sha: sha }, { now });
+      this.setKv(key, {
+        count, first: prev?.first ?? iso(now), last: iso(now), last_sha: sha, last_created: Number.isFinite(at) ? iso(at) : null,
+      }, { now });
       return { count, paused: false };
     }
     this.setKv(`pump.paused:${workflow}`, {

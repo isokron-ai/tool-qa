@@ -378,7 +378,7 @@ export function createCollector({
         }
         // R-ING-22: count dispatches whose run was at the wrong commit; one whose run passed resets the count.
         if (reasons.includes('run_sha_mismatch')) {
-          const alarm = db.noteShaMismatch(d.workflow, { sha: d.workflow_sha ?? null, now: now() });
+          const alarm = db.noteShaMismatch(d.workflow, { sha: d.workflow_sha ?? null, created: d.created ?? null, now: now() });
           summary.changed = true;
           log(`ingest: ${label}: run at another commit than recorded at dispatch (${alarm.count} dispatch${alarm.count === 1 ? '' : 'es'} in a row)${alarm.paused ? `; ${d.workflow} is paused` : ''}`);
         } else if (reasons.some((x) => x === null || !(/^run_/.test(x) || x === 'stale_fence' || x === 'ingest_error'))) {
