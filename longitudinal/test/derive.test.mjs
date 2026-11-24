@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { derive, itemsFromEntries, main, readArchive, readPlain } from '../derive.mjs';
+import { derive, itemsFromEntries, main, outInside, readArchive, readPlain } from '../derive.mjs';
 import { ageEncrypt } from '../../ingest/age.mjs';
 import { writeTar } from '../../worker-kit/tar.mjs';
 import { parseRegistry } from '../../ingest/registry.mjs';
@@ -65,7 +65,7 @@ test('R-DRIFT-01: a version-like release tag force-pushed to another commit is a
   assert.equal(e.seen_at, fx.items[1].observed_at);
 });
 
-test('R-DRIFT-02: a version-like image tag that resolves to a new digest is an oci_tag_moves event, ranked high; latest moving is not', () => {
+test('R-DRIFT-02: a version-like image tag that resolves to a new digest is an oci_tag_moves event, ranked medium; latest moving is not', () => {
   const { fx, by, d } = deriveFixture('oci-tag-moved.json');
   const [want] = fx.expect.oci_tag_moves;
   assert.deepEqual(by.oci_tag_moves.map((e) => [e.kind, e.reference, e.tag, e.rank, e.from_digest, e.to_digest]),
@@ -148,7 +148,7 @@ test('derive CLI: --plain reads an accepted/ folder and writes one line per deri
     const code = await main(['--plain', join(dir, 'in'), '--out', out], { write: (s) => { text += s; }, now: () => new Date('2026-11-30T00:00:00Z') });
     assert.equal(code, 0);
     const summary = JSON.parse(text);
-    assert.deepEqual(summary.events, { 'git_tag_moved:high': 1, 'oci_tag_moved:high': 1 });
+    assert.deepEqual(summary.events, { 'git_tag_moved:high': 1, 'oci_tag_moved:medium': 1 });
     const lines = readFileSync(out, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     assert.deepEqual(lines.map((l) => [l.subject, l.field]).sort(), [
       ['acme/image-server', 'oci_tag_moves'], ['acme/source-server', 'catalog_drift_same_version'], ['acme/tagged-server', 'git_tag_moves']]);
@@ -180,6 +180,66 @@ test('derive: --archive decrypts sealed ingest files in memory, reads accepted i
     assert.deepEqual(stats, { sealed: 2, failed: 1, unreadable: 0 });
     assert.deepEqual(items.map((x) => x.subject), [fx.subject, fx.subject]);
     assert.equal(derive(items).summary.events['git_tag_moved:high'], 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-DRIFT-11: a failed read in between (ok, rate_limited, ok with a new digest) or a git tag that leaves the window and comes back moved does not hide the move', () => {
+  const oci = deriveFixture('oci-move-after-failed-read.json');
+  const [want] = oci.fx.expect.oci_tag_moves;
+  assert.deepEqual(oci.by.oci_tag_moves.map((e) => [e.tag, e.rank, e.from_digest, e.to_digest, e.last_seen_before]),
+    [[want.tag, want.rank, want.from, want.to, want.last_seen_before]]);
+  const git = deriveFixture('git-tag-returns.json');
+  const [g] = git.fx.expect.git_tag_moves;
+  assert.deepEqual(git.by.git_tag_moves.map((e) => [e.tag, e.rank, e.from.commit, e.to.commit, e.last_seen_before]),
+    [[g.tag, g.rank, g.from, g.to, g.last_seen_before]]);
+});
+
+test('R-DRIFT-12: a tool list change behind a floating image tag is not an event: the probed tag counts, not the registry version', () => {
+  const { fx, by } = deriveFixture('catalog-floating-image.json');
+  assert.deepEqual(by.catalog_drift_same_version.events, fx.expect.catalog_events);
+  assert.deepEqual(by.catalog_drift_same_version.excluded, fx.expect.excluded);
+});
+
+test('R-DRIFT-22: --since reports only events seen at or after it, with everything before it as the baseline; times are compared as times', async () => {
+  const fx = fixture('git-tag-returns.json');
+  const items = itemsFromEntries(entriesOf(fx));
+  const at = (iso) => Date.parse(iso);
+  // The move is seen in the third observation; its baseline (the first) is before --since.
+  const mid = derive(items, { since: at('2026-11-23T00:00:00Z') }).subjects.get(fx.subject).records;
+  assert.equal(mid.find((r) => r.field === 'git_tag_moves').value.length, 1);
+  assert.deepEqual(derive(items, { since: at('2026-11-25T00:00:00Z') }).subjects.get(fx.subject).records, []);
+  // An offset time is a time, not a string: 2026-11-24T01:00:00+02:00 is before the third observation.
+  const dir = mkdtempSync(join(tmpdir(), 'drift-since-'));
+  try {
+    writePlain(join(dir, 'in'), entriesOf(fx));
+    let text = '';
+    assert.equal(await main(['--plain', join(dir, 'in'), '--since', '2026-11-24T01:00:00+02:00'], { write: (x) => { text += x; } }), 0);
+    assert.deepEqual(JSON.parse(text).events, { 'git_tag_moved:high': 1 });
+    text = '';
+    assert.equal(await main(['--plain', join(dir, 'in'), '--since', '2026-11-24T00:00:01Z'], { write: (x) => { text += x; } }), 0);
+    assert.deepEqual(JSON.parse(text).events, {});
+    assert.equal(await main(['--plain', join(dir, 'in'), '--since', 'yesterday'], { write: () => {} }), 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-DRIFT-24: --out is written 0600, and never inside the folder being read', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'drift-out-'));
+  try {
+    writePlain(join(dir, 'in'), entriesOf(fixture('git-force-push.json')));
+    const out = join(dir, 'derived.ndjson');
+    writeFileSync(out, 'old', { mode: 0o644 });
+    assert.equal(await main(['--plain', join(dir, 'in'), '--out', out], { write: () => {} }), 0);
+    assert.equal(statSync(out).mode & 0o777, 0o600);
+    let text = '';
+    assert.equal(await main(['--plain', join(dir, 'in'), '--out', join(dir, 'in', 'x.ndjson')], { write: (x) => { text += x; } }), 2);
+    assert.match(text, /must not be inside/);
+    assert.equal(await main(['--archive', join(dir, 'in'), '--out', join(dir, 'in', 'accepted', 'y.ndjson')], { write: () => {} }), 2);
+    assert.equal(outInside(join(dir, 'in'), join(dir, 'in')), true);
+    assert.equal(outInside(join(dir, 'in-sibling.ndjson'), join(dir, 'in')), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

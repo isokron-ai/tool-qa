@@ -750,6 +750,8 @@ export function subjectOutput(c, observedAt) {
   // Image tags: one element per reference and tag; a rate limit or an outage is a retryable skip (R-DRIFT-10).
   const oci = c.oci ?? [];
   for (const code of new Set(oci.map((x) => x.status).filter((st) => st === 'rate_limited' || st === 'upstream_unavailable'))) skip('oci', code);
+  // A token answer we cannot use fails the same way on every run: our side, not retried (R-DRIFT-16).
+  if (oci.some((x) => x.status === 'token_unreadable')) skips.push({ stage: 'oci', reason: 'tool_error', fault: 'tool' });
   if (c.registry.problem && oci.length === 0) {
     records.push(record('oci_tag_digests', null, `the official MCP registry was not read: ${c.registry.problem}`));
   } else {

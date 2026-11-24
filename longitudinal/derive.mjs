@@ -26,16 +26,21 @@
 // signal needs results from several lanes (scan-static, live-probe) side by
 // side. This step only reads.
 //
-// Exit codes: 0 done; 2 usage; 3 the archive or identity could not be read.
+// --since <time> reports only events seen at or after it; everything observed
+// before it is the baseline they are compared with. --out is written 0600 and
+// never inside the folder being read.
+//
+// Exit codes: 0 done; 2 usage (or --out inside the input); 3 the archive or
+// identity could not be read.
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ageDecrypt } from '../ingest/age.mjs';
 import { readTar } from '../worker-kit/tar.mjs';
-import { catalogDrift, gitTagMoves, ociTagMoves } from './drift.mjs';
+import { catalogDrift, gitTagSeries, ociTagSeries } from './drift.mjs';
 
 export const DEFAULT_IDENTITY = join(homedir(), '.isokron', 'loop-age-identity.key');
 export const SOURCE = 'tool-qa longitudinal/derive.mjs';
@@ -120,23 +125,32 @@ export function catalogObservation(item) {
   };
 }
 
-/** Release times from a registry_entry_history value: (server_name, version) -> published_at. */
-function releaseIndex(history) {
+/** Release times from every registry_entry_history value seen: (server_name, version) -> published_at. */
+function releaseIndex(histories) {
   const map = new Map();
-  for (const e of Array.isArray(history) ? history : []) {
-    for (const v of Array.isArray(e?.versions) ? e.versions : []) map.set(`${e.server_name}\u0000${v?.version}`, v?.published_at ?? null);
+  for (const history of histories) {
+    for (const e of Array.isArray(history) ? history : []) {
+      for (const v of Array.isArray(e?.versions) ? e.versions : []) {
+        const k = `${e.server_name}\u0000${v?.version}`;
+        if (!map.has(k) && v?.published_at) map.set(k, v.published_at);
+      }
+    }
   }
   return (server, version) => map.get(`${server}\u0000${version}`) ?? null;
 }
 
 const bump = (o, k, n = 1) => { o[k] = (o[k] ?? 0) + n; };
+const t = (iso) => { const v = Date.parse(iso); return Number.isFinite(v) ? v : -Infinity; };
 
 /**
  * Derive one subject's records from its items (any lanes, any order).
+ * Every observation is compared with the last-seen state before it, over the
+ * whole history (R-DRIFT-11). With `since` (ms), only events seen at or after
+ * it are reported; everything before it is the baseline (R-DRIFT-22).
  * Returns { records: [{field, value}], tool_side: [...], stats }.
  */
-export function deriveSubject(items) {
-  const sorted = [...items].sort((a, b) => a.observed_at.localeCompare(b.observed_at) || a.key.localeCompare(b.key));
+export function deriveSubject(items, { since = -Infinity } = {}) {
+  const sorted = [...items].sort((a, b) => t(a.observed_at) - t(b.observed_at) || a.key.localeCompare(b.key));
   const byLane = new Map();
   for (const it of sorted) {
     if (!byLane.has(it.lane)) byLane.set(it.lane, []);
@@ -145,33 +159,26 @@ export function deriveSubject(items) {
   const records = [];
   const toolSide = [];
   const stats = { git_pairs: 0, oci_pairs: 0, catalog_pairs: 0, floating_moved: 0, reannotated: 0, excluded: {} };
+  const recent = (iso) => t(iso) >= since;
 
-  // Force-pushed tags: successive meta-github observations that read the tags.
+  // Force-pushed tags: every meta-github observation that read the tags.
   const gh = (byLane.get('meta-github') ?? []).filter((x) => x.fields.get('git_tag_targets'));
-  if (gh.length >= 2) {
-    const events = [];
-    for (let i = 1; i < gh.length; i++) {
-      const r = gitTagMoves(gh[i - 1].fields.get('git_tag_targets'), gh[i].fields.get('git_tag_targets'), { prevAt: gh[i - 1].observed_at, curAt: gh[i].observed_at });
-      stats.git_pairs++;
-      stats.floating_moved += r.floating_moved;
-      stats.reannotated += r.reannotated;
-      events.push(...r.events);
-    }
-    records.push({ field: 'git_tag_moves', value: events });
+  if (gh.length >= 2 && recent(gh.at(-1).observed_at)) {
+    const r = gitTagSeries(gh.map((x) => ({ at: x.observed_at, value: x.fields.get('git_tag_targets') })));
+    stats.git_pairs = r.compared;
+    stats.floating_moved += r.floating_moved;
+    stats.reannotated += r.reannotated;
+    records.push({ field: 'git_tag_moves', value: r.events.filter((e) => recent(e.seen_at)) });
   }
 
-  // Moving image tags: successive meta-registry observations of the declared tags.
+  // Moving image tags: every meta-registry observation of the declared tags.
   const reg = (byLane.get('meta-registry') ?? []).filter((x) => Array.isArray(x.fields.get('oci_tag_digests')));
-  if (reg.length >= 2) {
-    const events = [];
-    for (let i = 1; i < reg.length; i++) {
-      const releasedAt = releaseIndex(reg[i - 1].fields.get('registry_entry_history') ?? reg[i].fields.get('registry_entry_history'));
-      const r = ociTagMoves(reg[i - 1].fields.get('oci_tag_digests'), reg[i].fields.get('oci_tag_digests'), { prevAt: reg[i - 1].observed_at, curAt: reg[i].observed_at, releasedAt });
-      stats.oci_pairs++;
-      stats.floating_moved += r.floating_moved;
-      events.push(...r.events);
-    }
-    records.push({ field: 'oci_tag_moves', value: events });
+  if (reg.length >= 2 && recent(reg.at(-1).observed_at)) {
+    const releasedAt = releaseIndex(reg.map((x) => x.fields.get('registry_entry_history')));
+    const r = ociTagSeries(reg.map((x) => ({ at: x.observed_at, value: x.fields.get('oci_tag_digests') })), { releasedAt });
+    stats.oci_pairs = r.compared;
+    stats.floating_moved += r.floating_moved;
+    records.push({ field: 'oci_tag_moves', value: r.events.filter((e) => recent(e.seen_at)) });
   }
 
   // Tool lists that change without a release: successive observations within one lane.
@@ -181,6 +188,7 @@ export function deriveSubject(items) {
   for (const lane of ['live-probe', 'scan-static']) {
     const obs = (byLane.get(lane) ?? []).map(catalogObservation).filter(Boolean);
     for (let i = 1; i < obs.length; i++) {
+      if (!recent(obs[i].observed_at)) continue; // the last one before `since` is still the baseline
       pairs++;
       const r = catalogDrift(obs[i - 1], obs[i]);
       if (!r) continue;
@@ -196,7 +204,7 @@ export function deriveSubject(items) {
 }
 
 /** Derive every subject. Items with the same key (one result archived twice) count once. */
-export function derive(items) {
+export function derive(items, { since = -Infinity } = {}) {
   const seen = new Set();
   const bySubject = new Map();
   let duplicates = 0;
@@ -213,7 +221,7 @@ export function derive(items) {
   };
   for (const list of bySubject.values()) for (const it of list) bump(summary.items_by_lane, it.lane ?? 'unknown');
   for (const [subject, list] of [...bySubject].sort((a, b) => a[0].localeCompare(b[0]))) {
-    const d = deriveSubject(list);
+    const d = deriveSubject(list, { since });
     subjects.set(subject, d);
     summary.pairs.git += d.stats.git_pairs;
     summary.pairs.oci += d.stats.oci_pairs;
@@ -286,6 +294,15 @@ export function outputLines(subjects, derivedAt) {
   return lines.length ? `${lines.join('\n')}\n` : '';
 }
 
+/** Is `file` (as it would be written) inside `dir`? Links are resolved where they exist. */
+export function outInside(file, dir) {
+  const real = (p) => { try { return realpathSync(p); } catch { return resolve(p); } };
+  const d = real(dir);
+  const target = join(real(dirname(resolve(file))), basename(file));
+  const rel = relative(d, target);
+  return rel === '' || (!rel.startsWith('..') && !rel.startsWith(sep) && rel !== '..');
+}
+
 function parseArgs(argv) {
   const o = {};
   for (let i = 0; i < argv.length; i++) {
@@ -304,6 +321,10 @@ export async function main(argv = process.argv.slice(2), { write = (s) => proces
     write('usage: node longitudinal/derive.mjs (--archive <dir> [--identity <file>] | --plain <dir>) [--out <file>] [--since <iso time>]\n');
     return 2;
   }
+  if (o.out && outInside(o.out, o.archive ?? o.plain)) {
+    write('--out must not be inside the folder being read (the archive is never written to)\n');
+    return 2;
+  }
   let read;
   try {
     if (o.archive) {
@@ -317,9 +338,12 @@ export async function main(argv = process.argv.slice(2), { write = (s) => proces
     write(`could not read the input (${err?.code ?? err?.name ?? 'error'})\n`);
     return 3;
   }
-  const items = o.since ? read.items.filter((x) => x.observed_at >= new Date(o.since).toISOString()) : read.items;
-  const { subjects, summary } = derive(items);
-  if (o.out) writeFileSync(o.out, outputLines(subjects, now().toISOString()));
+  const { subjects, summary } = derive(read.items, { since: o.since ? Date.parse(o.since) : -Infinity });
+  if (o.out) {
+    // Created 0600; an existing file is set to 0600 too (R-DRIFT-24).
+    writeFileSync(o.out, outputLines(subjects, now().toISOString()), { mode: 0o600 });
+    chmodSync(o.out, 0o600);
+  }
   write(`${JSON.stringify({ read: read.stats, ...summary }, null, 2)}\n`);
   return 0;
 }

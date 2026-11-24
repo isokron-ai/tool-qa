@@ -1,0 +1,129 @@
+{
+ "about": "R-DRIFT-11: v1.0.0 points at A, then leaves the 100-tag window (newer tags pushed it out), then comes back force-pushed to C. The gap must not hide the move.",
+ "subject": "acme/busy-repo",
+ "items": [
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-20T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 1,
+      "sample_size": 1,
+      "truncated": false,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "v1.0.0",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-10-01T00:00:00Z",
+        "tagged_at": null
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-22T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 101,
+      "sample_size": 1,
+      "truncated": true,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "v9.9.9",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-11-21T00:00:00Z",
+        "tagged_at": null
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-24T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 101,
+      "sample_size": 2,
+      "truncated": true,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "v1.0.0",
+        "commit": "cccccccccccccccccccccccccccccccccccccccc",
+        "tag_object": null,
+        "commit_date": "2026-11-23T12:00:00Z",
+        "tagged_at": null
+       },
+       {
+        "tag": "v9.9.9",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": null,
+        "commit_date": "2026-11-21T00:00:00Z",
+        "tagged_at": null
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "git_tag_moves": [
+   {
+    "tag": "v1.0.0",
+    "rank": "high",
+    "from": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "to": "cccccccccccccccccccccccccccccccccccccccc",
+    "last_seen_before": "2026-11-20T00:00:00.000Z"
+   }
+  ]
+ }
+}

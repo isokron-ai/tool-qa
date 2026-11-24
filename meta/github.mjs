@@ -179,10 +179,17 @@ export async function graphqlBatch(http, { repos, token, budget }) {
   if (rl?.resetAt) budget.graphql.reset = rl.resetAt;
   const notFound = new Set(errors.filter((e) => e?.type === 'NOT_FOUND').map((e) => (Array.isArray(e.path) ? e.path[0] : null)));
   const otherErr = new Set(errors.filter((e) => e?.type !== 'NOT_FOUND').map((e) => (Array.isArray(e.path) ? e.path[0] : null)));
+  // An error inside a found repository (path [rN, field, ...]) names the field it broke (R-DRIFT-21).
+  const fieldErrors = new Map();
+  for (const e of errors) {
+    if (e?.type === 'NOT_FOUND' || !Array.isArray(e?.path) || e.path.length < 2 || typeof e.path[1] !== 'string') continue;
+    if (!fieldErrors.has(e.path[0])) fieldErrors.set(e.path[0], new Set());
+    fieldErrors.get(e.path[0]).add(e.path[1]);
+  }
   const byRepo = new Map();
   repos.forEach((repo, i) => {
     const node = doc.data[`r${i}`];
-    if (node && typeof node === 'object') byRepo.set(repo, { status: 'ok', node });
+    if (node && typeof node === 'object') byRepo.set(repo, { status: 'ok', node, fieldErrors: [...(fieldErrors.get(`r${i}`) ?? [])].sort() });
     else if (notFound.has(`r${i}`)) byRepo.set(repo, { status: 'not_found', node: null });
     else if (otherErr.has(`r${i}`) || otherErr.has(null)) byRepo.set(repo, { status: 'error', node: null });
     else byRepo.set(repo, { status: 'not_found', node: null });
@@ -292,7 +299,8 @@ export function tagTargets(refs) {
   const tags = [];
   const seen = new Set();
   for (const n of refs.nodes.slice(0, TAG_SAMPLE)) {
-    const name = sanitize(str(n?.name, 255));
+    // Bidirectional controls are replaced too, so a tag name cannot reorder text where it is shown (R-DRIFT-23).
+    const name = sanitize(str(typeof n?.name === 'string' ? n.name.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '?') : n?.name, 255));
     if (!name || seen.has(name)) continue;
     seen.add(name);
     const t = n.target ?? {};
@@ -496,8 +504,16 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }
     records.push(record('issues_prs_summary', g.issues_prs_summary));
     records.push(record('community_profile', g.community_profile));
     records.push(record('workflow_health', g.workflow_health));
-    records.push(record('git_tag_targets', g.git_tag_targets, 'the answer had no tag refs'));
-    records.push(record('git_tag_map_sha256', g.git_tag_targets?.map_sha256 ?? null, 'the answer had no tag refs'));
+    if (Array.isArray(graph.fieldErrors) && graph.fieldErrors.includes('tagRefs')) {
+      // An error is not "no tags": it is a read that failed, tried again later (R-DRIFT-21).
+      stages.tag_refs = 'error';
+      skips.push({ stage: 'tag_refs', reason: 'upstream_unavailable', retryable: true });
+      records.push(record('git_tag_targets', null, 'GitHub GraphQL returned an error for the tag refs'));
+      records.push(record('git_tag_map_sha256', null, 'GitHub GraphQL returned an error for the tag refs'));
+    } else {
+      records.push(record('git_tag_targets', g.git_tag_targets, 'the answer had no tag refs'));
+      records.push(record('git_tag_map_sha256', g.git_tag_targets?.map_sha256 ?? null, 'the answer had no tag refs'));
+    }
 
     const c = rest.contributors;
     stages.contributors = stageOf(c);

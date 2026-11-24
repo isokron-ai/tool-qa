@@ -160,3 +160,27 @@ test('R-DRIFT-09: tag names and image answers are upstream text: the forgery con
   assert.deepEqual(oci.map((x) => [x.reference, x.tag, x.status, x.digest]), [['ghcr.io/forgery-target/forgery-target', '1.0.0', 'ok', `sha256:${'e'.repeat(64)}`]]);
   assert.equal(sanitize(oci)[0].media_type, '[removed: identity-like text]');
 });
+
+test('R-DRIFT-23: meta-github replaces bidirectional control characters in tag names before keeping or hashing them', () => {
+  const t = tagTargets({ totalCount: 1, nodes: [{ name: 'v1.0.0‮⁦', target: { __typename: 'Commit', oid: 'a'.repeat(40), committedDate: '2026-11-01T00:00:00Z' } }] });
+  assert.equal(t.tags[0].tag, 'v1.0.0??');
+  assert.equal(t.map_sha256, sha256Hex(stableJson([['v1.0.0??', 'a'.repeat(40), null]])));
+});
+
+test('R-DRIFT-21: a GraphQL error on the tag refs is a failed read (null with why, retryable skip), not "no tag refs"', async () => {
+  const f = githubFetch({
+    graphql: () => new Response(JSON.stringify({
+      data: { rateLimit: { cost: 1, remaining: 900, resetAt: '2026-11-24T01:00:00Z' }, r0: ghNode({ tagRefs: null }) },
+      errors: [{ type: 'SERVICE_UNAVAILABLE', path: ['r0', 'tagRefs'], message: 'timeout' }],
+    }), { status: 200 }),
+  });
+  const out = await collect({ http: httpFor(f), repos: ['isokron-ai/mcp-check'], token: 't', budget: createBudget() });
+  const o = subjectOutput({ ...out.get('isokron-ai/mcp-check'), observedAt: '2026-11-24T00:00:00Z' });
+  assert.deepEqual(o.records.filter((r) => r.field.startsWith('git_tag')).map((r) => [r.field, r.value, r.why]), [
+    ['git_tag_targets', null, 'GitHub GraphQL returned an error for the tag refs'],
+    ['git_tag_map_sha256', null, 'GitHub GraphQL returned an error for the tag refs'],
+  ]);
+  assert.deepEqual(o.skips, [{ stage: 'tag_refs', reason: 'upstream_unavailable', retryable: true }]);
+  assert.equal(o.stages.tag_refs, 'error');
+  assert.equal(o.records.find((r) => r.field === 'repo_core').value.github_id, 1463720077, 'the rest of the repository is kept');
+});

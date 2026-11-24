@@ -1,8 +1,11 @@
 # longitudinal: drift at an unchanged release
 
 Three signals that need two observations of the same subject. Each is found
-by comparing a subject's successive accepted results, in the order they were
-observed.
+by comparing every accepted result of a subject, in the order they were
+observed, with what was last seen before it. Tags keep their last-seen state
+over the whole history: a failed read in between (ok, rate-limited, ok with a
+new digest), or a git tag that leaves the 100-tag window and comes back, does
+not hide a move.
 
 | Signal | Field (mcp-results registry) | From | Class |
 |---|---|---|---|
@@ -35,7 +38,10 @@ manifest, the observations and the scan-static or live-probe result. Nothing
 decrypted is written to disk. The summary goes to stdout; `--out` writes one
 line per derived field per subject (`{subject, field, value, derived_at,
 source}`), holding only public facts: tag names, commit ids, image digests,
-tool-list hashes and counts. `--since <time>` limits the items read.
+tool-list hashes and counts. The file is written with mode 0600, and never
+inside the folder being read. `--since <time>` reports only events seen at or
+after that time (parsed as a time, so an offset is honoured); everything
+observed before it is the baseline they are compared with.
 
 A subject gets a field only once it has two observations from the lane it
 comes from. An empty list means the observations were compared and nothing
@@ -48,31 +54,42 @@ moved.
 - **Version-like tags only.** A full `MAJOR.MINOR.PATCH` (a fourth part, a
   pre-release or a build suffix allowed), optionally `v`-prefixed or behind a
   package prefix: `1.2.3`, `v1.2.3`, `pkg@1.2.3`, `server-v1.2.3`,
-  `sub/v1.2.3`. `latest`, `main`, `nightly`, `v1`, `1.2` and other floating
-  tags are expected to move: they are counted (`floating_moved`), never events.
-- **Fix-up re-tags rank low.** A git tag whose old and new targets were made
-  within an hour of each other (tagger date for an annotated tag, else commit
-  date), or an image tag whose old digest was last seen within an hour of the
-  registry release, is kept as an event with `rank: low`. Everything else is
-  `rank: high`. A version tag re-annotated on the same commit is counted
-  (`reannotated`), not an event.
+  `sub/v1.2.3`, with no floating word (snapshot, dev, nightly, edge, latest,
+  main, master, canary) in the prefix or the pre-release. `latest`, `main`,
+  `v1`, `1.2`, `1.0.0-SNAPSHOT`, `nightly-1.0.0` and other floating tags are
+  expected to move: they are counted (`floating_moved`), never events.
+- **Fix-up re-tags rank low; moved images rank medium.** A git tag whose old
+  and new targets were made within an hour of each other (tagger date for an
+  annotated tag, else commit date) is kept as an event with `rank: low`, but
+  only if we also last saw the old target within an hour of when it was made:
+  those dates are set by whoever made the commit or tag, so they are not
+  trusted alone. An image tag whose old digest we last saw within an hour of
+  the registry release is `rank: low` too. Otherwise a moved git tag is
+  `rank: high`, and a moved image tag `rank: medium`, because base images are
+  rebuilt routinely and results are public by name. A version tag
+  re-annotated on the same commit is counted (`reannotated`), not an event.
 - **Our own tools are not the subject's drift.** A tool list change is
   excluded (counted under `excluded`) when the manifest's tool versions differ
   (`tool_version_changed`), or when the run_key differs while the subject
   commit is the same (`run_key_changed`: a tool, oracle, probe or settings
   change). A new package version (`new_release`), a different package
   (`package_changed`) or a new commit (`new_commit`) is not drift either.
-- **npm and PyPI versions are immutable.** A published version's content cannot
-  change there, so a tool list change at the same npm or PyPI version is never
-  an event (`immutable_registry_version`).
+- **npm, PyPI and NuGet versions are immutable.** A published version's
+  content cannot change there, so a tool list change at the same version is
+  never an event (`immutable_registry_version`).
+- **Floating image tags.** For an image, the version is the tag live-probe
+  ran (the identifier's own tag, else the registry version). A tool list that
+  changes with the digest behind a floating tag is a new image, not drift
+  (`floating_tag`).
 - **Same source, same reader, different list is ours.** For scan-static, a
   different list from the same commit with the same tools and run_key is our
   reader's nondeterminism. It is reported in the summary's `tool_side`, never
-  as a subject event.
+  as a subject event. Other lanes have no such case: with only a commit to go
+  on they are `no_anchor`.
 
 Tool list events: `catalog_changed_same_image` (same image digest, rank
-medium), `catalog_changed_with_tag_move` (the version tag now points to a new
-digest, rank high), `catalog_changed_same_version` (another package type at
+medium), `catalog_changed_with_tag_move` (a version-like tag now points to a
+new digest, rank high), `catalog_changed_same_version` (another package type at
 the same version, rank medium).
 
 ## Limits

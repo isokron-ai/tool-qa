@@ -41,7 +41,9 @@ query as the rest), each with the commit it points to (an annotated tag is
 peeled once and keeps its tag object), the commit date and the tagger date,
 plus the total and whether the list was cut. `git_tag_map_sha256` is the
 sha256 of the canonical JSON of the sorted `[tag, commit, tag object]` list.
-Tag names are sanitised before they are kept or hashed. They feed the
+Tag names are sanitised (and bidirectional control characters replaced)
+before they are kept or hashed. A GraphQL error on the tag refs is a failed
+read (`null` with why, a retryable `tag_refs` skip), not an empty list. They feed the
 force-pushed tag signal (`longitudinal/`). The tags cost no REST call; a batch
 of nine real repositories cost 1 GraphQL point with and without them (24 Nov
 2026).
@@ -74,17 +76,21 @@ most five tags per subject: the subject owner's own registry entries first
 repository. Each element has the image reference, the tag, the entry and
 version that declared it, the digest, the media type, how it was read and a
 status (`ok`, `not_found`, `unauthorized`, `host_not_allowed`,
-`no_digest_header`, `redirect_refused`, `rate_limited`,
-`upstream_unavailable`). An empty list means no OCI package. Only the hosts in
+`no_digest_header`, `no_digest`, `too_large`, `token_unreadable`,
+`redirect_refused`, `rate_limited`, `upstream_unavailable`). An empty list means no OCI package. Only the hosts in
 `lib/oci.mjs` are asked (docker.io, ghcr.io, quay.io, public.ecr.aws,
 mcr.microsoft.com, registry.gitlab.com; the same allowlist as mcp-check's
 live-probe), and their token services. One tag is one manifest `HEAD`, which
 answers with `Docker-Content-Digest`; the first tag of an image also costs a
 401 and one anonymous token request. Redirects are not followed, no layer or
 blob is fetched, and Docker Hub never gets a manifest `GET` (it counts as a
-pull there). So a subject costs at most 5 tags + 2 requests per image. A rate
-limit or an outage is a retryable `oci` skip, and stops that host's remaining
-reads for the subject. They feed the moving image tag signal (`longitudinal/`).
+pull there), and an empty manifest is `no_digest`. A token realm must be
+https, on the default port, with no user or password, on the token-host list.
+So a subject costs at most 5 tags + 2 requests per image. A rate limit or an
+outage is a retryable `oci` skip. A refused realm, or a token answer we cannot
+use (over 64 KiB, not JSON, no token: `token_unreadable`, a `tool_error` skip
+with fault `tool` that is not retried), fails the same way every time. Any of
+these stops that host's remaining reads for the subject. They feed the moving image tag signal (`longitudinal/`).
 
 npm is read through its abbreviated document
 (`application/vnd.npm.install-v1+json`: versions, tags, deprecations,
