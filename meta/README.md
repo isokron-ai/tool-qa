@@ -268,7 +268,7 @@ hard links, devices and FIFOs are recorded and never followed or read. Caps:
 | one kept file | 16 MiB | 2 MiB |
 | time | 2 minutes a download | 2 minutes |
 
-A subject starts no download after 6 minutes, and reads at most four source
+A subject starts no network call after 6 minutes (downloads are not retried), and reads at most four source
 commits.
 
 ### The tag and the source commit
@@ -290,7 +290,11 @@ is not compared (`not_linked_to_subject`).
 once line endings are folded, explained (`build_output`, `compiled_output`,
 `compiled_extension`, `copied_from_repo`, `generated_metadata`,
 `generated_lockfile`, `generated_setup_py`, `generated_version_file`,
-`version_stamp`, `manifest`, `build_output_stale`), or unexplained. Findings,
+`version_stamp`, `manifest`), or unexplained. A file the source tree has, with other
+content, is never explained by the folder it sits in: a changed `lib/index.js`
+that is tracked in the source is `content_differs`. A version stamp is a line
+that carries the artifact's version and differs from the source's line in
+nothing else. Findings,
 each with a level:
 
 | Kind | Level |
@@ -302,8 +306,17 @@ each with a level:
 | `setup_py_executes`, `in_tree_build_backend`, `pth_file` | low to high |
 | `no_matching_tag` | low |
 | `tag_commit_differs_from_provenance` | high when the build was from that very tag (the tag moved), else medium |
-| `tag_commit_differs_from_git_head`, `source_commit_not_found` | medium |
+| `tag_commit_differs_from_git_head` | low (an attention item: release flows that commit after npm's `gitHead` trigger it) |
+| `source_commit_not_found` | medium |
 | `link_in_package`, `duplicate_entry`, `special_entry`, `unsafe_entry_refused`, `no_source_overlap`, `artifact_unreadable` | medium or high |
+
+### Packages linked only by what their author wrote
+
+A package that reaches the subject only through its own `repository` field or
+PyPI project URLs (`linked_by` `repository_field` or `project_urls`) can name
+any repository. Its public findings are capped at `low`, with `level_capped_from`
+and `linked_by` on the finding. Verified provenance and an attested deps.dev link
+keep their levels.
 
 ### Security-class items are held
 
@@ -315,15 +328,24 @@ the source does not explain it: an unexplained or differing file, an install
 script or the file it runs, setup.py, a `.pth` file, or build output whose
 matched text appears nowhere in the source tree. A held item goes to
 `release_diff_held` (class S) with its path, digest and rule ids, never the
-matched text, and is left out of every public field and count. The fixture
+matched text, and is left out of every public field and count. The held list is capped at 500 entries like the findings; a last
+`held_truncated` entry counts what it left out. The fixture
 run's log prints nothing about it.
 
 ### Skips
 
-Passing problems (a rate limit, an outage, a cut stream, a digest mismatch)
-are `rate_limited` or `upstream_unavailable`, retryable. Our own limits say
+Every skip says its fault side. Passing problems (a rate limit or a 403 from
+GitHub or a registry, an outage, a cut stream, a digest mismatch) are
+`rate_limited` or `upstream_unavailable` with `fault: infra`, retryable. A
+redirect we do not follow (a download, a codeload archive, a registry answer
+that leaves the allowed hosts, a renamed repository that moved off github.com)
+is `upstream_unavailable` with `fault: tool`, retryable; a renamed repository
+on github.com is read at its new name. Only a 404 (or GitHub's 401 for a
+repository that is gone) is the subject's, and it is data, not a skip. Our own limits say
 `fault: tool` and are not retried: `too_large` (a cap above),
-`reader_limit` (the time limit, the subject's budget, the commit limit),
+`reader_limit` (the time limit, the subject's budget, the commit limit, the
+compute budget of 90 seconds for all comparisons of a subject, a zip feature or
+tar number our readers lack: zip64, unsupported compression, encryption),
 `tool_error` (the lane failed on the subject), `unsupported_layout` (a subject
 that is not a GitHub repository). The shard deadline is `upstream_unavailable`
 with `fault: tool`, retryable. These need the worker kit at 2ffcea1 or later,

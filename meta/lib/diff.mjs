@@ -24,7 +24,7 @@ import { createSourceIndex, looksText, scanIndicators, SECRET_FILE_RE, SECRET_RU
 
 export const EXPLAINED = Object.freeze([
   'build_output', 'compiled_output', 'compiled_extension', 'copied_from_repo', 'generated_metadata',
-  'generated_lockfile', 'generated_setup_py', 'generated_version_file', 'version_stamp', 'manifest', 'build_output_stale',
+  'generated_lockfile', 'generated_setup_py', 'generated_version_file', 'version_stamp', 'manifest',
 ]);
 
 const BUILD_DIR_RE = /^(?:dist|build|lib|libs|out|output|esm|cjs|es|es5|es6|umd|types|typings|bundle|bundles|compiled|release|\.output|dist-[a-z0-9-]+|lib-[a-z0-9-]+)\//i;
@@ -42,24 +42,67 @@ const base = (p) => p.slice(p.lastIndexOf('/') + 1);
 const dirOf = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '');
 const foldEol = (buf) => buf.toString('latin1').replace(/\r\n?/g, '\n');
 
-/** Folder (with trailing '/', or '') of the source tree the paths come from, by vote. */
-export function findPrefix(paths, treePaths, { hint = null, byBase = indexByBase(treePaths) } = {}) {
+/**
+ * Folder (with trailing '/', or '') of the source tree the paths come from, by
+ * vote. One lookup per artifact path in `bySuffix` (suffixIndex), so the cost
+ * follows the artifact, not artifact x tree.
+ */
+export function findPrefix(paths, treePaths, { hint = null, bySuffix = suffixIndex(treePaths) } = {}) {
   const votes = new Map();
   for (const p of paths) {
-    const seen = new Set();
-    for (const r of byBase.get(base(p)) ?? []) {
-      if (r !== p && !r.endsWith(`/${p}`)) continue;
-      const pre = r.slice(0, r.length - p.length);
-      if (seen.has(pre)) continue;
-      seen.add(pre);
-      votes.set(pre, (votes.get(pre) ?? 0) + 1);
-    }
+    for (const pre of bySuffix.get(p) ?? []) votes.set(pre, (votes.get(pre) ?? 0) + 1);
   }
   if (votes.size === 0) return { prefix: hint ?? null, votes: 0, hint_agrees: null };
   const best = Math.max(...votes.values());
   const tied = [...votes.entries()].filter(([, v]) => v === best).map(([k]) => k);
   const prefix = hint !== null && tied.includes(hint) ? hint : tied.sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
   return { prefix, votes: best, hint_agrees: hint === null ? null : prefix === hint };
+}
+
+/** suffix of a tree path (the path itself, or what follows any '/') -> the folders (with trailing '/', or '') it sits under. */
+export function suffixIndex(paths) {
+  const m = new Map();
+  for (const r of paths) {
+    let at = 0;
+    for (;;) {
+      const suffix = r.slice(at);
+      const pre = r.slice(0, at);
+      const list = m.get(suffix);
+      if (list) list.push(pre); else m.set(suffix, [pre]);
+      const i = r.indexOf('/', at);
+      if (i < 0) break;
+      at = i + 1;
+    }
+  }
+  return m;
+}
+
+/** Every folder above a path, as prefixes with a trailing '/': 'a/b/c.js' -> ['', 'a/', 'a/b/']. */
+function ancestors(path) {
+  const out = [''];
+  for (let i = path.indexOf('/'); i >= 0; i = path.indexOf('/', i + 1)) out.push(path.slice(0, i + 1));
+  return out;
+}
+
+/**
+ * The lookups compareArtifact makes against the tree, built once per tree:
+ * folders holding native source, "folder + file name" pairs holding a source
+ * file, and "folder + lowercase name" pairs for docs.
+ */
+export function treeIndexOf(tree, treePaths) {
+  if (tree.lookups) return tree.lookups;
+  const nativeDirs = new Set();
+  const sourceAt = new Set();
+  const nameAt = new Set();
+  for (const r of treePaths) {
+    const b = base(r);
+    const dir = dirOf(r);
+    nameAt.add(`${dir}\0${b.toLowerCase()}`);
+    if (NATIVE_SRC_RE.test(r)) for (const a of ancestors(r)) nativeDirs.add(a);
+    if (SOURCE_EXT_RE.test(r)) for (const a of ancestors(r)) sourceAt.add(`${a}\0${b}`);
+  }
+  tree.lookups = { nativeDirs, sourceAt, nameAt, bySuffix: tree.bySuffix ?? suffixIndex(treePaths) };
+  return tree.lookups;
 }
 
 export function indexByBase(paths) {
@@ -82,7 +125,15 @@ function isBinary(path, data) {
   return data ? !looksText(data) : false;
 }
 
-/** Do two texts differ only in lines that carry a version? */
+// A version in a source line: x.y or x.y.z with a pre-release or build tail, or a template placeholder.
+const VERSION_TOKEN_RE = /\d+(?:\.\d+){1,3}(?:(?:[-+]|\.?(?:a|b|rc|dev|post|alpha|beta|pre))[0-9A-Za-z.+-]*)?|\$\{[^}\n]*\}|\{\{[^}\n]*\}\}/g;
+
+/**
+ * Do two texts differ only in version strings? The lines that differ are
+ * paired and a pair counts only when the artifact's line carries the artifact's
+ * version and the two lines are the same once the version in each is blanked:
+ * a line that changes anything else, or merely mentions "version", does not.
+ */
 export function onlyVersionLines(pkgText, srcText, version) {
   const a = pkgText.split('\n');
   const b = srcText.split('\n');
@@ -97,8 +148,13 @@ export function onlyVersionLines(pkgText, srcText, version) {
   if (onlyA.length === 0 && onlyB.length === 0) return true;
   if (onlyA.length !== onlyB.length || onlyA.length > 6) return false;
   const v = String(version ?? '');
-  const versionish = /version|0\.0\.0|\b\d+\.\d+\.\d+/i;
-  return onlyA.every((l) => (v && l.includes(v)) || versionish.test(l)) && onlyB.every((l) => versionish.test(l));
+  if (!v) return false;
+  const blankPkg = (l) => l.split(v).join('\0');
+  const blankSrc = (l) => l.replace(VERSION_TOKEN_RE, '\0');
+  if (!onlyA.every((l) => l.includes(v))) return false;
+  const left = onlyA.map(blankPkg).sort();
+  const right = onlyB.map(blankSrc).sort();
+  return left.every((l, i) => l === right[i]);
 }
 
 const PLACEHOLDER_VERSION_RE = /^(?:0\.0\.0(?:-.*)?|0\.0\.0-development|0\.0\.0-semantic-release|.*placeholder.*|\$\{.*\}|)$/i;
@@ -246,14 +302,18 @@ export function installScripts(pkgJson, artifactPaths) {
  * @param {object} tree   { files: Map<path, {size, mode, sha256, data?}>, index (createSourceIndex), byBase }
  * @param {object} [o]
  * @param {string|null} [o.hint]   the folder the publisher names (npm repository.directory), with trailing '/'
- * @returns {{summary: object, findings: object[], held: object[]}}
+ * @param {() => boolean} [o.expired]   the compute deadline: when it says true the comparison stops with ComputeBudget
+ * @returns {{summary: object, findings: object[], held: object[], held_truncated: number}}
  */
-export function compareArtifact(a, tree, { hint = null } = {}) {
+export function compareArtifact(a, tree, { hint = null, expired = () => false } = {}) {
   const findings = [];
   const held = [];
   const counts = { identical: 0, identical_eol: 0, explained: {}, unexplained_absent: 0, unexplained_differs: 0 };
   const treePaths = [...tree.files.keys()];
   const byBase = tree.byBase ?? indexByBase(treePaths);
+  if (expired()) throw new ComputeBudget();
+  const look = treeIndexOf(tree, treePaths);
+  if (expired()) throw new ComputeBudget();
   const artPaths = new Set(a.files.keys());
   const index = tree.index ?? createSourceIndex();
   const treeHashes = tree.hashes ?? new Set([...tree.files.values()].map((f) => f.sha256));
@@ -273,14 +333,14 @@ export function compareArtifact(a, tree, { hint = null } = {}) {
     }
     let votes = 0;
     for (const [top, list] of groups) {
-      const f = findPrefix(list, treePaths, { byBase });
+      const f = findPrefix(list, treePaths, { bySuffix: look.bySuffix });
       prefixes.set(top, f.prefix);
       votes += f.votes;
     }
     const firstGroup = [...groups.entries()].sort((x, y) => y[1].length - x[1].length)[0];
     prefixInfo = { prefix: firstGroup ? prefixes.get(firstGroup[0]) ?? null : null, votes, hint_agrees: null };
   } else {
-    prefixInfo = findPrefix([...artPaths].filter((p) => !metaPath(p)), treePaths, { hint, byBase });
+    prefixInfo = findPrefix([...artPaths].filter((p) => !metaPath(p)), treePaths, { hint, bySuffix: look.bySuffix });
     prefixes.set('', prefixInfo.prefix);
   }
   const prefixFor = (p) => {
@@ -305,15 +365,24 @@ export function compareArtifact(a, tree, { hint = null } = {}) {
   if (a.kind === 'sdist' && artPaths.has('setup.py')) installFiles.add('setup.py');
 
   const heldPaths = new Set();
+  const heldAt = new Map();
+  let heldDropped = 0;
   const hold = (path, file, placement, reasons) => {
-    const cur = held.find((h) => h.path === path);
+    const cur = heldAt.get(path);
     if (cur) { cur.indicators = [...new Set([...cur.indicators, ...reasons])].sort(); return; }
+    if (heldPaths.has(path)) return;
     heldPaths.add(path);
-    held.push({ artifact: a.kind, path, sha256: file?.sha256 ?? null, size: file?.size ?? null, placement, indicators: [...new Set(reasons)].sort() });
+    // The list is capped like the findings; a held path past the cap is still kept out of every public count.
+    if (held.length >= MAX_HELD) { heldDropped++; return; }
+    const entry = { artifact: a.kind, path, sha256: file?.sha256 ?? null, size: file?.size ?? null, placement, indicators: [...new Set(reasons)].sort() };
+    held.push(entry);
+    heldAt.set(path, entry);
   };
 
   // Every artifact file.
+  let seenFiles = 0;
   for (const [path, f] of [...a.files].sort(([x], [y]) => x.localeCompare(y))) {
+    if (++seenFiles % 128 === 0 && expired()) throw new ComputeBudget();
     const pre = prefixFor(path);
     const src = pre !== null ? tree.files.get(`${pre}${path}`) : undefined;
     let cls;
@@ -325,7 +394,8 @@ export function compareArtifact(a, tree, { hint = null } = {}) {
       if (path === 'package.json' || path === 'pyproject.toml') reason = 'manifest';
       else if (a.kind === 'sdist' && path === 'setup.cfg') reason = 'generated_metadata';
       else if (f.data && src.data && looksText(f.data) && onlyVersionLines(f.data.toString('utf8'), src.data.toString('utf8'), a.version)) reason = 'version_stamp';
-      else if (BUILD_DIR_RE.test(path)) reason = 'build_output_stale';
+      // A file the source tree has, with other content, is never explained by its folder's name:
+      // a republished lib/index.js that differs from the tracked one is content_differs.
     } else {
       cls = 'absent';
       if (metaPath(path)) reason = 'generated_metadata';
@@ -333,9 +403,9 @@ export function compareArtifact(a, tree, { hint = null } = {}) {
       else if (VERSION_FILE_RE.test(path) && (py.vcs_version || (f.size ?? 0) < 2048)) reason = 'generated_version_file';
       else if (a.ecosystem === 'npm' && path === 'npm-shrinkwrap.json') reason = 'generated_lockfile';
       else if (a.ecosystem === 'npm' && BUILD_DIR_RE.test(path)) reason = 'build_output';
-      else if (COMPILED_EXT_RE.test(path) && compiledFrom(path, pre, byBase)) reason = 'compiled_output';
-      else if (NATIVE_EXT_RE.test(path) && treePaths.some((t) => (pre === null || t.startsWith(pre)) && NATIVE_SRC_RE.test(t))) reason = 'compiled_extension';
-      else if (DOC_RE.test(path) && docInTree(path, pre, tree.files)) reason = 'copied_from_repo';
+      else if (COMPILED_EXT_RE.test(path) && compiledFrom(path, pre, look.sourceAt)) reason = 'compiled_output';
+      else if (NATIVE_EXT_RE.test(path) && look.nativeDirs.has(pre ?? '')) reason = 'compiled_extension';
+      else if (DOC_RE.test(path) && docInTree(path, pre, look.nameAt)) reason = 'copied_from_repo';
       // The same bytes are in the source at another path (a prepack copy, a shared file).
       else if (f.size > 0 && treeHashes.has(f.sha256)) reason = 'copied_from_repo';
       // setuptools writes setup.cfg into an sdist with only its [egg_info] tags when the project has none.
@@ -347,7 +417,7 @@ export function compareArtifact(a, tree, { hint = null } = {}) {
     const placement = installFiles.has(path) ? 'install_time'
       : cls === 'absent' && !reason ? 'unexplained_absent'
         : cls === 'differs' && !reason ? 'unexplained_differs'
-          : (reason === 'build_output' || reason === 'compiled_output' || reason === 'build_output_stale') ? 'build_output'
+          : (reason === 'build_output' || reason === 'compiled_output') ? 'build_output'
             : cls === 'differs' ? 'explained_differs' : null;
     if (placement && f.data && looksText(f.data)) {
       const text = f.data.toString('utf8');
@@ -455,10 +525,19 @@ export function compareArtifact(a, tree, { hint = null } = {}) {
     refused_entries: (a.archive.refused ?? []).length,
     findings_truncated: truncated,
   };
-  return { summary, findings, held };
+  return { summary, findings, held, held_truncated: heldDropped };
 }
 
 export const MAX_FINDINGS = 500;
+export const MAX_HELD = 500;
+
+/** The comparison ran past its compute deadline: our limit, not the package's. */
+export class ComputeBudget extends Error {
+  constructor() {
+    super('release-diff: the comparison ran past its compute budget');
+    this.name = 'ComputeBudget';
+  }
+}
 const LEVEL_ORDER = Object.freeze({ high: 0, medium: 1, low: 2, info: 3 });
 
 function levelOf(changes) {
@@ -472,26 +551,21 @@ export function eggInfoOnly(text) {
 }
 
 /** Is there a source file this compiled path comes from (same stem, under the artifact's folder)? */
-function compiledFrom(path, pre, byBase) {
+function compiledFrom(path, pre, sourceAt) {
   const stem = base(path).replace(/\.(?:d\.ts|d\.mts|d\.cts)(?:\.map)?$/i, '').replace(/\.(?:js|mjs|cjs|jsx)(?:\.map)?$/i, '').replace(/\.map$/i, '');
   for (const ext of ['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs', 'coffee', 'svelte', 'vue']) {
-    for (const r of byBase.get(`${stem}.${ext}`) ?? []) {
-      if (pre === null || r.startsWith(pre)) {
-        if (SOURCE_EXT_RE.test(r)) return true;
-      }
-    }
+    if (sourceAt.has(`${pre ?? ''}\0${stem}.${ext}`)) return true;
   }
   return false;
 }
 
-/** A doc file is explained when the tree has one of that name at the artifact's folder or any folder above it. */
-function docInTree(path, pre, files) {
+/** A doc file is explained when the tree has one of that name (any case) at the artifact's folder or any folder above it. */
+function docInTree(path, pre, nameAt) {
   if (path.includes('/')) return false;
+  const name = path.toLowerCase();
   let dir = pre ?? '';
   for (;;) {
-    for (const cand of [`${dir}${path}`]) if (files.has(cand)) return true;
-    // Case-insensitive: README.md vs readme.md.
-    for (const k of files.keys()) if (dirOf(k) === dir && base(k).toLowerCase() === path.toLowerCase()) return true;
+    if (nameAt.has(`${dir}\0${name}`)) return true;
     if (dir === '') return false;
     dir = dir.slice(0, -1);
     dir = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/') + 1) : '';

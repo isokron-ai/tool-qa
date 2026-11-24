@@ -98,7 +98,7 @@ test('provenance: the PyPI PEP 740 attestation of mcp-write-safety-kit 0.1.0 ver
 
 // ---------------------------------------------------------------- tags
 
-test('git refs: ls-refs answers are parsed (annotated tags peeled, HEAD symref), and a missing or moved repository is data', async () => {
+test('git refs: ls-refs answers are parsed (annotated tags peeled, HEAD symref), and a missing repository is data', async () => {
   assert.match(lsRefsBody(), /^0014command=ls-refs\n/);
   assert.ok(lsRefsBody().endsWith('0000'));
   const r = parseLsRefs(pkt([`${C} HEAD symref-target:refs/heads/main`, `${D} refs/tags/v1.0.0 peeled:${C}`, `${C} refs/tags/light`, 'garbage line']));
@@ -110,7 +110,7 @@ test('git refs: ls-refs answers are parsed (annotated tags peeled, HEAD symref),
   assert.throws(() => parseLsRefs(pkt(['ERR denied'])));
   const f = mockFetch([{ method: 'POST', prefix: 'https://github.com/gone/repo.git', status: 401, body: '' }, { method: 'POST', prefix: 'https://github.com/old/name.git', status: 301, body: '', headers: { location: 'https://github.com/new/name.git/git-upload-pack' } }]);
   assert.deepEqual(await readGitRefs(http(f), 'gone/repo'), { status: 'not_found' });
-  assert.deepEqual(await readGitRefs(http(f), 'old/name'), { status: 'moved' });
+  assert.deepEqual(await readGitRefs(http(f), 'old/name'), { status: 'not_found' }, 'a moved repository is read again at its new place (here: gone)');
   assert.ok(f.calls.every((c) => c.redirect === 'manual'), 'redirects are never followed');
 });
 
@@ -358,11 +358,12 @@ test('downloads stay on the registry host: a tarball URL elsewhere is not fetche
   f = npmWorld({ pkg: { 'package.json': PKG_JSON }, src: {}, extra: [{ prefix: 'https://registry.npmjs.org/acme-tool/-/', status: 302, headers: { location: 'https://evil.example/x.tgz' } }] });
   c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED });
   assert.equal(c.artifacts[0].outcome, 'artifact_redirected');
+  assert.deepEqual(c.skips, [{ stage: 'npm', reason: 'upstream_unavailable', fault: 'tool', retryable: true }], 'a redirect we do not follow is a retryable skip with a fault side');
   assert.ok(!f.calls.some((x) => x.url.includes('evil.example')));
   f = npmWorld({ pkg: { 'package.json': PKG_JSON }, src: {}, doc: { dist: { tarball: 'https://registry.npmjs.org/acme-tool/-/acme-tool-1.0.0.tgz', integrity: `sha512-${Buffer.alloc(64).toString('base64')}` } } });
   c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED });
   assert.equal(c.artifacts[0].outcome, 'integrity_mismatch');
-  assert.deepEqual(c.skips, [{ stage: 'npm', reason: 'upstream_unavailable', retryable: true }]);
+  assert.deepEqual(c.skips, [{ stage: 'npm', reason: 'upstream_unavailable', fault: 'infra', retryable: true }]);
   // The guard itself: no host outside the list, no plain HTTP, no port or credentials.
   assert.throws(() => guardHttp(http(f)).request('https://example.com/'), HostRefused);
   for (const u of ['http://registry.npmjs.org/x', 'https://registry.npmjs.org:8443/x', 'https://u:p@registry.npmjs.org/x', 'https://registry.npmjs.org.evil.example/x']) assert.equal(allowedUrl(u), false, u);
@@ -378,11 +379,11 @@ test('collect: our own caps are skips with fault tool and are not retried; passi
   const c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED });
   assert.equal(c.artifacts[0].outcome, 'too_large');
   assert.deepEqual(c.skips, [{ stage: 'npm', reason: 'too_large', fault: 'tool' }]);
-  assert.deepEqual(skipOf('x', 'rate_limited'), { stage: 'x', reason: 'rate_limited', retryable: true });
+  assert.deepEqual(skipOf('x', 'rate_limited'), { stage: 'x', reason: 'rate_limited', fault: 'infra', retryable: true });
   assert.deepEqual(skipOf('x', 'reader_limit'), { stage: 'x', reason: 'reader_limit', fault: 'tool' });
   const g = mockFetch([{ prefix: 'https://api.deps.dev/', status: 503, body: '' }]);
   const d = await collectSubject(http(g), 'acme/tool', {});
-  assert.deepEqual(d.skips, [{ stage: 'depsdev', reason: 'upstream_unavailable', retryable: true }]);
+  assert.deepEqual(d.skips, [{ stage: 'depsdev', reason: 'upstream_unavailable', fault: 'infra', retryable: true }]);
 });
 
 test('collect: PyPI: the sdist and the py3-none-any wheel are both compared against the tag\'s source', async () => {
@@ -507,10 +508,10 @@ test('R-RD-04: a source archive that outlasts our time limit is our limit (reade
   // The same cut stream inside the time limit is a passing problem, retried.
   now = 0;
   c = await collectSubject(http(slow), 'acme/tool', { seed: NPM_SEED, clock });
-  assert.deepEqual(c.skips, [{ stage: 'source', reason: 'upstream_unavailable', retryable: true }]);
+  assert.deepEqual(c.skips, [{ stage: 'source', reason: 'upstream_unavailable', fault: 'infra', retryable: true }]);
   // Over the subject's budget, no download starts.
   now = 0;
-  const late = async (url, init) => { now += 400_000; return slow(url, init); };
+  const late = async (url, init) => { const r = await slow(url, init); if (url.includes('/latest')) now += 400_000; return r; };
   c = await collectSubject(http(late), 'acme/tool', { seed: NPM_SEED, clock });
   assert.equal(c.artifacts[0].outcome, 'subject_time_budget');
   assert.deepEqual(c.skips, [{ stage: 'collect', reason: 'reader_limit', fault: 'tool' }]);

@@ -171,11 +171,13 @@ export function createHttp({
    * One request with retries. Returns { status, headers, text() , json() }.
    * `redirect` is passed to fetch ('follow' by default). 'manual' returns a 3xx as it is,
    * so a request never leaves its host (the OCI reads, release-diff's allowed hosts).
-   * `timeoutMs` overrides the per-request time limit (it covers reading the body too).
+   * `timeoutMs` overrides the per-request time limit (it covers reading the body too);
+   * `retries` overrides the extra tries (0 for a long download: a retry would double the wait).
    * Throws FetchProblem for a rate limit or an outage that outlasts the retries.
    */
-  async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck, redirect = 'follow', timeoutMs: callTimeoutMs } = {}) {
+  async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck, redirect = 'follow', timeoutMs: callTimeoutMs, retries: callRetries } = {}) {
     const host = hostOf(url);
+    const maxRetries = callRetries ?? retries;
     for (let attempt = 0; ; attempt++) {
       await pace(host);
       stats.requests++;
@@ -190,14 +192,14 @@ export function createHttp({
           signal: AbortSignal.timeout(callTimeoutMs ?? timeoutMs),
         });
       } catch (err) {
-        if (attempt < retries) { stats.retries++; await sleep(1000 * 2 ** attempt); continue; }
+        if (attempt < maxRetries) { stats.retries++; await sleep(1000 * 2 ** attempt); continue; }
         throw new FetchProblem('upstream_unavailable', `${host}: ${err?.name === 'TimeoutError' ? 'timed out' : 'network error'}`);
       }
       const limited = res.status === 429 || (rateLimitCheck ? rateLimitCheck(res) : false);
       if (limited || res.status >= 500) {
         const ra = Number(res.headers.get('retry-after'));
         const waitMs = Number.isFinite(ra) && ra >= 0 ? ra * 1000 : 1000 * 2 ** attempt;
-        if (attempt < retries && waitMs <= maxRetryWaitMs) { stats.retries++; await sleep(waitMs); continue; }
+        if (attempt < maxRetries && waitMs <= maxRetryWaitMs) { stats.retries++; await sleep(waitMs); continue; }
         await res.body?.cancel?.().catch(() => {});
         throw new FetchProblem(limited ? 'rate_limited' : 'upstream_unavailable', `${host}: HTTP ${res.status}`, { status: res.status, retryAfterMs: Number.isFinite(ra) ? ra * 1000 : null });
       }
@@ -222,13 +224,13 @@ export function createHttp({
     return memo.get(key);
   }
 
-  async function fetchSummary(url, { extract, version, headers = {}, rateLimitCheck, parse = 'json', cacheKey = url, onResponse } = {}) {
+  async function fetchSummary(url, { extract, version, headers = {}, rateLimitCheck, parse = 'json', cacheKey = url, onResponse, redirect = 'follow' } = {}) {
     const hit = cache.get(cacheKey);
     const usable = hit && hit.v === version;
     const h = { ...headers };
     if (usable && hit.etag) h['if-none-match'] = hit.etag;
     else if (usable && hit.last_modified) h['if-modified-since'] = hit.last_modified;
-    const res = await request(url, { headers: h, rateLimitCheck });
+    const res = await request(url, { headers: h, rateLimitCheck, redirect });
     if (onResponse) onResponse(res);
     if (res.status === 304 && usable) {
       stats.not_modified++;

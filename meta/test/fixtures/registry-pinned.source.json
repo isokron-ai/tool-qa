@@ -1,7 +1,7 @@
 {
   "note": "Where registry-pinned.yaml was copied from, byte for byte. Must match REGISTRY_REPO, REGISTRY_COMMIT, REGISTRY_PATH and REGISTRY_SHA256 in ingest/registry.mjs (R-COV-08); move all of them together.",
   "repo": "isokron-ai/mcp-results",
-  "commit": "239f8c533ef00424a00f6c46f8d9054ec1911bb7",
+  "commit": "8c31509daa771820084a1f7c522a5069ff81b0c0",
   "path": "fields/registry.yaml",
-  "sha256": "c2234b4e5e5c57ee45f74dce1f09e39c7439823a3a5a5757ad91667372622f5b"
+  "sha256": "e6cde3e16f0de30691c76b55b729734b04d0b7763084cff33f9e50a063eb5562"
 }

@@ -65,34 +65,68 @@ export function parseLsRefs(buf) {
   return { head, head_ref: headRef, tags, unreadable };
 }
 
+const MAX_HOPS = 3;
+const SMART_PATH_RE = /^\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/git-upload-pack$/;
+
 /**
- * Read the tags and HEAD of github.com/<repo>.
- * @returns {Promise<{status: 'ok', head, head_ref, tags, unreadable} | {status: 'not_found'|'moved'|'http_<n>'}>}
- *   throws FetchProblem for a rate limit, an outage or an answer over the cap
+ * Where a renamed or moved repository now lives, from the Location of a 3xx,
+ * or null when it points anywhere but github.com's own smart HTTP path for
+ * another owner/name (another host, a port, credentials, a path we do not know).
+ */
+export function movedTo(location, from) {
+  let u;
+  try { u = new URL(location, `https://github.com/${from}.git/git-upload-pack`); } catch { return null; }
+  if (u.protocol !== 'https:' || u.hostname !== 'github.com' || u.port !== '' || u.username || u.password) return null;
+  const m = SMART_PATH_RE.exec(u.pathname);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+/**
+ * Read the tags and HEAD of github.com/<repo>. A repository that was renamed
+ * or moved answers with a redirect: it is read again at the new place (at most
+ * three hops, github.com only, every request checked by the caller's host
+ * guard) and the result says where it went (`moved_to`).
+ * @returns {Promise<{status: 'ok', head, head_ref, tags, unreadable, moved_to: string|null}
+ *   | {status: 'not_found'}
+ *   | {status: 'moved', to: string|null}>}
+ *   not_found: the repository answered 401 or 404 (GitHub says 401 for one that is gone or private).
+ *   moved: a redirect we could not follow (another host, a loop, too many hops).
+ *   Throws FetchProblem for 403 and 429 (a rate limit), an outage, any other status or an answer over the cap.
  */
 export async function readGitRefs(http, repo) {
-  const url = `https://github.com/${repo}.git/git-upload-pack`;
-  const res = await http.request(url, {
-    method: 'POST',
-    body: lsRefsBody(),
-    redirect: 'manual',
-    headers: {
-      'content-type': 'application/x-git-upload-pack-request',
-      accept: 'application/x-git-upload-pack-result',
-      'git-protocol': 'version=2',
-    },
-  });
-  if (res.status !== 200) {
+  let at = repo;
+  const seen = new Set([repo.toLowerCase()]);
+  for (let hop = 0; ; hop++) {
+    const url = `https://github.com/${at}.git/git-upload-pack`;
+    const res = await http.request(url, {
+      method: 'POST',
+      body: lsRefsBody(),
+      redirect: 'manual',
+      headers: {
+        'content-type': 'application/x-git-upload-pack-request',
+        accept: 'application/x-git-upload-pack-result',
+        'git-protocol': 'version=2',
+      },
+    });
+    if (res.status === 200) {
+      const buf = await readBytesCapped(res, MAX_REFS_BYTES, 'github.com');
+      try {
+        return { status: 'ok', ...parseLsRefs(buf), moved_to: at === repo ? null : at };
+      } catch {
+        throw new FetchProblem('upstream_unavailable', 'github.com: the refs answer could not be read');
+      }
+    }
     await res.body?.cancel?.().catch(() => {});
     // GitHub answers a repository that does not exist, or is private, with 401 (it asks for credentials).
-    if (res.status === 401 || res.status === 403 || res.status === 404) return { status: 'not_found' };
-    if (res.status >= 300 && res.status < 400) return { status: 'moved' };
-    return { status: `http_${res.status}` };
-  }
-  const buf = await readBytesCapped(res, MAX_REFS_BYTES, 'github.com');
-  try {
-    return { status: 'ok', ...parseLsRefs(buf) };
-  } catch {
-    throw new FetchProblem('upstream_unavailable', 'github.com: the refs answer could not be read');
+    if (res.status === 401 || res.status === 404) return { status: 'not_found' };
+    if (res.status === 403 || res.status === 429) throw new FetchProblem('rate_limited', `github.com: HTTP ${res.status}`, { status: res.status });
+    if (res.status >= 300 && res.status < 400) {
+      const next = movedTo(res.headers.get('location') ?? '', at);
+      if (next === null || seen.has(next.toLowerCase()) || hop >= MAX_HOPS) return { status: 'moved', to: next };
+      seen.add(next.toLowerCase());
+      at = next;
+      continue;
+    }
+    throw new FetchProblem('upstream_unavailable', `github.com: HTTP ${res.status}`, { status: res.status });
   }
 }

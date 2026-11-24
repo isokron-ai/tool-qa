@@ -314,7 +314,7 @@ fields:
   # The release-diff lane (tool-qa meta/release-diff.mjs): each npm tarball, PyPI sdist and wheel a subject
   # publishes (latest version, at most three packages per ecosystem), compared with the source tree at the
   # version's git tag. Nothing from an artifact is installed or run; both sides are read as data.
-  # release_artifacts: one entry per artifact: ecosystem, package, version, artifact (npm_tarball | sdist |
+  # release_artifacts (R1: tag names, provenance refs and filenames are upstream text): one entry per artifact: ecosystem, package, version, artifact (npm_tarball | sdist |
   # wheel), filename, sources (how the package was found), linked_by (provenance | repository_field |
   # project_urls | depsdev_attestation | null), provenance (present, verified, why, signer, commit, ref: npm SLSA
   # or PyPI PEP 740, checked against the Sigstore root), tag (name, match exact | name_prefixed |
@@ -329,7 +329,7 @@ fields:
   # duplicate_entry, special_entry, no_source_overlap, artifact_unreadable. Paths are upstream text (R1).
   # release_diff_held: anything that looks malicious (indicator rule ids only, never the matched text) or
   # exposes a secret; security-class, so it is left out of the three fields above, counts included.
-  - {id: release_artifacts, layer: source_build, type: array, unit: none, source: release-diff, class: P, redaction: null, status: planned}
+  - {id: release_artifacts, layer: source_build, type: array, unit: none, source: release-diff, class: P, redaction: [R1], status: planned}
   - {id: release_diff_summary, layer: source_build, type: array, unit: count, source: release-diff, class: P, redaction: [R1], status: planned}
   - {id: release_diff_findings, layer: source_build, type: array, unit: none, source: release-diff, class: P-h, redaction: [R1], status: planned}
   - {id: release_diff_held, layer: source_build, type: array, unit: none, source: release-diff, class: S, redaction: [R1], status: planned}

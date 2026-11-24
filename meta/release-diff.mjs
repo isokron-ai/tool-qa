@@ -32,7 +32,7 @@ import { createHash } from 'node:crypto';
 import { FetchProblem, readBytesCapped } from './lib/http.mjs';
 import { readGitRefs } from './lib/gitrefs.mjs';
 import { npmProvenance, pypiProvenance } from './lib/provenance.mjs';
-import { compareArtifact, indexByBase } from './lib/diff.mjs';
+import { compareArtifact, ComputeBudget, indexByBase, MAX_HELD } from './lib/diff.mjs';
 import { createSourceIndex, looksText } from './lib/indicators.mjs';
 import { githubRepoOf, record, str, int } from './lib/common.mjs';
 import { namespaceMatches, registryEntries } from './registry.mjs';
@@ -55,8 +55,10 @@ export const LIMITS = Object.freeze({
   packagesPerEcosystem: 3,
   commitsPerSubject: 4,
   downloadTimeoutMs: 120_000,
-  // No new download starts once a subject has used this much time.
+  // No network call starts once a subject has used this much time.
   subjectBudgetMs: 360_000,
+  // All the comparisons of one subject together may compute this long (the loops run on one thread).
+  computeBudgetMs: 90_000,
   artifact: { maxCompressedBytes: 64 * 1024 ** 2, maxInflatedBytes: 256 * 1024 ** 2, maxEntries: 20_000, maxKeptEntryBytes: 16 * 1024 ** 2, maxKeptTotalBytes: 256 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
   source: { maxCompressedBytes: 128 * 1024 ** 2, maxInflatedBytes: 1024 ** 3, maxEntries: 100_000, maxKeptEntryBytes: 2 * 1024 ** 2, maxKeptTotalBytes: 256 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
 });
@@ -98,12 +100,57 @@ export function allowedUrl(url) {
   return u.protocol === 'https:' && ALLOWED_HOSTS.includes(u.hostname) && u.port === '' && !u.username && !u.password;
 }
 
-/** The lane's HTTP: every request checked against ALLOWED_HOSTS first. */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_SUMMARY_HOPS = 2;
+
+/**
+ * The lane's HTTP: every request checked against ALLOWED_HOSTS first. The
+ * registry JSON reads never follow a redirect on their own: a redirect to
+ * another allowed host is followed here, one hop at a time, each target checked
+ * again; one that leaves the list is refused (`redirect_refused`).
+ */
 export function guardHttp(http) {
+  async function getSummary(url, opts = {}, hop = 0) {
+    if (!allowedUrl(url)) throw new HostRefused(url);
+    const key = opts.cacheKey ?? url;
+    const r = await http.getSummary(url, { ...opts, redirect: 'manual', cacheKey: hop === 0 ? key : `${key}#hop${hop}` });
+    if (!REDIRECT_STATUSES.has(r.status)) return r;
+    let target = null;
+    try { target = new URL(r.res?.headers?.get('location') ?? '', url).href; } catch { target = null; }
+    if (target === null || !allowedUrl(target) || hop >= MAX_SUMMARY_HOPS) {
+      throw new FetchProblem('redirect_refused', `${new URL(url).hostname}: a redirect to somewhere we do not read`, { status: r.status });
+    }
+    return getSummary(target, opts, hop + 1);
+  }
   return {
     ...http,
     request(url, opts) { if (!allowedUrl(url)) throw new HostRefused(url); return http.request(url, opts); },
-    getSummary(url, opts) { if (!allowedUrl(url)) throw new HostRefused(url); return http.getSummary(url, opts); },
+    getSummary,
+  };
+}
+
+/** The subject has used its time: no network call starts. */
+export class SubjectBudget extends Error {
+  constructor() {
+    super('release-diff: the subject used its time budget');
+    this.name = 'SubjectBudget';
+  }
+}
+
+/** A limit of our own readers (an unsupported zip method, zip64): the artifact may be fine, we cannot read it. */
+export class ReaderLimit extends Error {
+  constructor(message) {
+    super(`release-diff: ${message}`);
+    this.name = 'ReaderLimit';
+  }
+}
+
+/** The lane's HTTP with the subject's time budget checked before every call, whatever it is for. */
+function budgetHttp(http, overBudget) {
+  return {
+    ...http,
+    request(url, opts) { if (overBudget()) throw new SubjectBudget(); return http.request(url, opts); },
+    getSummary(url, opts) { if (overBudget()) throw new SubjectBudget(); return http.getSummary(url, opts); },
   };
 }
 
@@ -190,11 +237,53 @@ export function resolveTag(tags, { name, version, folder = null, ecosystem = nul
   };
   const strong = hit(exact, 'exact') ?? hit(prefixed, 'name_prefixed') ?? hit(eco, 'ecosystem_prefixed');
   if (strong) return strong;
+  // PyPI normalises versions (PEP 440): 1.0 is 1.0.0, 1.0.0rc1 is 1.0.0-rc.1. Compare the normalised forms.
+  const want = ecosystem === 'pypi' ? pep440Key(v) : null;
+  const norm = want === null ? [] : [...tags.keys()].map((t) => ({ t, p: pep440Tag(t) })).filter((x) => x.p?.key === want).sort((x, y) => x.t.localeCompare(y.t));
+  if (norm.length > 0) {
+    const nameWords = new Set(names.map(canonWord));
+    const ecoWords = new Set((ECOSYSTEM_TAG_PREFIXES[ecosystem] ?? []).map(canonWord));
+    const labelled = norm.map((x) => ({ ...x, w: canonWord(x.p.prefix) }))
+      .filter((x) => x.w === '' || ecoWords.has(x.w) || nameWords.has(x.w) || ['release', 'rel', 'version'].includes(x.w));
+    const best = labelled.find((x) => x.w === '') ?? labelled[0];
+    if (best) return { name: best.t, match: best.w === '' ? 'exact' : ecoWords.has(best.w) ? 'ecosystem_prefixed' : 'name_prefixed', ...tags.get(best.t) };
+  }
   const esc = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`(?:^|[-/@_.])v?${esc}$`);
-  const weak = [...tags.keys()].filter((t) => re.test(t)).sort();
+  const weak = [...new Set([...tags.keys()].filter((t) => re.test(t)).concat(norm.map((x) => x.t)))].sort();
   if (weak.length === 0) return null;
   return { name: weak[0], match: weak.length > 1 ? 'weak_ambiguous' : 'weak', ...tags.get(weak[0]), others: weak.length - 1 };
+}
+
+const PEP440_RE = /^v?(?:(\d+)!)?(\d+(?:\.\d+)*)(?:[-_.]?(alpha|beta|preview|pre|rc|a|b|c)[-_.]?(\d*))?(?:-(\d+)|[-_.]?(post|rev|r)[-_.]?(\d*))?(?:[-_.]?(dev)[-_.]?(\d*))?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+const PRE_KIND = Object.freeze({ alpha: 'a', beta: 'b', a: 'a', b: 'b', c: 'rc', rc: 'rc', pre: 'rc', preview: 'rc' });
+const canonWord = (w) => String(w).toLowerCase().replace(/[-_./@]+/g, '-').replace(/^-|-$/g, '');
+
+/**
+ * A PEP 440 version as a comparable key: epoch, release without trailing
+ * zeros, pre-release (alpha, beta, c, pre, preview written a, b, rc), post and
+ * dev; the local part is dropped. Null when the text is not a PEP 440 version.
+ */
+export function pep440Key(version) {
+  const m = PEP440_RE.exec(String(version).trim());
+  if (!m) return null;
+  const release = m[2].split('.').map((n) => String(Number(n)));
+  while (release.length > 1 && release[release.length - 1] === '0') release.pop();
+  const pre = m[3] ? `${PRE_KIND[m[3].toLowerCase()]}${Number(m[4] || 0)}` : '';
+  const post = m[5] !== undefined ? `post${Number(m[5])}` : m[6] ? `post${Number(m[7] || 0)}` : '';
+  const dev = m[8] ? `dev${Number(m[9] || 0)}` : '';
+  return `${Number(m[1] ?? 0)}!${release.join('.')}|${pre}|${post}|${dev}`;
+}
+
+/** A tag as { prefix, key }: what comes before the version, and the version's PEP 440 key; null when no tail of it is one. */
+function pep440Tag(tag) {
+  for (let i = 0; i < tag.length; i++) {
+    if (i > 0 && !/[-/@_.]/.test(tag[i - 1])) continue;
+    if (!/[vV\d]/.test(tag[i])) continue;
+    const key = pep440Key(tag.slice(i));
+    if (key !== null) return { prefix: tag.slice(0, i), key };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- releases
@@ -278,11 +367,13 @@ async function pypiRelease(http, name, version, repo) {
 /** Download one artifact: the allowed registry host only, no redirect, the size cap, then the registry's digest. */
 async function download(http, url, { prefix, cap, digest }) {
   if (typeof url !== 'string' || !url.startsWith(prefix)) return { status: 'url_elsewhere' };
-  const res = await http.request(url, { redirect: 'manual', timeoutMs: LIMITS.downloadTimeoutMs });
+  // No retry: a second 120 s try would eat the subject's budget.
+  const res = await http.request(url, { redirect: 'manual', timeoutMs: LIMITS.downloadTimeoutMs, retries: 0 });
   if (res.status !== 200) {
     await res.body?.cancel?.().catch(() => {});
     if (res.status === 404 || res.status === 410) return { status: 'not_found' };
     if (res.status >= 300 && res.status < 400) return { status: 'redirected' };
+    if (res.status === 403 || res.status === 429) throw new FetchProblem('rate_limited', `${new URL(url).hostname}: HTTP ${res.status}`, { status: res.status });
     throw new FetchProblem('upstream_unavailable', `${new URL(url).hostname}: HTTP ${res.status}`);
   }
   const buf = await readBytesCapped(res, cap, new URL(url).hostname);
@@ -312,6 +403,8 @@ export async function readArtifact(buf, kind, filename = '') {
       z = readZipLenient(buf, { maxEntries: LIMITS.artifact.maxEntries, maxTotalBytes: LIMITS.artifact.maxInflatedBytes });
     } catch (err) {
       if (/entries is more than/.test(err?.message ?? '')) throw new ArchiveLimit('the wheel has too many entries');
+      // zip64 is our reader's limit, not a flaw of the package; a truncated or damaged zip is.
+      if (/zip64/.test(err?.message ?? '')) throw new ReaderLimit('the zip reader does not read zip64 archives');
       throw new ArchiveError(err?.message ?? 'zip unreadable');
     }
     const files = new Map();
@@ -326,11 +419,20 @@ export async function readArtifact(buf, kind, filename = '') {
     }
     // An entry refused for our inflated-size cap makes the whole artifact too large for us, not unsafe.
     if (z.refused.some((r) => /once inflated/.test(r.reason))) throw new ArchiveLimit('the wheel inflates past the cap');
+    // An entry we cannot decode (a compression method or encryption our reader lacks) is our limit, not an unsafe entry.
+    if (z.refused.some((r) => /unsupported compression method|is encrypted|zip64/.test(r.reason))) throw new ReaderLimit('an entry uses a zip feature the reader does not support');
     const refused = z.refused.map((r) => ({ name: String(r.name).slice(0, 300), reason: /unsafe/.test(r.reason) ? 'unsafe_path' : 'unreadable' }));
     const s = kind === 'wheel' ? { files, top: null } : stripTop(files);
     return { files: s.files, archive: { links: stripLinks(links, s.top), refused, duplicates: [...new Set(duplicates)], others: [] }, top: s.top };
   }
-  const t = await readTarGz(buf, { keep: () => true, limits: LIMITS.artifact });
+  let t;
+  try {
+    t = await readTarGz(buf, { keep: () => true, limits: LIMITS.artifact });
+  } catch (err) {
+    // A number our header parser cannot hold is our limit; a bad checksum or a stream that ends early is the archive's.
+    if (err instanceof ArchiveError && /too large to read|is negative/.test(err.message)) throw new ReaderLimit('a tar header holds a number the reader cannot read');
+    throw err;
+  }
   const s = stripTop(t.files);
   return { files: s.files, archive: { links: stripLinks(t.links, s.top), refused: t.refused, duplicates: t.duplicates, others: stripLinks(t.others, s.top) }, top: s.top };
 }
@@ -344,11 +446,12 @@ const MANIFEST_NAMES = new Set(['package.json', 'pyproject.toml', 'setup.py', 's
  */
 export async function readSourceTree(http, repo, commit, wantNames, { clock = () => Date.now() } = {}) {
   const t0 = clock();
-  const res = await http.request(`https://codeload.github.com/${repo}/tar.gz/${commit}`, { redirect: 'manual', timeoutMs: LIMITS.downloadTimeoutMs });
+  const res = await http.request(`https://codeload.github.com/${repo}/tar.gz/${commit}`, { redirect: 'manual', timeoutMs: LIMITS.downloadTimeoutMs, retries: 0 });
   if (res.status !== 200) {
     await res.body?.cancel?.().catch(() => {});
     if (res.status === 404 || res.status === 422) return { status: 'not_found' };
     if (res.status >= 300 && res.status < 400) return { status: 'redirected' };
+    if (res.status === 403 || res.status === 429) throw new FetchProblem('rate_limited', `codeload.github.com: HTTP ${res.status}`, { status: res.status });
     throw new FetchProblem('upstream_unavailable', `codeload.github.com: HTTP ${res.status}`);
   }
   const index = createSourceIndex();
@@ -386,20 +489,28 @@ export async function readSourceTree(http, repo, commit, wantNames, { clock = ()
 
 // ---------------------------------------------------------------- one subject
 
-const PROBLEM_CODES = new Set(['rate_limited', 'upstream_unavailable', 'too_large']);
+const PROBLEM_CODES = new Set(['rate_limited', 'upstream_unavailable', 'too_large', 'redirect_refused']);
 
 function problemOf(err) {
   if (err instanceof FetchProblem && PROBLEM_CODES.has(err.code)) return err.code;
   if (err instanceof ArchiveLimit) return 'too_large';
-  if (err instanceof SourceTimeLimit) return 'reader_limit';
+  if (err instanceof SourceTimeLimit || err instanceof ReaderLimit) return 'reader_limit';
+  if (err instanceof SubjectBudget) return 'subject_budget';
+  if (err instanceof ComputeBudget) return 'compute_budget';
   throw err;
 }
 
-/** The skip for a problem: passing ones are retried; our own caps are ours (fault tool). */
+/**
+ * The skip for a problem. Every skip says its fault side. Passing ones are
+ * retried (rate limit, outage: infra); our own caps are ours (fault tool, not
+ * retried); a redirect we do not follow is a tool-side retryable skip.
+ */
 export function skipOf(stage, code) {
   if (code === 'too_large') return { stage, reason: 'too_large', fault: 'tool' };
-  if (code === 'reader_limit') return { stage, reason: 'reader_limit', fault: 'tool' };
-  return { stage, reason: code === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', retryable: true };
+  if (code === 'reader_limit' || code === 'subject_budget') return { stage, reason: 'reader_limit', fault: 'tool' };
+  if (code === 'compute_budget') return { stage: 'compute_budget', reason: 'reader_limit', fault: 'tool' };
+  if (code === 'redirected' || code === 'redirect_refused') return { stage, reason: 'upstream_unavailable', fault: 'tool', retryable: true };
+  return { stage, reason: code === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', fault: 'infra', retryable: true };
 }
 
 /**
@@ -408,17 +519,30 @@ export function skipOf(stage, code) {
  * known-answer control reads fixed releases).
  */
 export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {}, clock = () => Date.now() } = {}) {
-  const http = guardHttp(rawHttp);
   const t0 = clock();
   const overBudget = () => clock() - t0 > LIMITS.subjectBudgetMs;
+  // The budget is checked before every network call, not only before downloads.
+  const http = budgetHttp(guardHttp(rawHttp), overBudget);
   let budgetSkipped = false;
   const budgetSkip = () => { if (!budgetSkipped) { budgetSkipped = true; skips.push(skipOf('collect', 'reader_limit')); } };
+  // A problem at a stage: its code, and its skip (the subject's budget makes one skip for the whole subject).
+  const fail = (stage, err) => {
+    const c = problemOf(err);
+    if (c === 'subject_budget') budgetSkip(); else skips.push(skipOf(stage, c));
+    return c;
+  };
   const stages = {};
   const skips = [];
   const artifacts = [];
   const summaries = [];
   const findings = [];
   const held = [];
+  let heldDropped = 0;
+  // A package linked to the subject only by what its own author wrote (the repository field, project URLs)
+  // can say anything: its findings are attention items (low), never medium or high in public.
+  const trustedLink = (linkedBy) => linkedBy === 'provenance' || linkedBy === 'depsdev_attestation';
+  const capFinding = (f, j) => (trustedLink(j.linkedBy) || !['high', 'medium'].includes(f.level)
+    ? f : { ...f, level: 'low', level_capped_from: f.level, linked_by: j.linkedBy });
 
   // Packages.
   let servers = new Map();
@@ -426,18 +550,14 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
     servers = (await registryEntries(http, repo)).servers;
     stages.mcp_registry = 'ok';
   } catch (err) {
-    const c = problemOf(err);
-    stages.mcp_registry = c;
-    skips.push(skipOf('mcp_registry', c));
+    stages.mcp_registry = fail('mcp_registry', err);
   }
   let depsdev = [];
   try {
     depsdev = await depsdevPackagesOf(http, repo);
     stages.depsdev = 'ok';
   } catch (err) {
-    const c = problemOf(err);
-    stages.depsdev = c;
-    skips.push(skipOf('depsdev', c));
+    stages.depsdev = fail('depsdev', err);
   }
   const packages = choosePackages({ servers, seed: seed.get(repo.toLowerCase()) ?? [], depsdev, repo });
   stages.packages = packages.length;
@@ -449,11 +569,13 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
     refs = await readGitRefs(http, repo);
     stages.git_refs = refs.status;
   } catch (err) {
-    const c = problemOf(err);
-    stages.git_refs = c;
-    skips.push(skipOf('git_refs', c));
+    stages.git_refs = fail('git_refs', err);
   }
+  // A renamed repository is read where it went (and its source from there); one we could not follow is a retryable skip.
+  if (refs?.status === 'moved') skips.push(skipOf('git_refs', 'redirected'));
   const tags = refs?.status === 'ok' ? refs.tags : null;
+  const sourceRepo = refs?.status === 'ok' && refs.moved_to ? refs.moved_to : repo;
+  if (refs?.status === 'ok' && refs.moved_to) stages.git_moved = 'followed';
 
   // Releases.
   const jobs = []; // { art, buf? , kind, filename, folder }
@@ -463,12 +585,13 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
     try {
       rel = p.ecosystem === 'npm' ? await npmRelease(http, p.name, pin, repo) : await pypiRelease(http, p.name, pin, repo);
     } catch (err) {
-      const c = problemOf(err);
-      skips.push(skipOf(p.ecosystem, c));
-      artifacts.push({ ecosystem: p.ecosystem, package: p.name, version: pin, artifact: null, sources: p.sources, outcome: 'not_read', why: c });
+      const c = fail(p.ecosystem, err);
+      artifacts.push({ ecosystem: p.ecosystem, package: p.name, version: pin, artifact: null, sources: p.sources, outcome: c === 'subject_budget' ? 'subject_time_budget' : 'not_read', why: c });
       continue;
     }
     if (rel.status !== 'ok') {
+      // A registry that answers 403 or 429 is limiting us, which is not the package's doing.
+      if (rel.status === 'http_403' || rel.status === 'http_429') skips.push(skipOf(p.ecosystem, 'rate_limited'));
       artifacts.push({ ecosystem: p.ecosystem, package: p.name, version: pin, artifact: null, sources: p.sources, outcome: 'release_not_found', why: rel.status });
       continue;
     }
@@ -505,14 +628,15 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
       : prov ? { kind: 'provenance_commit', commit: prov }
         : j.gitHead ? { kind: 'git_head', commit: j.gitHead } : null;
     const at = { package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind };
-    if (tags && !strong) findings.push({ ...at, kind: 'no_matching_tag', weak_tag: j.tag ? j.tag.name : null, weak_tag_confirmed: j.tag ? !!confirmedWeak : null, level: 'low' });
+    if (tags && !strong) findings.push(capFinding({ ...at, kind: 'no_matching_tag', weak_tag: j.tag ? j.tag.name : null, weak_tag_confirmed: j.tag ? !!confirmedWeak : null, level: 'low' }, j));
     if (j.tag && prov && j.tag.commit !== prov && (strong || confirmedWeak)) {
       // Built from this very tag, yet the tag now names another commit: the tag moved after the build.
       const ref = j.provenance.ref ?? '';
       const refKind = ref === `refs/tags/${j.tag.name}` ? 'this_tag' : ref.startsWith('refs/tags/') ? 'other_tag' : ref.startsWith('refs/heads/') ? 'branch' : 'unknown';
-      findings.push({ ...at, kind: 'tag_commit_differs_from_provenance', tag: j.tag.name, provenance_ref: refKind, level: refKind === 'this_tag' ? 'high' : 'medium' });
+      findings.push(capFinding({ ...at, kind: 'tag_commit_differs_from_provenance', tag: j.tag.name, provenance_ref: refKind, level: refKind === 'this_tag' ? 'high' : 'medium' }, j));
     }
-    if (j.tag && j.gitHead && j.tag.commit !== j.gitHead && (strong || confirmedWeak)) findings.push({ ...at, kind: 'tag_commit_differs_from_git_head', tag: j.tag.name, level: 'medium' });
+    // Releases are often cut from a commit after the one npm recorded (a version-bump commit, a squash): an attention item.
+    if (j.tag && j.gitHead && j.tag.commit !== j.gitHead && (strong || confirmedWeak)) findings.push(capFinding({ ...at, kind: 'tag_commit_differs_from_git_head', tag: j.tag.name, level: 'low' }, j));
   }
 
   // One basis commit at a time: its artifacts, then its source tree, then the comparisons, so at most one
@@ -521,11 +645,14 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   let treesRead = 0;
   for (const j of jobs) {
     if (!j.linkedBy) j.outcome = 'not_linked_to_subject';
-    else if (refs && refs.status !== 'ok') j.outcome = 'source_repository_not_found';
+    else if (refs?.status === 'not_found') j.outcome = 'source_repository_not_found';
+    else if (refs?.status === 'moved') j.outcome = 'source_repository_moved';
     else if (!j.basis) j.outcome = 'no_source_basis';
     else if (commits.indexOf(j.basis.commit) >= LIMITS.commitsPerSubject) j.outcome = 'commit_limit';
   }
   if (jobs.some((j) => j.outcome === 'commit_limit')) skips.push(skipOf('source', 'reader_limit'));
+  let computeSpent = 0;
+  let computeOut = false;
   for (const commit of commits.slice(0, LIMITS.commitsPerSubject)) {
     const group = jobs.filter((j) => !j.outcome && j.basis?.commit === commit);
     const names = new Set();
@@ -535,7 +662,9 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
         const d = await download(http, j.url, j.download);
         if (d.status !== 'ok') {
           j.outcome = d.status === 'integrity_mismatch' ? 'integrity_mismatch' : `artifact_${d.status}`;
+          // A digest that does not match and a redirect we do not follow are not the package's doing: retried.
           if (d.status === 'integrity_mismatch') skips.push(skipOf(j.p.ecosystem, 'upstream_unavailable'));
+          else if (d.status === 'redirected') skips.push(skipOf(j.p.ecosystem, 'redirected'));
           continue;
         }
         j.bytes = d.buf.length;
@@ -543,17 +672,17 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
         try {
           j.read = await readArtifact(d.buf, j.kind, j.filename ?? '');
         } catch (err) {
-          if (err instanceof ArchiveLimit) throw err;
+          // Our caps and our reader's limits are skips; only a damaged archive is a finding about the package.
+          if (err instanceof ArchiveLimit || err instanceof ReaderLimit) throw err;
           j.outcome = 'artifact_unreadable';
-          findings.push({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, kind: 'artifact_unreadable', level: 'medium' });
+          findings.push(capFinding({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, kind: 'artifact_unreadable', level: 'medium' }, j));
           continue;
         }
         for (const p of j.read.files.keys()) names.add(p.slice(p.lastIndexOf('/') + 1));
       } catch (err) {
-        const c = problemOf(err);
-        j.outcome = c === 'too_large' ? 'too_large' : 'not_read';
+        const c = fail(j.p.ecosystem, err);
+        j.outcome = c === 'too_large' || c === 'reader_limit' ? c : c === 'subject_budget' ? 'subject_time_budget' : 'not_read';
         j.why = c;
-        skips.push(skipOf(j.p.ecosystem, c));
       }
     }
     const ready = group.filter((j) => !j.outcome && j.read);
@@ -565,24 +694,44 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
       continue;
     }
     try {
-      t = await readSourceTree(http, repo, commit, names, { clock });
+      t = await readSourceTree(http, sourceRepo, commit, names, { clock });
       if (t.status === 'ok') treesRead++;
     } catch (err) {
-      const code = problemOf(err);
-      t = { status: code };
-      skips.push(skipOf('source', code));
+      const code = fail('source', err);
+      t = { status: code === 'subject_budget' ? 'time_budget' : code };
     }
+    if (t.status === 'redirected') skips.push(skipOf('source', 'redirected'));
     for (const j of ready) {
       if (t.status !== 'ok') {
-        j.outcome = t.status === 'not_found' ? 'source_commit_not_found' : t.status === 'too_large' ? 'source_too_large' : t.status === 'reader_limit' ? 'source_time_limit' : `source_${t.status}`;
-        if (t.status === 'not_found') findings.push({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, kind: 'source_commit_not_found', basis: j.basis.kind, level: 'medium' });
+        j.outcome = t.status === 'not_found' ? 'source_commit_not_found' : t.status === 'too_large' ? 'source_too_large' : t.status === 'reader_limit' ? 'source_time_limit' : t.status === 'time_budget' ? 'subject_time_budget' : `source_${t.status}`;
+        if (t.status === 'not_found') findings.push(capFinding({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, kind: 'source_commit_not_found', basis: j.basis.kind, level: 'medium' }, j));
+      } else if (computeOut) {
+        j.outcome = 'compute_budget';
       } else {
-        const r = compareArtifact({ ecosystem: j.p.ecosystem, kind: j.kind, version: j.version, files: j.read.files, archive: j.read.archive }, t, { hint: j.folder });
-        const at = { package: j.p.name, version: j.version, ecosystem: j.p.ecosystem };
-        summaries.push({ ...at, ...r.summary });
-        for (const f of r.findings) findings.push({ ...at, ...f });
-        for (const h of r.held) held.push({ ...at, commit, ...h });
-        j.outcome = 'compared';
+        const c0 = clock();
+        let r;
+        try {
+          r = compareArtifact({ ecosystem: j.p.ecosystem, kind: j.kind, version: j.version, files: j.read.files, archive: j.read.archive }, t, {
+            hint: j.folder,
+            expired: () => computeSpent + (clock() - c0) > LIMITS.computeBudgetMs,
+          });
+        } catch (err) {
+          if (!(err instanceof ComputeBudget)) throw err;
+          // Out of compute time: the subject ends here, with our own limit as its skip (fault tool, not retried).
+          computeOut = true;
+          j.outcome = 'compute_budget';
+          skips.push(skipOf('compute_budget', 'compute_budget'));
+        } finally {
+          computeSpent += clock() - c0;
+        }
+        if (r) {
+          const at = { package: j.p.name, version: j.version, ecosystem: j.p.ecosystem };
+          summaries.push({ ...at, ...r.summary });
+          for (const f of r.findings) findings.push(capFinding({ ...at, ...f }, j));
+          for (const h of r.held) held.push({ ...at, commit, ...h });
+          heldDropped += r.held_truncated;
+          j.outcome = 'compared';
+        }
       }
       j.read = null;
     }
@@ -611,6 +760,9 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   stages.artifacts = artifacts.length;
   stages.compared = jobs.filter((j) => j.outcome === 'compared').length;
   stages.source_trees = treesRead;
+  // The private held list is capped like the findings; the count of what it left out is its last entry.
+  if (held.length > MAX_HELD) { heldDropped += held.length - MAX_HELD; held.length = MAX_HELD; }
+  if (heldDropped > 0) held.push({ kind: 'held_truncated', truncated: heldDropped });
   return { repo, stages, skips, artifacts, summaries, findings, held };
 }
 
