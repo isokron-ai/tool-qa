@@ -29,6 +29,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const SCHEMA_VERSION = 8;
 export const MAX_SLOTS = 15;
+/** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
+export const ACCEPT_TTL_MS = 48 * 3_600_000;
 /** How far apart one tick's dispatches may be created and still count as one burst (R-ING-26). */
 export const SHA_BURST_MS = 30_000;
 
@@ -456,6 +458,36 @@ export class StateDb {
     return plain(this.raw.prepare('SELECT * FROM subjects WHERE repo_id = ?').get(repoId));
   }
 
+  static acceptKey(key) {
+    return `subjects.identity.accept:${key}`;
+  }
+
+  /**
+   * A person accepts the binding for a subject in id conflict (run with the
+   * pump paused; scripts/subject-accept.mjs): the repository its last
+   * id_conflict event found (id and creation time) is bound by the next
+   * lookup if that lookup answers exactly it, the reuse and squatter guards
+   * aside, and the conflict clears. The acceptance is used up by that next
+   * lookup whatever it answers, and lapses after ACCEPT_TTL_MS. An id another
+   * subject holds is still refused.
+   * @returns {{ok: boolean, why?: string}}
+   */
+  acceptIdentityConflict(key, { now } = {}) {
+    return this.tx(() => {
+      const s = this.getSubject(key);
+      if (!s) return { ok: false, why: `no subject ${key}` };
+      if (s.id_status !== 'conflict') return { ok: false, why: `${key} is not in conflict (id_status ${s.id_status ?? 'none'})` };
+      // Exactly the repository the conflict found: its id and creation time.
+      const last = this.listSubjectEvents(key).filter((e) => e.kind === 'id_conflict').at(-1);
+      const got = last?.detail?.got;
+      if (!Number.isSafeInteger(got?.repo_id) || typeof got?.created_at !== 'string') return { ok: false, why: `${key}: its last id_conflict event names no repository to accept` };
+      const at = iso(now);
+      this.setKv(StateDb.acceptKey(key), { at, expires: iso(toMs(now) + ACCEPT_TTL_MS), repo_id: got.repo_id, created_at: got.created_at }, { now });
+      this.raw.prepare('UPDATE subjects SET id_status = NULL, id_checked_at = NULL WHERE id = ?').run(key);
+      return { ok: true, repo_id: got.repo_id, created_at: got.created_at, expires: iso(toMs(now) + ACCEPT_TTL_MS) };
+    });
+  }
+
   /** Whether any result or attempt names this subject key. */
   hasSubjectHistory(key) {
     return Boolean(this.raw.prepare(`
@@ -549,6 +581,14 @@ export class StateDb {
         this.raw.prepare(`UPDATE subjects SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...cols.map((c) => fields[c]), key);
       };
       const via = lookup?.via === 'id' ? 'id' : 'name';
+      // A person's acceptance of this subject's conflict (acceptIdentityConflict)
+      // is used up by this lookup, whatever it answers (R-SUBJ-17). It binds
+      // only the exact repository accepted (id and creation time), and only
+      // within ACCEPT_TTL_MS.
+      const acceptKey = StateDb.acceptKey(key);
+      const marker = this.getKv(acceptKey);
+      if (marker !== undefined) this.deleteKv(acceptKey);
+      const live = marker && typeof marker === 'object' && Date.parse(marker.expires) > toMs(now) ? marker : null;
       if (lookup?.status === 'not_found') {
         if (s.id_status !== 'not_found') {
           event({
@@ -561,19 +601,33 @@ export class StateDb {
       }
       const n = lookup?.status === 'ok' ? checkNode(lookup.node) : null;
       if (!n) {
-        // No usable answer counts as an error: try again soon, change nothing else.
-        set({ id_status: s.id_status === 'not_found' || s.id_status === 'conflict' ? s.id_status : 'error', id_checked_at: t });
+        // No usable answer counts as an error: try again soon, change nothing
+        // else. An acceptance used up here leaves the conflict as it was.
+        let status = 'error';
+        if (s.id_status === 'not_found' || s.id_status === 'conflict') status = s.id_status;
+        else if (marker !== undefined && s.id_status === null) status = 'conflict'; // the accepted conflict stands
+        set({ id_status: status, id_checked_at: t });
         return events;
       }
+      const accepted = live !== null && n.repoId === live.repo_id && n.createdAt === live.created_at;
+      const acceptance = accepted ? { at: live.at, repo_id: live.repo_id, created_at: live.created_at } : null;
       const conflict = (detail) => {
         if (s.id_status !== 'conflict') event({ kind: 'id_conflict', repoId: s.repo_id ?? n.repoId, oldName: s.name, newName: n.name, detail: { via, ...detail } });
         set({ id_status: 'conflict', id_checked_at: t });
         return events;
       };
+      const heldElsewhere = () => { const o = this.getSubjectByRepoId(n.repoId); return o !== undefined && o.id !== key; };
       if (s.repo_id !== null) {
         if (s.repo_id !== n.repoId || (s.repo_created_at !== null && s.repo_created_at !== n.createdAt)) {
-          return conflict({ expected: { repo_id: s.repo_id, created_at: s.repo_created_at }, got: { repo_id: n.repoId, created_at: n.createdAt } });
+          if (!accepted || heldElsewhere()) {
+            return conflict({ expected: { repo_id: s.repo_id, created_at: s.repo_created_at }, got: { repo_id: n.repoId, created_at: n.createdAt } });
+          }
+          event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, accepted: acceptance, replaced: { repo_id: s.repo_id, created_at: s.repo_created_at } } });
+          set({ repo_id: n.repoId, repo_created_at: n.createdAt });
         }
+      } else if (accepted && !heldElsewhere()) {
+        event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, created_at: n.createdAt, accepted: acceptance } });
+        set({ repo_id: n.repoId, repo_created_at: n.createdAt });
       } else {
         // A repository created after the subject was first seen cannot be the
         // one the subject meant: its old name now belongs to a newcomer, which

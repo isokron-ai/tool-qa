@@ -261,3 +261,38 @@ test('R-SUBJ-12: a first binding to a repository created after the subject was f
   assert.deepEqual(db.applyIdentityLookup('acme/fine', ok(78, 'acme/fine', new Date(T0 - DAY).toISOString()), { now: T0 }).map((e) => e.kind), ['id_bound']);
   db.close();
 });
+
+test('R-SUBJ-15: the merge refuses to move a binding to a survivor first seen before the repository was created (squatter on the move branch)', () => {
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'acme/zz-old', kind: 'github', source: 'seed-v1', tier: 3, now: T0 });
+  db.recordAttempt({ subject: 'acme/zz-old', holder: 'h', fence: 1, now: T0 }); // history: it would survive
+  db.setSubjectVersion({ id: 'acme/aa-new', kind: 'github', source: 'seed-v2', tier: 3, now: T0 + 5 * DAY });
+  const created = new Date(T0 + 2 * DAY).toISOString(); // after zz-old was first seen, before aa-new was
+  assert.deepEqual(db.applyIdentityLookup('acme/aa-new', ok(9, 'acme/aa-new', created), { now: T0 + 6 * DAY }).map((e) => e.kind), ['id_bound']);
+  const ev = db.applyIdentityLookup('acme/zz-old', ok(9, 'acme/aa-new', created), { now: T0 + 6 * DAY + 1 });
+  assert.deepEqual(ev.map((e) => [e.subject, e.kind, e.detail.reason]), [['acme/zz-old', 'id_conflict', 'created_after_first_seen']]);
+  assert.deepEqual([db.getSubject('acme/zz-old').repo_id, db.getSubject('acme/zz-old').id_status], [null, 'conflict']);
+  assert.deepEqual([db.getSubject('acme/aa-new').repo_id, db.getSubject('acme/aa-new').alias_of], [9, null], 'nothing moved or merged');
+  db.close();
+});
+
+test('R-SUBJ-15: with no history on either side the subject first seen earlier survives, even when the other was bound first', () => {
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'acme/zz-first', kind: 'github', source: 'seed-v1', tier: 3, now: T0 });
+  db.setSubjectVersion({ id: 'acme/aa-later', kind: 'github', source: 'seed-v2', tier: 3, now: T0 + DAY });
+  db.applyIdentityLookup('acme/aa-later', ok(9, 'acme/aa-later'), { now: T0 + 2 * DAY });
+  const ev = db.applyIdentityLookup('acme/zz-first', ok(9, 'acme/aa-later'), { now: T0 + 2 * DAY + 1 });
+  assert.deepEqual(ev.map((e) => [e.subject, e.kind]), [['acme/aa-later', 'merged'], ['acme/zz-first', 'id_bound'], ['acme/zz-first', 'renamed']]);
+  assert.equal(db.getSubjectByRepoId(9).id, 'acme/zz-first');
+  assert.equal(db.getSubject('acme/aa-later').alias_of, 'acme/zz-first');
+  // And the other way round: the one first seen earlier, bound first, stays.
+  const db2 = openState(':memory:');
+  db2.setSubjectVersion({ id: 'acme/zz-first', kind: 'github', source: 'seed-v1', tier: 3, now: T0 });
+  db2.setSubjectVersion({ id: 'acme/aa-later', kind: 'github', source: 'seed-v2', tier: 3, now: T0 + DAY });
+  db2.applyIdentityLookup('acme/zz-first', ok(9, 'acme/zz-first'), { now: T0 + 2 * DAY });
+  db2.applyIdentityLookup('acme/aa-later', ok(9, 'acme/zz-first'), { now: T0 + 2 * DAY + 1 });
+  assert.equal(db2.getSubjectByRepoId(9).id, 'acme/zz-first');
+  assert.equal(db2.getSubject('acme/aa-later').alias_of, 'acme/zz-first');
+  db.close();
+  db2.close();
+});
