@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { openState } from '../../state/db.mjs';
 import { dueFromState, loadConfig, maxAgeDays } from '../due.mjs';
 import { runPump } from '../run.mjs';
-import { MAPPING_VERSION, parseSeed, SEED_FILE, SEED_KV_KEY, syncSeedSubjects, tierFor } from '../subjects.mjs';
+import { ALLOW_RETIRE_KV_KEY, MAPPING_VERSION, parseSeed, SEED_FILE, SEED_KV_KEY, syncSeedSubjects, tierFor } from '../subjects.mjs';
 import { runTick } from '../tick.mjs';
 import { fakeClock } from '../../test/lib/fake-api.mjs';
 
@@ -187,6 +187,7 @@ test('R-SUB-01: the pump loads the seed at start-up, before the first tick, and 
     await runPump(opts);
     assert.ok(lines.some((l) => l === 'pump: subjects: seed-v1 already loaded (997 subjects)'), lines.join('\n'));
     db = openState(stateFile);
+    assert.equal(db.getKv('pump.subjects').ok, true);
     assert.deepEqual(db.listSubjects(), before);
     db.close();
 
@@ -197,6 +198,9 @@ test('R-SUB-01: the pump loads the seed at start-up, before the first tick, and 
     assert.ok(lines.some((l) => /^pump: subjects: seed not loaded, subjects left as they were: ENOENT/.test(l)), lines.join('\n'));
     db = openState(stateFile);
     assert.equal(db.listSubjects().length, 997);
+    // What the watchdog's subjects check reads (R-SUB-11).
+    assert.equal(db.getKv('pump.subjects').ok, false);
+    assert.match(db.getKv('pump.subjects').summary, /ENOENT/);
     db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -233,7 +237,10 @@ test('a subject that leaves the seed is retired, not deleted: no longer due, bac
   try {
     syncSeedSubjects(db, { now: T, file: a.file });
     db.setSubjectVersion({ id: 'other/x', kind: 'github', source: 'discovery', tier: 3, now: T });
+    // Half the seed leaving is over the 10% guard (R-SUB-03): allowed once by the override.
+    db.setKv(ALLOW_RETIRE_KV_KEY, true, { now: T });
     const out = syncSeedSubjects(db, { now: T + DAY, file: b.file });
+    assert.equal(db.getKv(ALLOW_RETIRE_KV_KEY), undefined, 'the override is used once');
     assert.equal(out.retired, 1);
     assert.equal(db.getSubject('o/b').retired_at, new Date(T + DAY).toISOString());
     assert.equal(db.getSubject('other/x').retired_at, null, 'subjects from other sources are not touched');
@@ -274,6 +281,190 @@ test('R-SUB-02: a subject with no sha is refreshed on its tier cadence, even whe
     assert.deepEqual(at(1.1), ['isokron-ai/mcp-check stale']);
     assert.deepEqual(at(29.9), ['isokron-ai/mcp-check stale']);
     assert.deepEqual(at(30.1), ['isokron-ai/mcp-check stale', 'o/long-tail stale']);
+  } finally {
+    s.cleanup();
+    db.close();
+  }
+});
+
+test('R-SUB-03: a seed with no size, or one that would retire over 10% of the active seed subjects, is refused', () => {
+  const db = openState(':memory:');
+  const noSize = tmpSeed([row('o/a')]);
+  writeFileSync(noSize.file, JSON.stringify({ version: 1, subjects: [row('o/a')] }));
+  try {
+    assert.match(syncSeedSubjects(db, { now: T, file: noSize.file }).error, /size \(the number of subjects\) is required/);
+
+    assert.equal(syncSeedSubjects(db, { now: T }).subjects, 997);
+    const before = db.listSubjects();
+    const kvBefore = db.getKv(SEED_KV_KEY);
+    // The review's case: one valid subject would have retired 996.
+    const tiny = tmpSeed([row('isokron-ai/mcp-check', 'T0')], { version: 2 });
+    const out = syncSeedSubjects(db, { now: T + DAY, file: tiny.file });
+    tiny.cleanup();
+    assert.equal(out.loaded, false);
+    assert.match(out.error, /would retire 996 of 997 active seed subjects \(over 10%\); set kv subjects\.seed\.allow_retire to true/);
+    assert.deepEqual(db.listSubjects(), before, 'nothing written');
+    assert.deepEqual(db.getKv(SEED_KV_KEY), kvBefore);
+
+    // Up to 10% leaving is fine without the override.
+    const ids = REAL_SEED.subjects.map((x) => x.id);
+    const smaller = tmpSeed(REAL_SEED.subjects.slice(0, ids.length - 99));
+    const ok = syncSeedSubjects(db, { now: T + 2 * DAY, file: smaller.file });
+    smaller.cleanup();
+    assert.equal(ok.loaded, true);
+    assert.equal(ok.retired, 99);
+  } finally {
+    noSize.cleanup();
+    db.close();
+  }
+});
+
+test('R-SUB-05: a state error inside the load is returned as error, not thrown, and nothing is written', () => {
+  const db = openState(':memory:');
+  const s = tmpSeed([row('o/a'), row('o/b')]);
+  const orig = db.setSubjectVersion.bind(db);
+  let calls = 0;
+  db.setSubjectVersion = (args) => {
+    calls += 1;
+    if (calls === 2) throw new Error('disk I/O error');
+    return orig(args);
+  };
+  try {
+    const out = syncSeedSubjects(db, { now: T, file: s.file });
+    assert.equal(out.loaded, false);
+    assert.match(out.error, /disk I\/O error/);
+    assert.deepEqual(db.listSubjects(), [], 'the transaction rolled back');
+    assert.equal(db.getKv(SEED_KV_KEY), undefined);
+  } finally {
+    s.cleanup();
+    db.close();
+  }
+});
+
+test('R-SUB-07: kv subjects.seed records the path actually loaded', () => {
+  const db = openState(':memory:');
+  const s = tmpSeed([row('o/a')]);
+  try {
+    syncSeedSubjects(db, { now: T, file: s.file });
+    assert.equal(db.getKv(SEED_KV_KEY).file, s.file);
+    const db2 = openState(':memory:');
+    syncSeedSubjects(db2, { now: T });
+    assert.equal(db2.getKv(SEED_KV_KEY).file, 'history/seed-v1.json');
+    db2.close();
+  } finally {
+    s.cleanup();
+    db.close();
+  }
+});
+
+/** Dispatch one scan-static item for each due pair and return them. */
+function dispatchAll(db, cfg, at) {
+  const due = dueFromState(db, { now: at, tiers: cfg.tiers, workflows: cfg.workflows });
+  return due.map((d, i) => {
+    const attemptId = `att-${at}-${i}`;
+    db.recordRunKey(d.run_key, { subject: d.subject, workflow: d.workflow, fields: d.fields, now: at });
+    const lease = db.acquireLease(d.run_key, attemptId, { ttlMs: DAY, now: at });
+    db.createDispatch({ attemptId, shardId: 's', workflow: d.workflow, repo: 'isokron-ai/mcp-check', workflowFile: 'scan-static.yml', ref: 'main', expires: at + DAY, items: [{ run_key: d.run_key, subject: d.subject, fence: lease.fence }], now: at });
+    return { ...d, attemptId, fence: lease.fence };
+  });
+}
+
+test('R-SUB-04: retry_throttled is not counted towards parking or MAX_RETRIES, and its backoff is capped', () => {
+  const cfg = scanStaticConfig();
+  assert.equal(cfg.tiers.retry_backoff_max_minutes, 360);
+  const db = openState(':memory:');
+  const s = tmpSeed([row('o/a')]);
+  try {
+    syncSeedSubjects(db, { now: T, file: s.file });
+    let at = T;
+    let key = null;
+    for (let n = 1; n <= 12; n++) {
+      const [d] = dispatchAll(db, cfg, at);
+      assert.ok(d, `due again for throttled retry ${n}`);
+      key = d.run_key;
+      const r = db.recordResult({ run_key: d.run_key, attempt_id: d.attemptId, fence: d.fence, outcome: 'rejected', accepted: false, reason: 'retry_throttled', now: at + 60_000 });
+      assert.equal(r.reason, 'retry_throttled');
+      // Waits at most 6 hours, however many retries came before.
+      const wait = Math.min(360, 30 * 2 ** (n - 1)) * 60_000;
+      assert.deepEqual(dueFromState(db, { now: at + 60_000 + wait - 1000, tiers: cfg.tiers, workflows: cfg.workflows }), []);
+      at += 60_000 + wait + 1000;
+    }
+    assert.equal(db.retryLaterCount(key), 0, 'not counted towards MAX_RETRIES');
+    assert.equal(db.retryThrottled(key).throttled, 12);
+    assert.equal(db.retryThrottled(key).throttled_since, new Date(T + 60_000).toISOString());
+    assert.deepEqual(db.rejectedRunKeys(1), [], 'not counted towards parking');
+  } finally {
+    s.cleanup();
+    db.close();
+  }
+});
+
+test('R-SUB-06: a skips_only result (retries ran out) is due again after a day; a permanent skip keeps the tier max age', () => {
+  const cfg = scanStaticConfig();
+  assert.equal(cfg.tiers.skips_only_max_age_days, 1);
+  const db = openState(':memory:');
+  // o/permanent: accepted with only permanent skips, which ingest records as an ordinary result.
+  const s = tmpSeed([row('o/skipped'), row('o/measured'), row('o/permanent')]);
+  try {
+    syncSeedSubjects(db, { now: T, file: s.file });
+    for (const d of dispatchAll(db, cfg, T)) {
+      db.recordResult({ run_key: d.run_key, attempt_id: d.attemptId, fence: d.fence, outcome: 'accepted', accepted: true, resultOutcome: d.subject === 'o/skipped' ? 'skips_only' : null, now: T + 1000 });
+    }
+    assert.equal(db.listResults().find((r) => r.subject === 'o/skipped').outcome, 'skips_only');
+    const at = (days) => dueFromState(db, { now: T + days * DAY, tiers: cfg.tiers, workflows: cfg.workflows }).map((d) => `${d.subject} ${d.reasons.join(',')}`);
+    assert.deepEqual(at(0.9), []);
+    assert.deepEqual(at(1.1), ['o/skipped skips_only']);
+    assert.deepEqual(at(29.9), ['o/skipped skips_only']);
+    assert.deepEqual(at(30.1), ['o/measured stale', 'o/permanent stale', 'o/skipped stale']);
+  } finally {
+    s.cleanup();
+    db.close();
+  }
+});
+
+test('R-SUB-08: a subject that is throttled for ever gets one 7-day window, then skips_only re-dues back off: dispatches stay bounded', () => {
+  const cfg = scanStaticConfig();
+  const db = openState(':memory:');
+  const s = tmpSeed([row('o/stuck')]);
+  const HOUR = 3_600_000;
+  const WINDOW = 7 * DAY; // ingest RETRY_WINDOW_MS
+  try {
+    syncSeedSubjects(db, { now: T, file: s.file });
+    const sent = [];
+    const accepted = [];
+    for (let at = T; at < T + 120 * DAY; at += HOUR) {
+      for (const d of dispatchAll(db, cfg, at)) {
+        sent.push(at);
+        // What ingest decides for a bundle whose every skip is throttling (ingest/ingest.mjs).
+        const item = db.getAttempt(d.attemptId).items[0];
+        const since = item.throttled_since ? Date.parse(item.throttled_since) : null;
+        const within = since === null || at + 60_000 - since < WINDOW;
+        db.recordResult({
+          run_key: d.run_key, attempt_id: d.attemptId, fence: d.fence, now: at + 60_000,
+          ...(within ? { outcome: 'rejected', accepted: false, reason: 'retry_throttled' } : { outcome: 'accepted', accepted: true, resultOutcome: 'skips_only' }),
+        });
+        if (!within) accepted.push(at);
+      }
+    }
+    const window = sent.filter((t) => t < T + WINDOW + DAY);
+    assert.ok(window.length >= 25 && window.length <= 35, `about 30 tries in the first window, got ${window.length}`);
+    // After the window, every re-due is one dispatch, accepted at once, each waiting twice as long up to 30 days.
+    const gaps = accepted.slice(1).map((t, i) => Math.round((t - accepted[i]) / DAY));
+    assert.deepEqual(gaps.slice(0, 5), [1, 2, 4, 8, 16]);
+    assert.ok(gaps.slice(5).every((g) => g === 30), gaps.join(','));
+    assert.equal(sent.length, window.length + accepted.length - 1, 'no new window after a skips_only result');
+    assert.ok(sent.length < 45, `${sent.length} dispatches in 120 days`);
+    const r = db.listResults()[0];
+    assert.equal(r.measured_at, null);
+    assert.equal(r.skips_streak, accepted.length);
+
+    // A result that measured something resets the streak and the counters.
+    const [d] = dispatchAll(db, cfg, T + 200 * DAY);
+    db.recordResult({ run_key: d.run_key, attempt_id: d.attemptId, fence: d.fence, outcome: 'accepted', accepted: true, now: T + 200 * DAY + 1000 });
+    const after = db.listResults()[0];
+    assert.equal(after.skips_streak, 0);
+    assert.equal(after.measured_at, new Date(T + 200 * DAY + 1000).toISOString());
+    assert.deepEqual(db.retryThrottled(d.run_key), { throttled: 0, throttled_since: null });
   } finally {
     s.cleanup();
     db.close();

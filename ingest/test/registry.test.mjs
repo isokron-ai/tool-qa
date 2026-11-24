@@ -137,7 +137,7 @@ test('validateObservations accepts declared fields with the right types', () => 
     'results/report.json': Buffer.from('{"not": "checked here"}'),
     'raw/x.ndjson': Buffer.from('not json at all'),
   }), reg);
-  assert.deepEqual(r, { ok: true, errors: [], records: 5 });
+  assert.deepEqual(r, { ok: true, errors: [], records: 5, measured: 4 }, 'the null value is a record, not a measurement');
 });
 
 test('validateObservations reports each kind of problem with a reason', () => {

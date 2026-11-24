@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32 } from 'node:zlib';
 
-import { ingestAttempt, openAttempt } from '../ingest.mjs';
+import { ingestAttempt, laneThrottleStages, openAttempt } from '../ingest.mjs';
 import { parseRegistry } from '../registry.mjs';
 import { GithubError } from '../github.mjs';
 import { writeTar } from '../../worker-kit/tar.mjs';
@@ -580,9 +580,12 @@ test('R-ING-03: a full-size bundle of crafted text is judged well inside the tim
 const retryMeta = (skips) => ({ skips });
 const RATE_LIMITED = { stage: 'fetch', reason: 'rate_limited', retryable: true };
 const UPSTREAM = { stage: 'install', reason: 'upstream_unavailable', retryable: true };
+// A retryable skip that is not throttling: bounded by MAX_RETRIES (since R-SUB-04,
+// rate limits and upstream outages have their own time window).
+const START_TIMEOUT = { stage: 'start', reason: 'timeout_start', retryable: true };
 
 test('R-ING-16: a bundle whose every skip is retryable is sent back as retry_later; the retries are bounded', async () => {
-  const bundle = makeBundle({ meta: retryMeta([RATE_LIMITED, UPSTREAM]) });
+  const bundle = makeBundle({ meta: retryMeta([START_TIMEOUT, RATE_LIMITED]) });
   const first = await run({ bundle });
   assert.equal(first.r.outcome, 'rejected');
   assert.equal(first.r.reason, 'retry_later');
@@ -610,4 +613,105 @@ test('R-ING-16: one skip that is not retryable, or no skips at all, is accepted 
   // A retryable skip never outranks a real problem.
   const bad = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED]), identity: { fence: 6 } }) });
   assert.equal(bad.r.reason, 'fence_mismatch');
+});
+
+// The lane's third-party stages (pump/workflows.json throttle_stages, R-SUB-09).
+const STAGES = { 'live-probe': ['fetch', 'install'] };
+
+test('R-SUB-04: a throttled bundle is sent back as retry_throttled, not counted towards MAX_RETRIES, for up to the retry window', async () => {
+  const bundle = makeBundle({ meta: retryMeta([RATE_LIMITED, UPSTREAM]) });
+  const first = await run({ bundle, ledger: fakeLedger([expectedRow({ workflow: 'live-probe' })]), throttleStages: STAGES });
+  assert.equal(first.r.outcome, 'rejected');
+  assert.equal(first.r.reason, 'retry_throttled');
+  assert.deepEqual(first.ledger.records.map((x) => [x.outcome, x.reason]), [['rejected', 'retry_throttled']]);
+  assert.deepEqual(json(first.r.outputs.get('rejected/att-1/0/ingest.json')).retries, { throttled_before: 0, throttled_since: null, window_ms: 7 * 86_400_000 });
+
+  // Earlier retry_later decisions and many throttled ones do not end it while the window is open.
+  const sixDays = new Date(NOW().getTime() - 6 * 86_400_000).toISOString();
+  const later = await run({ bundle, ledger: fakeLedger([expectedRow({ workflow: 'live-probe', retries: 5, throttled: 20, throttled_since: sixDays })]), throttleStages: STAGES });
+  assert.equal(later.r.reason, 'retry_throttled');
+  assert.match(json(later.r.outputs.get('rejected/att-1/0/ingest.json')).problems[0].detail, /throttled retry 21/);
+
+  // Seven days after the first throttled retry it is kept as it is: accepted, with its skips.
+  const eightDays = new Date(NOW().getTime() - 8 * 86_400_000).toISOString();
+  const kept = await run({ bundle, ledger: fakeLedger([expectedRow({ workflow: 'live-probe', retries: 0, throttled: 30, throttled_since: eightDays })]), throttleStages: STAGES });
+  assert.equal(kept.r.outcome, 'accepted');
+  assert.equal(json(kept.r.outputs.get('accepted/att-1/0/ingest.json')).retries.exhausted, true);
+
+  // A retryable skip that is not throttling still goes through the count cap.
+  const capped = await run({ bundle: makeBundle({ meta: retryMeta([START_TIMEOUT]) }), ledger: fakeLedger([expectedRow({ workflow: 'live-probe', retries: 3, throttled: 9, throttled_since: sixDays })]), throttleStages: STAGES });
+  assert.equal(capped.r.outcome, 'accepted');
+});
+
+test('R-SUB-06: an accepted bundle whose every skip is retryable and no records is recorded as skips_only; any permanent skip is not', async () => {
+  const files = defaultFiles();
+  delete files['observations/check.ndjson'];
+  delete files['results/report.json'];
+  // Retries ran out: retryable skips, nothing measured.
+  const exhausted = await run({ bundle: makeBundle({ meta: retryMeta([START_TIMEOUT]), files }), ledger: fakeLedger([expectedRow({ retries: 3 })]) });
+  assert.equal(exhausted.r.outcome, 'accepted');
+  assert.equal(exhausted.ledger.records[0].resultOutcome, 'skips_only');
+  const throttled = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED]), files }), ledger: fakeLedger([expectedRow({ workflow: 'live-probe', throttled: 40, throttled_since: new Date(NOW().getTime() - 8 * 86_400_000).toISOString() })]), throttleStages: STAGES });
+  assert.equal(throttled.r.outcome, 'accepted');
+  assert.equal(throttled.ledger.records[0].resultOutcome, 'skips_only');
+  // Any permanent skip makes it an ordinary result, even beside a retryable one.
+  const mixed = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED, { stage: 'start', reason: 'remote_only' }]), files }) });
+  assert.equal(mixed.r.outcome, 'accepted');
+  assert.equal(mixed.ledger.records[0].resultOutcome, undefined);
+  // Only permanent skips: an ordinary result, kept for the tier max age.
+  for (const reason of ['remote_only', 'no_runnable_artifact', 'policy_excluded']) {
+    const permanent = await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'scan', reason }]), files }) });
+    assert.equal(permanent.r.outcome, 'accepted', reason);
+    assert.equal(permanent.ledger.records[0].resultOutcome, undefined, reason);
+  }
+  // Records, or no skips at all, are an ordinary result.
+  const measured = await run({ bundle: makeBundle({ meta: retryMeta([START_TIMEOUT]) }), ledger: fakeLedger([expectedRow({ retries: 3 })]) });
+  assert.equal(measured.ledger.records[0].resultOutcome, undefined);
+  const empty = await run({ bundle: makeBundle({ files }) });
+  assert.equal(empty.ledger.records[0].resultOutcome, undefined);
+});
+
+test('R-SUB-09: only declared third-party stages are throttling; a subject\'s own fetch or probe failure is a counted retry', async () => {
+  const own = makeBundle({ meta: retryMeta([{ stage: 'probe', reason: 'upstream_unavailable', retryable: true }]) });
+  const probe = await run({ bundle: own, ledger: fakeLedger([expectedRow({ workflow: 'live-probe' })]), throttleStages: STAGES });
+  assert.equal(probe.r.reason, 'retry_later', 'the subject itself hanging or answering 5xx uses the counted retries');
+  // A row without a lane name, or a lane that declares nothing, has no throttle stages.
+  assert.equal((await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED]) }), throttleStages: STAGES })).r.reason, 'retry_later');
+  assert.equal((await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED]) }), ledger: fakeLedger([expectedRow({ workflow: 'scan-deep' })]), throttleStages: STAGES })).r.reason, 'retry_later');
+  // "stage:reason" declares one reason only: scan-static's GitHub rate limit is throttling, its own upstream errors are not.
+  const ss = { 'scan-static': ['static:rate_limited'] };
+  const row = () => fakeLedger([expectedRow({ workflow: 'scan-static' })]);
+  assert.equal((await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'static', reason: 'rate_limited', retryable: true }]) }), ledger: row(), throttleStages: ss })).r.reason, 'retry_throttled');
+  assert.equal((await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'static', reason: 'upstream_unavailable', retryable: true }]) }), ledger: row(), throttleStages: ss })).r.reason, 'retry_later');
+  // The shipped lanes: only scan-static declares a stage, and no lane that runs third-party code does.
+  const shipped = laneThrottleStages();
+  assert.deepEqual(shipped['scan-static'], ['static:rate_limited']);
+  for (const lane of ['live-probe', 'scan-deep', 'build-probe', 'writecheck']) assert.deepEqual(shipped[lane], [], lane);
+});
+
+test('R-SUB-10: skips_only needs nothing measured: null observations and a skip\'s own evidence file do not count; other results/ data or a value does', async () => {
+  const skip = { stage: 'start', reason: 'timeout_start', retryable: true, evidence: 'results/report.json' };
+  const nullObs = `${JSON.stringify({ field: 'tool_count', value: null, why: 'not read' })}\n`;
+  const base = () => {
+    const f = defaultFiles();
+    f['observations/check.ndjson'] = nullObs;
+    return f;
+  };
+  const ledger = () => fakeLedger([expectedRow({ retries: 3 })]);
+  const evidenceOnly = await run({ bundle: makeBundle({ meta: retryMeta([skip]), files: base() }), ledger: ledger() });
+  assert.equal(evidenceOnly.r.outcome, 'accepted');
+  assert.equal(evidenceOnly.ledger.records[0].resultOutcome, 'skips_only');
+  const report = json(evidenceOnly.r.outputs.get('accepted/att-1/0/ingest.json'));
+  assert.equal(report.observations.records, 1);
+  assert.equal(report.observations.measured, 0);
+  assert.equal(report.bundle.result_files, 0);
+
+  const moreResults = base();
+  moreResults['results/grades.json'] = JSON.stringify({ grade: 'B' });
+  assert.equal((await run({ bundle: makeBundle({ meta: retryMeta([skip]), files: moreResults }), ledger: ledger() })).ledger.records[0].resultOutcome, undefined);
+  const notEvidence = await run({ bundle: makeBundle({ meta: retryMeta([{ stage: skip.stage, reason: skip.reason, retryable: true }]), files: base() }), ledger: ledger() });
+  assert.equal(notEvidence.ledger.records[0].resultOutcome, undefined, 'results/report.json is measured data when no skip names it');
+  const valued = base();
+  valued['observations/check.ndjson'] = `${JSON.stringify({ field: 'tool_count', value: 2 })}\n`;
+  assert.equal((await run({ bundle: makeBundle({ meta: retryMeta([skip]), files: valued }), ledger: ledger() })).ledger.records[0].resultOutcome, undefined);
 });

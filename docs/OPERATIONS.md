@@ -256,10 +256,24 @@ run, inside the pump (the one writer), before the first tick. The log line is
   kind `github`, source `seed-v1` (set when the subject is first seen), and a
   tier. The commit SHA is left empty: the scan-static worker reads the head of
   the default branch itself. A SHA or digest set by another writer is kept.
-- **A seed that cannot be read or is malformed** (duplicate id, an id that is
-  not `owner/name`, an unknown population) is refused whole. Nothing is
-  written, the subjects already in the state stay, and the run fails (red)
-  with `pump: subjects: seed not loaded, ...`.
+- **A seed that cannot be read or is malformed** (no `size`, a `size` that
+  does not match, a duplicate id, an id that is not `owner/name`, an unknown
+  population) is refused whole. So is a state error during the load. Nothing
+  is written, the subjects already in the state stay, and the run fails (red)
+  with `pump: subjects: seed not loaded, ...`. The pump keeps dispatching the
+  subjects it already has; the health issue shows the `subjects` check red
+  with the reason (kv `pump.subjects`, R-SUB-11). kv `subjects.seed` records
+  the path actually loaded (`file`).
+- **Shrink guard (R-SUB-03).** A seed that would retire more than 10% of the
+  active seed subjects is refused the same way (`... would retire N of M
+  active seed subjects ...`), so a truncated or wrong file cannot retire
+  nearly everything. To retire more on purpose, set the one-shot override
+  `subjects.seed.allow_retire` to `true` in kv: switch the pump off
+  (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going, pull the
+  state, run
+  `node -e "import('./state/db.mjs').then(({openState})=>{const d=openState('state/state.sqlite');d.setKv('subjects.seed.allow_retire',true);d.close()})"`,
+  push it, and switch the pump back on. The load that uses it clears it and
+  says so in its log line.
 
 **Tiers.** From the seed's own population labels:
 
@@ -282,6 +296,49 @@ applies to a subject with no SHA and no digest: 1 day for T0, then 7, 14, 30
 and 90 days for T1 to T4. Without it, T0 would never be scanned again after
 its first result. A new tool version in `pump/workflows.json` still makes
 every subject due at once.
+
+**Skips only (R-SUB-06, R-SUB-08, R-SUB-10).** An accepted result whose
+skips were all retryable (its retries ran out) and that measured nothing (no
+observation with a value, null observations do not count, and no `results/`
+file other than a skip's own `evidence`) is stored with outcome `skips_only`.
+It is due again (reason `skips_only`) after `skips_only_max_age_days` (1 day)
+for the first such result in a row, then 2, 4, 8 ... days, never later than
+the tier max age. A result with any permanent skip (`remote_only`,
+`no_runnable_artifact`, `policy_excluded`, ...), even beside a retryable one,
+keeps the tier max age.
+
+A `skips_only` result does not start the retry counters over: the three
+`retry_later` retries and the 7-day `retry_throttled` window count from the
+run_key's last result that measured something (`results.measured_at`), so a
+subject that never works gets one window and then a few backed-off looks,
+not a new window every day.
+
+**Throttling (R-SUB-04, R-SUB-09).** A result whose every skip is a
+retryable `rate_limited` or `upstream_unavailable` from a third-party stage
+the lane declares is sent back as `retry_throttled`. It does not use up the
+three `retry_later` retries: it is sent out again after the usual backoff,
+capped at `retry_backoff_max_minutes` (6 hours), for up to 7 days after the
+run_key's first throttled retry. Only then is it kept as a skip.
+
+A lane declares those stages in `pump/workflows.json` as `throttle_stages`:
+`"stage"` (both reasons) or `"stage:reason"` (that reason only). The
+subject's own fetch or probe is never declared, because a slow or hostile
+subject could otherwise hang or answer 5xx to keep itself out of the counted
+retries. scan-static declares `static:rate_limited`: its only stage reads the
+subject from the GitHub API, and a GitHub rate limit (429, or a 403 with
+`x-ratelimit-remaining: 0` or `retry-after`) is the shared token budget,
+which a repository cannot cause; its `upstream_unavailable` (timeouts, broken
+reads, 5xx) stays a counted retry. The lanes that run third-party code declare
+nothing yet; add their registry or search stages (for example `registry`,
+`mcp_registry_search`) when they are built.
+
+**Before switching on a lane that runs third-party code.** In
+`pump/tiers.json`, `live-probe` is `always` for every tier, T0 to T4 (and
+`build-probe` is `always` for T0 to T2, `writecheck` for T0 and T1). The seed's 977
+sample subjects would all be due for it at once. Before any lane that runs
+third-party code is switched on, review its tier cells (mode and max age) for
+the subjects actually loaded, and change them in the same reviewed PR as the
+switch.
 
 **Leaving the seed.** A subject removed from a later seed is not deleted; its
 results and history stay. It is marked retired (`subjects.retired_at`), the
@@ -546,6 +603,7 @@ person. off: switched off on purpose.
 | `pump` | No pump run started for 20 minutes (amber; the watchdog dispatches one) or 40 minutes (red). | Look at recent pump runs: are they queued, failing, or skipped by the guard? Check the Actions queue and the App settings. |
 | `pump-dispatch` | The watchdog could not dispatch the pump; the HTTP status is in the details. | 403: the App lacks `actions: write` or is not installed on `tool-qa`. 404 or 422: `pump.yml` is missing or has no `workflow_dispatch`. |
 | `pump-successor` | The pump could not dispatch its next run, so the chain is broken until the next schedule (at most 30 minutes). | Check `APP_ID`, `APP_INSTALLATION_ID`, the private key and the installation. Clears when a later pump run succeeds. |
+| `subjects` | The last pump run could not load the seed subjects (red, with why: an unreadable or malformed seed, the shrink guard, a state error). The pump keeps dispatching the subjects it already has. | Fix the seed file (or set the shrink override, "Subjects: where they come from") and merge. Clears when a pump run loads it. |
 | `history-registry-delta` | Newest delta capture is over 45 minutes old (amber), or over 90 (red). | Open the `history-registry` runs. |
 | `history-registry-full`, `history-packages`, `history-popularity` | Newest artifact is over 26 hours old (amber), or over 50 (red). | Open that workflow's runs. |
 | `state` | No state asset yet, or it could not be read (amber; the details say which). | Normal until the first pump run has saved state. Otherwise check the `state` release. |

@@ -7,6 +7,7 @@
       "runs_untrusted": false,
       "repo": "isokron-ai/mcp-check",
       "file": "scan-static.yml",
+      "throttle_stages": ["static:rate_limited"],
       "ref": "main",
       "shard_size": 25,
       "setup_minutes": 3,

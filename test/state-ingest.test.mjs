@@ -51,7 +51,7 @@ test('getAttempt describes a dispatch in the shape ingest reads', () => {
   assert.deepEqual(before.canaries, []);
   assert.equal(before.status, 'pending');
   assert.deepEqual(before.items, [{
-    index: 0, run_key: KEY_A, fence: item.fence, subject: 'repo:1', current_fence: item.fence, outcome: null, resolved: null, retries: 0,
+    index: 0, run_key: KEY_A, fence: item.fence, subject: 'repo:1', current_fence: item.fence, outcome: null, resolved: null, retries: 0, throttled: 0, throttled_since: null,
   }]);
 
   db.markDispatched('att-1', { runId: 4242, workflowSha: SHA, correlatedBy: 'response' });

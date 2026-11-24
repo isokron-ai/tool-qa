@@ -23,6 +23,21 @@ import { cleanHit, cleanProblem, makeLabeler, MAX_LISTED } from './hygiene.mjs';
 import { scanFiles } from './redact.mjs';
 import { validateObservations } from './registry.mjs';
 
+/** Retryable skip reasons that may be throttling, not the subject (R-SUB-04). */
+export const THROTTLE_SKIPS = Object.freeze(['rate_limited', 'upstream_unavailable']);
+
+/**
+ * Whether a skip is throttling by a third party (R-SUB-09): a retryable
+ * rate_limited or upstream_unavailable skip from a stage the lane declares in
+ * pump/workflows.json `throttle_stages`, as "stage" (both reasons) or
+ * "stage:reason" (that reason only). A subject's own fetch or probe is never
+ * declared, so its failures stay counted retries.
+ */
+export function isThrottleSkip(skip, stages = []) {
+  if (skip?.retryable !== true || !THROTTLE_SKIPS.includes(skip.reason)) return false;
+  return stages.includes(skip.stage) || stages.includes(`${skip.stage}:${skip.reason}`);
+}
+
 /**
  * Wall-clock limit for judging one item. Within the bundle caps
  * (worker-kit/contract.mjs) judging takes a few seconds even on crafted input
@@ -77,9 +92,10 @@ export function readBundle(plaintext, { maxBundleBytes } = {}) {
  * @returns {{outcome: 'accepted'|'rejected'|'quarantined', reason: string|null,
  *   problems: object[], problemsTotal: number, report: object, retryable?: boolean}}
  *   retryable (accepted only): the bundle has skips and every one is retryable
+ *   throttled (accepted only): retryable, and every skip is rate_limited or upstream_unavailable
  */
 export function analyzeBundle(plaintext, ctx) {
-  const { exp, registry, canaries = [], allowNoControls = false, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES } = ctx;
+  const { exp, registry, canaries = [], allowNoControls = false, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES, throttleStages = [] } = ctx;
   const label = makeLabeler(canaries);
   const report = {};
   const done = (outcome, reason, problems = []) => ({
@@ -123,9 +139,15 @@ export function analyzeBundle(plaintext, ctx) {
     controls: manifest.controls.length,
     skips: manifest.skips.length,
     retryable_skips: retryableSkips,
+    // results/ files that are not only a skip's evidence: measured results (R-SUB-10).
+    result_files: [...files.keys()].filter((p) => p.startsWith('results/') && !manifest.skips.some((sk) => sk.evidence === p)).length,
   };
   // Every stage that did not run may succeed later (R-ING-16).
   const retryable = manifest.skips.length > 0 && retryableSkips === manifest.skips.length;
+  // Throttled: every skip is a retryable rate limit or upstream outage from a
+  // third-party stage the lane declares, which says nothing about the subject
+  // (R-SUB-04, R-SUB-09).
+  const throttled = retryable && manifest.skips.every((sk) => isThrottleSkip(sk, throttleStages));
 
   // 6. forgery: the bundle must name this item's run_key and fence
   const forged = checkBundle(manifest, files, exp, { requireControl: !allowNoControls })
@@ -137,7 +159,7 @@ export function analyzeBundle(plaintext, ctx) {
   // 7. registry
   const obs = validateObservations(files, registry);
   report.registry = { source: registry.source ?? null, version: registry.version, sha256: registry.sha256 };
-  report.observations = { records: obs.records, errors: obs.errors.length, ...(obs.truncated ? { truncated: true } : {}) };
+  report.observations = { records: obs.records, measured: obs.measured, errors: obs.errors.length, ...(obs.truncated ? { truncated: true } : {}) };
   if (!obs.ok) return reject(obs.errors[0]?.reason ?? 'observation_format', obs.errors);
 
   // 8. secrets
@@ -153,7 +175,7 @@ export function analyzeBundle(plaintext, ctx) {
   };
   if (hits.length > 0) return done('quarantined', 'secret_scan');
 
-  return { ...done('accepted', null), retryable };
+  return { ...done('accepted', null), retryable, throttled };
 }
 
 /**

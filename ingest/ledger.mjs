@@ -73,7 +73,15 @@ function normalizeItem(it, position, bad) {
   const retriesRaw = pick(it, 'retries');
   const retries = retriesRaw === undefined || retriesRaw === null ? 0 : toInt(retriesRaw);
   if (!(retries >= 0)) bad('retries');
-  return { index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries };
+  const throttledRaw = pick(it, 'throttled');
+  const throttled = throttledRaw === undefined || throttledRaw === null ? 0 : toInt(throttledRaw);
+  if (!(throttled >= 0)) bad('throttled');
+  const since = pick(it, 'throttled_since') ?? null;
+  if (since !== null && (typeof since !== 'string' || !Number.isFinite(Date.parse(since)))) bad('throttled_since');
+  return {
+    index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries,
+    throttled, throttled_since: since,
+  };
 }
 
 /**
@@ -110,11 +118,14 @@ export function normalizeAttempt(row) {
   }
   items.forEach((it, i) => { if (it.index !== i) bad('item index (indexes must run 0, 1, 2, ... without gaps)'); });
   if (new Set(items.map((it) => it.run_key)).size !== items.length) bad('run_key (each item needs its own)');
+  // The lane name (pump/workflows.json key), when the row has one besides the file.
+  const lane = pick(row, 'workflow_file') !== undefined && typeof row.workflow === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(row.workflow) ? row.workflow : null;
   return {
     attempt_id: attemptId,
     repo,
     run_id: runId,
     workflow_file: workflowFile,
+    workflow_name: lane,
     workflow_sha: sha ?? null,
     canaries,
     items,
