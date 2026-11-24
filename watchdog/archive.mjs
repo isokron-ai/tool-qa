@@ -9,7 +9,8 @@
 //             to 24 hours, or when `at` is more than 10 minutes in the future;
 //             red after 24 hours, or when the variable is empty, not JSON, or
 //             its `at` is not a date. `off` when the variable is exactly "off"
-//             (an archive retired on purpose).
+//             (an archive retired on purpose; the Mac agent must be stopped
+//             first, or its next good pull writes a heartbeat over it).
 //
 // archiveCheck never throws: a bad value is a red item, not a failed watchdog run.
 

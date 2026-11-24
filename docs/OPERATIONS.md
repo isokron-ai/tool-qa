@@ -743,7 +743,7 @@ person. off: switched off on purpose.
 | `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
 | `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
 | `config` | Red: the pump cannot load `pump/workflows.json` (for example `enabled` or `runs_untrusted` is not a real boolean), so it dispatches nothing. | Fix the file; the details name the entry. |
-| `archive` | The Mac archive pull's last good run (repository variable `ARCHIVE_LAST_OK`, set by `scripts/archive-pull.mjs`) is more than 12 hours old, or dated in the future (amber); more than 24 hours old, or the variable is empty, not JSON or has no valid `at` (red). `off` when the variable is `off`. | On the Mac: `tail ~/Library/Logs/tool-qa-archive-pull.log`, `launchctl print gui/$(id -u)/ai.isokron.tool-qa.archive-pull`, then `launchctl kickstart` it. See "Archive of history artifacts and ingest outputs". |
+| `archive` | The Mac archive pull's last good run (repository variable `ARCHIVE_LAST_OK`, set by `scripts/archive-pull.mjs`) is more than 12 hours old, or dated in the future (amber); more than 24 hours old, or the variable is empty, not JSON or has no valid `at` (red). `off` when the variable is `off` (stop the Mac's agent first, or its next good pull sets the variable again). | On the Mac: `tail ~/Library/Logs/tool-qa-archive-pull.log`, `launchctl print gui/$(id -u)/ai.isokron.tool-qa.archive-pull`, then `launchctl kickstart` it. See "Archive of history artifacts and ingest outputs". |
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 | `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
 
@@ -794,7 +794,9 @@ An artifact from this repository on `main` but from a workflow `SOURCES` (in
 `scripts/archive-pull.mjs`) does not list for its name, or whose run is gone, is
 ours: a workflow was renamed or added. It is held, not left: the run counts it
 as failed (`held, not pulled: ...`), exits 1 and notifies, the cursor stays at
-it, and it is pulled on the first run after `SOURCES` lists the workflow. A test
+it, and it is pulled on the first run after `SOURCES` lists the workflow.
+Deleting that artifact on GitHub also ends the hold (it is no longer listed),
+so do that only for an artifact you do not want archived. A test
 (`R-ARC-20`) checks that every `upload-artifact` name in `.github/workflows/`
 with an archived prefix is mapped to its workflow in `SOURCES`.
 
@@ -840,11 +842,17 @@ next run. Nothing in the quarantine folder is ever decrypted.
 inside names its pid, host, the host's boot time, its start time and
 `touched_at`, which it updates after each artifact). A second run that finds a
 live holder logs it and exits 0 without doing anything. A lock from this host is
-taken over only once its pid is gone, it was taken in an earlier boot (after a
-restart its pid can belong to anything, even pid 1), or `ps` shows that pid now
-runs a program that is not `archive-pull`; never just for its age, however long
-the run has taken (a first backfill can take many hours, and a Mac may sleep in
-the middle). A lock from another host, whose pid cannot be
+taken over only once its pid is gone or now runs something else; never just for
+its age, however long the run has taken (a first backfill can take many hours,
+and a Mac may sleep in the middle). `owner.json` also records the holder's own
+command line as `ps -ww -o command=` shows it. If `ps` shows that line on the
+pid, or a line containing `archive-pull.mjs`, the lock is live, even if the boot
+time differs (macOS moves its boot time when the clock is set, so a clock jump
+alone must not free a running pull); a run started through a wrapper or a link
+is recognised by its recorded line. If `ps` shows anything else there, the lock
+is stale. Only when `ps` cannot tell (no line for the pid) does the boot time
+decide: a lock from an earlier boot is stale, since after a restart its pid can
+belong to anything, even pid 1. A lock naming this run's own pid is stale. A lock from another host, whose pid cannot be
 checked here, is taken over once it has not been touched for 12 hours. The
 takeover happens under a second lock, `<dest>/.lock.takeover`, and only if the
 owner file still names the holder judged stale, so two runs never both take
@@ -872,7 +880,9 @@ old, red after 24 hours or when the variable is empty, is not JSON, or `at` is
 not a date. `watchdog.yml` passes it in as `${{ vars.ARCHIVE_LAST_OK }}`
 through `env:`, because the job's `GITHUB_TOKEN` cannot read repository
 variables through the REST API. Set the variable to `off` to switch the item off
-(an archive retired on purpose). It shows a macOS notification (via
+(an archive retired on purpose); stop the Mac's agent first (`launchctl bootout
+gui/$(id -u)/ai.isokron.tool-qa.archive-pull`), because its next successful pull
+overwrites the variable with a fresh heartbeat. It shows a macOS notification (via
 `osascript`) when a run fails, when it quarantines an artifact (or finds one quarantined by a run that died before indexing it), when the
 heartbeat cannot be set, and, with a failed or locked-out run, when the last
 good run is more than 24 hours old. Neither the heartbeat nor a notification

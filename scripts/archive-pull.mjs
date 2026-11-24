@@ -68,8 +68,9 @@
 //
 // One run at a time: a run holds the folder `<dest>/.lock` (made with mkdir),
 // touches it after each artifact, and leaves at once, with exit 0, if a live
-// run holds it. A lock from this host is taken over only when its pid is gone,
-// it is from an earlier boot, or its pid now runs something else;
+// run holds it. A lock from this host is taken over only when its pid is gone or
+// now runs something else (ps shows neither the holder's recorded command line
+// nor archive-pull.mjs), or, when ps cannot tell, it is from an earlier boot;
 // one from another host when it has not been touched for 12 hours. A takeover
 // happens under `<dest>/.lock.takeover`, and only of the holder judged stale.
 // Temporary `.partial-<id>-<pid>` folders left by a run that died are removed
@@ -555,13 +556,17 @@ const heldLocks = new Set();
 export function bootTime() {
   return new Date(Math.round((Date.now() - uptime() * 1000) / 1000) * 1000).toISOString();
 }
+// What a live archive pull's command line holds (not just "archive-pull", which `tail -f
+// ...archive-pull.log` would match too).
+const SCRIPT_NAME = 'archive-pull.mjs';
 // The boot time is computed from two clocks; readings within this of each other are the same boot.
 const BOOT_SLACK_MS = 120_000;
 
 /** The command line of a pid, or null if it cannot be read (no ps, no such pid). */
 export function commandOf(pid, run = spawnSync) {
   try {
-    const r = run('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5_000 });
+    // -ww: never cut the line to a terminal's width, so it can be compared whole.
+    const r = run('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5_000 });
     if (!r || r.error || r.status !== 0) return null;
     return String(r.stdout ?? '').trim() || null;
   } catch {
@@ -609,12 +614,22 @@ export function acquireLock(dest, {
       return now() - mtime > 60_000 ? 'it has had no owner file for over a minute' : null;
     }
     if (holder.host === host) {
-      // A pid is only meaningful within one boot: after a reboot it may be any process, even pid 1.
+      const theirPid = Number(holder.pid);
+      if (!alive(theirPid)) return `pid ${holder.pid} is gone`;
+      // Our own pid in someone else's lock: that process is gone and the pid came round to us.
+      if (theirPid === pid) return `pid ${holder.pid} is this run's own; the holder is gone`;
+      // The pid and its command line decide when they can: still the holder's own command, or still
+      // an archive pull, is live. The boot time is not used then: macOS moves kern.boottime when the
+      // clock is set, so a clock jump would make a live run look like one from an earlier boot.
+      const cmd = command(theirPid);
+      if (typeof cmd === 'string' && cmd) {
+        if ((typeof holder.command === 'string' && cmd === holder.command) || cmd.includes(SCRIPT_NAME)) return null;
+        return `pid ${holder.pid} is now another program (${cmd.slice(0, 80)})`;
+      }
+      // No command line to go by: a pid is only meaningful within one boot (after a reboot it may
+      // be any process, even pid 1).
       const theirs = Date.parse(holder.boot);
       if (Number.isFinite(theirs) && Math.abs(theirs - Date.parse(boot)) > BOOT_SLACK_MS) return `it is from an earlier boot (${holder.boot})`;
-      if (!alive(Number(holder.pid))) return `pid ${holder.pid} is gone`;
-      const cmd = command(Number(holder.pid));
-      if (typeof cmd === 'string' && cmd && !cmd.includes('archive-pull')) return `pid ${holder.pid} is now another program (${cmd.slice(0, 80)})`;
       return null;
     }
     const last = Date.parse(holder.touched_at ?? holder.started_at);
@@ -663,9 +678,13 @@ export function acquireLock(dest, {
       continue;
     }
     const started = new Date(now()).toISOString();
+    // Our own command line, as ps shows it, so a later run can tell this pid is still us even when
+    // we were started through a wrapper or a link whose name is not archive-pull.mjs.
+    const self = command(pid);
     const writeOwner = () => {
       const temp = join(dir, `owner.json.${pid}.tmp`);
-      writeFileSync(temp, `${JSON.stringify({ pid, host, boot, started_at: started, touched_at: new Date(now()).toISOString() })}\n`);
+      const body = { pid, host, boot, ...(typeof self === 'string' && self ? { command: self } : {}), started_at: started, touched_at: new Date(now()).toISOString() };
+      writeFileSync(temp, `${JSON.stringify(body)}\n`);
       renameSync(temp, owner);
     };
     writeOwner();

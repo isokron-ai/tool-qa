@@ -1150,3 +1150,62 @@ test('R-ARC-21: many runs are looked up from the run list a page at a time, with
   w.cleanup();
   v.cleanup();
 });
+
+test('R-ARC-23: a live archive pull keeps its lock across a clock jump; the boot time is used only when ps cannot tell', () => {
+  const dest = mkdtempSync(join(tmpdir(), 'archive-lock-'));
+  const host = 'mac';
+  const lock = (owner) => {
+    rmSync(join(dest, '.lock'), { recursive: true, force: true });
+    mkdirSync(join(dest, '.lock'));
+    writeFileSync(join(dest, '.lock', 'owner.json'), JSON.stringify({ host, started_at: '2026-03-02T09:00:00.000Z', ...owner }));
+  };
+  // The clock was set an hour forward: macOS moved kern.boottime, so our boot time reads an hour later.
+  const take = (o) => acquireLock(dest, { host, pid: 100, boot: '2026-03-02T09:00:00.000Z', alive: () => true, now: () => Date.parse('2026-03-02T12:00:00Z'), ...o });
+  const earlier = '2026-03-02T08:00:00.000Z';
+  const pull = 'node /Users/x/isokron-archive/tool-qa-code/scripts/archive-pull.mjs --dest /Users/x/isokron-archive/tool-qa';
+  lock({ pid: 4242, boot: earlier });
+  assert.ok(take({ command: () => pull }).holder, 'ps shows the archive pull: live, whatever the boot time says');
+  // "archive-pull" alone is not enough: this is someone reading the log
+  let l = take({ command: () => 'tail -f /Users/x/Library/Logs/tool-qa-archive-pull.log' });
+  assert.equal(l.holder, undefined, 'taken over');
+  l.release();
+  // ps cannot tell: the boot time decides
+  lock({ pid: 4242, boot: earlier });
+  l = take({ command: () => null });
+  assert.equal(l.holder, undefined);
+  l.release();
+  // our own pid in a lock we have not taken: its holder is gone
+  lock({ pid: 100, boot: '2026-03-02T09:00:00.000Z' });
+  l = take({ command: () => pull });
+  assert.equal(l.holder, undefined);
+  l.release();
+  // ps is asked for the whole line, never cut to a width
+  const calls = [];
+  commandOf(7, (cmd, args) => (calls.push([cmd, ...args]), { status: 0, stdout: 'x\n' }));
+  assert.deepEqual(calls, [['ps', '-ww', '-o', 'command=', '-p', '7']]);
+  rmSync(dest, { recursive: true, force: true });
+});
+
+test('R-ARC-24: a run started through a wrapper or link records its own command line, and keeps its lock by it', () => {
+  const dest = mkdtempSync(join(tmpdir(), 'archive-lock-'));
+  const host = 'mac';
+  const boot = '2026-03-02T08:00:00.000Z';
+  const wrapper = '/bin/sh /Users/x/bin/nightly-archive --dest /Users/x/isokron-archive/tool-qa';
+  // the holder records how ps shows it
+  const mine = acquireLock(dest, { host, boot, pid: 4242, alive: () => true, command: (p) => (p === 4242 ? wrapper : null) });
+  assert.equal(JSON.parse(readFileSync(join(dest, '.lock', 'owner.json'), 'utf8')).command, wrapper);
+  // a second run sees that same command line on that pid: live, though it does not say archive-pull.mjs
+  const other = (cmd) => acquireLock(dest, { host, boot, pid: 5000, alive: () => true, command: () => cmd, now: () => Date.parse('2026-03-02T12:00:00Z') });
+  assert.equal(other(wrapper).holder?.pid, 4242);
+  // the pid now runs something else: taken over
+  const l = other('/usr/sbin/cron');
+  assert.equal(l.holder, undefined);
+  assert.equal(JSON.parse(readFileSync(join(dest, '.lock', 'owner.json'), 'utf8')).pid, 5000);
+  l.release();
+  mine.release();
+  // with no command line to record (no ps), owner.json has none
+  const quiet = acquireLock(dest, { host, boot, pid: 4242, alive: () => true, command: () => null });
+  assert.equal('command' in JSON.parse(readFileSync(join(dest, '.lock', 'owner.json'), 'utf8')), false);
+  quiet.release();
+  rmSync(dest, { recursive: true, force: true });
+});
