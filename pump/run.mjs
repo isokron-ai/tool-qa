@@ -54,6 +54,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { createCollector, IngestSetupError } from '../ingest/collect.mjs';
+import { sleepUnless } from '../ingest/github.mjs';
 import { openState } from '../state/db.mjs';
 import { pullState, pushState } from '../scripts/state-asset.mjs';
 import { appTokenMinter } from './app-token.mjs';
@@ -80,7 +81,7 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
 export async function runPump({
   env = process.env,
   now = Date.now,
-  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  sleep = sleepUnless,
   fetch = globalThis.fetch,
   log = (line) => process.stderr.write(`${line}\n`),
   stateFile = DEFAULT_STATE,

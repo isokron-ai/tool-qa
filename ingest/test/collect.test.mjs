@@ -873,3 +873,17 @@ test('R-ING-17: a GitHub call that hangs is cut off at collect()\'s deadline plu
     db.close();
   }
 });
+
+test('R-ING-21: a deadline further off than a timer can wait is no deadline, not one that fires at once', async () => {
+  const { db, fence } = setup();
+  const api = worker({ bundle: makeBundle({ identity: { fence } }) });
+  const h = harness({ api });
+  try {
+    const s = await h.collect(db, { deadline: h.clock.t + 2 ** 32 });
+    assert.deepEqual(s.outcomes, { accepted: 1 }, 'the GitHub calls were not cut off');
+    assert.equal(s.errors, 0);
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});

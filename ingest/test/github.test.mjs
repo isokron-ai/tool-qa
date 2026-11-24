@@ -178,3 +178,26 @@ test('R-ING-17: no request is sent once the caller\'s deadline has passed, and a
   const gh3 = makeGithub({ token: TOKEN, fetch: fakeFetch([]), sleep: noSleep, deadlineSignal: () => past.signal });
   await assert.rejects(gh3.downloadArtifact('isokron-ai/mcp-check', 9), (err) => err.code === 'deadline');
 });
+
+test('R-ING-20: the wait before a retry ends at the deadline, even a retry-after of 60 s', async () => {
+  const dl = new AbortController();
+  const fetch = fakeFetch([() => json({ message: 'slow down' }, 429, { 'retry-after': '60' })]);
+  let slept = 0;
+  const forever = () => { slept += 1; return new Promise(() => {}); }; // a sleep that ignores the signal
+  const gh = makeGithub({ token: TOKEN, fetch, sleep: forever, deadlineSignal: () => dl.signal });
+  setTimeout(() => dl.abort(), 50);
+  const t0 = Date.now();
+  await assert.rejects(gh.getRun('isokron-ai/mcp-check', 5), (err) => err instanceof GithubError && err.code === 'deadline');
+  assert.ok(Date.now() - t0 < 5000);
+  assert.equal(slept, 1);
+  assert.equal(fetch.calls.length, 1, 'no second request after the deadline');
+
+  // The default sleep clears its timer when the signal aborts.
+  const { sleepUnless } = await import('../github.mjs');
+  const c = new AbortController();
+  const t1 = Date.now();
+  setTimeout(() => c.abort(), 20);
+  await sleepUnless(60_000, c.signal);
+  assert.ok(Date.now() - t1 < 5000);
+  await sleepUnless(60_000, c.signal); // already aborted: at once
+});
