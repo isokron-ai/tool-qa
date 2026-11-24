@@ -30,6 +30,8 @@
 //   AGE_IDENTITY        decrypts the state asset (age ciphertext, R-ING-15);
 //                       removed from the process environment once read
 //   AGE_BIN, AGE_KEYGEN_BIN   optional paths of age and age-keygen
+//   ARCHIVE_LAST_OK     the Mac archive pull's heartbeat, `${{ vars.ARCHIVE_LAST_OK }}`
+//                       (watchdog/archive.mjs)
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -46,6 +48,7 @@ import { judgeConformance, pinMismatches, readConformance as readConformanceStat
 import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
+import { archiveCheck } from './archive.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
 
@@ -199,6 +202,8 @@ export async function runWatchdog({
     const c = checks.find((x) => x.id === 'state');
     c.summary = `could not read the state asset: ${stateError.slice(0, 200)}`;
   }
+  // The Mac archive pull's heartbeat, a repository variable passed in by the workflow.
+  checks.push(archiveCheck({ now: now(), raw: env.ARCHIVE_LAST_OK }));
 
   if (actions.dispatchPump) {
     const ref = env.GITHUB_REF_NAME || 'main';

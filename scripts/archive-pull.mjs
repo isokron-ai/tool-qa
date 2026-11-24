@@ -23,9 +23,13 @@
 // For every such artifact that has not expired and is not in the index yet, it:
 //   0. checks it was made by our own workflow for its kind (pump.yml or
 //      ingest.yml for ingest; the history workflow for history), on main, in
-//      this repository and not a fork. Anything else (a pull request from a
-//      fork can upload any name) is logged and left alone: not downloaded, not
-//      quarantined, not a failure;
+//      this repository and not a fork. An artifact from a fork or another
+//      branch (a pull request from a fork can upload any name) is logged and
+//      left alone: not downloaded, not quarantined, not a failure. One from this
+//      repository on main but from a workflow SOURCES does not list (renamed or
+//      new) is ours: it fails, so it is retried and the cursor holds, until
+//      SOURCES lists it. With many runs to check, they are read from the run
+//      list 100 at a time rather than one by one;
 //   1. downloads it (the API answers with a redirect to storage; the token is
 //      sent to the API only, never to the storage host);
 //   2. checks the download against the artifact's sha256 digest when GitHub
@@ -64,7 +68,9 @@
 //
 // One run at a time: a run holds the folder `<dest>/.lock` (made with mkdir),
 // touches it after each artifact, and leaves at once, with exit 0, if a live
-// run holds it. A lock from this host is taken over only when its pid is gone;
+// run holds it. A lock from this host is taken over only when its pid is gone or
+// now runs something else (ps shows neither the holder's recorded command line
+// nor archive-pull.mjs), or, when ps cannot tell, it is from an earlier boot;
 // one from another host when it has not been touched for 12 hours. A takeover
 // happens under `<dest>/.lock.takeover`, and only of the holder judged stale.
 // Temporary `.partial-<id>-<pid>` folders left by a run that died are removed
@@ -83,7 +89,7 @@ import {
   closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync,
   renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
-import { hostname } from 'node:os';
+import { hostname, uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -475,24 +481,60 @@ export const SOURCE_BRANCH = 'main';
 /**
  * Why an artifact was not made by one of our own workflows on main, or null.
  * A pull request from a fork can upload an artifact with any name, so the name
- * alone proves nothing. Looks the run up once per run id.
+ * alone proves nothing. Returns { why, ours }: `ours` is true when the run is in
+ * this repository, on main, but from a workflow SOURCES does not list for that
+ * name (a workflow renamed or added): that is our data, so it is held, not left.
+ * Looks each run up once, in `runs` (filled in bulk by prefetchRuns when there
+ * are many).
  */
 async function provenanceProblem(client, repo, artifact, runs) {
   const wr = artifact.workflow_run;
-  if (!wr || wr.id == null) return 'GitHub gives no workflow run for it';
-  if (wr.repository_id == null || wr.head_repository_id !== wr.repository_id) return `its run was made from another repository (head repository ${wr.head_repository_id ?? 'unknown'})`;
-  if (wr.head_branch !== SOURCE_BRANCH) return `its run was made on branch ${JSON.stringify(wr.head_branch ?? null)}, not ${SOURCE_BRANCH}`;
+  if (!wr || wr.id == null) return { why: 'GitHub gives no workflow run for it', ours: false };
+  if (wr.repository_id == null || wr.head_repository_id !== wr.repository_id) return { why: `its run was made from another repository (head repository ${wr.head_repository_id ?? 'unknown'})`, ours: false };
+  if (wr.head_branch !== SOURCE_BRANCH) return { why: `its run was made on branch ${JSON.stringify(wr.head_branch ?? null)}, not ${SOURCE_BRANCH}`, ours: false };
   const allowed = SOURCES.find(([p]) => String(artifact.name).startsWith(p))?.[1] ?? [];
   if (!runs.has(wr.id)) {
     const res = await client.request('GET', `/repos/${repo}/actions/runs/${wr.id}`, { allow: [404] });
     runs.set(wr.id, res.status === 404 ? null : res.data);
   }
   const run = runs.get(wr.id);
-  if (!run) return `its run ${wr.id} is gone, so where it came from cannot be checked`;
+  if (!run) return { why: `its run ${wr.id} is gone, so the workflow that made it cannot be checked`, ours: true };
+  if (run.head_repository?.id != null && run.repository?.id != null && run.head_repository.id !== run.repository.id) return { why: 'its run was made from another repository', ours: false };
   const path = String(run.path ?? '').split('@')[0];
-  if (!allowed.some((w) => path === `.github/workflows/${w}`)) return `it was made by ${JSON.stringify(path)}, not ${allowed.join(' or ')}`;
-  if (run.head_repository?.id != null && run.repository?.id != null && run.head_repository.id !== run.repository.id) return 'its run was made from another repository';
+  if (!allowed.some((w) => path === `.github/workflows/${w}`)) return { why: `it was made on ${SOURCE_BRANCH} by ${JSON.stringify(path)}, which SOURCES does not list for this name (it lists ${allowed.join(' or ') || 'nothing'})`, ours: true };
   return null;
+}
+
+// Below this many runs to look up, one GET each is cheaper than listing.
+export const BULK_RUNS_MIN = 10;
+export const MAX_RUN_PAGES = 100;
+// A run is created before its artifacts; how far back to list runs before the oldest artifact.
+const RUN_LEAD_MS = 24 * 60 * 60_000;
+
+/**
+ * Fill `runs` for many run ids at once from the run list (100 a page, newest
+ * first), stopping once every id is found or the list is older than the
+ * oldest artifact by a day. Ids it does not find are left for one GET each.
+ */
+async function prefetchRuns(client, repo, artifacts, runs, maxPages = MAX_RUN_PAGES) {
+  const need = new Set(artifacts.map((a) => a.workflow_run?.id).filter((id) => id != null && !runs.has(id)));
+  if (need.size < BULK_RUNS_MIN) return 0;
+  const times = artifacts.map((a) => Date.parse(a.created_at)).filter(Number.isFinite);
+  const floor = times.length ? Math.min(...times) - RUN_LEAD_MS : -Infinity;
+  let pages = 0;
+  for (let page = 1; page <= maxPages && need.size; page++) {
+    const res = await client.request('GET', `/repos/${repo}/actions/runs`, { query: { per_page: 100, page } });
+    pages += 1;
+    const batch = res.data?.workflow_runs ?? [];
+    for (const run of batch) {
+      if (need.has(run.id)) {
+        runs.set(run.id, run);
+        need.delete(run.id);
+      }
+    }
+    if (batch.length < 100 || batch.every((r) => Date.parse(r.created_at) < floor)) break;
+  }
+  return pages;
 }
 
 // ---- one run at a time ----
@@ -510,6 +552,28 @@ export function pidAlive(pid) {
 
 const heldLocks = new Set();
 
+/** This machine's boot time, to the second: a lock from an earlier boot cannot be held by a live run. */
+export function bootTime() {
+  return new Date(Math.round((Date.now() - uptime() * 1000) / 1000) * 1000).toISOString();
+}
+// What a live archive pull's command line holds (not just "archive-pull", which `tail -f
+// ...archive-pull.log` would match too).
+const SCRIPT_NAME = 'archive-pull.mjs';
+// The boot time is computed from two clocks; readings within this of each other are the same boot.
+const BOOT_SLACK_MS = 120_000;
+
+/** The command line of a pid, or null if it cannot be read (no ps, no such pid). */
+export function commandOf(pid, run = spawnSync) {
+  try {
+    // -ww: never cut the line to a terminal's width, so it can be compared whole.
+    const r = run('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5_000 });
+    if (!r || r.error || r.status !== 0) return null;
+    return String(r.stdout ?? '').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Take `<dest>/.lock`. Returns { touch, release } or { holder } when a live run
  * holds it.
@@ -524,7 +588,16 @@ const heldLocks = new Set();
  * the owner file still names the holder judged stale, so two runs cannot both
  * take the same stale lock, nor one take a lock another has just taken.
  */
-export function acquireLock(dest, { now = Date.now, alive = pidAlive, pid = process.pid, host = hostname(), log = () => {} } = {}) {
+export function acquireLock(dest, {
+  now = Date.now,
+  alive = pidAlive,
+  pid = process.pid,
+  host = hostname(),
+  boot = bootTime(),
+  // Only with the real pid check: a test's made-up pid may belong to some other process here.
+  command = alive === pidAlive ? commandOf : () => null,
+  log = () => {},
+} = {}) {
   const dir = join(dest, LOCK);
   const owner = join(dir, 'owner.json');
   const guard = join(dest, `${LOCK}.takeover`);
@@ -540,7 +613,25 @@ export function acquireLock(dest, { now = Date.now, alive = pidAlive, pid = proc
       }
       return now() - mtime > 60_000 ? 'it has had no owner file for over a minute' : null;
     }
-    if (holder.host === host) return alive(Number(holder.pid)) ? null : `pid ${holder.pid} is gone`;
+    if (holder.host === host) {
+      const theirPid = Number(holder.pid);
+      if (!alive(theirPid)) return `pid ${holder.pid} is gone`;
+      // Our own pid in someone else's lock: that process is gone and the pid came round to us.
+      if (theirPid === pid) return `pid ${holder.pid} is this run's own; the holder is gone`;
+      // The pid and its command line decide when they can: still the holder's own command, or still
+      // an archive pull, is live. The boot time is not used then: macOS moves kern.boottime when the
+      // clock is set, so a clock jump would make a live run look like one from an earlier boot.
+      const cmd = command(theirPid);
+      if (typeof cmd === 'string' && cmd) {
+        if ((typeof holder.command === 'string' && cmd === holder.command) || cmd.includes(SCRIPT_NAME)) return null;
+        return `pid ${holder.pid} is now another program (${cmd.slice(0, 80)})`;
+      }
+      // No command line to go by: a pid is only meaningful within one boot (after a reboot it may
+      // be any process, even pid 1).
+      const theirs = Date.parse(holder.boot);
+      if (Number.isFinite(theirs) && Math.abs(theirs - Date.parse(boot)) > BOOT_SLACK_MS) return `it is from an earlier boot (${holder.boot})`;
+      return null;
+    }
     const last = Date.parse(holder.touched_at ?? holder.started_at);
     if (Number.isFinite(last) && now() - last <= LOCK_STALE_MS) return null;
     return `pid ${holder.pid} on ${holder.host} has not touched it for over ${LOCK_STALE_MS / 3_600_000} hours`;
@@ -587,9 +678,13 @@ export function acquireLock(dest, { now = Date.now, alive = pidAlive, pid = proc
       continue;
     }
     const started = new Date(now()).toISOString();
+    // Our own command line, as ps shows it, so a later run can tell this pid is still us even when
+    // we were started through a wrapper or a link whose name is not archive-pull.mjs.
+    const self = command(pid);
     const writeOwner = () => {
       const temp = join(dir, `owner.json.${pid}.tmp`);
-      writeFileSync(temp, `${JSON.stringify({ pid, host, started_at: started, touched_at: new Date(now()).toISOString() })}\n`);
+      const body = { pid, host, boot, ...(typeof self === 'string' && self ? { command: self } : {}), started_at: started, touched_at: new Date(now()).toISOString() };
+      writeFileSync(temp, `${JSON.stringify(body)}\n`);
       renameSync(temp, owner);
     };
     writeOwner();
@@ -689,7 +784,9 @@ export async function archivePull({
   dryRun = false,
   budget: budgetFor,
   maxPages = MAX_LIST_PAGES,
+  maxRunPages = MAX_RUN_PAGES,
   alive = pidAlive,
+  boot,
   zipLimits = {},
   fsync = fsyncSync,
 } = {}) {
@@ -714,7 +811,7 @@ export async function archivePull({
   let lock = null;
   if (!dryRun) {
     mkdirSync(dest, { recursive: true });
-    lock = acquireLock(dest, { now, alive, log });
+    lock = acquireLock(dest, { now, alive, log, ...(boot ? { boot } : {}) });
     if (lock.holder) {
       out.locked = lock.holder;
       log(`archive-pull: another pull holds ${join(dest, LOCK)} (pid ${lock.holder.pid ?? '?'}, since ${lock.holder.started_at ?? '?'}); nothing done`);
@@ -726,14 +823,14 @@ export async function archivePull({
       const removed = cleanPartials(dest, { alive });
       if (removed.length) log(`archive-pull: removed ${removed.length} temporary folder(s) left by a run that died: ${removed.join(', ')}`);
     }
-    await pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryRun, budgetFor, maxPages, zipLimits, fsync, previous, out, lock });
+    await pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryRun, budgetFor, maxPages, maxRunPages, zipLimits, fsync, previous, out, lock });
     return out;
   } finally {
     lock?.release();
   }
 }
 
-async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryRun, budgetFor, maxPages, zipLimits, fsync, previous, out, lock }) {
+async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryRun, budgetFor, maxPages, maxRunPages, zipLimits, fsync, previous, out, lock }) {
   // This runs on its own machine with its own token, not inside the loop, so a
   // long backlog may use more calls than the pump's caps allow. It waits for the
   // hourly cap rather than giving up; GitHub's own limits are still honoured.
@@ -781,6 +878,9 @@ async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryR
     manifested.set(Number(marker.id), true);
   };
   const runs = new Map();
+  const toCheck = wanted.filter((a) => !indexed.has(Number(a.id)));
+  const runPages = await prefetchRuns(client, repo, toCheck, runs, maxRunPages);
+  if (runPages) log(`archive-pull: listed ${runPages} page(s) of runs to check where ${toCheck.length} artifact(s) came from`);
   const quarantined = (marker, dir, recovered = false) => {
     out.quarantined.push({ name: marker.name, id: marker.id, kept: marker.files.length, refused: (marker.refused ?? []).length, path: marker.quarantine, problems: marker.problems ?? [], dir, recovered });
   };
@@ -793,11 +893,14 @@ async function pullAll({ dest, repo, token, fetch, apiUrl, now, sleep, log, dryR
       continue;
     }
     try {
-      const foreign = await provenanceProblem(client, repo, a, runs);
-      if (foreign) {
-        // Not ours: never downloaded, kept or quarantined. Not a failure of the archive either.
-        out.foreign.push({ name: a.name, id: a.id, why: foreign });
-        log(`archive-pull: ${a.name}: REFUSED, not from our own workflow on ${SOURCE_BRANCH}: ${foreign}`);
+      const origin = await provenanceProblem(client, repo, a, runs);
+      // Ours, but from a workflow SOURCES does not list: a failure, so the cursor holds, the run
+      // exits 1 and notifies, and the artifact is pulled once SOURCES is fixed.
+      if (origin?.ours) throw new Error(`held, not pulled: ${origin.why}; add the workflow to SOURCES in scripts/archive-pull.mjs`);
+      if (origin) {
+        // Not ours (a fork, or another branch): never downloaded, kept or quarantined, and not a failure.
+        out.foreign.push({ name: a.name, id: a.id, why: origin.why });
+        log(`archive-pull: ${a.name}: REFUSED, not from our own workflow on ${SOURCE_BRANCH}: ${origin.why}`);
         continue;
       }
       const place = placeFor(dest, a, log);

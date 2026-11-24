@@ -743,6 +743,7 @@ person. off: switched off on purpose.
 | `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
 | `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
 | `config` | Red: the pump cannot load `pump/workflows.json` (for example `enabled` or `runs_untrusted` is not a real boolean), so it dispatches nothing. | Fix the file; the details name the entry. |
+| `archive` | The Mac archive pull's last good run (repository variable `ARCHIVE_LAST_OK`, set by `scripts/archive-pull.mjs`) is more than 12 hours old, or dated in the future (amber); more than 24 hours old, or the variable is empty, not JSON or has no valid `at` (red). `off` when the variable is `off` (stop the Mac's agent first, or its next good pull sets the variable again). | On the Mac: `tail ~/Library/Logs/tool-qa-archive-pull.log`, `launchctl print gui/$(id -u)/ai.isokron.tool-qa.archive-pull`, then `launchctl kickstart` it. See "Archive of history artifacts and ingest outputs". |
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 | `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
 
@@ -782,10 +783,22 @@ Only artifacts made by this repository's own workflows on `main` are pulled:
 `history-registry.yml`, `history-packages-*` and `history-popularity-*` from
 their workflows. The artifact's run must be in this repository, not a fork
 (`head_repository_id` equal to `repository_id`), on branch `main`, and its
-workflow file is looked up once per run. A pull request from a fork can upload
-an artifact with any name, so anything else is logged as `REFUSED, not from our
-own workflow on main`, and left alone: not downloaded, not quarantined, and not
-a failure.
+workflow file is looked up once per run (from the run list, 100 runs a page,
+when there are ten or more runs to check; one request per run otherwise, and
+for any run the list did not show). A pull request from a fork can upload an
+artifact with any name, so one from a fork or another branch is logged as
+`REFUSED, not from our own workflow on main`, and left alone: not downloaded,
+not quarantined, and not a failure.
+
+An artifact from this repository on `main` but from a workflow `SOURCES` (in
+`scripts/archive-pull.mjs`) does not list for its name, or whose run is gone, is
+ours: a workflow was renamed or added. It is held, not left: the run counts it
+as failed (`held, not pulled: ...`), exits 1 and notifies, the cursor stays at
+it, and it is pulled on the first run after `SOURCES` lists the workflow.
+Deleting that artifact on GitHub also ends the hold (it is no longer listed),
+so do that only for an artifact you do not want archived. A test
+(`R-ARC-20`) checks that every `upload-artifact` name in `.github/workflows/`
+with an archived prefix is mapped to its workflow in `SOURCES`.
 
 Every download is checked against the artifact's sha256 digest when GitHub
 gives one. Each file is written and synced to disk in a temporary
@@ -826,16 +839,34 @@ the digest, or, with no digest, its size is not the artifact's) is tried again
 next run. Nothing in the quarantine folder is ever decrypted.
 
 **One run at a time.** A run holds the folder `<dest>/.lock` (`owner.json`
-inside names its pid, host, start time and `touched_at`, which it updates after
-each artifact). A second run that finds a live holder logs it and exits 0
-without doing anything. A lock from this host is taken over only once its pid is
-gone, however long the run has taken (a first backfill can take many hours, and
-a Mac may sleep in the middle). A lock from another host, whose pid cannot be
+inside names its pid, host, the host's boot time, its start time and
+`touched_at`, which it updates after each artifact). A second run that finds a
+live holder logs it and exits 0 without doing anything. A lock from this host is
+taken over only once its pid is gone or now runs something else; never just for
+its age, however long the run has taken (a first backfill can take many hours,
+and a Mac may sleep in the middle). `owner.json` also records the holder's own
+command line as `ps -ww -o command=` shows it. If `ps` shows that line on the
+pid, or a line containing `archive-pull.mjs`, the lock is live, even if the boot
+time differs (macOS moves its boot time when the clock is set, so a clock jump
+alone must not free a running pull); a run started through a wrapper or a link
+is recognised by its recorded line. If `ps` shows anything else there, the lock
+is stale. Only when `ps` cannot tell (no line for the pid) does the boot time
+decide: a lock from an earlier boot is stale, since after a restart its pid can
+belong to anything, even pid 1. A lock naming this run's own pid is stale. A lock from another host, whose pid cannot be
 checked here, is taken over once it has not been touched for 12 hours. The
 takeover happens under a second lock, `<dest>/.lock.takeover`, and only if the
 owner file still names the holder judged stale, so two runs never both take
 one. At start, `.partial-*` folders and files left by a run whose pid is gone are
 removed.
+
+To remove the lock by hand (only if no pull is running: `pgrep -fl
+archive-pull.mjs` shows nothing, and `launchctl print
+gui/$(id -u)/ai.isokron.tool-qa.archive-pull` says `state = not running`):
+
+```sh
+cat ~/isokron-archive/tool-qa/.lock/owner.json   # who held it, and since when
+rm -r ~/isokron-archive/tool-qa/.lock ~/isokron-archive/tool-qa/.lock.takeover
+```
 
 **Alerts.** From the command line, after a successful run (nothing failed, the
 list complete) it writes `<dest>/.last-ok.json` and sets the repository
@@ -843,12 +874,15 @@ variable `ARCHIVE_LAST_OK` on the repository it pulls from, through the API with
 the same token, to JSON such as
 `{"at":"2026-11-24T06:00:00.000Z","pulled":3,"recovered":0,"quarantined":0,"already":41,"refused_foreign":0,"failed":0,"listed":120}`.
 The token needs to be able to write Actions variables (the GitHub CLI's token,
-signed in as an admin of the repository, can). A freshness check, such as one in the watchdog, can read it to tell
-that the archive is still running. A workflow must read it as
-`${{ vars.ARCHIVE_LAST_OK }}` (passed to its step through `env:`): the job's
-`GITHUB_TOKEN` cannot read repository variables through the REST API. The check
-to add: amber when `at` is more than 12 hours old; red after 24 hours, or when
-the variable is empty, is not JSON, or `at` is not a date. It shows a macOS notification (via
+signed in as an admin of the repository, can). The watchdog reads it for its
+`archive` item (`watchdog/archive.mjs`): amber when `at` is more than 12 hours
+old, red after 24 hours or when the variable is empty, is not JSON, or `at` is
+not a date. `watchdog.yml` passes it in as `${{ vars.ARCHIVE_LAST_OK }}`
+through `env:`, because the job's `GITHUB_TOKEN` cannot read repository
+variables through the REST API. Set the variable to `off` to switch the item off
+(an archive retired on purpose); stop the Mac's agent first (`launchctl bootout
+gui/$(id -u)/ai.isokron.tool-qa.archive-pull`), because its next successful pull
+overwrites the variable with a fresh heartbeat. It shows a macOS notification (via
 `osascript`) when a run fails, when it quarantines an artifact (or finds one quarantined by a run that died before indexing it), when the
 heartbeat cannot be set, and, with a failed or locked-out run, when the last
 good run is more than 24 hours old. Neither the heartbeat nor a notification

@@ -53,7 +53,11 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'watchdog-'));
   const mints = [];
   const opts = {
-    env: { GITHUB_REPOSITORY: REPO, LOOP_SLOTS: '4', GITHUB_REF_NAME: 'main', GITHUB_TOKEN: 'ghs_synthetic_job_token' },
+    env: {
+      GITHUB_REPOSITORY: REPO, LOOP_SLOTS: '4', GITHUB_REF_NAME: 'main', GITHUB_TOKEN: 'ghs_synthetic_job_token',
+      // a fresh heartbeat from the Mac archive pull (watchdog/archive.mjs)
+      ARCHIVE_LAST_OK: JSON.stringify({ at: ago(60), pulled: 2, quarantined: 0, refused_foreign: 0 }),
+    },
     now: c.now,
     sleep: c.sleep,
     fetch: api.fetch,
@@ -284,6 +288,47 @@ test('R-WD-13: a workflows.json the pump cannot load is a red config check; the 
   w.cleanup();
 });
 
+test('R-ARC-22: the watchdog shows the archive heartbeat from vars.ARCHIVE_LAST_OK: amber after 12 hours, red after 24 or when it is empty or unreadable', async () => {
+  const { archiveCheck } = await import('../archive.mjs');
+  const now = Date.parse('2026-03-02T12:00:00Z');
+  const hb = (hoursAgo, extra = {}) => JSON.stringify({ at: new Date(now - hoursAgo * 3_600_000).toISOString(), pulled: 3, quarantined: 1, refused_foreign: 0, ...extra });
+  const status = (raw) => archiveCheck({ now, raw }).status;
+  assert.equal(status(hb(1)), 'green');
+  assert.match(archiveCheck({ now, raw: hb(1) }).summary, /^last good archive pull 60 minutes ago \(pulled 3, quarantined 1, refused as not ours 0\)$/);
+  assert.equal(status(hb(12)), 'green');
+  assert.equal(status(hb(12.1)), 'amber');
+  assert.equal(status(hb(24)), 'amber');
+  assert.equal(status(hb(24.1)), 'red');
+  assert.match(archiveCheck({ now, raw: hb(30) }).summary, /no good archive pull for 30\.0 hours/);
+  for (const raw of [undefined, '', '   ']) assert.equal(status(raw), 'red', JSON.stringify(raw));
+  assert.match(archiveCheck({ now, raw: '' }).summary, /ARCHIVE_LAST_OK is empty/);
+  assert.match(archiveCheck({ now, raw: '2026-03-02T11:00:00Z' }).summary, /is not JSON/);
+  for (const raw of ['{}', '{"at":"yesterday"}', '{"at":12345}', 'null', '[1]']) assert.equal(status(raw), 'red', raw);
+  assert.match(archiveCheck({ now, raw: '{"at":"yesterday"}' }).summary, /no valid date/);
+  assert.equal(status(hb(-1)), 'amber', 'an hour in the future: the Mac clock');
+  assert.equal(status(hb(-0.1)), 'green', 'a few minutes of clock skew is fine');
+  assert.equal(status('off'), 'off');
+
+  // end to end: the item is on the health issue, and a stale heartbeat makes the issue red
+  const w = world();
+  w.opts.env.ARCHIVE_LAST_OK = JSON.stringify({ at: new Date(w.c.t - 30 * 3_600_000).toISOString(), pulled: 0 });
+  const out = await runWatchdog(w.opts);
+  const item = out.checks.find((c) => c.id === 'archive');
+  assert.equal(item.status, 'red');
+  assert.equal(out.overall, 'red');
+  assert.match(w.issues[0].body, /archive/);
+  // the run reads no repository variable through the API
+  assert.equal(w.api.calls.filter((c) => c.path.includes('/actions/variables')).length, 0);
+  w.cleanup();
+});
+
+test('R-ARC-22: watchdog.yml passes vars.ARCHIVE_LAST_OK to the watchdog step through env', async () => {
+  const { readFileSync } = await import('node:fs');
+  const yml = readFileSync(new URL('../../.github/workflows/watchdog.yml', import.meta.url), 'utf8');
+  const step = yml.slice(yml.indexOf('- name: Watchdog'));
+  assert.match(step, /\n\s+ARCHIVE_LAST_OK: \$\{\{ vars\.ARCHIVE_LAST_OK \}\}\n/);
+  assert.ok(step.indexOf('ARCHIVE_LAST_OK') < step.indexOf('run: node watchdog/run.mjs'));
+});
 test('R-SNAP-09: the watchdog shows the state snapshots on the health issue: amber after 3 hours, red after 6, off with the lane off', async () => {
   for (const [hours, env, want] of [[1, {}, 'green'], [4, {}, 'amber'], [7, {}, 'red'], [7, { LANE_STATE_SNAPSHOT_ENABLED: 'false' }, 'off']]) {
     const w = world({ seed: () => {} });
