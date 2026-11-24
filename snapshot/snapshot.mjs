@@ -14,9 +14,13 @@
 //      asset's `sha256:` label, check the asset is still the same one (id,
 //      label, updated_at) after the download, and that it is age ciphertext.
 //      If the pump replaced it while we copied, try once more; then fail.
-//   2. reads `manifest.json` on the snapshot release and reconciles it with
-//      the assets really there (an asset missing from the manifest is added
-//      back from its name and label; an entry whose asset is gone is dropped).
+//      Losing that race on both tries is not a failure: the run ends with
+//      a notice and the next run tries again.
+//   2. reads `manifest.json` on the snapshot release (malformed entries are
+//      left out) and reconciles it with the assets really there: an asset the
+//      manifest does not list is downloaded and verified against its name and
+//      label before it is added back (deleted if it fails), and an entry whose
+//      asset is gone is dropped. Dedupe only ever compares verified entries.
 //   3. if the newest snapshot has the same sha256, uploads nothing (dedupe);
 //      otherwise uploads the copy, downloads it back and checks it.
 //   4. retention: keeps the 48 newest snapshots and the newest snapshot of
@@ -47,6 +51,7 @@ export const KEEP_DAYS = 30;
 export const NAME_RE = /^state-(\d{8}T\d{6}Z)-([0-9a-f]{8})\.sqlite\.age$/;
 const AGE_MAGIC = 'age-encryption.org/v1\n';
 const DAY = 24 * 3600 * 1000;
+const FUTURE_SLACK_MS = 5 * 60 * 1000;
 
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -145,66 +150,156 @@ const describeSource = (a) => ({ asset_id: a.id, name: a.name, updated_at: a.upd
  * Copy the live state asset without trusting that it stood still: the bytes
  * must match the asset's sha256 label, and the asset must be the same (id,
  * label, updated_at) once the download is done. If the pump pushed in
- * between, copy once more.
- * @returns {Promise<{status: 'absent'} | {status: 'copied', bytes: Buffer, sha256: string, source: object, tries: number}>}
+ * between (the asset changed, or vanished under the download), copy once
+ * more. Losing that race every time is not an error: the result is `busy`
+ * and the next run tries again (the health item reports staleness). Bytes
+ * that do not match an unchanged asset's label, twice, are an error.
+ * @returns {Promise<{status: 'absent'} | {status: 'busy', why: string, tries: number} |
+ *   {status: 'copied', bytes: Buffer, sha256: string, source: object, tries: number}>}
  */
 export async function copyStateAsset({ gh, log = () => {}, tries = 2 }) {
   let why = '';
+  let raced = false;
   for (let i = 1; i <= tries; i++) {
     const release = await gh.getRelease(SOURCE_TAG);
     const asset = release && pickSource(release.assets);
     if (!asset) return { status: 'absent' };
     const want = labelSha(asset.label);
     if (!want) throw new Error(`${asset.name} has no sha256 label, so a copy of it cannot be checked; not taking a snapshot`);
-    const bytes = await gh.download(asset);
-    const got = sha256(bytes);
+    let bytes = null;
+    let downloadError = null;
+    try {
+      bytes = await gh.download(asset);
+    } catch (err) {
+      downloadError = err;
+    }
     const after = await gh.getRelease(SOURCE_TAG);
     const now = after && pickSource(after.assets);
-    if (got !== want) why = `the bytes (sha256 ${got.slice(0, 12)}) do not match the label (${want.slice(0, 12)})`;
-    else if (!now || now.id !== asset.id || now.label !== asset.label || (now.updated_at ?? null) !== (asset.updated_at ?? null)) {
+    const moved = !now || now.id !== asset.id || now.label !== asset.label || (now.updated_at ?? null) !== (asset.updated_at ?? null);
+    if (moved) {
+      raced = true;
       why = 'the asset was replaced while it was copied';
+    } else if (downloadError) {
+      throw downloadError;
     } else {
-      if (!isAgeCiphertext(bytes)) throw new Error(`${asset.name} is not age ciphertext; refusing to keep a copy of it`);
-      return { status: 'copied', bytes, sha256: got, source: describeSource(asset), tries: i };
+      const got = sha256(bytes);
+      if (got !== want) {
+        raced = false;
+        why = `the bytes (sha256 ${got.slice(0, 12)}) do not match the label (${want.slice(0, 12)})`;
+      } else {
+        if (!isAgeCiphertext(bytes)) throw new Error(`${asset.name} is not age ciphertext; refusing to keep a copy of it`);
+        return { status: 'copied', bytes, sha256: got, source: describeSource(asset), tries: i };
+      }
     }
     log(`state-snapshot: copy ${i} of ${tries} failed: ${why}${i < tries ? '; trying again' : ''}`);
   }
+  if (raced) return { status: 'busy', why, tries };
   throw new Error(`could not copy a stable state asset in ${tries} tries (${why}); the next run will try again`);
 }
 
-/** Parse manifest text; null if it is not one of ours. */
+/**
+ * One manifest entry, checked: the name must be a snapshot name and the
+ * sha256 64 hex digits that the name carries. `created` always comes from the
+ * name, never from the manifest. Returns null for anything else.
+ */
+export function cleanEntry(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return null;
+  const parsed = parseSnapshotName(e.name);
+  if (!parsed) return null;
+  if (!/^[0-9a-f]{64}$/.test(String(e.sha256)) || e.sha256.slice(0, 8) !== parsed.sha8) return null;
+  const size = Number.isSafeInteger(e.size) && e.size >= 0 ? e.size : null;
+  const source = e.source && typeof e.source === 'object' && !Array.isArray(e.source) ? e.source : null;
+  return { name: e.name, asset_id: Number.isSafeInteger(e.asset_id) ? e.asset_id : null, created: parsed.created, sha256: e.sha256, size, source };
+}
+
+/**
+ * Parse manifest text; null if it is not one of ours. Entries that fail
+ * cleanEntry() are left out (`rejected` counts them), so a damaged entry can
+ * neither crash a run nor pin itself as the newest.
+ */
 export function parseManifest(text) {
+  let m;
   try {
-    const m = JSON.parse(text);
-    return m && m.version === 1 && Array.isArray(m.snapshots) ? m : null;
+    m = JSON.parse(text);
   } catch {
     return null;
   }
+  if (!m || typeof m !== 'object' || m.version !== 1 || !Array.isArray(m.snapshots)) return null;
+  const snapshots = [];
+  const seen = new Set();
+  let rejected = 0;
+  for (const raw of m.snapshots) {
+    const e = cleanEntry(raw);
+    if (!e || seen.has(e.name)) {
+      rejected++;
+      continue;
+    }
+    seen.add(e.name);
+    snapshots.push(e);
+  }
+  const currentAt = typeof m.current_at === 'string' && Number.isFinite(Date.parse(m.current_at)) ? m.current_at : null;
+  return { ...m, current_at: currentAt, snapshots, rejected };
+}
+
+/** An entry for a snapshot asset the manifest does not list, from its name and label (not yet verified). */
+export function orphanEntry(a) {
+  const parsed = parseSnapshotName(a.name);
+  return parsed && { name: a.name, asset_id: a.id, created: parsed.created, sha256: labelSha(a.label), size: Number.isSafeInteger(a.size) ? a.size : null, source: null };
 }
 
 /**
  * The snapshots really on the release, with what the manifest knows of them.
- * @returns {{ entries: object[], dropped: string[], added: string[] }}
+ * `entries` are the manifest's (verified when they were written); `unknown`
+ * are snapshot assets the manifest does not list, which must be downloaded
+ * and verified before they are trusted.
+ * @returns {{ entries: object[], unknown: object[], dropped: string[] }}
  */
 export function reconcile(manifest, assets) {
   const known = new Map((manifest?.snapshots ?? []).map((e) => [e.name, e]));
   const entries = [];
-  const added = [];
+  const unknown = [];
   const present = new Set();
   for (const a of assets ?? []) {
-    const parsed = parseSnapshotName(a.name);
-    if (!parsed || !uploaded(a)) continue;
+    if (!parseSnapshotName(a.name) || !uploaded(a)) continue;
     present.add(a.name);
     const k = known.get(a.name);
-    if (k) {
-      entries.push({ ...k, asset_id: a.id });
-      continue;
-    }
-    added.push(a.name);
-    entries.push({ name: a.name, asset_id: a.id, created: parsed.created, sha256: labelSha(a.label), size: a.size ?? null, source: null });
+    if (k) entries.push({ ...k, asset_id: a.id });
+    else unknown.push(a);
   }
   const dropped = [...known.keys()].filter((n) => !present.has(n));
-  return { entries: entries.sort(byNewest), dropped, added };
+  return { entries: entries.sort(byNewest), unknown, dropped };
+}
+
+/**
+ * Download each unknown snapshot asset and verify it against its own name and
+ * label. A verified one is adopted. One that fails verification is deleted
+ * (no manifest names it, so nothing relies on it); one that cannot be
+ * downloaded is left for the next run. Neither is ever used for dedupe.
+ */
+export async function adoptOrphans({ gh, unknown, log = () => {} }) {
+  const adopted = [];
+  const deleted = [];
+  const skipped = [];
+  for (const a of unknown) {
+    const entry = orphanEntry(a);
+    let bytes;
+    try {
+      bytes = await gh.download(a);
+    } catch (err) {
+      skipped.push(a.name);
+      log(`state-snapshot: could not read ${a.name}, which the manifest does not list; leaving it for the next run (${err?.message ?? err})`);
+      continue;
+    }
+    const v = verifySnapshot(bytes, entry);
+    if (v.ok) {
+      adopted.push(entry);
+      continue;
+    }
+    deleted.push(a.name);
+    log(`state-snapshot: ${a.name} is not in the manifest and fails verification (${v.reason}); deleting it`);
+    await gh.deleteAsset(a.id);
+  }
+  return { adopted, deleted, skipped };
 }
 
 export function buildManifest({ repo, entries, currentAt, now }) {
@@ -224,6 +319,7 @@ async function readManifest(gh, assets, log) {
   if (!a) return null;
   const parsed = parseManifest((await gh.download(a)).toString('utf8'));
   if (!parsed) log(`state-snapshot: ${MANIFEST} could not be read; rebuilding it from the assets`);
+  else if (parsed.rejected) log(`state-snapshot: left out ${parsed.rejected} malformed ${MANIFEST} entr${parsed.rejected === 1 ? 'y' : 'ies'}; their assets are verified again`);
   return parsed;
 }
 
@@ -247,6 +343,10 @@ export async function runSnapshot({ gh, now = Date.now, log = () => {} }) {
     log('state-snapshot: there is no state asset; nothing to copy');
     return { status: 'absent' };
   }
+  if (copy.status === 'busy') {
+    log(`state-snapshot: the pump replaced the state asset during each of ${copy.tries} copies; no snapshot this run, the next run tries again`);
+    return { status: 'busy', why: copy.why, copy_tries: copy.tries };
+  }
   const t = now();
   let release = await gh.getRelease(SNAPSHOT_TAG);
   if (!release) {
@@ -258,9 +358,18 @@ export async function runSnapshot({ gh, now = Date.now, log = () => {} }) {
   }
   let assets = await gh.listAssets(release);
   const manifest = await readManifest(gh, assets, log);
-  const { entries, dropped, added } = reconcile(manifest, assets);
+  const { entries: listed, unknown, dropped } = reconcile(manifest, assets);
   if (dropped.length) log(`state-snapshot: the manifest listed ${dropped.length} snapshot(s) no longer on the release: ${dropped.join(', ')}`);
-  if (added.length) log(`state-snapshot: added ${added.length} snapshot(s) the manifest did not list: ${added.join(', ')}`);
+  const orphans = await adoptOrphans({ gh, unknown, log });
+  if (orphans.adopted.length) log(`state-snapshot: added ${orphans.adopted.length} verified snapshot(s) the manifest did not list: ${orphans.adopted.map((e) => e.name).join(', ')}`);
+  const gone = new Set(orphans.deleted);
+  assets = assets.filter((a) => !gone.has(a.name));
+  // A snapshot dated in the future would stay "newest" for good and break
+  // dedupe; it is left out (and left alone) until its time has passed.
+  const future = (e) => Date.parse(e.created) > t + FUTURE_SLACK_MS;
+  const all = [...listed, ...orphans.adopted];
+  for (const e of all.filter(future)) log(`state-snapshot: ${e.name} is dated in the future; leaving it out`);
+  const entries = all.filter((e) => !future(e)).sort(byNewest);
 
   let status = 'unchanged';
   let made = newest(entries);
@@ -268,10 +377,16 @@ export async function runSnapshot({ gh, now = Date.now, log = () => {} }) {
     const name = snapshotName(t, copy.sha256);
     const label = `sha256:${copy.sha256}`;
     const up = await gh.upload(release, name, copy.bytes, label);
-    const entry = { name, asset_id: up.id, created: new Date(t).toISOString().replace(/\.\d+Z$/, 'Z'), sha256: copy.sha256, size: copy.bytes.length, source: copy.source };
+    const entry = { name, asset_id: up.id, created: parseSnapshotName(name).created, sha256: copy.sha256, size: copy.bytes.length, source: copy.source };
     // Read it back: a snapshot that cannot be restored is worse than none.
-    const back = await gh.download(up);
-    const v = verifySnapshot(back, entry);
+    // Any failure deletes the upload; if even that fails, the next run finds
+    // an unlisted asset and verifies it before trusting it.
+    let v;
+    try {
+      v = verifySnapshot(await gh.download(up), entry);
+    } catch (err) {
+      v = { ok: false, reason: `read-back failed: ${err?.message ?? err}` };
+    }
     if (!v.ok) {
       await gh.deleteAsset(up.id).catch(() => {});
       throw new Error(`the uploaded snapshot ${name} did not read back intact (${v.reason}); deleted it`);
@@ -302,6 +417,7 @@ export async function runSnapshot({ gh, now = Date.now, log = () => {} }) {
 function summary(r) {
   const lines = ['### State snapshot', ''];
   if (r.status === 'absent') return [...lines, 'There is no state asset yet; nothing was copied.', ''].join('\n');
+  if (r.status === 'busy') return [...lines, `The pump replaced the state asset during each of ${r.copy_tries} copies, so no snapshot was taken this run. The next run tries again.`, ''].join('\n');
   lines.push(
     r.status === 'snapshotted' ? `Saved \`${r.snapshot}\`.` : `The state is unchanged since \`${r.snapshot}\`; nothing uploaded.`,
     '',
@@ -315,7 +431,7 @@ function summary(r) {
   return lines.join('\n');
 }
 
-export async function main(argv = process.argv.slice(2), env = process.env) {
+export async function main(argv = process.argv.slice(2), env = process.env, { gh: injected } = {}) {
   let repo = env.GITHUB_REPOSITORY;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--repo') repo = argv[++i];
@@ -327,10 +443,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const token = env.GITHUB_TOKEN || undefined;
   const log = (m) => process.stderr.write(`${token ? String(m).split(token).join('***') : m}\n`);
   try {
-    if (!token) throw new Error('GITHUB_TOKEN is required');
-    const gh = createReleaseClient({ repo, token, apiUrl: env.GITHUB_API_URL, log });
+    if (!token && !injected) throw new Error('GITHUB_TOKEN is required');
+    const gh = injected ?? createReleaseClient({ repo, token, apiUrl: env.GITHUB_API_URL, log });
     const r = await runSnapshot({ gh, log });
     process.stdout.write(`${JSON.stringify(r)}\n`);
+    // Losing the race with the pump is not a failure (R-SNAP-15): a notice,
+    // exit 0, and the health item reports it if it keeps happening.
+    if (r.status === 'busy' && env.GITHUB_ACTIONS === 'true') process.stdout.write('::notice title=state-snapshot::the pump replaced the state asset during every copy; no snapshot this run\n');
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary(r));
     return 0;
   } catch (err) {

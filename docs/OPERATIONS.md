@@ -263,9 +263,17 @@ versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
 - **Copy check.** The run downloads the live asset, checks the bytes against
   its `sha256:` label, and checks the asset is still the same one (id, label,
   `updated_at`) after the download. If the pump pushed in between, it copies
-  once more, then gives up until the next run. It refuses an asset with no
-  label or that is not age ciphertext. Each new snapshot is downloaded back
-  and checked before the manifest names it.
+  once more; if it loses that race again, the run ends with a notice (exit 0)
+  and the next run tries again (the health item turns amber if this goes on).
+  It refuses an asset with no label or that is not age ciphertext. Each new
+  snapshot is downloaded back and checked before the manifest names it; if the
+  read-back fails in any way, the upload is deleted.
+- **Trust.** Only verified snapshots count, for dedupe and as "newest". A
+  snapshot asset the manifest does not list (a lost manifest, a delete that
+  failed) is downloaded and checked against its name and label first: added
+  back if it passes, deleted if it fails, left for the next run if it cannot be
+  read. Malformed manifest entries are left out, a snapshot's time always comes
+  from its name, and one dated in the future is ignored.
 - **Dedupe.** If the newest snapshot already has the live sha256, nothing is
   uploaded; only `current_at` in the manifest moves on.
 - **Retention.** The 48 newest snapshots, plus the newest snapshot of each UTC
@@ -278,8 +286,10 @@ versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
   stopped the state does not change, so nothing is lost.
 
 **Health.** The watchdog reads the manifest and shows a `state-snapshot` check
-on the health issue: amber when `current_at` is more than 3 hours old (or there
-is no snapshot yet), red after 6 hours ("The loop health issue" below).
+on the health issue: amber when `current_at` is more than 3 hours old, when
+there is no snapshot yet, when the release or its manifest is missing or
+unreadable, or when `current_at` is more than 5 minutes in the future; red after
+6 hours ("The loop health issue" below).
 
 **Restore drill.** [`snapshot/restore.mjs`](../snapshot/restore.mjs), on an
 operator's machine with age installed and the state identity (default
@@ -296,7 +306,9 @@ node snapshot/restore.mjs drill --snapshot state-20261124T034100Z-6e511772.sqlit
 manifest, decrypts it into a private temporary directory, checks that SQLite
 opens it and that `PRAGMA integrity_check` says `ok`, and prints the schema
 version, the fence counter and the row count of every table (subjects and
-results first). The decrypted copy is deleted before it exits. It needs no
+results first). The decrypted copy is deleted before it exits. If the manifest
+is lost, `list` still shows the snapshot assets (marked as not in the
+manifest), and `drill --snapshot <name>` checks one against its own label. It needs no
 token for a public repository (it uses `GITHUB_TOKEN` or `gh auth token` if
 there is one). Run it after any change to the state code, and now and then
 anyway: a backup nobody has restored is a hope, not a backup.
@@ -304,17 +316,21 @@ anyway: a backup nobody has restored is a hope, not a backup.
 **Restore for real** (`drill --apply`). First stop the pump: set
 `LANE_PUMP_ENABLED=false` (or `LOOP_ENABLED`, or `LOOP_PAUSE_UNTIL` at least 10
 minutes ahead) and wait until no `pump` or `ingest` run is queued or running.
-`--apply` checks both and refuses otherwise; it needs a token that can write
-releases and read repository variables (`gh auth token` of an admin). It then:
+`--apply` checks both and refuses otherwise. It reads the switches as the pump
+job sees them (environment `loop`, then the repository, then the organization
+variables shared with it); if any of those reads fails, it refuses. It also
+refuses while a `state-snapshot` run has not finished. It needs a token that
+can write releases and read variables (`gh auth token` of an admin). It then:
 
 1. takes a normal snapshot of the live state, so the restore can be undone (if
    the live asset cannot be copied, it says so and goes on);
 2. uploads the chosen snapshot's ciphertext, unchanged, under a temporary name;
 3. checks the live asset is still the one it saw, and stops without changing
    anything if not;
-4. renames the old `state.sqlite` to `state.sqlite.replaced-<time>` (the pump
-   never reads that name; delete it by hand once you no longer need it) and
-   renames the upload to `state.sqlite`.
+4. renames the live asset, whatever its name (after an interrupted push it is
+   a `state.sqlite.upload-*`), to `state.sqlite.replaced-<time>` (the pump
+   never reads that name; delete it by hand once you no longer need it),
+   deletes any other stale uploads, and renames the upload to `state.sqlite`.
 
 Then switch the pump back on. Its next run pulls the restored state. Work the
 loop did after the snapshot is not in it: dispatches sent since then are

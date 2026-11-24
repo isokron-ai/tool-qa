@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  KEEP_DAYS, KEEP_RECENT, copyStateAsset, isUnchanged, parseSnapshotName, reconcile, runSnapshot, selectRetention,
-  snapshotName, verifySnapshot,
+  KEEP_DAYS, KEEP_RECENT, copyStateAsset, isUnchanged, main, parseManifest, parseSnapshotName, reconcile, runSnapshot,
+  selectRetention, snapshotName, verifySnapshot,
 } from '../snapshot.mjs';
 import { createReleaseClient } from '../github.mjs';
 import { cipher, fakeGh, sha } from './fake-github.mjs';
@@ -224,7 +224,7 @@ test('R-SNAP-05: a lost manifest is rebuilt from the snapshot assets, and a stal
   assert.equal(r.status, 'unchanged', 'the rebuilt manifest still dedupes on the label sha256');
   const m = f.manifestOf();
   assert.equal(m.snapshots.length, 2);
-  assert.ok(logs.some((l) => /added 2 snapshot/.test(l)));
+  assert.ok(logs.some((l) => /added 2 verified snapshot/.test(l)));
   for (const s of m.snapshots) assert.equal(s.sha256.length, 64);
 
   // A manifest entry whose asset is gone is dropped.
@@ -273,4 +273,142 @@ test('the release client sends the token to the API only, never to the storage h
   assert.equal(seen[1].auth, null);
   const failing = createReleaseClient({ repo: 'o/r', token: 'tok123', fetch: async () => new Response('bad tok123', { status: 403 }) });
   await assert.rejects(failing.getRelease('state'), (err) => !String(err.message).includes('tok123'));
+});
+
+test('R-SNAP-10: an asset the manifest does not list is verified before it is adopted; one that fails is deleted and never used for dedupe', async () => {
+  const f = fakeGh();
+  let t = T0;
+  f.pushState(cipher('A'));
+  await runSnapshot({ gh: f.gh, now: () => t });
+  // A leftover upload claims to hold state B (name and label), but its bytes are not B.
+  const B = cipher('B');
+  const orphan = f.addAsset('state-snapshots', snapshotName(t + 60_000, sha(B)), cipher('not B'), `sha256:${sha(B)}`);
+  f.pushState(B);
+  t += HOUR;
+  const logs = [];
+  const r = await runSnapshot({ gh: f.gh, now: () => t, log: (m) => logs.push(m) });
+  assert.equal(r.status, 'snapshotted', 'the unverified orphan did not make B look already saved');
+  assert.equal(r.sha256, sha(B));
+  assert.ok(!f.assetsOf('state-snapshots').some((a) => a.id === orphan.id), 'the bad orphan is deleted');
+  assert.ok(logs.some((l) => /fails verification .*deleting it/.test(l)));
+  const m = f.manifestOf();
+  assert.deepEqual(m.snapshots.map((s) => s.sha256), [sha(B), sha(cipher('A'))]);
+  assert.ok(m.snapshots.every((s) => s.name !== orphan.name));
+});
+
+test('R-SNAP-10: an unlisted asset that cannot be downloaded is left alone and not trusted', async () => {
+  const f = fakeGh();
+  f.pushState(cipher('A'));
+  await runSnapshot({ gh: f.gh, now: () => T0 });
+  const B = cipher('B');
+  const orphan = f.addAsset('state-snapshots', snapshotName(T0 + 60_000, sha(B)), B, `sha256:${sha(B)}`);
+  f.pushState(B);
+  f.gh.hooks.beforeDownload = (a) => { if (a.id === orphan.id) throw new Error('HTTP 502'); };
+  const r = await runSnapshot({ gh: f.gh, now: () => T0 + HOUR });
+  assert.equal(r.status, 'snapshotted');
+  assert.ok(f.assetsOf('state-snapshots').some((a) => a.id === orphan.id), 'not deleted on a read error');
+  assert.ok(!f.manifestOf().snapshots.some((s) => s.name === orphan.name), 'not adopted either');
+  // Next run it reads fine, verifies and is adopted.
+  f.gh.hooks.beforeDownload = null;
+  await runSnapshot({ gh: f.gh, now: () => T0 + 2 * HOUR });
+  assert.ok(f.manifestOf().snapshots.some((s) => s.name === orphan.name));
+});
+
+test('R-SNAP-10: a read-back that throws deletes the upload and fails the run', async () => {
+  const f = fakeGh();
+  f.pushState(cipher('A'));
+  f.gh.hooks.beforeDownload = (a) => {
+    const x = f.assetsOf('state-snapshots').find((y) => y.id === a.id);
+    if (x && x.name.startsWith('state-')) throw new Error('socket hang up');
+  };
+  await assert.rejects(runSnapshot({ gh: f.gh, now: () => T0 }), /did not read back intact \(read-back failed: socket hang up\); deleted it/);
+  assert.equal(f.assetsOf('state-snapshots').filter((a) => a.name.startsWith('state-')).length, 0);
+});
+
+test('R-SNAP-12: malformed manifest entries are left out, created always comes from the name, and a run does not crash on them', async () => {
+  const s = sha(cipher('A'));
+  const good = { name: snapshotName(T0, s), sha256: s, size: 5, created: '2099-01-01T00:00:00Z', asset_id: 1, source: null };
+  const parsed = parseManifest(JSON.stringify({
+    version: 1,
+    current_at: 'not a time',
+    snapshots: [null, 7, 'x', [], { name: 'state.sqlite', sha256: s }, { ...good, sha256: 'z'.repeat(64) },
+      { ...good, sha256: sha(Buffer.from('other')) }, good, { ...good }],
+  }));
+  assert.equal(parsed.snapshots.length, 1);
+  assert.equal(parsed.rejected, 8);
+  assert.equal(parsed.snapshots[0].created, parseSnapshotName(good.name).created, 'not the 2099 date the manifest claimed');
+  assert.equal(parsed.current_at, null);
+  assert.equal(parseManifest('{"version":1,"snapshots":{}}'), null);
+  assert.equal(parseManifest('null'), null);
+
+  // A run over a manifest full of junk still works and rewrites it clean.
+  const f = fakeGh();
+  f.pushState(cipher('A'));
+  await runSnapshot({ gh: f.gh, now: () => T0 });
+  const man = f.assetsOf('state-snapshots').find((a) => a.name === 'manifest.json');
+  const m = f.manifestOf();
+  m.snapshots.push(null, null, { name: 'junk' });
+  m.snapshots[0].created = '2099-01-01T00:00:00Z';
+  f.blobs.set(man.id, Buffer.from(JSON.stringify(m)));
+  f.pushState(cipher('B'));
+  const r = await runSnapshot({ gh: f.gh, now: () => T0 + HOUR });
+  assert.equal(r.status, 'snapshotted', 'the entry that claimed 2099 does not pin itself as newest');
+  const after = f.manifestOf();
+  assert.equal(after.snapshots.length, 2);
+  assert.equal(after.snapshots[0].sha256, sha(cipher('B')));
+});
+
+test('R-SNAP-12: a snapshot asset named in the future is left out of dedupe and retention', async () => {
+  const f = fakeGh();
+  const A = cipher('A');
+  f.addAsset('state-snapshots', snapshotName(T0 + 400 * DAY, sha(A)), A, `sha256:${sha(A)}`);
+  f.pushState(A);
+  const logs = [];
+  const r = await runSnapshot({ gh: f.gh, now: () => T0, log: (m) => logs.push(m) });
+  assert.equal(r.status, 'snapshotted', 'not "unchanged" because of a future-dated copy');
+  assert.ok(logs.some((l) => /dated in the future; leaving it out/.test(l)));
+  assert.equal(f.manifestOf().snapshots.length, 1);
+});
+
+test('R-SNAP-15: losing the race with the pump on both tries is a notice and exit 0, not a failed run', async () => {
+  const f = fakeGh();
+  f.pushState(cipher('g0'));
+  let n = 0;
+  f.gh.hooks.afterDownload = (asset, out) => {
+    const a = f.assetsOf('state').find((x) => x.id === asset.id);
+    if (a && a.name === 'state.sqlite') f.pushState(cipher(`g${++n}`));
+    return out;
+  };
+  const r = await runSnapshot({ gh: f.gh, now: () => T0 });
+  assert.equal(r.status, 'busy');
+  assert.equal(r.copy_tries, 2);
+  assert.equal(f.gh.calls.filter((c) => c[0] === 'upload').length, 0);
+
+  // The download of an asset the pump just deleted (404) is the same race.
+  const g = fakeGh();
+  g.pushState(cipher('h0'));
+  g.gh.hooks.beforeDownload = (asset) => {
+    const a = g.assetsOf('state').find((x) => x.id === asset.id);
+    if (a) {
+      g.pushState(cipher(`h${asset.id}`));
+      throw new Error('GitHub GET asset failed: HTTP 404');
+    }
+  };
+  assert.equal((await runSnapshot({ gh: g.gh, now: () => T0 })).status, 'busy');
+
+  const out = [];
+  const write = process.stdout.write;
+  process.stdout.write = (chunk) => { out.push(String(chunk)); return true; };
+  const errWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  let code;
+  try {
+    n = 100;
+    code = await main([], { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'isokron-ai/tool-qa' }, { gh: f.gh });
+  } finally {
+    process.stdout.write = write;
+    process.stderr.write = errWrite;
+  }
+  assert.equal(code, 0);
+  assert.ok(out.some((l) => l.startsWith('::notice title=state-snapshot::')));
 });
