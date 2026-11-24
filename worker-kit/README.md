@@ -94,11 +94,20 @@ action for it:
   (30, 60, then 120 minutes, `retry_backoff_minutes` in `pump/tiers.json`).
   After three `retry_later` decisions for the same run_key, the next such
   bundle is accepted with its skips. When every skip is `rate_limited` or
-  `upstream_unavailable`, the item is rejected as `retry_throttled` instead:
+  `upstream_unavailable` from a stage the lane lists in `throttle_stages`
+  (`pump/workflows.json`), the item is rejected as `retry_throttled` instead:
   those do not count towards the three, and the item is sent out again
   (backoff capped at 6 hours) for up to 7 days after its first throttled
   retry. A bundle with at least one skip that is not retryable is judged as
   before.
+- **Name the stage honestly.** Give a skip the stage that failed. Report a
+  rate limit or outage of a third party (a registry, a search API, GitHub's
+  shared token budget) under that third party's own stage, which the lane can
+  declare as throttling. Report a failure of the subject itself (its own
+  fetch timing out, a server under test that hangs, crashes or answers 5xx)
+  under the subject's own stage (for example `fetch` or `probe`), which is
+  never declared, so it uses the counted retries and cannot keep itself out
+  of them. If the stage cannot tell the two apart, treat it as the subject's.
 - `controls[].kind` is `known_good`, `known_bad`, `malicious`,
   `protocol_variant` or `forgery`; `expected` and `observed` are short labels
   such as `contained` (lower case letters, digits, `_`). Ingest rejects the bundle unless every

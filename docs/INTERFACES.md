@@ -186,15 +186,21 @@ such attempt: `attempt_id`, `workflow`, `repo`, `workflow_file` (a path under
 item in dispatch order:
 `{ index, run_key, fence, subject, current_fence, outcome, resolved }`.
 `retries` is the number of `retry_later` decisions for the item's run_key
-since its last accepted result (`db.retryLaterCount(runKey)`); `throttled` and
-`throttled_since` are the number and first time of its `retry_throttled`
-decisions since then (`db.retryThrottled(runKey)`).
+since its last accepted result that measured something (`results.measured_at`;
+a `skips_only` result does not reset it, R-SUB-08) (`db.retryLaterCount(runKey)`);
+`throttled` and `throttled_since` are the number and first time of its
+`retry_throttled` decisions since then (`db.retryThrottled(runKey)`). The row
+also has `workflow`, the lane name, which ingest uses to look up the lane's
+`throttle_stages` (R-SUB-09).
 
 `recordResult` also takes `resultOutcome`, what the results row stores as its
 outcome when the result is accepted (default: `outcome`). Ingest passes
-`skips_only` for a bundle with no observation records whose every skip is
-retryable (its retries ran out); the due list
-looks at such a result again after `skips_only_max_age_days` (R-SUB-06).
+`skips_only` for a bundle whose every skip is retryable (its retries ran out)
+and that measured nothing: no observation with a value and no `results/` file
+other than a skip's `evidence` (R-SUB-10). The due list looks at such a
+result again after `skips_only_max_age_days`, doubling for each one in a row,
+at most the tier max age (R-SUB-06, R-SUB-08). The results row keeps
+`measured_at` and counts `skips_streak` for this.
 
 `index` is the item's 0-based position in the `items` input the worker got,
 which names its result artifact; `current_fence` is the fence of the
@@ -256,7 +262,7 @@ an earlier rejection into an acceptance.
 | `fence_mismatch` | The fence is not the one sent with this run_key. | no |
 | `duplicate_result` | This item is already resolved without a recorded decision for this fence (not expected; repeats of a recorded decision return it with `duplicate: true` instead). | no |
 | `stale_fence` | A newer lease exists; the work was sent out again. | no |
-| `retry_throttled` | Every skip in the bundle is a retryable `rate_limited` or `upstream_unavailable`: the item is sent out again after the same backoff, capped at `retry_backoff_max_minutes`, for as long as 7 days after its run_key's first throttled retry (ingest `RETRY_WINDOW_MS`); not counted towards the three `retry_later` retries, which since R-SUB-04 are for other retryable skips only. Then the bundle is accepted with its skips. | no |
+| `retry_throttled` | Every skip in the bundle is a retryable `rate_limited` or `upstream_unavailable` from a stage the lane declares in `throttle_stages` (`pump/workflows.json`; never the subject's own fetch or probe, R-SUB-09): the item is sent out again after the same backoff, capped at `retry_backoff_max_minutes`, for as long as 7 days after its run_key's first throttled retry (ingest `RETRY_WINDOW_MS`); not counted towards the three `retry_later` retries, which since R-SUB-04 are for other retryable skips only. Then the bundle is accepted with its skips. | no |
 | `lease_expired`, `lease_released`, `no_lease`, `unknown_fence`, `holder_mismatch` | The lease is not live any more. | yes |
 | `run_sha_mismatch` | The worker run was at another commit than the one recorded at dispatch: the worker branch moved between the pump reading it and GitHub starting the run, or someone else's run took the shard's run name. The work is due again. Three such dispatches of one workflow in a row pause that workflow for six hours (`pump.paused:<workflow>` below). | no |
 | `retry_later` | Every skip in the bundle is retryable (a rate limit, an upstream outage): the item is sent out again after a backoff (`retry_backoff_minutes` in `pump/tiers.json`, doubled for each retry), at most three times per run_key, then the bundle is accepted with its skips. | no |

@@ -10,8 +10,8 @@
 //                  probe, image or settings versions.
 //   skips_only     the last result was accepted but held no records and only
 //                  retryable skips whose retries ran out, and is older than
-//                  skips_only_max_age_days (R-SUB-06), sooner than the
-//                  tier's max age.
+//                  skips_only_max_age_days x 2^(n-1) for the n-th such result
+//                  in a row, at most the tier's max age (R-SUB-06, R-SUB-08).
 //   change_event   a change event (release, new SHA, advisory) arrived after the
 //                  pair's last result.
 //   stale          the last result is older than the tier's max age for the
@@ -108,6 +108,19 @@ export function maxAgeDays(cell, subject, tiers, tierName) {
   return null;
 }
 
+/**
+ * How long a skips_only result waits before it is due again (R-SUB-06,
+ * R-SUB-08): skips_only_max_age_days x 2^(n-1) for the n-th skips_only result
+ * in a row, at most the cell's max age. null when the result is not skips_only.
+ */
+export function skipsOnlyWaitDays(last, tiers, maxAge) {
+  const base = Number(tiers?.skips_only_max_age_days);
+  if (last?.outcome !== 'skips_only' || !Number.isFinite(base)) return null;
+  const n = Math.max(1, Math.trunc(Number(last.skips_streak)) || 1);
+  const days = base * 2 ** Math.min(20, n - 1);
+  return maxAge === null ? days : Math.min(days, maxAge);
+}
+
 function whyNoResult(fields, last) {
   if (!last) return 'first_sight';
   const prev = last.fields || {};
@@ -163,8 +176,8 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
         if (reasons.length === 0 && last && maxAge !== null && now - toMs(last.accepted_at) > maxAge * DAY_MS) {
           reasons.push('stale');
         }
-        const skipsDays = Number(tiers.skips_only_max_age_days);
-        if (reasons.length === 0 && last?.outcome === 'skips_only' && Number.isFinite(skipsDays) && now - toMs(last.accepted_at) > skipsDays * DAY_MS) {
+        const skipsDays = skipsOnlyWaitDays(last, tiers, maxAge);
+        if (reasons.length === 0 && skipsDays !== null && now - toMs(last.accepted_at) > skipsDays * DAY_MS) {
           reasons.push('skips_only');
         }
       }
@@ -200,7 +213,7 @@ export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
     const prev = lastResults.get(pk);
     if (prev && prev.accepted_at >= r.accepted_at) continue;
     const rk = db.getRunKey(r.run_key);
-    lastResults.set(pk, { run_key: r.run_key, accepted_at: r.accepted_at, outcome: r.outcome ?? null, fields: rk ? JSON.parse(rk.fields) : {} });
+    lastResults.set(pk, { run_key: r.run_key, accepted_at: r.accepted_at, outcome: r.outcome ?? null, skips_streak: r.skips_streak ?? 0, fields: rk ? JSON.parse(rk.fields) : {} });
   }
   const inFlight = new Set(db.inFlight({ now }).map((p) => pairKey(p.subject, p.workflow)));
   const maxRejections = Number.isInteger(tiers.max_rejections) && tiers.max_rejections > 0 ? tiers.max_rejections : 3;

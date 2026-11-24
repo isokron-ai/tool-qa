@@ -187,6 +187,7 @@ test('R-SUB-01: the pump loads the seed at start-up, before the first tick, and 
     await runPump(opts);
     assert.ok(lines.some((l) => l === 'pump: subjects: seed-v1 already loaded (997 subjects)'), lines.join('\n'));
     db = openState(stateFile);
+    assert.equal(db.getKv('pump.subjects').ok, true);
     assert.deepEqual(db.listSubjects(), before);
     db.close();
 
@@ -197,6 +198,9 @@ test('R-SUB-01: the pump loads the seed at start-up, before the first tick, and 
     assert.ok(lines.some((l) => /^pump: subjects: seed not loaded, subjects left as they were: ENOENT/.test(l)), lines.join('\n'));
     db = openState(stateFile);
     assert.equal(db.listSubjects().length, 997);
+    // What the watchdog's subjects check reads (R-SUB-11).
+    assert.equal(db.getKv('pump.subjects').ok, false);
+    assert.match(db.getKv('pump.subjects').summary, /ENOENT/);
     db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -412,6 +416,55 @@ test('R-SUB-06: a skips_only result (retries ran out) is due again after a day; 
     assert.deepEqual(at(1.1), ['o/skipped skips_only']);
     assert.deepEqual(at(29.9), ['o/skipped skips_only']);
     assert.deepEqual(at(30.1), ['o/measured stale', 'o/permanent stale', 'o/skipped stale']);
+  } finally {
+    s.cleanup();
+    db.close();
+  }
+});
+
+test('R-SUB-08: a subject that is throttled for ever gets one 7-day window, then skips_only re-dues back off: dispatches stay bounded', () => {
+  const cfg = scanStaticConfig();
+  const db = openState(':memory:');
+  const s = tmpSeed([row('o/stuck')]);
+  const HOUR = 3_600_000;
+  const WINDOW = 7 * DAY; // ingest RETRY_WINDOW_MS
+  try {
+    syncSeedSubjects(db, { now: T, file: s.file });
+    const sent = [];
+    const accepted = [];
+    for (let at = T; at < T + 120 * DAY; at += HOUR) {
+      for (const d of dispatchAll(db, cfg, at)) {
+        sent.push(at);
+        // What ingest decides for a bundle whose every skip is throttling (ingest/ingest.mjs).
+        const item = db.getAttempt(d.attemptId).items[0];
+        const since = item.throttled_since ? Date.parse(item.throttled_since) : null;
+        const within = since === null || at + 60_000 - since < WINDOW;
+        db.recordResult({
+          run_key: d.run_key, attempt_id: d.attemptId, fence: d.fence, now: at + 60_000,
+          ...(within ? { outcome: 'rejected', accepted: false, reason: 'retry_throttled' } : { outcome: 'accepted', accepted: true, resultOutcome: 'skips_only' }),
+        });
+        if (!within) accepted.push(at);
+      }
+    }
+    const window = sent.filter((t) => t < T + WINDOW + DAY);
+    assert.ok(window.length >= 25 && window.length <= 35, `about 30 tries in the first window, got ${window.length}`);
+    // After the window, every re-due is one dispatch, accepted at once, each waiting twice as long up to 30 days.
+    const gaps = accepted.slice(1).map((t, i) => Math.round((t - accepted[i]) / DAY));
+    assert.deepEqual(gaps.slice(0, 5), [1, 2, 4, 8, 16]);
+    assert.ok(gaps.slice(5).every((g) => g === 30), gaps.join(','));
+    assert.equal(sent.length, window.length + accepted.length - 1, 'no new window after a skips_only result');
+    assert.ok(sent.length < 45, `${sent.length} dispatches in 120 days`);
+    const r = db.listResults()[0];
+    assert.equal(r.measured_at, null);
+    assert.equal(r.skips_streak, accepted.length);
+
+    // A result that measured something resets the streak and the counters.
+    const [d] = dispatchAll(db, cfg, T + 200 * DAY);
+    db.recordResult({ run_key: d.run_key, attempt_id: d.attemptId, fence: d.fence, outcome: 'accepted', accepted: true, now: T + 200 * DAY + 1000 });
+    const after = db.listResults()[0];
+    assert.equal(after.skips_streak, 0);
+    assert.equal(after.measured_at, new Date(T + 200 * DAY + 1000).toISOString());
+    assert.deepEqual(db.retryThrottled(d.run_key), { throttled: 0, throttled_since: null });
   } finally {
     s.cleanup();
     db.close();

@@ -18,7 +18,7 @@ const SHARED = {
 
 test('normalizeAttempt accepts the documented names and common aliases', () => {
   assert.deepEqual(normalizeAttempt(ROW), {
-    ...SHARED, canaries: [], items: [{ index: 0, run_key: 'a'.repeat(64), fence: 7, current_fence: null, outcome: null, retries: 0, throttled: 0, throttled_since: null }],
+    ...SHARED, workflow_name: null, canaries: [], items: [{ index: 0, run_key: 'a'.repeat(64), fence: 7, current_fence: null, outcome: null, retries: 0, throttled: 0, throttled_since: null }],
   });
   const aliased = normalizeAttempt({
     attempt_id: 'att-1', run_key: 'a'.repeat(64), fencing_no: '7', worker_repo: 'isokron-ai/mcp-check',

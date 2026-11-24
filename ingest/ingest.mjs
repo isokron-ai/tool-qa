@@ -66,7 +66,7 @@
 // Exit codes: 0 a decision was made (any outcome), 1 operational error (nothing
 // was recorded unless stdout said so), 2 usage error.
 
-import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -100,6 +100,24 @@ export const MAX_RETRIES = 3;
  * max age.
  */
 export const RETRY_WINDOW_MS = 7 * 86_400_000;
+
+const laneStages = new Map();
+/**
+ * Each lane's throttle_stages from pump/workflows.json (R-SUB-09): the
+ * third-party stages whose rate limits and outages are throttling. Read once
+ * per file.
+ */
+export function laneThrottleStages(file = new URL('../pump/workflows.json', import.meta.url)) {
+  const key = String(file);
+  if (!laneStages.has(key)) {
+    const out = {};
+    for (const [name, wf] of Object.entries(JSON.parse(readFileSync(file, 'utf8')).workflows ?? {})) {
+      out[name] = Array.isArray(wf?.throttle_stages) ? wf.throttle_stages.filter((x) => typeof x === 'string') : [];
+    }
+    laneStages.set(key, out);
+  }
+  return laneStages.get(key);
+}
 // The size caps live in the result contract (worker-kit/contract.mjs).
 export { MAX_ARTIFACT_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES };
 export const OUTCOME_DIRS = Object.freeze({ accepted: 'accepted', rejected: 'rejected', quarantined: 'quarantine' });
@@ -160,6 +178,7 @@ export async function openAttempt(input, deps) {
     ledger, github, decrypt, registry, now = () => new Date(), allowNoControls = false,
     maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES,
     analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS, maxRetries = MAX_RETRIES, retryWindowMs = RETRY_WINDOW_MS,
+    throttleStages = laneThrottleStages(),
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
 
@@ -387,7 +406,8 @@ export async function openAttempt(input, deps) {
       run_id: runId,
       run_attempt: base.run.run_attempt,
     };
-    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes, maxFileBytes };
+    const stages = row.workflow_name && Array.isArray(throttleStages?.[row.workflow_name]) ? throttleStages[row.workflow_name] : [];
+    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes, maxFileBytes, throttleStages: stages };
     const verdict = await analyze(plaintext, ctx, { timeoutMs: judgeTimeoutMs });
     if (verdict?.timedOut) {
       return reject('ingest_timeout', [{ reason: 'ingest_timeout', detail: `judging took longer than ${judgeTimeoutMs / 1000} s and was stopped` }]);
@@ -424,12 +444,14 @@ export async function openAttempt(input, deps) {
     } catch (err) {
       return reject('ingest_error', [{ reason: 'ingest_error', detail: `reading the accepted bundle failed: ${errorText(err)}` }]);
     }
-    // Every skip retryable (its retries ran out) and no records: nothing was
-    // measured, for a passing reason. The due list looks again after
-    // skips_only_max_age_days (pump/tiers.json), not the tier max age. Any
-    // permanent skip makes it an ordinary result on the tier max age.
+    // Every skip retryable (its retries ran out) and nothing measured: no
+    // observation with a value and no results/ file beyond a skip's evidence
+    // (R-SUB-10). The due list looks again after skips_only_max_age_days
+    // (pump/tiers.json), backing off, not the tier max age. Any permanent skip
+    // makes it an ordinary result on the tier max age.
     const skips = Number(report.bundle?.skips);
-    if (skips > 0 && Number(report.bundle?.retryable_skips) === skips && Number(report.observations?.records) === 0) resultOutcome = 'skips_only';
+    if (skips > 0 && Number(report.bundle?.retryable_skips) === skips
+      && Number(report.observations?.measured) === 0 && Number(report.bundle?.result_files) === 0) resultOutcome = 'skips_only';
     return finish('accepted', null);
   }
 
@@ -470,6 +492,7 @@ function checkRun(run, row, seen) {
  * @param {number} [deps.maxFileBytes]
  * @param {number} [deps.maxRetries]  retry_later decisions per run_key before a retryable bundle is kept
  * @param {number} [deps.retryWindowMs]  how long a throttled bundle keeps being sent back (retry_throttled)
+ * @param {Record<string, string[]>} [deps.throttleStages]  lane -> throttle_stages (default: pump/workflows.json)
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
  *   outcome and reason are the items' own when they all agree; otherwise outcome

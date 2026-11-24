@@ -136,11 +136,14 @@ const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
  * Errors name the file, line, reason and field, never the observed value.
  * Reasons: observation_format, undeclared_field, deprecated_field, field_type.
  * @param {Map<string, Buffer>|Iterable<[string, Buffer]>} files
- * @returns {{ok: boolean, errors: object[], records: number, truncated?: true}}
+ * measured counts the records with a value (not null): what was actually
+ * measured (R-SUB-10).
+ * @returns {{ok: boolean, errors: object[], records: number, measured: number, truncated?: true}}
  */
 export function validateObservations(files, registry, { maxErrors = 50 } = {}) {
   const errors = [];
   let records = 0;
+  let measured = 0;
   let truncated = false;
   const add = (e) => {
     if (errors.length < maxErrors) errors.push(e);
@@ -212,9 +215,10 @@ export function validateObservations(files, registry, { maxErrors = 50 } = {}) {
         continue;
       }
       records++;
+      measured++;
     }
   }
-  const out = { ok: errors.length === 0 && !truncated, errors, records };
+  const out = { ok: errors.length === 0 && !truncated, errors, records, measured };
   if (truncated) out.truncated = true;
   return out;
 }

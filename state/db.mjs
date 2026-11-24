@@ -23,7 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 export const MAX_SLOTS = 15;
 /** How far apart one tick's dispatches may be created and still count as one burst (R-ING-26). */
 export const SHA_BURST_MS = 30_000;
@@ -34,6 +34,7 @@ const MIGRATIONS = [
   { version: 3, sql: () => readFileSync(new URL('./schema-v3.sql', import.meta.url), 'utf8') },
   { version: 4, sql: () => readFileSync(new URL('./schema-v4.sql', import.meta.url), 'utf8') },
   { version: 5, sql: () => readFileSync(new URL('./schema-v5.sql', import.meta.url), 'utf8') },
+  { version: 6, sql: () => readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -564,8 +565,9 @@ export class StateDb {
    * item's run_key lease now (a newer one means the item is stale). outcome is
    * null until a result for this attempt, run_key and fence is recorded.
    * retries is how many retry_later decisions the run_key has had since its
-   * last accepted result (retryLaterCount); throttled and throttled_since are
-   * the count and first time of its retry_throttled decisions since then
+   * last accepted result that measured something (retryLaterCount); throttled
+   * and throttled_since are the count and first time of its retry_throttled
+   * decisions since then
    * (retryThrottled; R-SUB-04).
    * canaries is always empty for now (none are injected yet). When they are,
    * they live only here, in the state database, which is stored encrypted
@@ -699,12 +701,17 @@ export class StateDb {
         this.raw.prepare('UPDATE dispatch_items SET resolved = ? WHERE attempt_id = ? AND run_key = ?').run(t, attemptId, runKey);
         this.releaseLease(runKey, attemptId, fence, { now });
         if (ok) {
+          // A skips_only result keeps measured_at, so the retry counters run on (R-SUB-08).
+          const final = resultOutcome ?? outcome;
+          const skipsOnly = final === 'skips_only';
           this.raw.prepare(`
-            INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, digest, accepted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, digest, accepted_at, measured_at, skips_streak)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (run_key) DO UPDATE SET attempt_id = excluded.attempt_id, fence = excluded.fence,
-              outcome = excluded.outcome, digest = excluded.digest, accepted_at = excluded.accepted_at
-          `).run(runKey, item.subject, item.workflow, attemptId, fence, resultOutcome ?? outcome, digest, t);
+              outcome = excluded.outcome, digest = excluded.digest, accepted_at = excluded.accepted_at,
+              measured_at = CASE WHEN excluded.outcome IS 'skips_only' THEN results.measured_at ELSE excluded.accepted_at END,
+              skips_streak = CASE WHEN excluded.outcome IS 'skips_only' THEN results.skips_streak + 1 ELSE 0 END
+          `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0);
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {
@@ -752,19 +759,27 @@ export class StateDb {
 
   // ---- retry_later ----
 
-  /** retry_later decisions for a run_key since its last accepted result. */
+  /**
+   * retry_later decisions for a run_key since its last accepted result that
+   * measured something (results.measured_at): a skips_only result does not
+   * start the count over (R-SUB-08).
+   */
   retryLaterCount(runKey) {
     return this.raw.prepare(`
       SELECT COUNT(*) AS n FROM attempts WHERE run_key = ? AND reason = 'retry_later'
-        AND received > COALESCE((SELECT accepted_at FROM results WHERE run_key = ?), '')
+        AND received > COALESCE((SELECT measured_at FROM results WHERE run_key = ?), '')
     `).get(runKey, runKey).n;
   }
 
-  /** retry_throttled decisions for a run_key since its last accepted result: {throttled, throttled_since}. */
+  /**
+   * retry_throttled decisions for a run_key since its last accepted result that
+   * measured something: {throttled, throttled_since}. A skips_only result does
+   * not open a new window (R-SUB-08).
+   */
   retryThrottled(runKey) {
     const r = this.raw.prepare(`
       SELECT COUNT(*) AS n, MIN(received) AS first FROM attempts WHERE run_key = ? AND reason = 'retry_throttled'
-        AND received > COALESCE((SELECT accepted_at FROM results WHERE run_key = ?), '')
+        AND received > COALESCE((SELECT measured_at FROM results WHERE run_key = ?), '')
     `).get(runKey, runKey);
     return { throttled: Number(r.n), throttled_since: r.first ?? null };
   }
