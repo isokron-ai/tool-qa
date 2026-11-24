@@ -476,9 +476,12 @@ run, inside the pump (the one writer), before the first tick. The log line is
   version are kept in kv as `subjects.seed`. When both match, nothing is
   written (`pump: subjects: seed-v1 already loaded (997 subjects)`).
   Otherwise every seed subject is upserted in one transaction.
-- **What is written.** id `owner/name` (what the scan-static worker takes),
-  kind `github`, source `seed-v1` (set when the subject is first seen), and a
-  tier. The commit SHA is left empty: the scan-static worker reads the head of
+- **What is written.** id `owner/name` as the seed spells it when the
+  subject is first seen (the subject key, frozen: see "Subject ids"), kind
+  `github`, source `seed-v1` (set when the subject is first seen), and a
+  tier. A seed row is matched to its subject by the subject's current name,
+  then its key, then a name it had before (case aside), so a rebuilt seed
+  that spells a renamed repository by its new name keeps its subject. The commit SHA is left empty: the scan-static worker reads the head of
   the default branch itself. A SHA or digest set by another writer is kept.
 - **A seed that cannot be read or is malformed** (no `size`, a `size` that
   does not match, a duplicate id, an id that is not `owner/name`, an unknown
@@ -613,6 +616,61 @@ sends three full shards of 25: our five, the 15 calibration subjects and the
 first T2 subjects first. Later ticks send nothing until results free a slot,
 so a full pass takes 14 rounds of up to 75, each about as long as one shard runs
 (at most about 30 minutes for 25 subjects), roughly 7 hours.
+
+## Subject ids (state schema v8)
+
+A subject is keyed by its GitHub repository's numeric id (loop upgrade #15),
+so a rename or a transfer never splits a server's history. Three things are
+kept apart:
+
+- **The subject key** (`subjects.id`): owner/name as first seen, frozen.
+  run_keys are computed from it, so it never moves: a rename makes nothing
+  due again, and the upgrade to schema v8 made nothing due again either.
+- **The identity** (`subjects.repo_id`, `node_id`, `repo_created_at`):
+  GitHub's numeric id, its GraphQL node id and its creation time.
+- **The name** (`subjects.name`): what the repository is called now. Workers
+  are sent this name (the item's `subject`), so they clone or read the
+  repository where it is today.
+
+**Lookups.** At the start of every pump run, after the seed load,
+`pump/identity.mjs` looks ids up with GraphQL: subjects without an id by
+name (GitHub follows renames and transfers), and bound subjects once a day
+by node id (which finds renames, transfers and deletions even when another
+repository took the old name). One query holds 100 repositories and costs
+one point; at most 4 queries a run, through the pump's API budget (family
+`graphql`) with the job's `GITHUB_TOKEN`. The 997 seed subjects take 10
+queries to backfill (three pump runs, about 30 minutes) and 10 a day after
+that. The log line is `pump: subject ids: ...` and kv `pump.identity` keeps
+the last pass; each change is logged as `pump: subject <key>: <event>`.
+
+**Never in the way.** A lookup that fails (rate limit, budget, outage, a bad
+answer) is logged and tried again an hour later; the run goes on. A subject
+not looked up yet is dispatched by its name, as before v8.
+
+**What a lookup can find** (each is a row in `subject_events`):
+
+| Event | What happened | What the loop does |
+|---|---|---|
+| `id_bound` | First lookup. | Records the id. |
+| `renamed`, `transferred` | New name, or new owner. | Workers get the new name from the next dispatch. The key, run_keys and results stay. A result sent under the old name and judged after the rename is recorded as usual (by run_key). |
+| `not_found` | Deleted, or turned private: no lookup is possible. | A subject-fault skip (`repo_not_visible`, fault `subject`): `gone_at` is set and the subject is not dispatched. Looked up again daily. |
+| `found_again` | Public again. | `gone_at` cleared; due as usual. |
+| `merged` | Two subjects are one repository (the seed listed its old and new names as two rows). | The one without the history is retired with `alias_of` pointing to the other, which is active if either was. |
+| `id_conflict` | The id answered with another creation time, or a bound subject's id answered another id: an id reused, which GitHub never does. | Nothing is bound, renamed or merged; the subject keeps being dispatched under its last good name. Look at it by hand. |
+
+**Switch.** `LANE_SUBJECT_IDS_ENABLED` (repository variable): unset, empty or
+`true` runs the lookups; anything else stops them. The ids and names already
+found are still used.
+
+**Read them.** Pull the state and run
+`sqlite3 state/state.sqlite "SELECT id, name, repo_id, id_status, gone_at FROM subjects WHERE name <> id OR id_status <> 'ok'"`
+and `SELECT * FROM subject_events ORDER BY id`.
+
+**The v8 migration** runs in the first pump run with this code, in one
+transaction: it adds the columns and `subject_events`, sets every subject's
+name to its key and keeps every row. Code from before v8 refuses a v8 state
+(`state schema version 8 is newer than this code`), so going back means
+restoring the snapshot taken before the merge (see "State snapshots").
 
 ## The pump
 

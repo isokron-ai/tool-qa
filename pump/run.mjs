@@ -453,7 +453,7 @@ export function plan({ stateFile = DEFAULT_STATE, now = Date.now(), config = loa
   try {
     const due = dueFromState(db, { now, tiers: config.tiers, workflows: config.workflows });
     out(`${due.length} due`);
-    for (const d of due.slice(0, 50)) out(`  ${d.priority.toFixed(1).padStart(6)}  T${d.tier}  ${d.workflow.padEnd(14)} ${d.subject}  (${d.reasons.join(', ')})`);
+    for (const d of due.slice(0, 50)) out(`  ${d.priority.toFixed(1).padStart(6)}  T${d.tier}  ${d.workflow.padEnd(14)} ${d.subject}${d.name && d.name !== d.subject ? ` (now ${d.name})` : ''}  (${d.reasons.join(', ')})`);
     const shards = planShards(due, config.workflows);
     out(`${shards.length} shard(s) if every slot were free`);
   } finally {
