@@ -265,3 +265,31 @@ test('R-DRIFT-26: an --out that is a link, or a second name, for a file in the f
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('R-SUBJ-10: a repository renamed between two results stays one subject: items are grouped by the subject key ingest recorded, not the name sent', async () => {
+  const { itemsFromEntries: checkinItems } = await import('../checkin.mjs');
+  const item = (attempt, sentAs, ledger, at) => {
+    const base = `accepted/${attempt}/0/`;
+    const manifest = {
+      schema_version: 1, attempt_id: attempt, fence: 1, run_key: 'a'.repeat(64),
+      subject: { id: sentAs, repo: sentAs, sha: null },
+      workflow: { repo: 'isokron-ai/x', file: '.github/workflows/scan-static.yml', sha: '1'.repeat(40), run_id: 1, run_attempt: 1 },
+      tools: [], oracles: [], settings_manifest_digest: '0'.repeat(64), started_at: at, finished_at: at, files: [], skips: [], controls: [],
+    };
+    return [
+      { path: `${base}manifest.json`, data: Buffer.from(JSON.stringify(manifest)) },
+      { path: `${base}ingest.json`, data: Buffer.from(JSON.stringify({ ledger })) },
+    ];
+  };
+  const entries = [
+    ...item('att-old', 'acme/server', {}, '2026-11-20T00:00:00Z'), // ingested before state schema v8: no key in the report
+    ...item('att-a', 'acme/server', { subject: 'acme/server', subject_name: 'acme/server', repo_id: 42 }, '2026-11-25T00:00:00Z'),
+    ...item('att-b', 'newco/server', { subject: 'acme/server', subject_name: 'newco/server', repo_id: 42 }, '2026-11-26T00:00:00Z'),
+  ];
+  const items = itemsFromEntries(entries);
+  assert.deepEqual(items.map((i) => [i.subject, i.sent_as]).sort(), [['acme/server', 'acme/server'], ['acme/server', 'acme/server'], ['acme/server', 'newco/server']]);
+  const { subjects, summary } = derive(items);
+  assert.equal(summary.subjects, 1);
+  assert.deepEqual([...subjects.keys()], ['acme/server']);
+  assert.deepEqual(checkinItems(entries).map((i) => i.subject), ['acme/server', 'acme/server', 'acme/server']);
+});

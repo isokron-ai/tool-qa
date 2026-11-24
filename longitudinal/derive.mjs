@@ -46,7 +46,7 @@ export const DEFAULT_IDENTITY = join(homedir(), '.isokron', 'loop-age-identity.k
 export const SOURCE = 'tool-qa longitudinal/derive.mjs';
 export const DERIVED_FIELDS = Object.freeze(['git_tag_moves', 'oci_tag_moves', 'catalog_drift_same_version']);
 const ITEM_RE = /^accepted\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/(\d{1,6})\/(.+)$/;
-const WANT_RE = /^(manifest\.json|observations\/[A-Za-z0-9._-]+\.ndjson|results\/(scan-static|live-probe)\.json)$/;
+const WANT_RE = /^(manifest\.json|ingest\.json|observations\/[A-Za-z0-9._-]+\.ndjson|results\/(scan-static|live-probe)\.json)$/;
 
 /**
  * Items from tar entries (or files) laid out as accepted/<attempt>/<index>/<path>.
@@ -90,7 +90,8 @@ function toItem(g, stats) {
   const res = parseJson(g.files.get('results/scan-static.json') ?? g.files.get('results/live-probe.json') ?? null);
   return {
     key: `${m.attempt_id ?? g.attempt}/${g.index}/${m.run_key ?? ''}`,
-    subject: m.subject.id,
+    subject: subjectKeyOf(g.files.get('ingest.json'), m),
+    sent_as: m.subject.id,
     lane,
     observed_at: m.finished_at,
     run_key: typeof m.run_key === 'string' ? m.run_key : null,
@@ -99,6 +100,19 @@ function toItem(g, stats) {
     fields,
     result: res && typeof res === 'object' ? res : null,
   };
+}
+
+/**
+ * The subject an accepted item belongs to: the subject key ingest recorded it
+ * under (ingest.json ledger.subject, state schema v8), which never changes
+ * when the repository is renamed or transferred; for items ingested before
+ * that, the name in the manifest, which was the key then. So one repository's
+ * history stays one subject across a rename (loop upgrade #15).
+ */
+export function subjectKeyOf(ingestJson, manifest) {
+  const ing = ingestJson === undefined || ingestJson === null ? null : parseJson(ingestJson);
+  const key = ing?.ledger?.subject;
+  return typeof key === 'string' && key.length > 0 && key.length <= 512 ? key : manifest.subject.id;
 }
 
 /** The catalog observation (drift.mjs catalogDrift) of one item, or null when it has no tool list hash. */

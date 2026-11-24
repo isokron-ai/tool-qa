@@ -80,9 +80,22 @@ function normalizeItem(it, position, bad) {
   if (!(throttled >= 0)) bad('throttled');
   const since = pick(it, 'throttled_since') ?? null;
   if (since !== null && (typeof since !== 'string' || !Number.isFinite(Date.parse(since)))) bad('throttled_since');
+  // Who the item is (state schema v8): the subject key it is recorded under,
+  // the owner/name the worker was sent, the repository id and current name.
+  // Optional, and only present when set (a ledger from before v8 has only the
+  // key); a malformed one is left out, never fatal: the result is judged by
+  // run_key and fence alone.
+  const text = (k) => {
+    const v = pick(it, k);
+    return typeof v === 'string' && v.length >= 1 && v.length <= 512 && !/[\s\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(v) ? v : null;
+  };
+  const repoIdRaw = pick(it, 'repo_id');
+  const repoId = Number.isSafeInteger(repoIdRaw) && repoIdRaw > 0 ? repoIdRaw : null;
   return {
     index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries,
     throttled, throttled_since: since,
+    ...Object.fromEntries(Object.entries({ subject: text('subject'), subject_name: text('subject_name'), repo_id: repoId, name: text('name') })
+      .filter(([, v]) => v !== null)),
   };
 }
 

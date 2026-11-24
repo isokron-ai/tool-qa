@@ -34,8 +34,8 @@ function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 
 
 test('schema v3 adds the dispatch ledger tables and columns', () => {
   const db = fresh();
-  assert.equal(SCHEMA_VERSION, 7);
-  assert.equal(db.schemaVersion(), 7);
+  assert.equal(SCHEMA_VERSION, 8);
+  assert.equal(db.schemaVersion(), 8);
   const tables = db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const t of ['dispatches', 'dispatch_items', 'results', 'run_keys', 'kv']) assert.ok(tables.includes(t), t);
   const cols = (t) => db.raw.prepare(`PRAGMA table_info(${t})`).all().map((r) => r.name);
@@ -332,7 +332,7 @@ test('R-COV-02: migration from version 6 keeps results and adds fault, coverage 
   raw.prepare("INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, digest, accepted_at) VALUES (?, 's', 'scan-static', 'a', 1, 'accepted', NULL, '2026-11-23T00:00:00.000Z')").run('e'.repeat(64));
   const db = new StateDb(':memory:');
   db.raw = raw;
-  assert.equal(db.migrate(), 7);
+  assert.equal(db.migrate(), SCHEMA_VERSION);
   const r = db.getResult('e'.repeat(64));
   assert.deepEqual([r.outcome, r.fault, r.coverage, r.assessed_at], ['accepted', null, null, null]);
   db.close();

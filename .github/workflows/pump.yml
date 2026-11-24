@@ -76,6 +76,7 @@ jobs:
           AGE_BIN: ${{ runner.temp }}/age/age
           AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
           LANE_STATE_PRUNE_ENABLED: ${{ vars.LANE_STATE_PRUNE_ENABLED }}
+          LANE_SUBJECT_IDS_ENABLED: ${{ vars.LANE_SUBJECT_IDS_ENABLED }}
         run: >-
           node pump/run.mjs --state "$RUNNER_TEMP/state/state.sqlite"
           --successor-result "$RUNNER_TEMP/successor.json"

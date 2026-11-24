@@ -476,9 +476,12 @@ run, inside the pump (the one writer), before the first tick. The log line is
   version are kept in kv as `subjects.seed`. When both match, nothing is
   written (`pump: subjects: seed-v1 already loaded (997 subjects)`).
   Otherwise every seed subject is upserted in one transaction.
-- **What is written.** id `owner/name` (what the scan-static worker takes),
-  kind `github`, source `seed-v1` (set when the subject is first seen), and a
-  tier. The commit SHA is left empty: the scan-static worker reads the head of
+- **What is written.** id `owner/name` as the seed spells it when the
+  subject is first seen (the subject key, frozen: see "Subject ids"), kind
+  `github`, source `seed-v1` (set when the subject is first seen), and a
+  tier. A seed row is matched to its subject by the subject's current name,
+  then its key, then a name it had before (case aside), so a rebuilt seed
+  that spells a renamed repository by its new name keeps its subject. The commit SHA is left empty: the scan-static worker reads the head of
   the default branch itself. A SHA or digest set by another writer is kept.
 - **A seed that cannot be read or is malformed** (no `size`, a `size` that
   does not match, a duplicate id, an id that is not `owner/name`, an unknown
@@ -613,6 +616,78 @@ sends three full shards of 25: our five, the 15 calibration subjects and the
 first T2 subjects first. Later ticks send nothing until results free a slot,
 so a full pass takes 14 rounds of up to 75, each about as long as one shard runs
 (at most about 30 minutes for 25 subjects), roughly 7 hours.
+
+## Subject ids (state schema v8)
+
+A subject is keyed by its GitHub repository's numeric id (loop upgrade #15),
+so a rename or a transfer never splits a server's history. Three things are
+kept apart:
+
+- **The subject key** (`subjects.id`): owner/name as first seen, frozen.
+  run_keys are computed from it, so it never moves: a rename makes nothing
+  due again, and the upgrade to schema v8 made nothing due again either.
+- **The identity** (`subjects.repo_id`, `node_id`, `repo_created_at`):
+  GitHub's numeric id, its GraphQL node id and its creation time.
+- **The name** (`subjects.name`): what the repository is called now. Workers
+  are sent this name (the item's `subject`), so they clone or read the
+  repository where it is today.
+
+**Lookups.** At the start of every pump run, after the seed load,
+`pump/identity.mjs` looks ids up with GraphQL: subjects without an id by
+name (GitHub follows renames and transfers), and bound subjects once a day
+by node id (which finds renames, transfers and deletions even when another
+repository took the old name). One query holds 100 repositories and costs
+one point; at most 4 queries a run, through the pump's API budget (family
+`graphql`) with the job's `GITHUB_TOKEN`. The 997 seed subjects take 10
+queries to backfill (three pump runs, about 30 minutes) and 10 a day after
+that. The log line is `pump: subject ids: ...` and kv `pump.identity` keeps
+the last pass; each change is logged as `pump: subject <key>: <event>`.
+
+**Never in the way.** A lookup that fails (rate limit, budget, outage, a bad
+answer) is logged and tried again an hour later; the run goes on. A subject
+not looked up yet is dispatched by its name, as before v8.
+
+**What a lookup can find** (each is a row in `subject_events`):
+
+| Event | What happened | What the loop does |
+|---|---|---|
+| `id_bound` | First lookup. | Records the id. |
+| `renamed`, `transferred` | New name, or new owner. | Workers get the new name from the next dispatch. The key, run_keys and results stay. A result sent under the old name and judged after the rename is recorded as usual (by run_key). |
+| `not_found` | Deleted, or turned private: no lookup is possible. | A subject-fault skip (`repo_not_visible`, fault `subject`): `gone_at` is set and the subject is not dispatched. Looked up again daily. A batch where more than 5 and more than 20% answer NOT_FOUND is not believed (most likely the token or its permissions changed): nothing is marked gone, those lookups are retried in an hour, and the health issue shows `subject-ids` red. |
+| `found_again` | Public again. | `gone_at` cleared; due as usual. |
+| `merged` | Two subjects are one repository, with the same id and creation time (a rebuilt seed listed the new name as a new row). | The survivor is the subject with history (results or attempts), else the one first seen earlier, whichever was bound first. If the newcomer was bound first, its binding (id, node id, creation time, name) moves to the survivor in the same transaction. The other is retired with `alias_of` pointing to the survivor, which is active if either was. |
+| `id_conflict` | The id answered with another creation time, or a bound subject's id answered another id (an id reused, which GitHub never does); or a first lookup by name found a repository created after the subject was first seen (a newcomer that took the old name: GitHub answers it ahead of the redirect). | Nothing is bound, renamed or merged; the subject keeps being dispatched under its last good name. The health issue shows `subject-ids` amber. Look at it by hand. |
+
+**Switch.** `LANE_SUBJECT_IDS_ENABLED` (repository variable): unset, empty or
+`true` runs the lookups; anything else stops them. The ids and names already
+found are still used.
+
+**Read them.** Pull the state and run
+`sqlite3 state/state.sqlite "SELECT id, name, repo_id, id_status, gone_at FROM subjects WHERE name <> id OR id_status <> 'ok'"`
+and `SELECT * FROM subject_events ORDER BY id`.
+
+**Health.** The `subject-ids` item on the health issue (watchdog/identity.mjs)
+shows the last pass's not-found, conflict and merged counts: red when the last
+pass stopped on a mass of NOT_FOUND, or when more than 5 and more than 20% of
+the active subjects are marked gone; amber on any id conflict.
+
+**The v8 migration** runs in the first pump run with this code, in one
+transaction: it adds the columns and `subject_events`, sets every subject's
+name to its key and keeps every row. Code from before v8 refuses a v8 state
+(`state schema version 8 is newer than this code`), so going back means
+restoring the snapshot taken before the merge (see "State snapshots").
+
+**What going back costs.** Restoring the v7 snapshot throws away everything
+the loop recorded after it: every result, attempt and dispatch since the
+merge, the fence counter's progress, the API budget and every other kv row,
+and the ids looked up. Dispatches sent since then are unknown to the restored
+state, so their results are never ingested (their sealed ingest outputs stay
+in the archive), and that work is due again. The longer v8 has run, the more
+is lost; decide early. There is no down-migration: a v8 state could be taken
+back to v7 by dropping what v8 added (the R-SUBJ-01 test does exactly that),
+but no tool for it is shipped, so if v8 has run for long, prefer fixing
+forward (or switching the lookups off with `LANE_SUBJECT_IDS_ENABLED=false`)
+to a restore.
 
 ## The pump
 
@@ -870,6 +945,7 @@ person. off: switched off on purpose.
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 | `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
 | `state-size` | The state database (or the asset it was pulled from) is over 256 MiB, the `state-snapshots` release holds over 2 GB, the last prune pass failed or gave up its archive, or a pump run finished without recording a size (amber); the database is over 768 MiB or the snapshots over 6 GB (red). The details show the database and asset size, the main row counts, the last prune result and the snapshot total. | A failed or given-up pass needs nothing if the next one succeeds; otherwise read the pump log's `prune:` lines. If the size keeps growing, check that pruning is on (`LANE_STATE_PRUNE_ENABLED`) and that `ingest-state-archive-*` artifacts are uploaded. Red: act before it reaches 1 GiB (see "State pruning and size"). |
+| `subject-ids` | The pump's last subject id pass (kv `pump.identity`) stopped on a mass of NOT_FOUND answers, or more than 5 and more than 20% of the active subjects are marked gone (red); any subject is in id conflict (amber). Green shows the not-found, conflict and merged counts; absent before the first pass. | Red on NOT_FOUND: check the pump job's `GITHUB_TOKEN` (nothing was marked gone; it retries hourly). Red on gone: read `subject_events` for `not_found`. Amber: read the `id_conflict` events and decide by hand (see "Subject ids"). |
 | `offsite-backup` | The off-site backup to R2: no good run for 12 hours, not configured yet, near the cost cap, or a run stopped early (amber); no good run for 24 hours, over the cost cap, or a verification failure (red). | Open the newest `offsite-backup` run's summary. See "Off-site backup". |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails

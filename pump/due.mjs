@@ -51,6 +51,13 @@
 // plus the stale result's age: with the shipped tiers.json, always in T0,
 // in T1 while the stale result is under 20 days old, never in T2 to T4.
 //
+// Subjects are keyed by their frozen subject key (subjects.id, which run_keys
+// name); each due pair also carries the subject's current owner/name (`name`,
+// what the worker is sent) and its repository id when known (state schema v8,
+// pump/identity.mjs). Subjects whose repository cannot be found (gone_at: it
+// was deleted or turned private, a subject-fault skip) and subjects merged
+// into another (alias_of) are left out.
+//
 // Retired subjects (no longer in their source list, pump/subjects.mjs), pairs
 // whose tier says `never`, pairs already in flight, pairs on a disabled
 // workflow, run_keys parked after too many rejections, and run_keys sent back
@@ -219,7 +226,8 @@ function whyNoResult(fields, last) {
  * Compute the due list.
  * @param {object} input
  * @param {number} input.now  ms since epoch
- * @param {{id:string, tier:number, sha?:string, artifact_digest?:string, changed_at?:string, retired_at?:string}[]} input.subjects
+ * @param {{id:string, name?:string, repo_id?:number|null, tier:number, sha?:string, artifact_digest?:string,
+ *        changed_at?:string, retired_at?:string, gone_at?:string, alias_of?:string}[]} input.subjects
  * @param {Record<string, object>} input.workflows  name -> workflow config (pump/workflows.json)
  * @param {object} input.tiers  parsed pump/tiers.json
  * @param {Map<string, {run_key:string, accepted_at:string, outcome?:string, fields:object,
@@ -230,8 +238,9 @@ function whyNoResult(fields, last) {
  * @param {Set<string>} input.inFlight    "<subject>\0<workflow>" pairs with a live dispatch
  * @param {Set<string>} input.parked      run_keys not to dispatch again
  * @param {object} [input.hooks]
- * @returns {{subject:string, workflow:string, tier:number, run_key:string, fields:object,
- *            reasons:string[], priority:number, gap:string|null}[]}
+ * @returns {{subject:string, name:string, repo_id:number|null, workflow:string, tier:number, run_key:string,
+ *            fields:object, reasons:string[], priority:number, gap:string|null}[]}
+ *          subject: the subject key (run_keys name it); name: the owner/name to send
  *          gap: gapKind() of the pair's last result (R-COV-03)
  */
 export function computeDue({ now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, hooks = NO_HOOKS }) {
@@ -241,7 +250,7 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
   const out = [];
   const names = Object.keys(workflows).sort();
   for (const s of subjects) {
-    if (s.retired_at != null) continue;
+    if (s.retired_at != null || s.gone_at != null || s.alias_of != null) continue;
     const tierName = `T${s.tier}`;
     const cells = tiers.tiers?.[tierName];
     if (!cells) continue;
@@ -281,7 +290,9 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       for (const r of reasons) priority += Number(prio[r] || 0);
       priority += Math.min(Number(prio.age_max ?? 30), ageDays * Number(prio.age_per_day ?? 1));
       priority += Number(h.coverageGap(s, name, { ...ctx, reasons }) || 0);
-      out.push({ subject: s.id, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority, gap: gapKind(last, reasons) });
+      out.push({
+        subject: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority, gap: gapKind(last, reasons),
+      });
     }
   }
   out.sort((a, b) => b.priority - a.priority || a.tier - b.tier
@@ -292,8 +303,8 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
 
 /** Read computeDue() inputs from the state store. */
 export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
-  const subjects = db.listSubjects().filter((s) => s.retired_at == null).map((s) => ({
-    id: s.id, tier: s.tier, sha: s.sha, artifact_digest: s.artifact_digest, changed_at: s.changed_at,
+  const subjects = db.listSubjects().filter((s) => s.retired_at == null && s.gone_at == null && s.alias_of == null).map((s) => ({
+    id: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, tier: s.tier, sha: s.sha, artifact_digest: s.artifact_digest, changed_at: s.changed_at,
   }));
   const lastResults = new Map();
   const resultKeys = new Set();

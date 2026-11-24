@@ -25,6 +25,9 @@
 //   subjects             the pump could not load the seed subjects at its last
 //                        start (pump/subjects.mjs): red, with why. It keeps
 //                        dispatching the subjects it already has (R-SUB-11).
+//   subject-ids          the pump's subject id lookups (watchdog/identity.mjs):
+//                        red on a mass of NOT_FOUND or of gone subjects,
+//                        amber on any id conflict.
 //   workflow:<file>      an expected workflow GitHub disabled for inactivity
 //                        (amber; the watchdog re-enables it) or one disabled by
 //                        hand (off).
@@ -50,6 +53,7 @@
 
 import { snapshotCheck } from '../snapshot/health.mjs';
 import { sizeCheck } from './size.mjs';
+import { identityCheck } from './identity.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -205,6 +209,7 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
         ? { id: 'subjects', status: 'green', summary: String(subj.summary ?? 'seed subjects loaded').slice(0, 200), at: subj.at }
         : { id: 'subjects', status: 'red', summary: `the pump could not load the seed subjects (it keeps dispatching the ones it has): ${String(subj.summary ?? 'unknown error').slice(0, 200)}`, at: subj.at });
     }
+    const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
   }
 
   // latest loop run per workflow

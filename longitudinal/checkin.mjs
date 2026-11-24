@@ -43,7 +43,7 @@ import { ageDecrypt } from '../ingest/age.mjs';
 import { SKIP_REASONS, skipFault } from '../worker-kit/contract.mjs';
 import { readTar } from '../worker-kit/tar.mjs';
 import { tierFor } from '../pump/subjects.mjs';
-import { DEFAULT_IDENTITY, outUnsafe, sealedFiles, writeOut } from './derive.mjs';
+import { DEFAULT_IDENTITY, outUnsafe, sealedFiles, subjectKeyOf, writeOut } from './derive.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 export const SOURCE = 'tool-qa longitudinal/checkin.mjs';
@@ -101,7 +101,10 @@ export function itemsFromEntries(entries, stats = { unreadable: 0 }) {
     }
     const lane = String(man.workflow?.file ?? '').split('/').pop().replace(/\.ya?ml$/, '') || 'unknown';
     out.push({
-      subject: man.subject.id,
+      // The subject key ingest recorded it under, which a rename does not
+      // move (derive.mjs subjectKeyOf); the name the worker was sent is kept.
+      subject: subjectKeyOf(g.files.get('ingest.json'), man),
+      sent_as: man.subject.id,
       lane,
       observed_at: man.finished_at,
       attempt_id: String(man.attempt_id ?? g.attempt),

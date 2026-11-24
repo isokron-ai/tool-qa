@@ -174,7 +174,9 @@ export async function runTick({
     for (const it of shard.items) {
       db.recordRunKey(it.run_key, { subject: it.subject, workflow: shard.workflow, fields: it.fields, now: t });
       const l = db.acquireLease(it.run_key, attemptId, { ttlMs, now: t });
-      if (l.acquired) leased.push({ run_key: it.run_key, subject: it.subject, fence: l.fence });
+      // subject: the key the result is recorded under; subject_name: the
+      // current owner/name, what the worker clones or reads (schema v8).
+      if (l.acquired) leased.push({ run_key: it.run_key, subject: it.subject, subject_name: it.name ?? it.subject, fence: l.fence });
     }
     if (leased.length === 0) {
       db.releaseSlotForAttempt(attemptId, 'nothing_leased', { now: t });
