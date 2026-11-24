@@ -1,0 +1,40 @@
+{
+ "about": "Known answers for the metadata lanes' known-answer control (meta/controls.mjs): facts about our own repository that do not change (ids, creation times, first published versions), or only grow (release count). exact: equal; at_least: a number no smaller; contains: these elements are in the observed list. meta-registry facts come only from entries in the subject owner's own io.github namespace, and only the expected npm package is compared.",
+ "subject": "isokron-ai/mcp-check",
+ "meta-github": {
+  "exact": {
+   "full_name": "isokron-ai/mcp-check",
+   "github_id": 1463720077,
+   "created_at": "2026-11-19T05:48:01Z",
+   "owner_type": "Organization",
+   "owner_id": 354617713,
+   "fork": false,
+   "licence_spdx": "MIT"
+  },
+  "at_least": {
+   "releases_total": 6,
+   "contributors_accounts": 1
+  }
+ },
+ "meta-registry": {
+  "exact": {
+   "mcp_registry_stage": "ok"
+  },
+  "contains": {
+   "registry_first": [
+    {
+     "entity": "mcp-registry:io.github.isokron-ai/mcp-check",
+     "version": "1.0.0",
+     "published_at": "2026-11-19T06:13:37.110314Z"
+    }
+   ],
+   "npm": [
+    {
+     "package": "@isokron/mcp-check",
+     "created_at": "2026-11-19T05:55:56Z",
+     "repository_matches_subject": true
+    }
+   ]
+  }
+ }
+}
