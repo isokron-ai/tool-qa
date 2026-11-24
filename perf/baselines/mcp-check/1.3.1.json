@@ -1,0 +1,228 @@
+{
+  "schema": "tool-qa/perf/1",
+  "server": "mcp-check",
+  "package": "@isokron/mcp-check",
+  "version": "1.3.1",
+  "integrity": "sha512-xThSEI0vlSwCEmRIxnZMaUlxFFjq1KSB/PsoO9LE2X5aY1moI8QI0cSu84miAi7htllVLV+uppsV0Szs7gEzfA==",
+  "measured_at": "2026-11-24T09:38:00.136Z",
+  "inspector": {
+    "package": "@modelcontextprotocol/inspector",
+    "version": "2.16.0",
+    "mode": "--load",
+    "scenario": "weighted read-only mix (perf/servers.json)",
+    "flags": [
+      "--load-scenario",
+      "--load",
+      "--load-concurrency",
+      "8",
+      "--load-duration",
+      "20",
+      "--load-warmup",
+      "3",
+      "--load-connections (http)",
+      "--load-churn --load-churn-calls 3 (http)"
+    ]
+  },
+  "runner": {
+    "os": "Linux 7.0.0-1017-azure",
+    "arch": "x64",
+    "cpus": 4,
+    "node": "v24.22.3",
+    "calibration_ms": 31.83,
+    "github_runner": "github-hosted"
+  },
+  "profiles": {
+    "stdio": {
+      "transport": "stdio",
+      "workload": {
+        "scenario": [
+          "check_tools_list x3",
+          "explain_check x3",
+          "compare_tools_lists x1"
+        ],
+        "concurrency": 8,
+        "sessions": 1,
+        "warmup_s": 3,
+        "duration_s": 20,
+        "repeats": 3
+      },
+      "repeats": [
+        {
+          "requests": 6848,
+          "ok": 6848,
+          "errorRate": 0,
+          "okThroughput": 342.12,
+          "latencyMs": {
+            "min": 4.35,
+            "mean": 23.27,
+            "p50": 23.89,
+            "p90": 29.4,
+            "p95": 31.77,
+            "p99": 37.76,
+            "p999": 52.19,
+            "max": 66.96
+          },
+          "steps": [
+            {
+              "name": "check",
+              "requests": 2935,
+              "ok": 2935,
+              "errorRate": 0,
+              "p50": 23.83,
+              "p95": 31.68,
+              "p99": 37.69,
+              "errors": []
+            },
+            {
+              "name": "explain",
+              "requests": 2935,
+              "ok": 2935,
+              "errorRate": 0,
+              "p50": 23.9,
+              "p95": 32.02,
+              "p99": 37.79,
+              "errors": []
+            },
+            {
+              "name": "compare",
+              "requests": 978,
+              "ok": 978,
+              "errorRate": 0,
+              "p50": 23.99,
+              "p95": 31.62,
+              "p99": 37.59,
+              "errors": []
+            }
+          ]
+        },
+        {
+          "requests": 6836,
+          "ok": 6836,
+          "errorRate": 0,
+          "okThroughput": 341.56,
+          "latencyMs": {
+            "min": 4.36,
+            "mean": 23.31,
+            "p50": 23.99,
+            "p90": 29.58,
+            "p95": 31.12,
+            "p99": 37.62,
+            "p999": 53.97,
+            "max": 57.28
+          },
+          "steps": [
+            {
+              "name": "check",
+              "requests": 2930,
+              "ok": 2930,
+              "errorRate": 0,
+              "p50": 23.94,
+              "p95": 30.84,
+              "p99": 36.48,
+              "errors": []
+            },
+            {
+              "name": "explain",
+              "requests": 2929,
+              "ok": 2929,
+              "errorRate": 0,
+              "p50": 24.01,
+              "p95": 31.15,
+              "p99": 38.13,
+              "errors": []
+            },
+            {
+              "name": "compare",
+              "requests": 977,
+              "ok": 977,
+              "errorRate": 0,
+              "p50": 24.08,
+              "p95": 31.83,
+              "p99": 38.16,
+              "errors": []
+            }
+          ]
+        },
+        {
+          "requests": 6785,
+          "ok": 6785,
+          "errorRate": 0,
+          "okThroughput": 339.2,
+          "latencyMs": {
+            "min": 4.47,
+            "mean": 23.46,
+            "p50": 24.17,
+            "p90": 29.63,
+            "p95": 31.41,
+            "p99": 37.28,
+            "p999": 44.36,
+            "max": 57.45
+          },
+          "steps": [
+            {
+              "name": "check",
+              "requests": 2908,
+              "ok": 2908,
+              "errorRate": 0,
+              "p50": 24.11,
+              "p95": 31.17,
+              "p99": 36.82,
+              "errors": []
+            },
+            {
+              "name": "explain",
+              "requests": 2908,
+              "ok": 2908,
+              "errorRate": 0,
+              "p50": 24.2,
+              "p95": 31.47,
+              "p99": 37.15,
+              "errors": []
+            },
+            {
+              "name": "compare",
+              "requests": 969,
+              "ok": 969,
+              "errorRate": 0,
+              "p50": 24.24,
+              "p95": 32.23,
+              "p99": 37.98,
+              "errors": []
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "repeats": 3,
+        "requests": 20469,
+        "failed": 0,
+        "p50_ms": 23.99,
+        "p95_ms": 31.41,
+        "p99_ms": 37.62,
+        "error_rate": 0,
+        "ok_per_s": 341.6,
+        "p95_spread": 1.02,
+        "steps": {
+          "check": {
+            "requests": 8773,
+            "p50_ms": 23.94,
+            "p95_ms": 31.17,
+            "error_rate": 0
+          },
+          "explain": {
+            "requests": 8772,
+            "p50_ms": 24.01,
+            "p95_ms": 31.47,
+            "error_rate": 0
+          },
+          "compare": {
+            "requests": 2924,
+            "p50_ms": 24.08,
+            "p95_ms": 31.83,
+            "error_rate": 0
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,317 @@
+{
+  "schema": "tool-qa/perf/1",
+  "server": "tiny-tracker",
+  "package": "@mcp-write-safety/tiny-tracker",
+  "version": "0.3.0",
+  "integrity": "sha512-wID8EVIPiWMbZO+Gg+VynAzooygiFKVGBUU8NpRU5AG3Jy2arngPb1mWDmHI7kK3q1a1dpzJJfCHH2rdcrrC0w==",
+  "measured_at": "2026-11-24T09:38:02.194Z",
+  "inspector": {
+    "package": "@modelcontextprotocol/inspector",
+    "version": "2.16.0",
+    "mode": "--load",
+    "scenario": "weighted read-only mix (perf/servers.json)",
+    "flags": [
+      "--load-scenario",
+      "--load",
+      "--load-concurrency",
+      "8",
+      "--load-duration",
+      "20",
+      "--load-warmup",
+      "3",
+      "--load-connections (http)",
+      "--load-churn --load-churn-calls 3 (http)"
+    ]
+  },
+  "runner": {
+    "os": "Linux 7.0.0-1014-aws",
+    "arch": "x64",
+    "cpus": 4,
+    "node": "v24.22.3",
+    "calibration_ms": 22.73,
+    "github_runner": "github-hosted"
+  },
+  "profiles": {
+    "http": {
+      "transport": "http",
+      "workload": {
+        "scenario": [
+          "list_projects x2",
+          "list_tickets x3",
+          "get_ticket x3"
+        ],
+        "concurrency": 8,
+        "sessions": 8,
+        "warmup_s": 3,
+        "duration_s": 20,
+        "repeats": 3
+      },
+      "repeats": [
+        {
+          "requests": 36461,
+          "ok": 36461,
+          "errorRate": 0,
+          "okThroughput": 1822.85,
+          "latencyMs": {
+            "min": 1.91,
+            "mean": 4.38,
+            "p50": 3.55,
+            "p90": 5.89,
+            "p95": 11.14,
+            "p99": 14.29,
+            "p999": 20.04,
+            "max": 28.99
+          },
+          "steps": [
+            {
+              "name": "list_projects",
+              "requests": 9115,
+              "ok": 9115,
+              "errorRate": 0,
+              "p50": 3.53,
+              "p95": 11.12,
+              "p99": 14.32,
+              "errors": []
+            },
+            {
+              "name": "list_tickets",
+              "requests": 13673,
+              "ok": 13673,
+              "errorRate": 0,
+              "p50": 3.51,
+              "p95": 11.14,
+              "p99": 14.29,
+              "errors": []
+            },
+            {
+              "name": "get_ticket",
+              "requests": 13673,
+              "ok": 13673,
+              "errorRate": 0,
+              "p50": 3.55,
+              "p95": 11.03,
+              "p99": 14.29,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 2788,
+            "failed": 0,
+            "connectMs": {
+              "min": 2.65,
+              "mean": 7.95,
+              "p50": 6.6,
+              "p90": 13.48,
+              "p95": 15.91,
+              "p99": 21.6,
+              "p999": 37.83,
+              "max": 45.66
+            },
+            "latencyMs": {
+              "min": 2.15,
+              "mean": 4.96,
+              "p50": 3.89,
+              "p90": 8.52,
+              "p95": 12.13,
+              "p99": 15.44,
+              "p999": 23.66,
+              "max": 25.2
+            },
+            "elapsedMs": 8002.61,
+            "requests": 8352,
+            "errorRate": 0
+          }
+        },
+        {
+          "requests": 36269,
+          "ok": 36269,
+          "errorRate": 0,
+          "okThroughput": 1812.53,
+          "latencyMs": {
+            "min": 2.11,
+            "mean": 4.41,
+            "p50": 3.55,
+            "p90": 6.01,
+            "p95": 11.48,
+            "p99": 14.15,
+            "p999": 19.65,
+            "max": 30.86
+          },
+          "steps": [
+            {
+              "name": "list_projects",
+              "requests": 9067,
+              "ok": 9067,
+              "errorRate": 0,
+              "p50": 3.53,
+              "p95": 11.42,
+              "p99": 14.18,
+              "errors": []
+            },
+            {
+              "name": "list_tickets",
+              "requests": 13601,
+              "ok": 13601,
+              "errorRate": 0,
+              "p50": 3.55,
+              "p95": 11.48,
+              "p99": 14.29,
+              "errors": []
+            },
+            {
+              "name": "get_ticket",
+              "requests": 13601,
+              "ok": 13601,
+              "errorRate": 0,
+              "p50": 3.55,
+              "p95": 11.37,
+              "p99": 14.15,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 2807,
+            "failed": 0,
+            "connectMs": {
+              "min": 2.26,
+              "mean": 7.93,
+              "p50": 6.52,
+              "p90": 13.38,
+              "p95": 16.07,
+              "p99": 23.79,
+              "p999": 39.94,
+              "max": 41.01
+            },
+            "latencyMs": {
+              "min": 2.05,
+              "mean": 4.91,
+              "p50": 3.9,
+              "p90": 8.32,
+              "p95": 12.05,
+              "p99": 15.35,
+              "p999": 20.84,
+              "max": 22.78
+            },
+            "elapsedMs": 8001.87,
+            "requests": 8415,
+            "errorRate": 0
+          }
+        },
+        {
+          "requests": 35929,
+          "ok": 35929,
+          "errorRate": 0,
+          "okThroughput": 1795.84,
+          "latencyMs": {
+            "min": 2.24,
+            "mean": 4.45,
+            "p50": 3.55,
+            "p90": 6.07,
+            "p95": 11.71,
+            "p99": 14.72,
+            "p999": 20.04,
+            "max": 29.17
+          },
+          "steps": [
+            {
+              "name": "list_projects",
+              "requests": 8982,
+              "ok": 8982,
+              "errorRate": 0,
+              "p50": 3.52,
+              "p95": 11.68,
+              "p99": 14.74,
+              "errors": []
+            },
+            {
+              "name": "list_tickets",
+              "requests": 13474,
+              "ok": 13474,
+              "errorRate": 0,
+              "p50": 3.55,
+              "p95": 11.71,
+              "p99": 14.58,
+              "errors": []
+            },
+            {
+              "name": "get_ticket",
+              "requests": 13473,
+              "ok": 13473,
+              "errorRate": 0,
+              "p50": 3.55,
+              "p95": 11.71,
+              "p99": 14.72,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 2778,
+            "failed": 0,
+            "connectMs": {
+              "min": 2.44,
+              "mean": 8.1,
+              "p50": 6.72,
+              "p90": 13.72,
+              "p95": 15.68,
+              "p99": 22.48,
+              "p999": 40.65,
+              "max": 50.44
+            },
+            "latencyMs": {
+              "min": 2.08,
+              "mean": 4.95,
+              "p50": 3.93,
+              "p90": 8.84,
+              "p95": 12.44,
+              "p99": 15.52,
+              "p999": 21.16,
+              "max": 23.17
+            },
+            "elapsedMs": 8009.65,
+            "requests": 8315,
+            "errorRate": 0
+          }
+        }
+      ],
+      "summary": {
+        "repeats": 3,
+        "requests": 108659,
+        "failed": 0,
+        "p50_ms": 3.55,
+        "p95_ms": 11.48,
+        "p99_ms": 14.29,
+        "error_rate": 0,
+        "ok_per_s": 1812.5,
+        "p95_spread": 1.05,
+        "steps": {
+          "list_projects": {
+            "requests": 27164,
+            "p50_ms": 3.53,
+            "p95_ms": 11.42,
+            "error_rate": 0
+          },
+          "list_tickets": {
+            "requests": 40748,
+            "p50_ms": 3.55,
+            "p95_ms": 11.48,
+            "error_rate": 0
+          },
+          "get_ticket": {
+            "requests": 40747,
+            "p50_ms": 3.55,
+            "p95_ms": 11.37,
+            "error_rate": 0
+          }
+        },
+        "churn": {
+          "sessions_opened": 8373,
+          "connect_failed": 0,
+          "connect_p50_ms": 6.6,
+          "connect_p95_ms": 15.91,
+          "call_p95_ms": 12.13,
+          "sessions_per_s": 348.4
+        }
+      }
+    }
+  }
+}

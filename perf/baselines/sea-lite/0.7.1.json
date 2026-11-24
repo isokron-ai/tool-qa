@@ -1,0 +1,583 @@
+{
+  "schema": "tool-qa/perf/1",
+  "server": "sea-lite",
+  "package": "sea-lite",
+  "version": "0.7.1",
+  "integrity": "sha512-z51lS1lKcN1z+UkTQNxaJgHkMg54o3DBISeflUCL5lPpebPz9O28XuED0Q5KN7LhCkl4PNZSL2wjHa98OCfavQ==",
+  "measured_at": "2026-11-24T09:37:53.020Z",
+  "inspector": {
+    "package": "@modelcontextprotocol/inspector",
+    "version": "2.16.0",
+    "mode": "--load",
+    "scenario": "weighted read-only mix (perf/servers.json)",
+    "flags": [
+      "--load-scenario",
+      "--load",
+      "--load-concurrency",
+      "8",
+      "--load-duration",
+      "20",
+      "--load-warmup",
+      "3",
+      "--load-connections (http)",
+      "--load-churn --load-churn-calls 3 (http)"
+    ]
+  },
+  "runner": {
+    "os": "Linux 7.0.0-1017-azure",
+    "arch": "x64",
+    "cpus": 4,
+    "node": "v24.22.3",
+    "calibration_ms": 20.74,
+    "github_runner": "github-hosted"
+  },
+  "profiles": {
+    "stdio": {
+      "transport": "stdio",
+      "workload": {
+        "scenario": [
+          "sea_list x4",
+          "sea_stats x2",
+          "sea_history x2",
+          "sea_scope_check x2"
+        ],
+        "concurrency": 8,
+        "sessions": 1,
+        "warmup_s": 3,
+        "duration_s": 20,
+        "repeats": 3
+      },
+      "repeats": [
+        {
+          "requests": 69015,
+          "ok": 69015,
+          "errorRate": 0,
+          "okThroughput": 3450.46,
+          "latencyMs": {
+            "min": 0.2777,
+            "mean": 2.31,
+            "p50": 2.2,
+            "p90": 2.69,
+            "p95": 3.66,
+            "p99": 13.2,
+            "p999": 16.26,
+            "max": 33.49
+          },
+          "steps": [
+            {
+              "name": "list",
+              "requests": 27606,
+              "ok": 27606,
+              "errorRate": 0,
+              "p50": 1.91,
+              "p95": 3.34,
+              "p99": 13.06,
+              "errors": []
+            },
+            {
+              "name": "stats",
+              "requests": 13803,
+              "ok": 13803,
+              "errorRate": 0,
+              "p50": 1.52,
+              "p95": 3.18,
+              "p99": 12.94,
+              "errors": []
+            },
+            {
+              "name": "history",
+              "requests": 13803,
+              "ok": 13803,
+              "errorRate": 0,
+              "p50": 2.29,
+              "p95": 4.78,
+              "p99": 13.46,
+              "errors": []
+            },
+            {
+              "name": "scope_check",
+              "requests": 13803,
+              "ok": 13803,
+              "errorRate": 0,
+              "p50": 2.2,
+              "p95": 3.92,
+              "p99": 13.2,
+              "errors": []
+            }
+          ]
+        },
+        {
+          "requests": 68750,
+          "ok": 68750,
+          "errorRate": 0,
+          "okThroughput": 3435.99,
+          "latencyMs": {
+            "min": 0.28,
+            "mean": 2.32,
+            "p50": 2.16,
+            "p90": 2.69,
+            "p95": 3.8,
+            "p99": 13.6,
+            "p999": 16.75,
+            "max": 30.2
+          },
+          "steps": [
+            {
+              "name": "list",
+              "requests": 27500,
+              "ok": 27500,
+              "errorRate": 0,
+              "p50": 1.75,
+              "p95": 3.44,
+              "p99": 13.46,
+              "errors": []
+            },
+            {
+              "name": "stats",
+              "requests": 13750,
+              "ok": 13750,
+              "errorRate": 0,
+              "p50": 1.51,
+              "p95": 3.21,
+              "p99": 13.46,
+              "errors": []
+            },
+            {
+              "name": "history",
+              "requests": 13750,
+              "ok": 13750,
+              "errorRate": 0,
+              "p50": 2.27,
+              "p95": 5.23,
+              "p99": 14.01,
+              "errors": []
+            },
+            {
+              "name": "scope_check",
+              "requests": 13750,
+              "ok": 13750,
+              "errorRate": 0,
+              "p50": 2.18,
+              "p95": 4.24,
+              "p99": 13.73,
+              "errors": []
+            }
+          ]
+        },
+        {
+          "requests": 68800,
+          "ok": 68800,
+          "errorRate": 0,
+          "okThroughput": 3439.74,
+          "latencyMs": {
+            "min": 0.2443,
+            "mean": 2.32,
+            "p50": 2.2,
+            "p90": 2.71,
+            "p95": 3.48,
+            "p99": 13.2,
+            "p999": 16.59,
+            "max": 25.35
+          },
+          "steps": [
+            {
+              "name": "list",
+              "requests": 27520,
+              "ok": 27520,
+              "errorRate": 0,
+              "p50": 1.8,
+              "p95": 3.28,
+              "p99": 13.06,
+              "errors": []
+            },
+            {
+              "name": "stats",
+              "requests": 13760,
+              "ok": 13760,
+              "errorRate": 0,
+              "p50": 1.52,
+              "p95": 3.24,
+              "p99": 12.94,
+              "errors": []
+            },
+            {
+              "name": "history",
+              "requests": 13760,
+              "ok": 13760,
+              "errorRate": 0,
+              "p50": 2.29,
+              "p95": 4.88,
+              "p99": 13.46,
+              "errors": []
+            },
+            {
+              "name": "scope_check",
+              "requests": 13760,
+              "ok": 13760,
+              "errorRate": 0,
+              "p50": 2.18,
+              "p95": 3.44,
+              "p99": 13.2,
+              "errors": []
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "repeats": 3,
+        "requests": 206565,
+        "failed": 0,
+        "p50_ms": 2.2,
+        "p95_ms": 3.66,
+        "p99_ms": 13.2,
+        "error_rate": 0,
+        "ok_per_s": 3439.7,
+        "p95_spread": 1.09,
+        "steps": {
+          "list": {
+            "requests": 82626,
+            "p50_ms": 1.8,
+            "p95_ms": 3.34,
+            "error_rate": 0
+          },
+          "stats": {
+            "requests": 41313,
+            "p50_ms": 1.52,
+            "p95_ms": 3.21,
+            "error_rate": 0
+          },
+          "history": {
+            "requests": 41313,
+            "p50_ms": 2.29,
+            "p95_ms": 4.88,
+            "error_rate": 0
+          },
+          "scope_check": {
+            "requests": 41313,
+            "p50_ms": 2.18,
+            "p95_ms": 3.92,
+            "error_rate": 0
+          }
+        }
+      }
+    },
+    "http": {
+      "transport": "http",
+      "workload": {
+        "scenario": [
+          "sea_list x4",
+          "sea_stats x2",
+          "sea_history x2",
+          "sea_scope_check x2"
+        ],
+        "concurrency": 8,
+        "sessions": 8,
+        "warmup_s": 3,
+        "duration_s": 20,
+        "repeats": 3
+      },
+      "repeats": [
+        {
+          "requests": 24046,
+          "ok": 24046,
+          "errorRate": 0,
+          "okThroughput": 1201.77,
+          "latencyMs": {
+            "min": 1,
+            "mean": 6.65,
+            "p50": 4.74,
+            "p90": 11.71,
+            "p95": 15.47,
+            "p99": 21.7,
+            "p999": 29.54,
+            "max": 41.01
+          },
+          "steps": [
+            {
+              "name": "list",
+              "requests": 9619,
+              "ok": 9619,
+              "errorRate": 0,
+              "p50": 4.65,
+              "p95": 15.36,
+              "p99": 21.68,
+              "errors": []
+            },
+            {
+              "name": "stats",
+              "requests": 4809,
+              "ok": 4809,
+              "errorRate": 0,
+              "p50": 4.55,
+              "p95": 15.11,
+              "p99": 21.04,
+              "errors": []
+            },
+            {
+              "name": "history",
+              "requests": 4809,
+              "ok": 4809,
+              "errorRate": 0,
+              "p50": 5.13,
+              "p95": 15.77,
+              "p99": 21.96,
+              "errors": []
+            },
+            {
+              "name": "scope_check",
+              "requests": 4809,
+              "ok": 4809,
+              "errorRate": 0,
+              "p50": 4.48,
+              "p95": 15.55,
+              "p99": 21.63,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 1950,
+            "failed": 0,
+            "connectMs": {
+              "min": 2.98,
+              "mean": 10.35,
+              "p50": 8.81,
+              "p90": 16.93,
+              "p95": 20.9,
+              "p99": 29.38,
+              "p999": 40.64,
+              "max": 41.32
+            },
+            "latencyMs": {
+              "min": 1.4,
+              "mean": 7.45,
+              "p50": 6.12,
+              "p90": 13.28,
+              "p95": 16.92,
+              "p99": 21.63,
+              "p999": 36.68,
+              "max": 39.51
+            },
+            "elapsedMs": 8002.86,
+            "requests": 5835,
+            "errorRate": 0
+          }
+        },
+        {
+          "requests": 23736,
+          "ok": 23736,
+          "errorRate": 0,
+          "okThroughput": 1186.51,
+          "latencyMs": {
+            "min": 0.9596,
+            "mean": 6.74,
+            "p50": 4.78,
+            "p90": 12.07,
+            "p95": 15.78,
+            "p99": 22.14,
+            "p999": 29.54,
+            "max": 56.66
+          },
+          "steps": [
+            {
+              "name": "list",
+              "requests": 9495,
+              "ok": 9495,
+              "errorRate": 0,
+              "p50": 4.71,
+              "p95": 15.8,
+              "p99": 22.17,
+              "errors": []
+            },
+            {
+              "name": "stats",
+              "requests": 4747,
+              "ok": 4747,
+              "errorRate": 0,
+              "p50": 4.59,
+              "p95": 15.91,
+              "p99": 22.47,
+              "errors": []
+            },
+            {
+              "name": "history",
+              "requests": 4747,
+              "ok": 4747,
+              "errorRate": 0,
+              "p50": 5.18,
+              "p95": 16.15,
+              "p99": 22.28,
+              "errors": []
+            },
+            {
+              "name": "scope_check",
+              "requests": 4747,
+              "ok": 4747,
+              "errorRate": 0,
+              "p50": 4.53,
+              "p95": 15.51,
+              "p99": 22.1,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 2040,
+            "failed": 0,
+            "connectMs": {
+              "min": 3.02,
+              "mean": 9.1,
+              "p50": 7.66,
+              "p90": 15.58,
+              "p95": 18.35,
+              "p99": 25.34,
+              "p999": 38.09,
+              "max": 40.75
+            },
+            "latencyMs": {
+              "min": 1.24,
+              "mean": 7.39,
+              "p50": 6.1,
+              "p90": 12.84,
+              "p95": 15.73,
+              "p99": 20.95,
+              "p999": 31.22,
+              "max": 41.25
+            },
+            "elapsedMs": 8004.75,
+            "requests": 6100,
+            "errorRate": 0
+          }
+        },
+        {
+          "requests": 24312,
+          "ok": 24312,
+          "errorRate": 0,
+          "okThroughput": 1214.84,
+          "latencyMs": {
+            "min": 1.12,
+            "mean": 6.58,
+            "p50": 4.69,
+            "p90": 11.71,
+            "p95": 15.17,
+            "p99": 20.86,
+            "p999": 28.11,
+            "max": 38.82
+          },
+          "steps": [
+            {
+              "name": "list",
+              "requests": 9725,
+              "ok": 9725,
+              "errorRate": 0,
+              "p50": 4.61,
+              "p95": 15.18,
+              "p99": 21.4,
+              "errors": []
+            },
+            {
+              "name": "stats",
+              "requests": 4863,
+              "ok": 4863,
+              "errorRate": 0,
+              "p50": 4.53,
+              "p95": 14.97,
+              "p99": 20.13,
+              "errors": []
+            },
+            {
+              "name": "history",
+              "requests": 4862,
+              "ok": 4862,
+              "errorRate": 0,
+              "p50": 5.08,
+              "p95": 15.54,
+              "p99": 20.79,
+              "errors": []
+            },
+            {
+              "name": "scope_check",
+              "requests": 4862,
+              "ok": 4862,
+              "errorRate": 0,
+              "p50": 4.42,
+              "p95": 14.93,
+              "p99": 20.89,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 2007,
+            "failed": 0,
+            "connectMs": {
+              "min": 3.19,
+              "mean": 9.53,
+              "p50": 7.9,
+              "p90": 16.4,
+              "p95": 19.49,
+              "p99": 27.41,
+              "p999": 46.04,
+              "max": 52.01
+            },
+            "latencyMs": {
+              "min": 1.87,
+              "mean": 7.42,
+              "p50": 6.15,
+              "p90": 12.49,
+              "p95": 15.96,
+              "p99": 21.71,
+              "p999": 43.52,
+              "max": 57.26
+            },
+            "elapsedMs": 8001.4,
+            "requests": 5997,
+            "errorRate": 0
+          }
+        }
+      ],
+      "summary": {
+        "repeats": 3,
+        "requests": 72094,
+        "failed": 0,
+        "p50_ms": 4.74,
+        "p95_ms": 15.47,
+        "p99_ms": 21.7,
+        "error_rate": 0,
+        "ok_per_s": 1201.8,
+        "p95_spread": 1.04,
+        "steps": {
+          "list": {
+            "requests": 28839,
+            "p50_ms": 4.65,
+            "p95_ms": 15.36,
+            "error_rate": 0
+          },
+          "stats": {
+            "requests": 14419,
+            "p50_ms": 4.55,
+            "p95_ms": 15.11,
+            "error_rate": 0
+          },
+          "history": {
+            "requests": 14418,
+            "p50_ms": 5.13,
+            "p95_ms": 15.77,
+            "error_rate": 0
+          },
+          "scope_check": {
+            "requests": 14418,
+            "p50_ms": 4.48,
+            "p95_ms": 15.51,
+            "error_rate": 0
+          }
+        },
+        "churn": {
+          "sessions_opened": 5997,
+          "connect_failed": 0,
+          "connect_p50_ms": 7.9,
+          "connect_p95_ms": 19.49,
+          "call_p95_ms": 15.96,
+          "sessions_per_s": 250.8
+        }
+      }
+    }
+  }
+}
