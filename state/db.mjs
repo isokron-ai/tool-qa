@@ -788,13 +788,17 @@ export class StateDb {
    * A mismatch belongs to the current burst only when it has the burst's
    * recorded commit AND its dispatch was made within `burstMs` of the burst's
    * FIRST dispatch (R-ING-26). One tick reserves all its shards in one loop of
-   * local writes, so their `created` times lie within seconds; ticks start 150 s
-   * apart, but how long ingest runs first varies, so two ticks' dispatches can
-   * be as little as ~2 minutes apart. 30 s separates the two with a wide margin
-   * either way, and since the burst's start never moves, repeats cannot chain
-   * from tick to tick. The same commit in a later tick therefore counts again,
-   * and a cause that persists at a fixed commit (someone taking the run names,
-   * a ref GitHub resolves differently) still pauses the workflow (R-ING-25).
+   * local writes, so their `created` times lie within seconds. Ticks start
+   * 150 s apart, but each runs ingest first and ingest's length varies, so
+   * there is no fixed minimum gap between two ticks' dispatches: usually about
+   * two minutes, yet as little as ~10 s when one tick's ingest runs long and
+   * the next one's is short. 30 s holds one tick's shards with room to spare;
+   * two ticks that happen to land within 30 s of a burst's start count once
+   * (one mismatch missed, not a chain), and since the burst's start never
+   * moves, repeats cannot chain from tick to tick. The same commit in later
+   * ticks therefore keeps counting, and a cause that persists at a fixed
+   * commit (someone taking the run names, a ref GitHub resolves differently)
+   * still pauses the workflow (R-ING-25).
    * Returns {count, paused}.
    */
   noteShaMismatch(workflow, { sha = null, created = null, now, limit = 3, pauseMs = 6 * 3_600_000, burstMs = SHA_BURST_MS } = {}) {

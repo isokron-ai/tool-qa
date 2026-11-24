@@ -1,9 +1,10 @@
 {
   "version": 1,
-  "description": "Worker workflows the pump may dispatch. A workflow is dispatched only when enabled is true. versions, image_digest and settings_state go into every run_key, so changing any of them makes every subject due again for that workflow. Lease and slot expiry = 1.5 x (setup_minutes + shard_size x minutes_per_subject) + 10 minutes. slots_max caps open dispatches for the workflow. The worker contract is in docs/INTERFACES.md.",
+  "description": "Worker workflows the pump may dispatch. A workflow is dispatched only when enabled is true. versions, image_digest and settings_state go into every run_key, so changing any of them makes every subject due again for that workflow. Lease and slot expiry = 1.5 x (setup_minutes + shard_size x minutes_per_subject) + 10 minutes. slots_max caps open dispatches for the workflow. enabled and runs_untrusted must be true or false. runs_untrusted says whether the workflow runs third-party code (servers, builds); a workflow that does not say false counts as true, and none of those is dispatched while the sandbox breaker is open (pump/breaker.mjs, docs/OPERATIONS.md). sandbox_sha is the isokron-ai/mcp-surface-corpus commit such a workflow pins its sandbox at (null until it pins one); the watchdog shows amber while it differs from the commit the nightly conformance run tested. The worker contract is in docs/INTERFACES.md.",
   "workflows": {
     "scan-static": {
-      "enabled": false,
+      "enabled": true,
+      "runs_untrusted": false,
       "repo": "isokron-ai/mcp-check",
       "file": "scan-static.yml",
       "ref": "main",
@@ -11,12 +12,14 @@
       "setup_minutes": 3,
       "minutes_per_subject": 1,
       "slots_max": 3,
-      "versions": { "tool": {}, "oracle": {}, "probe": {} },
+      "versions": { "tool": { "mcp-check": "60b88f0" }, "oracle": {}, "probe": {} },
       "image_digest": null,
       "settings_state": "default"
     },
     "live-probe": {
       "enabled": false,
+      "runs_untrusted": true,
+      "sandbox_sha": null,
       "repo": "isokron-ai/mcp-check",
       "file": "live-probe.yml",
       "ref": "main",
@@ -30,6 +33,8 @@
     },
     "scan-deep": {
       "enabled": false,
+      "runs_untrusted": true,
+      "sandbox_sha": null,
       "repo": "isokron-ai/mcp-check",
       "file": "scan-deep.yml",
       "ref": "main",
@@ -43,6 +48,8 @@
     },
     "build-probe": {
       "enabled": false,
+      "runs_untrusted": true,
+      "sandbox_sha": null,
       "repo": "isokron-ai/mcp-check",
       "file": "build-probe.yml",
       "ref": "main",
@@ -56,6 +63,8 @@
     },
     "writecheck": {
       "enabled": false,
+      "runs_untrusted": true,
+      "sandbox_sha": null,
       "repo": "isokron-ai/mcp-writecheck-action",
       "file": "corpus.yml",
       "ref": "main",
@@ -69,6 +78,7 @@
     },
     "meta-github": {
       "enabled": false,
+      "runs_untrusted": false,
       "repo": "isokron-ai/tool-qa",
       "file": "meta-github.yml",
       "ref": "main",
@@ -82,6 +92,7 @@
     },
     "meta-registry": {
       "enabled": false,
+      "runs_untrusted": false,
       "repo": "isokron-ai/tool-qa",
       "file": "meta-registry.yml",
       "ref": "main",
