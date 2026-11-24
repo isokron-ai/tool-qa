@@ -582,7 +582,7 @@ export function renderMarkdown(ledger) {
 
   out.push('## Cycle time');
   out.push('');
-  out.push('Days from a row being found (the earlier of its first commit in `REGRESSIONS.md` and its fix pull request being opened) to the fix merging, and from the merge to the first release that contains it. A row with no date yet, or whose dates run backwards, is left out of the figures and counted. Medians and p90 (nearest rank) are over the rows counted.');
+  out.push('Hours from a row being found (the earlier of its first commit in `REGRESSIONS.md` and its fix pull request being opened) to the fix merging, and from the merge to the first release that contains it. A row with no date yet, or whose dates run backwards, is left out of the figures and counted. Medians and p90 (nearest rank) are over the rows counted.');
   out.push('');
   out.push('| Tool | Rows | Found → merged (rows) | Median | p90 | Merged → released (rows) | Median | p90 | Merged, not released | No date | Left out |');
   out.push('|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|');

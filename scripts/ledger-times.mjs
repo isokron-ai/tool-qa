@@ -1,6 +1,6 @@
 // Cycle times for the cross-repo ledger: when each row was found, when its test
 // was pinned, when its fix merged and when a release shipped it, and the
-// median and p90 of the gaps, per repository.
+// median and p90 of the gaps (in hours), per repository.
 //
 // Everything here is read-only and cheap by design:
 //   - release time comes from the release list the ledger already fetches;
@@ -14,15 +14,15 @@
 // A rate limit or an empty budget leaves the rest unfilled for the next run.
 import { BudgetExhausted } from './ledger.mjs';
 
-const DAY = 86_400_000;
+const HOUR = 3_600_000;
 const MAX_PAGES = 5;
 
 const ts = (s) => (s ? Date.parse(s) : NaN);
 const isoMin = (xs) => xs.filter((x) => Number.isFinite(ts(x))).sort((a, b) => ts(a) - ts(b))[0] ?? null;
 
-/** Days from a to b (ISO strings), or null if either is missing or b is before a. */
-export function daysBetween(a, b) {
-  const d = (ts(b) - ts(a)) / DAY;
+/** Hours from a to b (ISO strings), or null if either is missing or b is before a. */
+export function hoursBetween(a, b) {
+  const d = (ts(b) - ts(a)) / HOUR;
   return Number.isFinite(d) && d >= 0 ? d : null;
 }
 
@@ -37,7 +37,7 @@ export function summarise(values) {
 }
 
 /**
- * Per repository (and "all"): found→merged and merged→released, in days.
+ * Per repository (and "all"): found→merged and merged→released, in hours.
  * A gap that would be negative (a row dated after its merge) is left out and counted.
  */
 export function cycleStats(records) {
@@ -49,8 +49,8 @@ export function cycleStats(records) {
     let excluded = 0; let unreleased = 0; let undated = 0;
     for (const r of recs) {
       if (!r.merged_at) { undated++; continue; }
-      if (r.found_at) { const d = daysBetween(r.found_at, r.merged_at); if (d === null) excluded++; else fm.push(d); } else undated++;
-      if (r.released_at) { const d = daysBetween(r.merged_at, r.released_at); if (d === null) excluded++; else mr.push(d); } else unreleased++;
+      if (r.found_at) { const d = hoursBetween(r.found_at, r.merged_at); if (d === null) excluded++; else fm.push(d); } else undated++;
+      if (r.released_at) { const d = hoursBetween(r.merged_at, r.released_at); if (d === null) excluded++; else mr.push(d); } else unreleased++;
     }
     out[key] = { rows: recs.length, found_to_merged: summarise(fm), merged_to_released: summarise(mr), merged_not_released: unreleased, without_dates: undated, excluded };
   }

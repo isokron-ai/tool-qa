@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildLedger, makeGitHub, renderMarkdown } from '../scripts/ledger.mjs';
-import { cycleStats, daysBetween, firstCommitWhere, foundAt, summarise } from '../scripts/ledger-times.mjs';
+import { cycleStats, hoursBetween, firstCommitWhere, foundAt, summarise } from '../scripts/ledger-times.mjs';
 
 const LEDGER = (rows) => `# Regressions\n\n| ID | What it was | Pinned by | Fix |\n|---|---|---|---|\n${rows.join('\n')}\n`;
 const ROW = (id, sha) => `| ${id} | A problem. | \`t.test.mjs\` › \`pinned: ${id}\` | ${sha} |`;
@@ -73,10 +73,10 @@ test('summarise: median (mean of the middle two when even) and p90 by nearest ra
   assert.deepEqual(summarise([1, 2, NaN, null].filter((x) => x !== null)), { n: 2, median: 1.5, p90: 2 });
 });
 
-test('daysBetween is null for a missing date or a gap that runs backwards', () => {
-  assert.equal(daysBetween('2026-11-01T00:00:00Z', '2026-11-02T12:00:00Z'), 1.5);
-  assert.equal(daysBetween('2026-11-03T00:00:00Z', '2026-11-02T00:00:00Z'), null);
-  assert.equal(daysBetween(null, '2026-11-02T00:00:00Z'), null);
+test('hoursBetween is null for a missing date or a gap that runs backwards', () => {
+  assert.equal(hoursBetween('2026-11-01T00:00:00Z', '2026-11-02T12:00:00Z'), 36);
+  assert.equal(hoursBetween('2026-11-03T00:00:00Z', '2026-11-02T00:00:00Z'), null);
+  assert.equal(hoursBetween(null, '2026-11-02T00:00:00Z'), null);
 });
 
 test('foundAt takes the earliest candidate and says where it came from', () => {
@@ -95,11 +95,11 @@ test('cycleStats: per repository and overall; unreleased, undated and backwards 
   ]);
   assert.deepEqual(c['o/a'], {
     rows: 4,
-    found_to_merged: { n: 2, median: 3, p90: 4 },
-    merged_to_released: { n: 1, median: 1, p90: 1 },
+    found_to_merged: { n: 2, median: 72, p90: 96 },
+    merged_to_released: { n: 1, median: 24, p90: 24 },
     merged_not_released: 2, without_dates: 1, excluded: 1,
   });
-  assert.deepEqual(c['o/b'].merged_to_released, { n: 1, median: 10, p90: 10 });
+  assert.deepEqual(c['o/b'].merged_to_released, { n: 1, median: 240, p90: 240 });
   assert.equal(c.all.rows, 5);
   assert.equal(c.all.found_to_merged.n, 3);
 });
@@ -124,13 +124,13 @@ test('R-LED-08: each row gets found, pinned, merged and released dates, and the 
     ['R-A-02', '2026-11-12T00:00:00Z', 'pr', '2026-11-11T08:00:00Z', '2026-11-13T00:00:00Z', null, null]);
   assert.deepEqual(ledger.cycle['o/r'], {
     rows: 2,
-    found_to_merged: { n: 2, median: 2.5, p90: 4 },
-    merged_to_released: { n: 1, median: 4, p90: 4 },
+    found_to_merged: { n: 2, median: 60, p90: 96 },
+    merged_to_released: { n: 1, median: 96, p90: 96 },
     merged_not_released: 1, without_dates: 0, excluded: 0,
   });
   const md = renderMarkdown(ledger);
   assert.match(md, /## Cycle time/);
-  assert.match(md, /\| All tools \| 2 \| 2 \| 2\.5 \| 4\.0 \| 1 \| 4\.0 \| 4\.0 \| 1 \| 0 \| 0 \|/);
+  assert.match(md, /\| All tools \| 2 \| 2 \| 60\.0 \| 96\.0 \| 1 \| 96\.0 \| 96\.0 \| 1 \| 0 \| 0 \|/);
   assert.match(md, /\| 2026-11-02 \| 2026-11-03 \| 2026-11-06 \| v1\.0\.0 \(2026-11-10\) \|/);
 });
 
