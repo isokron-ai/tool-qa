@@ -75,7 +75,8 @@ export function readBundle(plaintext, { maxBundleBytes } = {}) {
  *   maxBundleBytes?: number, maxFileBytes?: number}} ctx
  *   exp is the identity the bundle must name (forgery.mjs checkBundle)
  * @returns {{outcome: 'accepted'|'rejected'|'quarantined', reason: string|null,
- *   problems: object[], problemsTotal: number, report: object}}
+ *   problems: object[], problemsTotal: number, report: object, retryable?: boolean}}
+ *   retryable (accepted only): the bundle has skips and every one is retryable
  */
 export function analyzeBundle(plaintext, ctx) {
   const { exp, registry, canaries = [], allowNoControls = false, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES } = ctx;
@@ -114,13 +115,17 @@ export function analyzeBundle(plaintext, ctx) {
   if (!valid.ok) {
     return reject('manifest_invalid', valid.errors.map((e) => ({ reason: 'manifest_invalid', json_path: e.path, detail: e.message })));
   }
+  const retryableSkips = manifest.skips.filter((sk) => sk.retryable === true).length;
   report.bundle = {
     manifest_sha256: sha256Hex(manifestBytes),
     files: files.size,
     bytes: [...files.values()].reduce((n, d) => n + d.length, 0),
     controls: manifest.controls.length,
     skips: manifest.skips.length,
+    retryable_skips: retryableSkips,
   };
+  // Every stage that did not run may succeed later (R-ING-16).
+  const retryable = manifest.skips.length > 0 && retryableSkips === manifest.skips.length;
 
   // 6. forgery: the bundle must name this item's run_key and fence
   const forged = checkBundle(manifest, files, exp, { requireControl: !allowNoControls })
@@ -148,7 +153,7 @@ export function analyzeBundle(plaintext, ctx) {
   };
   if (hits.length > 0) return done('quarantined', 'secret_scan');
 
-  return done('accepted', null);
+  return { ...done('accepted', null), retryable };
 }
 
 /**

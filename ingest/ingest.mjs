@@ -32,6 +32,9 @@
 //   8. secrets   redaction rules and the attempt's canaries over the manifest and
 //                every file outside raw/; any hit quarantines; raw/ hits are
 //                only counted
+//   9. retry     a bundle that passed but whose every skip is retryable is
+//                rejected as retry_later, at most MAX_RETRIES times per run_key;
+//                after that it is accepted as skipped
 //
 // Steps 5 to 8 run in a worker thread with a time and memory limit
 // (analyze.mjs): past the limit the item is rejected as ingest_timeout, a
@@ -78,6 +81,12 @@ import { maskText, scanText } from './redact.mjs';
 import { loadRegistry } from './registry.mjs';
 
 export const REPORT_SCHEMA_VERSION = 1;
+/**
+ * How often an item whose every skip is retryable is sent back (retry_later)
+ * before ingest keeps it as skipped (R-ING-16). The pump waits longer before
+ * each retry (pump/due.mjs), so three retries span a few hours.
+ */
+export const MAX_RETRIES = 3;
 // The size caps live in the result contract (worker-kit/contract.mjs).
 export { MAX_ARTIFACT_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES };
 export const OUTCOME_DIRS = Object.freeze({ accepted: 'accepted', rejected: 'rejected', quarantined: 'quarantine' });
@@ -137,7 +146,7 @@ export async function openAttempt(input, deps) {
   const {
     ledger, github, decrypt, registry, now = () => new Date(), allowNoControls = false,
     maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES,
-    analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS,
+    analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS, maxRetries = MAX_RETRIES,
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
 
@@ -374,6 +383,16 @@ export async function openAttempt(input, deps) {
     const a = verdict.result;
     Object.assign(report, a.report);
     if (a.outcome !== 'accepted') return finish(a.outcome, a.reason, a.problems, a.problemsTotal);
+    if (a.retryable === true) {
+      // Nothing ran that could not run later: send it back, a bounded number
+      // of times (the ledger counts earlier retry_later decisions per run_key).
+      const used = Number.isSafeInteger(item.retries) && item.retries > 0 ? item.retries : 0;
+      report.retries = { before: used, max: maxRetries };
+      if (used < maxRetries) {
+        return reject('retry_later', [{ reason: 'retry_later', detail: `every skip is retryable; retry ${used + 1} of ${maxRetries}` }]);
+      }
+      report.retries.exhausted = true;
+    }
     try {
       ({ manifestBytes, files } = readBundle(plaintext, { maxBundleBytes }));
     } catch (err) {
@@ -417,6 +436,7 @@ function checkRun(run, row, seen) {
  * @param {number} [deps.maxArtifactBytes]
  * @param {number} [deps.maxBundleBytes]
  * @param {number} [deps.maxFileBytes]
+ * @param {number} [deps.maxRetries]  retry_later decisions per run_key before a retryable bundle is kept
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
  *   outcome and reason are the items' own when they all agree; otherwise outcome

@@ -70,7 +70,10 @@ function normalizeItem(it, position, bad) {
   const current = curRaw === undefined ? null : toInt(curRaw);
   if (current !== null && !(current >= 1)) bad('current_fence');
   const outcome = pick(it, 'outcome') ?? null;
-  return { index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome) };
+  const retriesRaw = pick(it, 'retries');
+  const retries = retriesRaw === undefined || retriesRaw === null ? 0 : toInt(retriesRaw);
+  if (!(retries >= 0)) bad('retries');
+  return { index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries };
 }
 
 /**

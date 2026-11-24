@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Staleness and eligibility per tier and workflow, read by pump/due.mjs. mode: always = due when there is no result for the current run_key (first sight, new SHA or digest, new tool, oracle or probe version), on a change event, or when the last result is older than max_age_days (null = no age limit); sample = due only when a sampling hook picks it; never = not run for this tier. capture_range_max_age_days is passed through to live-probe and is not used by the due list yet.",
+  "description": "Staleness and eligibility per tier and workflow, read by pump/due.mjs. mode: always = due when there is no result for the current run_key (first sight, new SHA or digest, new tool, oracle or probe version), on a change event, or when the last result is older than max_age_days (null = no age limit); sample = due only when a sampling hook picks it; never = not run for this tier. capture_range_max_age_days is passed through to live-probe and is not used by the due list yet. A run_key sent back as retry_later (every skip retryable) is not due again until retry_backoff_minutes x 2^(n-1) after its n-th retry.",
   "weights": { "T0": 100, "T1": 60, "T2": 40, "T3": 20, "T4": 10 },
   "priority": {
     "new_version": 30,
@@ -14,6 +14,7 @@
     "age_max": 30
   },
   "max_rejections": 3,
+  "retry_backoff_minutes": 30,
   "tiers": {
     "T0": {
       "scan-static": { "mode": "always", "max_age_days": null },

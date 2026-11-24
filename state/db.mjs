@@ -65,7 +65,9 @@ function checkTtl(ttlMs) {
 
 // Rejection reasons that say nothing about the run_key's own work (identity or
 // fencing failures), so they don't count towards parking it.
-const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'"].join(', ');
+// retry_later (the worker hit a passing condition) is bounded on its own
+// (ingest MAX_RETRIES) and is not counted either.
+const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'", "'retry_later'"].join(', ');
 
 function plain(row) {
   return row ? { ...row } : undefined;
@@ -524,13 +526,15 @@ export class StateDb {
    *
    *   {attempt_id, workflow, repo, workflow_file, run_id, workflow_sha,
    *    canaries, status, shard_id, created, expires,
-   *    items: [{index, run_key, fence, subject, current_fence, outcome, resolved}]}
+   *    items: [{index, run_key, fence, subject, current_fence, outcome, resolved, retries}]}
    *
    * workflow_file is a path under .github/workflows/. items are in dispatch
    * order; index is the item's 0-based position, which names its result bundle
    * (result-<attempt_id>-<index>.tar.age). current_fence is the fence of the
    * item's run_key lease now (a newer one means the item is stale). outcome is
    * null until a result for this attempt, run_key and fence is recorded.
+   * retries is how many retry_later decisions the run_key has had since its
+   * last accepted result (retryLaterCount).
    * canaries is always empty for now (none are injected yet). When they are,
    * they live only here, in the state database, which is stored encrypted
    * (scripts/state-asset.mjs); they must never go into dispatch inputs (shown
@@ -553,6 +557,7 @@ export class StateDb {
         current_fence: lease ? lease.fence : null,
         outcome: rec ? rec.outcome ?? (rec.accepted === 1 ? 'accepted' : 'rejected') : null,
         resolved: it.resolved,
+        retries: this.retryLaterCount(it.run_key),
       };
     });
     const file = String(d.workflow_file);
@@ -707,6 +712,32 @@ export class StateDb {
         AND NOT EXISTS (SELECT 1 FROM results r WHERE r.run_key = a.run_key)
       GROUP BY a.run_key HAVING COUNT(*) >= ?
     `).all(min).map(plain);
+  }
+
+  // ---- retry_later ----
+
+  /** retry_later decisions for a run_key since its last accepted result. */
+  retryLaterCount(runKey) {
+    return this.raw.prepare(`
+      SELECT COUNT(*) AS n FROM attempts WHERE run_key = ? AND reason = 'retry_later'
+        AND received > COALESCE((SELECT accepted_at FROM results WHERE run_key = ?), '')
+    `).get(runKey, runKey).n;
+  }
+
+  /**
+   * run_keys sent back as retry_later that must wait before they are due again:
+   * the n-th retry waits baseMs x 2^(n-1) after the decision.
+   * @returns {string[]}
+   */
+  retryLaterWaiting({ now, baseMs }) {
+    const t = toMs(now);
+    const rows = this.raw.prepare(`
+      SELECT a.run_key, COUNT(*) AS n, MAX(a.received) AS last FROM attempts a
+      WHERE a.reason = 'retry_later' AND a.run_key IS NOT NULL
+        AND a.received > COALESCE((SELECT accepted_at FROM results r WHERE r.run_key = a.run_key), '')
+      GROUP BY a.run_key
+    `).all();
+    return rows.filter((r) => Date.parse(r.last) + baseMs * 2 ** Math.min(10, r.n - 1) > t).map((r) => r.run_key);
   }
 
   // ---- ingest failures ----

@@ -16,7 +16,9 @@
 //                  picked by a hook. The hooks return nothing for now.
 //
 // Pairs whose tier says `never`, pairs already in flight, pairs on a disabled
-// workflow, and run_keys parked after too many rejections are skipped. A tier
+// workflow, run_keys parked after too many rejections, and run_keys sent back
+// as retry_later that are still in their backoff (retry_backoff_minutes in
+// pump/tiers.json, doubled for each retry) are skipped. A tier
 // cell in `sample` mode is due only through a sampling hook.
 //
 // computeDue() is pure. dueFromState() reads its inputs from the state store.
@@ -173,6 +175,9 @@ export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
   const inFlight = new Set(db.inFlight({ now }).map((p) => pairKey(p.subject, p.workflow)));
   const maxRejections = Number.isInteger(tiers.max_rejections) && tiers.max_rejections > 0 ? tiers.max_rejections : 3;
   const parked = new Set(db.rejectedRunKeys(maxRejections).map((r) => r.run_key));
+  const backoff = Number(tiers.retry_backoff_minutes);
+  const baseMs = (Number.isFinite(backoff) && backoff >= 0 ? backoff : 30) * 60_000;
+  if (typeof db.retryLaterWaiting === 'function') for (const k of db.retryLaterWaiting({ now, baseMs })) parked.add(k);
   return { now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, hooks };
 }
 

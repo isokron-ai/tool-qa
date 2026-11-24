@@ -574,3 +574,40 @@ test('R-ING-03: a full-size bundle of crafted text is judged well inside the tim
   assert.equal(r.outcome, 'accepted', r.reason);
   assert.ok(ms < 20_000, `took ${ms.toFixed(0)} ms`);
 });
+
+// ---- R-ING-16: retryable skips ----
+
+const retryMeta = (skips) => ({ skips });
+const RATE_LIMITED = { stage: 'fetch', reason: 'rate_limited', retryable: true };
+const UPSTREAM = { stage: 'install', reason: 'upstream_unavailable', retryable: true };
+
+test('R-ING-16: a bundle whose every skip is retryable is sent back as retry_later; the retries are bounded', async () => {
+  const bundle = makeBundle({ meta: retryMeta([RATE_LIMITED, UPSTREAM]) });
+  const first = await run({ bundle });
+  assert.equal(first.r.outcome, 'rejected');
+  assert.equal(first.r.reason, 'retry_later');
+  assert.deepEqual(first.ledger.records.map((x) => [x.outcome, x.reason]), [['rejected', 'retry_later']]);
+  const report = json(first.r.outputs.get('rejected/att-1/0/ingest.json'));
+  assert.equal(report.bundle.retryable_skips, 2);
+  assert.deepEqual(report.retries, { before: 0, max: 3 });
+  assert.match(report.problems[0].detail, /retry 1 of 3/);
+
+  const third = await run({ bundle, ledger: fakeLedger([expectedRow({ retries: 2 })]) });
+  assert.equal(third.r.reason, 'retry_later');
+  assert.match(json(third.r.outputs.get('rejected/att-1/0/ingest.json')).problems[0].detail, /retry 3 of 3/);
+
+  // After three retries it is kept as it is: accepted, with its skips.
+  const kept = await run({ bundle, ledger: fakeLedger([expectedRow({ retries: 3 })]) });
+  assert.equal(kept.r.outcome, 'accepted');
+  assert.deepEqual(json(kept.r.outputs.get('accepted/att-1/0/ingest.json')).retries, { before: 3, max: 3, exhausted: true });
+});
+
+test('R-ING-16: one skip that is not retryable, or no skips at all, is accepted as before', async () => {
+  const mixed = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED, { stage: 'start', reason: 'timeout_start' }]) }) });
+  assert.equal(mixed.r.outcome, 'accepted');
+  const none = await run({ bundle: makeBundle({ meta: retryMeta([]) }) });
+  assert.equal(none.r.outcome, 'accepted');
+  // A retryable skip never outranks a real problem.
+  const bad = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED]), identity: { fence: 6 } }) });
+  assert.equal(bad.r.reason, 'fence_mismatch');
+});

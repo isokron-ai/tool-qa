@@ -71,10 +71,12 @@
               "build_failed_upstream", "install_failed_registry",
               "start_requires_credentials", "no_local_backend", "heavy_backend",
               "timeout_start", "cluster_member", "quarantined", "lane_disabled",
-              "policy_excluded", "trace_unavailable", "bridge_required"
+              "policy_excluded", "trace_unavailable", "bridge_required",
+              "rate_limited", "upstream_unavailable"
             ]
           },
-          "evidence": { "$ref": "#/$defs/bundle_path" }
+          "evidence": { "$ref": "#/$defs/bundle_path" },
+          "retryable": { "type": "boolean" }
         }
       }
     },

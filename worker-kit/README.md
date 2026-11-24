@@ -81,7 +81,20 @@ action for it:
 
 - `finished_at` is optional (the build time is used).
 - `skips[].reason` is one of the codes in `contract.mjs` (`SKIP_REASONS`). A
-  stage that did not run is recorded, never left out.
+  stage that did not run is recorded, never left out. Use `rate_limited` when
+  a rate limit stopped it (GitHub, a package registry) and
+  `upstream_unavailable` when an upstream timed out or answered 5xx; don't
+  borrow another code, since the codes feed the coverage counts.
+- `skips[].retryable` (optional, `true` or `false`, default `false`) says the
+  stage did not run for a passing reason and may succeed later. Mark it per
+  skip; it usually goes with `rate_limited` or `upstream_unavailable`. When
+  **every** skip of an item's bundle is retryable (and the bundle is
+  otherwise valid), ingest records the item as rejected `retry_later`: its
+  lease and slot are freed and the pump sends it out again after a backoff
+  (30, 60, then 120 minutes, `retry_backoff_minutes` in `pump/tiers.json`).
+  After three `retry_later` decisions for the same run_key, the next such
+  bundle is accepted with its skips. A bundle with at least one skip that is
+  not retryable is judged as before.
 - `controls[].kind` is `known_good`, `known_bad`, `malicious`,
   `protocol_variant` or `forgery`; `expected` and `observed` are short labels
   such as `contained` (lower case letters, digits, `_`). Ingest rejects the bundle unless every

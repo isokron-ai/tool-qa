@@ -165,6 +165,9 @@ such attempt: `attempt_id`, `workflow`, `repo`, `workflow_file` (a path under
 `status`, `shard_id`, `created`, `expires`, and `items`, one per dispatched
 item in dispatch order:
 `{ index, run_key, fence, subject, current_fence, outcome, resolved }`.
+`retries` is the number of `retry_later` decisions for the item's run_key
+since its last accepted result (`db.retryLaterCount(runKey)`).
+
 `index` is the item's 0-based position in the `items` input the worker got,
 which names its result artifact; `current_fence` is the fence of the
 run_key's lease now (a newer one means this item is stale); `outcome` is
@@ -226,6 +229,7 @@ an earlier rejection into an acceptance.
 | `duplicate_result` | This item is already resolved without a recorded decision for this fence (not expected; repeats of a recorded decision return it with `duplicate: true` instead). | no |
 | `stale_fence` | A newer lease exists; the work was sent out again. | no |
 | `lease_expired`, `lease_released`, `no_lease`, `unknown_fence`, `holder_mismatch` | The lease is not live any more. | yes |
+| `retry_later` | Every skip in the bundle is retryable (a rate limit, an upstream outage): the item is sent out again after a backoff (`retry_backoff_minutes` in `pump/tiers.json`, doubled for each retry), at most three times per run_key, then the bundle is accepted with its skips. | no |
 | ingest's `reason`, or `rejected_by_ingest` | Ingest rejected the result. | yes |
 
 Every call is kept as an attempt, accepted or not; a rejected result never

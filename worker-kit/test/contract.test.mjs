@@ -265,3 +265,15 @@ test('R-ING-03: collectFiles refuses a file over 8 MiB and a bundle over 64 MiB;
     assert.throws(() => collectFiles(many), new RegExp(`more than the ${MAX_BUNDLE_BYTES} bytes a bundle may hold`));
   } finally { rmSync(many, { recursive: true, force: true }); }
 });
+
+test('R-ING-16: rate_limited and upstream_unavailable are skip reasons, and a skip may be marked retryable', () => {
+  assert.ok(SKIP_REASONS.includes('rate_limited'));
+  assert.ok(SKIP_REASONS.includes('upstream_unavailable'));
+  const ok = validManifest({ skips: [
+    { stage: 'fetch', reason: 'rate_limited', retryable: true },
+    { stage: 'install', reason: 'upstream_unavailable', retryable: false },
+  ] });
+  assert.deepEqual(validateManifest(ok).errors, []);
+  const bad = validManifest({ skips: [{ stage: 'fetch', reason: 'rate_limited', retryable: 'yes' }] });
+  assert.equal(validateManifest(bad).ok, false);
+});

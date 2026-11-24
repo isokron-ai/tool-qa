@@ -51,7 +51,7 @@ test('getAttempt describes a dispatch in the shape ingest reads', () => {
   assert.deepEqual(before.canaries, []);
   assert.equal(before.status, 'pending');
   assert.deepEqual(before.items, [{
-    index: 0, run_key: KEY_A, fence: item.fence, subject: 'repo:1', current_fence: item.fence, outcome: null, resolved: null,
+    index: 0, run_key: KEY_A, fence: item.fence, subject: 'repo:1', current_fence: item.fence, outcome: null, resolved: null, retries: 0,
   }]);
 
   db.markDispatched('att-1', { runId: 4242, workflowSha: SHA, correlatedBy: 'response' });
@@ -296,5 +296,55 @@ test('dispatchesAwaitingResults keeps a late multi-item dispatch listed until ev
   assert.deepEqual(ids(), ['late'], 'one item is still undecided');
   db.recordResult({ run_key: KEY_B, attempt_id: 'late', fence: items[1].fence, outcome: 'accepted', accepted: true, now: T0 + 7 * MIN });
   assert.deepEqual(ids(), []);
+  db.close();
+});
+
+test('R-ING-16: retry_later frees the lease and slot, is not counted towards parking, and backs off before the work is due again', async () => {
+  const { dueFromState, loadConfig } = await import('../pump/due.mjs');
+  const { tiers } = loadConfig();
+  const db = openState(':memory:');
+  const record = (attemptId, at) => {
+    const [item] = dispatch(db, { attemptId, now: at });
+    return db.recordResult({ run_key: KEY_A, attempt_id: attemptId, fence: item.fence, outcome: 'rejected', accepted: false, reason: 'retry_later', now: at + MIN });
+  };
+  const r = record('att-1', T0);
+  assert.equal(r.accepted, false);
+  assert.equal(r.reason, 'retry_later');
+  assert.equal(db.getLease(KEY_A).holder, null, 'the lease is free');
+  assert.deepEqual(db.openSlots(), [], 'the slot is free');
+  assert.equal(db.getDispatch('att-1').close_reason, 'results_in');
+  assert.equal(db.rejectedCount(KEY_A), 0, 'a retry does not count towards parking');
+  assert.equal(db.getAttempt('att-1').items[0].retries, 1);
+
+  // Backoff: 30 minutes after the first retry, 60 after the second.
+  const base = 30 * MIN;
+  assert.deepEqual(db.retryLaterWaiting({ now: T0 + MIN + base - 1, baseMs: base }), [KEY_A]);
+  assert.deepEqual(db.retryLaterWaiting({ now: T0 + MIN + base, baseMs: base }), []);
+  record('att-2', T0 + 40 * MIN);
+  assert.equal(db.retryLaterCount(KEY_A), 2);
+  assert.deepEqual(db.retryLaterWaiting({ now: T0 + 41 * MIN + 2 * base - 1, baseMs: base }), [KEY_A]);
+  assert.deepEqual(db.retryLaterWaiting({ now: T0 + 41 * MIN + 2 * base, baseMs: base }), []);
+
+  db.close();
+});
+
+test('R-ING-16: the due list skips a run_key sent back as retry_later until its backoff ends', async () => {
+  const { dueFromState, loadConfig } = await import('../pump/due.mjs');
+  const { tiers } = loadConfig();
+  assert.equal(tiers.retry_backoff_minutes, 30);
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'repo:1', kind: 'repo', source: 'test', tier: 1, sha: SHA, now: T0 });
+  const wf = { 'live-probe': {
+    enabled: true, repo: WORKER_REPO, file: 'qa-worker.yml', ref: 'main', shard_size: 1, setup_minutes: 1, minutes_per_subject: 1,
+    slots_max: 1, versions: { tool: {}, oracle: {}, probe: {} }, image_digest: null, settings_state: 'default',
+  } };
+  const due = (t) => dueFromState(db, { now: t, tiers, workflows: wf }).map((d) => d.run_key);
+  const [key] = due(T0);
+  assert.ok(key);
+  db.recordRunKey(key, { subject: 'repo:1', workflow: 'live-probe', fields: {}, now: T0 });
+  const [item] = dispatch(db, { items: [{ runKey: key, subject: 'repo:1' }] });
+  db.recordResult({ run_key: key, attempt_id: 'att-1', fence: item.fence, outcome: 'rejected', accepted: false, reason: 'retry_later', now: T0 + MIN });
+  assert.deepEqual(due(T0 + 2 * MIN), [], 'waiting out its backoff');
+  assert.deepEqual(due(T0 + 31 * MIN), [key], 'due again after 30 minutes');
   db.close();
 });

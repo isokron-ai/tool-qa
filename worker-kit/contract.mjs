@@ -53,7 +53,19 @@ export const SKIP_REASONS = Object.freeze([
   'start_requires_credentials', 'no_local_backend', 'heavy_backend',
   'timeout_start', 'cluster_member', 'quarantined', 'lane_disabled',
   'policy_excluded', 'trace_unavailable', 'bridge_required',
+  // Passing conditions outside the subject: a rate limit (GitHub or a
+  // registry), or an upstream that timed out or answered 5xx. Usually marked
+  // retryable (below).
+  'rate_limited', 'upstream_unavailable',
 ]);
+
+/**
+ * A skip may carry `retryable: true`: the stage did not run for a passing
+ * reason, and running it again later may succeed. When every skip of a bundle
+ * is retryable, ingest records the item as rejected `retry_later`, so the pump
+ * sends it out again after a backoff, up to a few times, and only then keeps
+ * it as skipped.
+ */
 
 /** Control targets carried by a shard. */
 export const CONTROL_KINDS = Object.freeze(['known_good', 'known_bad', 'malicious', 'protocol_variant', 'forgery']);

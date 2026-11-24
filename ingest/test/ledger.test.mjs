@@ -18,7 +18,7 @@ const SHARED = {
 
 test('normalizeAttempt accepts the documented names and common aliases', () => {
   assert.deepEqual(normalizeAttempt(ROW), {
-    ...SHARED, canaries: [], items: [{ index: 0, run_key: 'a'.repeat(64), fence: 7, current_fence: null, outcome: null }],
+    ...SHARED, canaries: [], items: [{ index: 0, run_key: 'a'.repeat(64), fence: 7, current_fence: null, outcome: null, retries: 0 }],
   });
   const aliased = normalizeAttempt({
     attempt_id: 'att-1', run_key: 'a'.repeat(64), fencing_no: '7', worker_repo: 'isokron-ai/mcp-check',
@@ -45,9 +45,9 @@ test('normalizeAttempt reads a multi-item row: items in dispatch order, each wit
     ],
   });
   assert.deepEqual(n.items, [
-    { index: 0, run_key: k('a'), fence: 10, current_fence: null, outcome: 'accepted' },
-    { index: 1, run_key: k('b'), fence: 11, current_fence: 13, outcome: null },
-    { index: 2, run_key: k('c'), fence: 12, current_fence: 12, outcome: null },
+    { index: 0, run_key: k('a'), fence: 10, current_fence: null, outcome: 'accepted', retries: 0 },
+    { index: 1, run_key: k('b'), fence: 11, current_fence: 13, outcome: null, retries: 0 },
+    { index: 2, run_key: k('c'), fence: 12, current_fence: 12, outcome: null, retries: 0 },
   ]);
   // Without an index, the position in the list is the index.
   const plainList = normalizeAttempt({ ...SHARED, items: [{ run_key: k('b'), fence: 3 }, { run_key: k('a'), fence: 4 }] });

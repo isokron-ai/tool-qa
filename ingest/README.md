@@ -71,6 +71,12 @@ that item only.
    ledger holds for the attempt. Any hit quarantines the bundle. Hits in `raw/`
    are only counted.
 
+9. **Retry.** A bundle that passed every check but whose skips are all marked
+   `retryable` (rate limits, upstream outages; see
+   [`worker-kit/README.md`](../worker-kit/README.md)) is rejected as
+   `retry_later`, so the item is sent out again, at most three times per
+   run_key (`MAX_RETRIES`); after that it is accepted with its skips.
+
 Steps 5 to 8 read untrusted bytes, so they run in a worker thread
 ([`analyze.mjs`](analyze.mjs)) with no environment, a 1 GiB heap limit and a
 60 second wall-clock limit. A judge that runs past the limit is stopped and
@@ -145,6 +151,7 @@ Recorded rejections and quarantine:
 | controls and claims | `forgery_control_injected`, `forgery_marker_leaked`, `foreign_identity_claim`, `control_output_in_raw`, `control_failed`, `control_missing`, `forgery_control_unverified` |
 | registry | `observation_format`, `undeclared_field`, `deprecated_field`, `field_type` |
 | secrets (quarantined) | `secret_scan` |
+| retry | `retry_later` (every skip is retryable; sent out again after a backoff; not counted towards parking) |
 | judging | `ingest_timeout` (judging or decrypting ran past its time limit), `ingest_error` (judging failed on this bundle, or the pump failed to judge the item three times; see "Ingest in the pump" in docs/INTERFACES.md) |
 
 When a bundle has several problems, all are listed and the most specific names
