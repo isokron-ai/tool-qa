@@ -570,6 +570,60 @@ old, never in T2 to T4. Results recorded before state schema 7 have no
 coverage: they get no `our_limit` boost, and one that was not `skips_only`
 counts as assessed.
 
+**Oracle disagreement (loop upgrade 7, R-ORD-01..10).** Where our reader
+(scan-static), the live tool list (live-probe) and the official SDK clients
+or conformance suite disagree, our tools are weakest there, so those subjects
+are looked at sooner and their fingerprints weigh more. The pieces:
+
+- *The signal* (`state/oracle.mjs`, state schema 9). Ingest reads the facts of
+  every accepted scan-static and live-probe bundle (tool count and tool list
+  hash, `sdk_client_results`, failed scored `conformance_checks`, the
+  worker's `oracle_disagreements`) and `StateDb.noteOracle()` keeps the latest
+  per (subject, lane) in `oracle_facts`, then derives one row per subject in
+  `oracle_disagreements`: `kinds` (`tool_set`: same count, other tools;
+  `tool_count`; `schema`: same tools, other definitions; `protocol`: an
+  official client could not initialise or list where our probe did;
+  `conformance`: our lint against the suite), with the oracles involved, and
+  a signature of those. Counts moving does not change the signature. Until
+  live-probe is switched on only the reader side exists, so there is nothing
+  to disagree with and no row; it fills in as results arrive.
+- *Fault side.* A disagreement is evidence about our tool, never the
+  subject's: it writes nothing to `results.fault` or `results.coverage`, is
+  not a coverage gap, and the check-in makes no fingerprint of it. Where an
+  oracle shows the server is wrong (a worker entry with `attribution:
+  server`, or a failed conformance check while the clients and our reader
+  agree) it is kept as `server_side` evidence and opens nothing.
+- *Priority* (`pump/due.mjs`, `priority.oracle_*` in `pump/tiers.json`). A
+  subject whose record is `open` gets, on its oracle lanes (`oracle_lanes`:
+  scan-static, live-probe): (1) a due reason `oracle_recheck` (+15) once its
+  last result is older than `oracle_recheck_days` (1), well before the tier
+  max age; (2) a boost of `oracle_disagreement_share` (0.25) x the tier
+  weight (T0 +25, T1 +15, T2 +10, T3 +5, T4 +2.5). **Order of the two
+  boosts:** the coverage-gap boost is taken first; the oracle boost gets only
+  what is left of the same cap, `gapBoostCap()` (one point under the gap to
+  the next tier up). Together they never reach a bare pair of the tier above
+  (R-ORD-02): a T1 pair with a coverage gap (+30) gets +9, not +15. The boost
+  orders due pairs; only `oracle_recheck` makes a pair due, and a
+  disagreement never moves a run_key.
+- *Clearing.* Each accepted oracle-lane result is one re-check. The record
+  clears when the oracles agree (kept with `cleared_at`; a later disagreement
+  reopens it as a new episode). The same disagreement (same signature)
+  surviving `ORACLE_MAX_UNCHANGED` (5) re-checks is `settled`: the boost and
+  the re-checks stop until the signature changes, so a server whose tools are
+  registered at run time from config (which the reader cannot know) does not
+  get looked at every day for ever. A changed signature starts over.
+- *Check-in* (`longitudinal/checkin.mjs`). It derives the same signal from
+  each subject's latest facts in the archive. A subject with an open
+  disagreement counts `oracle_multiplier` (1.5) times as much in every
+  fingerprint it is still affected by, so a fix that unlocks such subjects
+  ranks higher; each fingerprint shows `oracle_subjects`, and the summary
+  lists the disagreements by kind. The check-in ignores the settle rule: it
+  has no re-check count.
+- *Watching it.* `SELECT subject, status, kinds, unchanged_rechecks FROM
+  oracle_disagreements` (state read access) or `db.listOracleDisagreements()`;
+  due items of an open one carry `oracle: [kinds]`. Pruning never touches
+  these tables (like `results`, they are small and current).
+
 **Throttling (R-SUB-04, R-SUB-09).** A result whose every skip is a
 retryable `rate_limited` or `upstream_unavailable` from a third-party stage
 the lane declares is sent back as `retry_throttled`. It does not use up the

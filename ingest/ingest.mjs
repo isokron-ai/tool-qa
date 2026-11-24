@@ -83,6 +83,7 @@ import { cleanProblem, makeLabeler, MAX_LISTED, textOrNull } from './hygiene.mjs
 import { normalizeAttempt, openLedger } from './ledger.mjs';
 import { maskText, scanText } from './redact.mjs';
 import { loadRegistry } from './registry.mjs';
+import { oracleFactsFromFiles } from '../state/oracle.mjs';
 
 export const REPORT_SCHEMA_VERSION = 1;
 /**
@@ -293,6 +294,9 @@ export async function openAttempt(input, deps) {
         // The result's fault side and coverage state (R-COV-02): a tool-fault
         // skip is stored as unassessed_tool, never as excluded or the subject's.
         ...(outcome === 'accepted' && report.bundle?.coverage ? { fault: report.bundle.fault ?? null, coverage: report.bundle.coverage } : {}),
+        // What the oracle lanes said, for the subject's disagreement record
+        // (loop upgrade #7); it never changes the fault side or coverage.
+        ...(outcome === 'accepted' && files ? (() => { const oracle = oracleFactsFromFiles(row.workflow_name, files); return oracle ? { oracle } : {}; })() : {}),
       };
       const answer = (await ledger.recordResult(wantedRecord)) ?? { accepted: wantedRecord.accepted, reason };
       const recorded = { accepted: answer.accepted === true, reason: typeof answer.reason === 'string' ? answer.reason : null };

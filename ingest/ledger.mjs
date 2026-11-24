@@ -134,7 +134,10 @@ export function normalizeAttempt(row) {
   items.forEach((it, i) => { if (it.index !== i) bad('item index (indexes must run 0, 1, 2, ... without gaps)'); });
   if (new Set(items.map((it) => it.run_key)).size !== items.length) bad('run_key (each item needs its own)');
   // The lane name (pump/workflows.json key), when the row has one besides the file.
-  const lane = pick(row, 'workflow_file') !== undefined && typeof row.workflow === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(row.workflow) ? row.workflow : null;
+  // A row that was normalised before (the state ledger does, then ingest does
+  // again) carries it as workflow_name (R-ORD-10).
+  const named = typeof row.workflow === 'string' ? row.workflow : row.workflow_name;
+  const lane = pick(row, 'workflow_file') !== undefined && typeof named === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(named) ? named : null;
   return {
     attempt_id: attemptId,
     repo,

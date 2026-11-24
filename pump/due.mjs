@@ -51,6 +51,27 @@
 // plus the stale result's age: with the shipped tiers.json, always in T0,
 // in T1 while the stale result is under 20 days old, never in T2 to T4.
 //
+// Oracle disagreement (loop upgrade #7, state/oracle.mjs): a subject where
+// our reader, the live tool list and the official SDK clients or conformance
+// suite disagree (state oracle_disagreements, status open) is where our tools
+// are weakest. Its pairs of an oracle lane (priority.oracle_lanes: scan-static
+// and live-probe) get two things:
+//   oracle_recheck  a due reason (weight priority.oracle_recheck) once the last
+//                   result is older than priority.oracle_recheck_days, which
+//                   is shorter than the tier's max age. Each result counts
+//                   towards the settle rule: the same disagreement
+//                   ORACLE_MAX_UNCHANGED (5) results in a row is settled and
+//                   the boost and re-checks stop until it changes; agreement
+//                   clears it.
+//   a priority boost  priority.oracle_disagreement_share x the tier weight,
+//                   added AFTER the coverage-gap boost and limited to what is
+//                   left of the same cap: coverage-gap boost + oracle boost
+//                   never exceed gapBoostCap() of the tier, so a boosted pair
+//                   still never reaches a bare pair of the tier above
+//                   (R-COV-05, R-ORD-02). The coverage gap has the first claim.
+// A disagreement is evidence about our tool, never the subject's: it changes
+// no result's fault or coverage (R-ORD-04).
+//
 // Subjects are keyed by their frozen subject key (subjects.id, which run_keys
 // name); each due pair also carries the subject's current owner/name (`name`,
 // what the worker is sent) and its repository id when known (state schema v8,
@@ -131,6 +152,28 @@ export function coverageGapBoost(subject, workflowName, ctx) {
 }
 
 /**
+ * The oracle-disagreement boost of a due pair: priority.oracle_disagreement_share
+ * x the tier weight for a pair of an oracle lane whose subject has an open
+ * disagreement (ctx.oracle), limited to what is left of gapBoostCap() after the
+ * coverage-gap boost (ctx.gapBoost). So the two boosts together stay under the
+ * gap to the next tier (R-ORD-02).
+ */
+export function oracleBoost(subject, workflowName, ctx) {
+  if (!ctx?.tiers || ctx.oracle?.status !== 'open' || !isOracleLane(ctx.tiers, workflowName)) return 0;
+  const share = Number(ctx.tiers.priority?.oracle_disagreement_share);
+  const weight = Number(ctx.tiers.weights?.[ctx.tier]);
+  if (!Number.isFinite(share) || share <= 0 || !Number.isFinite(weight) || weight <= 0) return 0;
+  const room = gapBoostCap(ctx.tiers, ctx.tier) - Number(ctx.gapBoost || 0);
+  return Math.max(0, Math.min(share * weight, room));
+}
+
+/** Whether a workflow is one of the oracle lanes (priority.oracle_lanes). */
+export function isOracleLane(tiers, workflowName) {
+  const lanes = tiers?.priority?.oracle_lanes;
+  return Array.isArray(lanes) && lanes.includes(workflowName);
+}
+
+/**
  * The default hooks. Each takes (subject, workflowName, ctx). The sampling
  * hooks pick nothing for now; coverageGap is the coverage-gap boost.
  */
@@ -139,6 +182,7 @@ export const NO_HOOKS = Object.freeze({
   determinism: () => false,
   rawSample: () => false,
   coverageGap: coverageGapBoost,
+  oracleDisagreement: oracleBoost,
 });
 
 /** JSON with object keys sorted at every level and no whitespace. */
@@ -237,13 +281,14 @@ function whyNoResult(fields, last) {
  * @param {Set<string>} input.resultKeys  run_keys that have an accepted result
  * @param {Set<string>} input.inFlight    "<subject>\0<workflow>" pairs with a live dispatch
  * @param {Set<string>} input.parked      run_keys not to dispatch again
+ * @param {Map<string, {status:string, kinds:object[]}>} [input.oracle]  subject key -> its oracle disagreement row (status open boosts)
  * @param {object} [input.hooks]
  * @returns {{subject:string, name:string, repo_id:number|null, workflow:string, tier:number, run_key:string,
  *            fields:object, reasons:string[], priority:number, gap:string|null}[]}
  *          subject: the subject key (run_keys name it); name: the owner/name to send
  *          gap: gapKind() of the pair's last result (R-COV-03)
  */
-export function computeDue({ now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, hooks = NO_HOOKS }) {
+export function computeDue({ now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, oracle: oracleOf = new Map(), hooks = NO_HOOKS }) {
   const h = { ...NO_HOOKS, ...hooks };
   const weights = tiers.weights || {};
   const prio = tiers.priority || {};
@@ -265,7 +310,8 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       const key = runKey(fields);
       if (parked.has(key)) continue;
       const last = lastResults.get(pk);
-      const ctx = { now, tier: tierName, cell, last, tiers };
+      const oracle = oracleOf.get(s.id) ?? null;
+      const ctx = { now, tier: tierName, cell, last, tiers, oracle };
       const reasons = [];
 
       if (cell.mode === 'always') {
@@ -279,6 +325,12 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
         if (reasons.length === 0 && skipsDays !== null && now - toMs(last.accepted_at) > skipsDays * DAY_MS) {
           reasons.push('skips_only');
         }
+        // An open oracle disagreement is looked at again sooner than the tier's max age.
+        const recheckDays = Number(prio.oracle_recheck_days);
+        if (reasons.length === 0 && oracle?.status === 'open' && isOracleLane(tiers, name) && last && Number.isFinite(recheckDays)
+          && now - toMs(last.accepted_at) > recheckDays * DAY_MS) {
+          reasons.push('oracle_recheck');
+        }
       }
       if (h.leadReverify(s, name, ctx)) reasons.push('lead_reverify');
       if (h.determinism(s, name, ctx)) reasons.push('determinism_sample');
@@ -289,9 +341,12 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       let priority = Number(weights[tierName] || 0);
       for (const r of reasons) priority += Number(prio[r] || 0);
       priority += Math.min(Number(prio.age_max ?? 30), ageDays * Number(prio.age_per_day ?? 1));
-      priority += Number(h.coverageGap(s, name, { ...ctx, reasons }) || 0);
+      const gapBoost = Number(h.coverageGap(s, name, { ...ctx, reasons }) || 0);
+      priority += gapBoost;
+      priority += Number(h.oracleDisagreement(s, name, { ...ctx, reasons, gapBoost }) || 0);
       out.push({
         subject: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority, gap: gapKind(last, reasons),
+        ...(oracle?.status === 'open' ? { oracle: oracle.kinds.map((k) => k.kind) } : {}),
       });
     }
   }
@@ -335,7 +390,9 @@ export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
   const cap = Number(tiers.retry_backoff_max_minutes);
   const maxMs = Number.isFinite(cap) && cap > 0 ? cap * 60_000 : Infinity;
   if (typeof db.retryLaterWaiting === 'function') for (const k of db.retryLaterWaiting({ now, baseMs, maxMs })) parked.add(k);
-  return { now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, hooks };
+  // A state from before schema 9 has no oracle tables: nothing to boost (R-ORD-08).
+  const oracle = new Map(db.schemaVersion() >= 9 ? db.listOracleDisagreements({ status: 'open' }).map((r) => [r.subject, r]) : []);
+  return { now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, oracle, hooks };
 }
 
 /** The due list for the current state. */

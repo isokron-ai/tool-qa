@@ -18,6 +18,8 @@ const ok = (id, name, createdAt) => ({ status: 'ok', node: node(id, name, create
 /** Take a state built by this code back to exactly what schema v7 had. */
 function downgradeToV7(db) {
   db.raw.exec(`
+    DROP TABLE oracle_facts;
+    DROP TABLE oracle_disagreements;
     DROP INDEX subjects_repo_id;
     DROP TABLE subject_events;
     ALTER TABLE dispatch_items DROP COLUMN subject_name;
@@ -50,8 +52,8 @@ test('R-SUBJ-01: the v8 migration of a live-shaped v7 state keeps every row, nam
     const dueBefore = moments.map((now) => dueView(dueFromState(v7, { now, ...built.config })));
     const keysBefore = v7.raw.prepare('SELECT run_key FROM results ORDER BY run_key').all().map((r) => r.run_key);
 
-    assert.equal(v7.migrate(), 8);
-    assert.equal(SCHEMA_VERSION, 8);
+    assert.equal(v7.migrate(), 9);
+    assert.equal(SCHEMA_VERSION, 9);
     assert.deepEqual(counts(v7.raw), before, 'no row lost or added');
     assert.equal(v7.raw.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.equal(v7.raw.prepare("SELECT value FROM counters WHERE name = 'fence'").get().value, fence);
@@ -65,7 +67,7 @@ test('R-SUBJ-01: the v8 migration of a live-shaped v7 state keeps every row, nam
     assert.deepEqual(dueAfter, dueBefore, 'the due list is the same before and after: nothing became due again');
 
     // Idempotent: migrating again (or reopening) changes nothing.
-    assert.equal(v7.migrate(), 8);
+    assert.equal(v7.migrate(), 9);
     v7.close();
     const again = openState(file);
     assert.deepEqual(counts(again.raw), before);

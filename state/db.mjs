@@ -27,7 +27,9 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 8;
+import { deriveDisagreements, foldDisagreement, ORACLE_MAX_UNCHANGED } from './oracle.mjs';
+
+export const SCHEMA_VERSION = 9;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -43,6 +45,7 @@ const MIGRATIONS = [
   { version: 6, sql: () => readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8') },
   { version: 7, sql: () => readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8') },
   { version: 8, sql: () => readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8') },
+  { version: 9, sql: () => readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -960,9 +963,12 @@ export class StateDb {
    *   fault, coverage: the result's fault side and coverage state
    *   (worker-kit/contract.mjs resultFault, R-COV-02); stored on the results
    *   row, NULL when not given. coverage 'assessed' also sets assessed_at.
+   *   oracle: the accepted bundle's oracle facts (state/oracle.mjs
+   *   oracleFacts), folded into the subject's disagreement by noteOracle().
+   *   It never changes fault or coverage.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, completedAt = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, completedAt = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -1028,6 +1034,7 @@ export class StateDb {
               assessed_at = COALESCE(excluded.assessed_at, results.assessed_at)
           `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0,
             fault, coverage, assessed);
+          if (oracle) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t });
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {
@@ -1040,6 +1047,49 @@ export class StateDb {
       }
       return { accepted: ok, reason: why, id: Number(r.lastInsertRowid) };
     });
+  }
+
+  /**
+   * Keep the oracle facts of an accepted result and re-derive the subject's
+   * disagreement (state/oracle.mjs). Called inside recordResult()'s
+   * transaction. Each call is one re-check of the subject: the same
+   * disagreement `maxUnchanged` times in a row settles (the due boost stops);
+   * a changed one starts over; agreement clears it. Server-side evidence is
+   * stored beside it and never opens or keeps one.
+   * @returns {{status: string|null, kinds: object[]}}
+   */
+  noteOracle(subject, workflow, runKey, facts, { now, maxUnchanged = ORACLE_MAX_UNCHANGED } = {}) {
+    const t = iso(now);
+    this.raw.prepare(`
+      INSERT INTO oracle_facts (subject, workflow, run_key, facts, updated_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT (subject, workflow) DO UPDATE SET run_key = excluded.run_key, facts = excluded.facts, updated_at = excluded.updated_at
+    `).run(subject, workflow, runKey, JSON.stringify(facts), t);
+    const rows = this.raw.prepare('SELECT workflow, facts FROM oracle_facts WHERE subject = ?').all(subject);
+    const byLane = Object.fromEntries(rows.map((r) => [r.workflow, JSON.parse(r.facts)]));
+    const derived = deriveDisagreements({ static: byLane['scan-static'] ?? null, live: byLane['live-probe'] ?? null });
+    const prior = plain(this.raw.prepare('SELECT * FROM oracle_disagreements WHERE subject = ?').get(subject));
+    const next = foldDisagreement(prior, derived, { maxUnchanged });
+    if (next.status === null) return { status: null, kinds: [] };
+    if (next.status === 'cleared' && prior?.status === 'cleared') return { status: 'cleared', kinds: [] }; // already cleared: keep its time
+    const reopened = next.status === 'open' && (!prior || prior.status === 'cleared' || prior.signature !== derived.signature);
+    const kinds = next.status === 'cleared' ? prior.kinds : JSON.stringify(derived.kinds);
+    this.raw.prepare(`
+      INSERT INTO oracle_disagreements (subject, status, kinds, signature, server_side, unchanged_rechecks, opened_at, updated_at, cleared_at, reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (subject) DO UPDATE SET status = excluded.status, kinds = excluded.kinds, signature = excluded.signature,
+        server_side = excluded.server_side, unchanged_rechecks = excluded.unchanged_rechecks,
+        opened_at = CASE WHEN ? THEN excluded.opened_at ELSE oracle_disagreements.opened_at END,
+        updated_at = excluded.updated_at, cleared_at = excluded.cleared_at, reason = excluded.reason
+    `).run(subject, next.status, kinds, next.status === 'cleared' ? prior.signature : derived.signature, JSON.stringify(derived.server_side),
+      next.unchanged_rechecks, t, t, next.status === 'cleared' ? t : null, next.reason, reopened ? 1 : 0);
+    return { status: next.status, kinds: derived.kinds };
+  }
+
+  /** The stored disagreement rows, parsed. `status` filters (default: all). */
+  listOracleDisagreements({ status = null } = {}) {
+    const rows = status ? this.raw.prepare('SELECT * FROM oracle_disagreements WHERE status = ? ORDER BY subject').all(status)
+      : this.raw.prepare('SELECT * FROM oracle_disagreements ORDER BY subject').all();
+    return rows.map((r) => ({ ...plain(r), kinds: JSON.parse(r.kinds), server_side: r.server_side ? JSON.parse(r.server_side) : [] }));
   }
 
   getResult(runKey) {

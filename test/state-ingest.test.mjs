@@ -406,6 +406,29 @@ test('R-COV-02: ingest over the real store records a tool-fault skip as unassess
   db.close();
 });
 
+test('R-ORD-07: ingest over the real store keeps the oracle facts of a live-probe bundle and opens a disagreement with the reader\'s facts', async () => {
+  const { makeBundle, defaultFiles, fakeEncrypt, fakeDecrypt, REGISTRY_TEXT, RUN_ID } = await import('../ingest/testkit.mjs');
+  const { parseRegistry } = await import('../ingest/registry.mjs');
+  const db = openState(':memory:');
+  const H = 'd'.repeat(64);
+  // The reader (scan-static) said the server has other tools than the live list.
+  db.noteOracle('repo:1', 'scan-static', 'f'.repeat(64), { lane: 'scan-static', tool_list_sha256: 'e'.repeat(64), tool_count: 3 }, { now: T0 });
+  const [item] = dispatch(db);
+  db.setDispatchRun('att-1', { runId: RUN_ID, workflowSha: SHA, now: T0 });
+  const files = defaultFiles();
+  files['observations/check.ndjson'] = [{ field: 'tool_count', value: 3 }, { field: 'tool_list_sha256', value: H }].map((r) => `${JSON.stringify(r)}\n`).join('');
+  const bundle = makeBundle({ identity: { attempt_id: 'att-1', run_key: KEY_A, fence: item.fence }, workflow: { sha: SHA }, files });
+  const registry = { ...parseRegistry(`${REGISTRY_TEXT}  - {id: tool_list_sha256, layer: surface, type: hash, unit: none, source: check, class: P, redaction: null, status: active}\n`), source: 'test' };
+  const r = await ingestAttempt({ repo: WORKER_REPO, runId: RUN_ID, attemptId: 'att-1' }, {
+    ledger: dbLedger(db, { now: () => T0 + MIN }), github: fakeGithub({ blob: fakeEncrypt(bundle.tar), run: undefined }), decrypt: fakeDecrypt, registry, now: () => new Date(T0 + MIN),
+  });
+  assert.equal(r.outcome, 'accepted', JSON.stringify(r.report?.problems ?? r.reason));
+  const [row] = db.listOracleDisagreements();
+  assert.deepEqual([row.subject, row.status, row.kinds.map((k) => k.kind)], ['repo:1', 'open', ['tool_set']]);
+  assert.deepEqual([db.getResult(KEY_A).fault, db.getResult(KEY_A).coverage], [null, 'assessed']);
+  db.close();
+});
+
 test('R-CHAOS-02: a result whose run completed before the lease ran out is on time, even recorded after it; a later one is not; a newer lease always wins', () => {
   const db = openState(':memory:');
   const ttlMs = 10 * MIN;

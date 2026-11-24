@@ -33,6 +33,7 @@ function entriesOf(items = fixture.items) {
     entries.push({ path: `${base}manifest.json`, data: Buffer.from(JSON.stringify(manifest)) });
     entries.push({ path: `${base}ingest.json`, data: Buffer.from(JSON.stringify({ run: { id: it.run_id }, input: { run_id: it.run_id } })) });
     if (it.result) entries.push({ path: `${base}results/${it.lane}.json`, data: Buffer.from(JSON.stringify(it.result)) });
+    if (it.observations) entries.push({ path: `${base}observations/${it.lane}.ndjson`, data: Buffer.from(it.observations.map((r) => JSON.stringify(r)).join('\n')) });
     entries.push({ path: `${base}raw/subject/scan.json`, data: Buffer.from(JSON.stringify({ hints: { serverJson: Array.from({ length: it.server_json }, () => ({})) } })) });
   }
   return entries;
@@ -258,4 +259,55 @@ test('R-CHECKIN-12: the Markdown says how many evidence refs are left to the JSO
   const all = renderMarkdown(r, { generatedAt: 'now', md_evidence: 12 });
   assert.doesNotMatch(all, /more in the JSON/);
   assert.equal([...all.matchAll(/run 30\d\d, attempt/g)].length, 12);
+});
+
+const HA = 'a'.repeat(64);
+const HB = 'b'.repeat(64);
+/** Oracle facts for acme/py-two: an older graded scan-static result, and a live-probe result that lists other tools. */
+const oracleItems = (liveHash) => [
+  { subject: 'acme/py-two', lane: 'scan-static', at: '2026-11-19T10:00:00Z', attempt: 'att-o1', index: 0, run_id: 2001, tools: [{ name: 'mcp-check', version: '1.3.1' }], skips: [], server_json: 0,
+    result: { status: 'graded', detail: null, catalog_hash: HA, tool_count: 3 } },
+  { subject: 'acme/py-two', lane: 'live-probe', at: '2026-11-22T10:00:00Z', attempt: 'att-o2', index: 0, run_id: 2002, tools: [{ name: 'mcp-check', version: '1.3.1' }], skips: [], server_json: 0,
+    observations: [{ field: 'tool_count', value: 3 }, { field: 'tool_list_sha256', value: liveHash }] },
+];
+
+test('R-ORD-05: a subject whose oracles disagree weighs 1.5 times in every fingerprint it is affected by, and the weight is the config value', () => {
+  const base = run();
+  const agree = run([...fixture.items, ...oracleItems(HA)]);
+  const dis = run([...fixture.items, ...oracleItems(HB)]);
+  assert.deepEqual(agree.summary.oracle_disagreements, { subjects: 0, by_kind: {} });
+  assert.deepEqual(dis.summary.oracle_disagreements, { subjects: 1, by_kind: { tool_set: 1 } });
+  const key = (r) => r.fingerprints.map((f) => [f.fingerprint, f.impact, f.weighted_subjects, f.oracle_subjects]);
+  assert.deepEqual(key(agree).map((x) => x.slice(0, 3)), key(base).map((x) => x.slice(0, 3)), 'facts that agree change nothing');
+  const touched = dis.fingerprints.filter((f) => f.oracle_subjects > 0);
+  assert.equal(touched.length, 1, 'py-two is affected by exactly one fingerprint');
+  const was = base.fingerprints.find((f) => f.fingerprint === touched[0].fingerprint);
+  const info = loadSeed(SEED_FILE).get('acme/py-two');
+  const w = subjectWeight(info, tierWeights, DEFAULT_CONFIG);
+  assert.equal(DEFAULT_CONFIG.oracle_multiplier, 1.5);
+  assert.ok(w > 0);
+  assert.ok(Math.abs((touched[0].weighted_subjects - was.weighted_subjects) - 0.5 * w) < 0.02, `${touched[0].weighted_subjects} - ${was.weighted_subjects} vs ${0.5 * w}`);
+  // Every other fingerprint keeps its numbers.
+  for (const f of dis.fingerprints.filter((x) => x !== touched[0])) assert.deepEqual([f.impact, f.weighted_subjects, f.oracle_subjects], [base.fingerprints.find((b) => b.fingerprint === f.fingerprint).impact, base.fingerprints.find((b) => b.fingerprint === f.fingerprint).weighted_subjects, 0]);
+  // The multiplier is configurable, and 1 turns the weight off.
+  const off = run([...fixture.items, ...oracleItems(HB)], { oracle_multiplier: 1 });
+  assert.deepEqual(key(off).map((x) => x.slice(0, 3)), key(base).map((x) => x.slice(0, 3)));
+  assert.equal(subjectWeight({ tier: 'T2', stars: 0, oracle: true }, tierWeights, DEFAULT_CONFIG), 1.5 * subjectWeight({ tier: 'T2', stars: 0 }, tierWeights, DEFAULT_CONFIG));
+  // The ranking order follows the weighted impact; the report says so.
+  assert.match(renderMarkdown(dis, { generatedAt: 'now' }), /1 subjects have an open oracle disagreement \(tool_set: 1\); their fingerprints weigh x1\.5\./);
+  assert.match(renderMarkdown(dis, { generatedAt: 'now' }), /also has an open oracle disagreement/);
+});
+
+test('R-ORD-04: the check-in makes no fingerprint out of a disagreement, and a subject-side skip stays out', () => {
+  const dis = run([...fixture.items, ...oracleItems(HB)]);
+  const base = run();
+  assert.equal(dis.fingerprints.length, base.fingerprints.length, 'a disagreement is not a failure fingerprint of its own');
+  // A subject with a disagreement and no failure at all appears in no fingerprint.
+  const only = analyse(itemsFromEntries(entriesOf(oracleItems(HB))), { seed: loadSeed(SEED_FILE), tierWeights });
+  assert.deepEqual(only.fingerprints, []);
+  assert.equal(only.summary.oracle_disagreements.subjects, 1);
+  // A subject-fault skip (the repository is gone) is still not counted, disagreement or not.
+  const gone = oracleItems(HB).concat([{ subject: 'acme/py-two', lane: 'scan-static', at: '2026-11-23T10:00:00Z', attempt: 'att-o3', index: 0, run_id: 2003, tools: [], server_json: 0,
+    skips: [{ stage: 'static', reason: 'repo_not_visible', fault: 'subject', evidence: 'results/scan-static.json', retryable: false }] }]);
+  assert.deepEqual(analyse(itemsFromEntries(entriesOf(gone)), { seed: loadSeed(SEED_FILE), tierWeights }).fingerprints, []);
 });
