@@ -551,7 +551,7 @@ export async function buildLedger({ sources, readLedger, readFile, gh, cache, lo
 // ---------------------------------------------------------------- Markdown
 
 const esc = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
-const day = (iso) => (iso ? iso.slice(0, 10) : '');
+const day = (iso) => (typeof iso === 'string' ? iso.slice(0, 10) : '');
 const short = (sha) => (sha ? sha.slice(0, 7) : '');
 
 export function renderMarkdown(ledger) {
@@ -582,7 +582,7 @@ export function renderMarkdown(ledger) {
 
   out.push('## Cycle time');
   out.push('');
-  out.push('Hours from a row being found (the earlier of its first commit in `REGRESSIONS.md` and its fix pull request being opened) to the fix merging, and from the merge to the first release that contains it. A row with no date yet, or whose dates run backwards, is left out of the figures and counted. Medians and p90 (nearest rank) are over the rows counted.');
+  out.push('Hours from a row being found (the earlier of its first commit in `REGRESSIONS.md` and its fix pull request being opened) to the fix merging, and from the merge to the first release that contains it. A row with no date yet, or with a gap that runs backwards, is left out of that figure and counted ("Left out" counts rows, once each). Medians and p90 (nearest rank) are over the rows counted.');
   out.push('');
   out.push('| Tool | Rows | Found → merged (rows) | Median | p90 | Merged → released (rows) | Median | p90 | Merged, not released | No date | Left out |');
   out.push('|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|');

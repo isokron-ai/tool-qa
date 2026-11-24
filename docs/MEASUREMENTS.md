@@ -46,3 +46,16 @@ example `scorecard_result` in supply chain.
 
 The registry itself lives in `isokron-ai/mcp-results`; the tool-qa pin moves
 only on purpose (`ingest/registry.mjs`).
+
+## Notes on the ledger's cycle times
+
+- Dates for a row or a test come from the history of its path on the default
+  branch, read without `--follow`. A file that was renamed or moved shows the
+  date of the rename, not the original.
+- A history longer than 500 commits is cut; when the oldest commit read still
+  has the row or test, the date is left unknown rather than guessed.
+- "Left out" in the cycle table counts rows (once each) that have a gap
+  running backwards, not gaps.
+- Hardening has no registry layer yet. Until it has one, its findings are
+  class B observations in the layers where they were seen, and the lane list
+  above is a rule for what may be published, not a field in the registry.

@@ -17,7 +17,10 @@ import { BudgetExhausted } from './ledger.mjs';
 const HOUR = 3_600_000;
 const MAX_PAGES = 5;
 
-const ts = (s) => (s ? Date.parse(s) : NaN);
+const ISO = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/;
+/** Only a real ISO date string is a date; anything else (a corrupt cache entry) is not. */
+export const isIsoDate = (x) => typeof x === 'string' && ISO.test(x) && Number.isFinite(Date.parse(x));
+const ts = (s) => (isIsoDate(s) ? Date.parse(s) : NaN);
 const isoMin = (xs) => xs.filter((x) => Number.isFinite(ts(x))).sort((a, b) => ts(a) - ts(b))[0] ?? null;
 
 /** Hours from a to b (ISO strings), or null if either is missing or b is before a. */
@@ -49,8 +52,10 @@ export function cycleStats(records) {
     let excluded = 0; let unreleased = 0; let undated = 0;
     for (const r of recs) {
       if (!r.merged_at) { undated++; continue; }
-      if (r.found_at) { const d = hoursBetween(r.found_at, r.merged_at); if (d === null) excluded++; else fm.push(d); } else undated++;
-      if (r.released_at) { const d = hoursBetween(r.merged_at, r.released_at); if (d === null) excluded++; else mr.push(d); } else unreleased++;
+      let left = false; // "excluded" counts rows with at least one gap left out, not gaps
+      if (r.found_at) { const d = hoursBetween(r.found_at, r.merged_at); if (d === null) left = true; else fm.push(d); } else undated++;
+      if (r.released_at) { const d = hoursBetween(r.merged_at, r.released_at); if (d === null) left = true; else mr.push(d); } else unreleased++;
+      if (left) excluded++;
     }
     out[key] = { rows: recs.length, found_to_merged: summarise(fm), merged_to_released: summarise(mr), merged_not_released: unreleased, without_dates: undated, excluded };
   }
@@ -68,12 +73,14 @@ async function commitList(repo, ref, path, gh, memo) {
   const key = `${repo}@${ref}:${path}`;
   if (memo.has(key)) return memo.get(key);
   const out = [];
+  out.truncated = false;
   for (let page = 1; page <= MAX_PAGES; page++) {
     const q = `sha=${encodeURIComponent(ref)}&path=${path.split('/').map(encodeURIComponent).join('/')}&per_page=100&page=${page}`;
     const { body } = await gh.get(`/repos/${repo}/commits?${q}`);
     if (!Array.isArray(body)) break;
     for (const c of body) out.push({ sha: c.sha, date: c.commit?.committer?.date ?? c.commit?.author?.date ?? null });
     if (body.length < 100) break;
+    if (page === MAX_PAGES) out.truncated = true; // a full last page: older commits exist that we did not read
   }
   memo.set(key, out);
   return out;
@@ -89,7 +96,8 @@ export async function firstCommitWhere({ repo, ref, path, gh, readFile, has, mem
   const at = async (i) => { const t = await readFile(repo, list[i].sha, path); return t !== null && has(t); };
   if (!(await at(0))) return null;
   let lo = 0; let hi = list.length - 1; // largest index with the property true is wanted
-  if (await at(hi)) return list[hi].date;
+  // The oldest commit we read still has it, and older ones were not read: the true date is unknown.
+  if (await at(hi)) return list.truncated ? null : list[hi].date;
   while (hi - lo > 1) {
     const m = (lo + hi) >> 1;
     if (await at(m)) lo = m; else hi = m;
@@ -105,6 +113,9 @@ export async function collectTimes({ records, sources, readFile, gh, cache, test
   cache.prs ??= {};
   cache.times ??= {};
   const refOf = new Map(sources.repos.map((s) => [s.repo, { ref: s.ref ?? 'main', path: s.path ?? 'REGRESSIONS.md' }]));
+  // A corrupt cache entry is dropped and asked again, never trusted.
+  for (const [k, v] of Object.entries(cache.prs)) if (!isIsoDate(v?.created_at)) delete cache.prs[k];
+  for (const [k, v] of Object.entries(cache.times)) if (!isIsoDate(v)) delete cache.times[k];
   const memo = new Map();
   let stopped = null;
   const live = () => (gh && !stopped ? gh : null);
