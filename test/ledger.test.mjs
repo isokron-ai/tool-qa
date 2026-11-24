@@ -390,7 +390,9 @@ const OLD = 'f'.repeat(40);
 function runPublish(opts = {}) {
   const o = {
     status: ' M docs/LEDGER.md\n', prList: [], branch: null, apiTree: TREE,
-    made: { sha: NEW, verification: { verified: true } }, recheck: null, ...opts,
+    made: { sha: NEW, verification: { verified: true } }, recheck: null,
+    statuses: [{ context: 'dispatched/test', state: 'success' }, { context: 'dispatched/lint', state: 'success' }, { context: 'other', state: 'pending' }],
+    runs: [], ...opts,
   };
   const dir = mkdtempSync(join(tmpdir(), 'ledger-wf-'));
   try {
@@ -403,6 +405,8 @@ function runPublish(opts = {}) {
     writeFileSync(join(dir, 'tree.json'), JSON.stringify({ sha: o.apiTree }));
     writeFileSync(join(dir, 'made.json'), JSON.stringify(o.made));
     for (const [sha, c] of Object.entries(commits)) writeFileSync(join(dir, `commit-${sha}.json`), JSON.stringify(c));
+    writeFileSync(join(dir, 'status.json'), JSON.stringify({ state: 'pending', statuses: o.statuses }));
+    writeFileSync(join(dir, 'runs.json'), JSON.stringify({ total_count: o.runs.length, workflow_runs: o.runs }));
     writeFileSync(join(bin, 'gh'), `#!/usr/bin/env bash
 D='${dir}'
 echo "gh $*" >> "$D/calls"
@@ -426,6 +430,8 @@ if [ "$input" = - ]; then cat > "$D/body-$n.json"; fi
 case "$method $ep" in
   "GET repos/isokron-ai/tool-qa/git/matching-refs/heads/ledger/refresh") resp="$(cat "$D/refs.json")" ;;
   "GET repos/isokron-ai/tool-qa/git/commits/"*) resp="$(cat "$D/commit-\${ep##*/}.json")" ;;
+  "GET repos/isokron-ai/tool-qa/commits/${OLD}/status") resp="$(cat "$D/status.json")" ;;
+  "GET repos/isokron-ai/tool-qa/actions/runs?head_sha=${OLD}&per_page=100") resp="$(cat "$D/runs.json")" ;;
   "POST repos/isokron-ai/tool-qa/git/trees") resp="$(cat "$D/tree.json")" ;;
   "POST repos/isokron-ai/tool-qa/git/commits") resp="$(cat "$D/made.json")" ;;
   *) resp='{}' ;;
@@ -589,6 +595,45 @@ test('R-LED-10: after a new refresh commit the workflow dispatches test.yml and 
 
   const failed = runPublish({ apiTree: 'a'.repeat(40) });
   assert.doesNotMatch(failed.calls, /gh workflow run|\/statuses\//, 'no dispatch when nothing was published');
+});
+
+test('R-LED-10: when the branch already holds the ledger, a dispatch an earlier run left undone is made again, unless its run is in flight', () => {
+  const held = (extra) => runPublish({ branch: { sha: OLD, tree: { sha: TREE }, parents: [{ sha: BASE }], verification: { verified: true } },
+    prList: [{ number: 12, isCrossRepository: false, headRepositoryOwner: { login: 'isokron-ai' } }], ...extra });
+  const dispatched = (r) => (r.calls.match(/^gh workflow run \S+/gm) ?? []).map((l) => l.slice(16));
+  const pendingSet = (r) => (r.calls.match(/^gh api -X POST \S+\/statuses\/\S+ -f state=pending -f context=\S+/gm) ?? []).map((l) => l.replace(/^.*\/statuses\/(\S+) .*context=(\S+)$/, '$1 $2'));
+  const runOf = (wf, status) => ({ path: `.github/workflows/${wf}.yml`, status, head_sha: OLD });
+
+  // An earlier run died after moving the ref, before any dispatch: no statuses at all.
+  const died = held({ statuses: [] });
+  assert.equal(died.status, 0, died.out);
+  assert.deepEqual(dispatched(died), ['test.yml', 'lint.yml']);
+  assert.deepEqual(pendingSet(died), [`${OLD} dispatched/test`, `${OLD} dispatched/lint`], 'pending goes on the branch head, before the dispatch');
+  assert.doesNotMatch(died.calls, /git\/(trees|commits --input|refs)/, 'still no new commit');
+
+  // It died after setting pending; one dispatch got through and finished, the other never ran.
+  const half = held({ statuses: [{ context: 'dispatched/test', state: 'success' }, { context: 'dispatched/lint', state: 'pending' }],
+    runs: [runOf('test', 'completed')] });
+  assert.deepEqual(dispatched(half), ['lint.yml']);
+  assert.deepEqual(pendingSet(half), [`${OLD} dispatched/lint`]);
+
+  // Pending, but its run is queued or running for this commit: wait for it.
+  const busy = held({ statuses: [{ context: 'dispatched/test', state: 'pending' }, { context: 'dispatched/lint', state: 'pending' }],
+    runs: [runOf('test', 'in_progress'), runOf('lint', 'queued'), runOf('ledger', 'in_progress')] });
+  assert.deepEqual(dispatched(busy), []);
+  assert.doesNotMatch(busy.calls, /\/statuses\//);
+  // A run of another workflow in flight does not count for test.yml.
+  const other = held({ statuses: [{ context: 'dispatched/test', state: 'pending' }, { context: 'dispatched/lint', state: 'success' }],
+    runs: [runOf('ledger', 'in_progress'), runOf('lint', 'in_progress')] });
+  assert.deepEqual(dispatched(other), ['test.yml']);
+
+  // Finished results, passing or failing, are not dispatched again.
+  for (const state of ['success', 'failure', 'error']) {
+    const done = held({ statuses: [{ context: 'dispatched/test', state }, { context: 'dispatched/lint', state }] });
+    assert.equal(done.status, 0, done.out);
+    assert.deepEqual(dispatched(done), [], state);
+    assert.doesNotMatch(done.calls, WRITES, state);
+  }
 });
 
 test('R-LED-03: a Fix cell yields commit SHAs only, not dates, pull request numbers or hex-looking words', () => {
