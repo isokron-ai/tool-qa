@@ -121,9 +121,13 @@ jobs:
           repositories: ${{ steps.inputs.outputs.name }}
           permission-actions: read
 
+      # The state asset is age ciphertext (docs/OPERATIONS.md, "State encryption").
       - name: Pull state
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
         run: node scripts/state-asset.mjs pull
 
       - name: Ingest
@@ -157,4 +161,7 @@ jobs:
         if: steps.ingest.outputs.recorded == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
         run: node scripts/state-asset.mjs push

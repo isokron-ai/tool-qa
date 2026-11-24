@@ -24,6 +24,9 @@
 //   LOOP_SLOTS          as for the guard; 0 means the pump is expected to be idle
 //   LANE_<JOB>_ENABLED  lane switches; a lane that is off is reported as off
 //   APP_ID, APP_INSTALLATION_ID, APP_PRIVATE_KEY   the loop's GitHub App
+//   AGE_IDENTITY        decrypts the state asset (age ciphertext, R-ING-15);
+//                       removed from the process environment once read
+//   AGE_BIN, AGE_KEYGEN_BIN   optional paths of age and age-keygen
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -88,8 +91,15 @@ export async function runWatchdog({
 } = {}) {
   const repo = env.GITHUB_REPOSITORY;
   if (!repo || !repo.includes('/')) throw new Error('GITHUB_REPOSITORY is required (owner/name)');
-  const secrets = [env.GITHUB_TOKEN, env.APP_PRIVATE_KEY];
+  const secrets = [env.GITHUB_TOKEN, env.APP_PRIVATE_KEY, env.AGE_IDENTITY];
   const say = (line) => log(scrub(line, secrets));
+  const stateKeys = {
+    identity: env.AGE_IDENTITY || undefined,
+    ageBin: env.AGE_BIN || undefined,
+    keygenBin: env.AGE_KEYGEN_BIN || undefined,
+    tmpDir: env.RUNNER_TEMP || undefined,
+  };
+  if (env === process.env) delete process.env.AGE_IDENTITY;
   const budget = new ApiBudget({ now, sleep });
 
   const minter = mintToken ?? appTokenMinter({ env, fetch, apiUrl, now, sleep, budget });
@@ -114,7 +124,7 @@ export async function runWatchdog({
   try {
     mkdirSync(dir, { recursive: true });
     const file = join(dir, 'state.sqlite');
-    const pulled = await pull({ repo, token: env.GITHUB_TOKEN || undefined, file, fetch, apiUrl, log: say, sleep });
+    const pulled = await pull({ repo, token: env.GITHUB_TOKEN || undefined, file, fetch, apiUrl, log: say, sleep, ...stateKeys });
     if (pulled?.status !== 'absent') state = readState(file);
   } catch (err) {
     // Still report everything else; the state checks are skipped this time.

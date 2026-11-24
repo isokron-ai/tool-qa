@@ -42,6 +42,11 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      # The state asset is age ciphertext; the watchdog decrypts its copy with
+      # AGE_IDENTITY (docs/OPERATIONS.md, "State encryption").
+      - name: Install age (pinned version, sha256 checked)
+        if: steps.guard.outputs.proceed == 'true'
+        run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
       - name: Watchdog
         if: steps.guard.outputs.proceed == 'true'
         env:
@@ -55,4 +60,7 @@ jobs:
           APP_ID: ${{ vars.APP_ID }}
           APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
         run: node watchdog/run.mjs

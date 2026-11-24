@@ -43,8 +43,8 @@
 //                       the loop's GitHub App; tokens are minted per worker
 //                       repository: actions: write to dispatch, actions: read
 //                       for ingest
-//   AGE_IDENTITY        the ingest age identity (decrypts results); removed from
-//                       the process environment once read
+//   AGE_IDENTITY        the ingest age identity (decrypts results, and the state
+//                       asset); removed from the process environment once read
 //   AGE_BIN, AGE_KEYGEN_BIN, GITHUB_API_URL, RUNNER_TEMP   optional
 //
 // Ingest outputs are sealed to worker-kit/ingest.pub and written to --ingest-out
@@ -103,6 +103,14 @@ export async function runPump({
   const repo = env.GITHUB_REPOSITORY;
   const stateToken = env.GITHUB_TOKEN || undefined;
   const secrets = [stateToken, env.APP_PRIVATE_KEY, env.AGE_IDENTITY];
+  // The state asset is age ciphertext (R-ING-15): pulled and pushed with the
+  // same identity ingest uses, which must be a recipient in state/state.pub.
+  const stateKeys = {
+    identity: env.AGE_IDENTITY || undefined,
+    ageBin: env.AGE_BIN || undefined,
+    keygenBin: env.AGE_KEYGEN_BIN || undefined,
+    tmpDir: env.RUNNER_TEMP || undefined,
+  };
   const safe = (text) => scrub(text, secrets);
   const say = (line) => log(safe(line));
   const cfg = config ?? loadConfig();
@@ -156,7 +164,7 @@ export async function runPump({
     }
   }
 
-  await pull({ repo, token: stateToken, file: stateFile, fetch, log: say });
+  await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, ...stateKeys });
   const db = openState(stateFile);
   let ticks = 0;
   let dispatched = 0;
@@ -166,7 +174,7 @@ export async function runPump({
   let pushFailed = false;
   const save = async (why) => {
     try {
-      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now() });
+      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), ...stateKeys });
       return true;
     } catch (err) {
       ok = false;

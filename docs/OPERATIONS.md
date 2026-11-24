@@ -163,12 +163,70 @@ state changed" if it is no longer the pulled one, so a stale writer can't
 overwrite newer state. A push with no pull record is refused unless you pass
 `--force`.
 
+The asset is age ciphertext (see "State encryption" below): `push`
+encrypts the database before upload, and `pull` decrypts it with
+`AGE_IDENTITY`, so both need age (`AGE_BIN`, `AGE_KEYGEN_BIN`) and `pull`
+needs the identity.
+
 `push` needs a token with `contents: write`. It uploads under a temporary name,
 then deletes the old asset and renames the new one, so a failed push keeps the
 last good copy. `pull` checks the sha256 in the asset label and that the file
 is a healthy SQLite database before it replaces the local file. To reset state,
 delete `state.sqlite` and any `state.sqlite.upload-*` assets; the next run
 starts empty.
+
+## State encryption
+
+This repository is public, so anyone can download a release asset. The state
+database is for the loop only (attempts with their rejection and quarantine
+reasons, leases, dispatches, results before they are published), so
+[`scripts/state-asset.mjs`](../scripts/state-asset.mjs) keeps the asset
+age-encrypted:
+
+- `push` encrypts the database to every public key in
+  [`state/state.pub`](../state/state.pub) and uploads only age ciphertext. A
+  writer that has an identity (the pump, the manual re-ingest) first checks
+  that its identity is one of those keys, so it never pushes a state it could
+  not read back.
+- `pull` decrypts with `AGE_IDENTITY` and refuses an asset that is not age
+  ciphertext (it fails closed: the pump run fails before it does anything).
+- The sha256 label and the stale-writer check are over the uploaded
+  ciphertext, so they work as before.
+
+`state/state.pub` must list the ingest public key (the one in
+`worker-kit/ingest.pub`): the pump, the watchdog and the manual re-ingest all
+read the state with the `AGE_IDENTITY` secret of environment `loop`. A test
+checks this. You may add a key of your own, on its own line, to read the
+state on your machine:
+
+```sh
+GITHUB_REPOSITORY=isokron-ai/tool-qa AGE_IDENTITY="$(cat my-identity.txt)" \
+  node scripts/state-asset.mjs pull --file state/state.sqlite
+```
+
+Nothing else reads the state asset: the archive pull copies history
+artifacts only and needs no key.
+
+**One-time migration** from the plaintext asset of earlier versions. Pause
+the pump (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going,
+then, with age installed and a token that can write this repository's
+releases:
+
+```sh
+GITHUB_TOKEN=... GITHUB_REPOSITORY=isokron-ai/tool-qa node scripts/state-asset.mjs migrate --file /tmp/state.sqlite
+```
+
+`migrate` downloads the plaintext asset, checks it, encrypts it to
+`state/state.pub` and replaces the asset, with the same stale-writer checks as
+`push`. It needs no identity. If the asset is already encrypted (or absent) it
+says so and changes nothing. Turn the pump back on afterwards. Until the
+migration is done, every pump, watchdog and re-ingest run fails with "is not
+age ciphertext; refusing to use it". Delete the local copy when done.
+
+**Rotation.** Add the new public key to `state/state.pub` (keep the old one),
+merge, and let one pump run push: the asset is then encrypted to both keys.
+Then switch `AGE_IDENTITY` (see "Result encryption keys") and remove the old
+key from `state/state.pub`; the next push drops it.
 
 ## State store: one writer at a time
 
@@ -397,8 +455,9 @@ age-keygen -y ingest-identity.txt   # prints the public key again
 
 1. Put the public key (`age1...`) on its own line in
    [`worker-kit/ingest.pub`](../worker-kit/ingest.pub), in place of the
-   current one (lines starting with `#` may stay), and merge it. Workers use
-   the key in the tool-qa commit they pin.
+   current one (lines starting with `#` may stay), and in
+   [`state/state.pub`](../state/state.pub) (see "State encryption"), and
+   merge it. Workers use the key in the tool-qa commit they pin.
 2. Store the identity as the secret `AGE_IDENTITY` in the environment `loop`:
 
    ```sh
@@ -420,12 +479,17 @@ fetched, if `AGE_IDENTITY` is missing or is not the identity of a key in
 
 **Rotation.** Set `LOOP_SLOTS=0` so no new work goes out, and wait until the
 pump has judged every running worker (no open dispatches: `ingest: checked 0`
-or no `ingest:` lines in the pump log). Then set `LOOP_ENABLED=false`, create a
-new pair, put the new public key in `ingest.pub` and the new identity in
-`AGE_IDENTITY` together, update the tool-qa pin in every worker repo, and turn
-the loop back on. A bundle encrypted to the old key after that is rejected as
+or no `ingest:` lines in the pump log). Create a new pair, add the new public
+key to `state/state.pub` (keep the old one) and merge, and let one pump
+housekeeping run push the state, now encrypted to both keys (see "State
+encryption"). Then set `LOOP_ENABLED=false`, put the new public key in
+`ingest.pub` (and drop the old one from `state/state.pub`) and the new
+identity in `AGE_IDENTITY` together, update the tool-qa pin in every worker
+repo, and turn the loop back on. A bundle encrypted to the old key after that
+is rejected as
 `decrypt_failed`. If the identity may have leaked, rotate at once: it can read
-every bundle and every sealed ingest output encrypted to it.
+every bundle and every sealed ingest output encrypted to it, and every copy
+of the state asset encrypted to it.
 
 **Reading ingest outputs.** Each pump run that sealed any outputs uploads one
 artifact `ingest-<run id>-<run attempt>` (kept 30 days) holding one

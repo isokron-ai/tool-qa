@@ -521,7 +521,10 @@ export class StateDb {
    * (result-<attempt_id>-<index>.tar.age). current_fence is the fence of the
    * item's run_key lease now (a newer one means the item is stale). outcome is
    * null until a result for this attempt, run_key and fence is recorded.
-   * canaries is always empty for now (none are injected yet).
+   * canaries is always empty for now (none are injected yet). When they are,
+   * they live only here, in the state database, which is stored encrypted
+   * (scripts/state-asset.mjs); they must never go into dispatch inputs (shown
+   * in the worker repos' public run pages), logs or unsealed outputs.
    */
   getAttempt(attemptId) {
     const d = this.getDispatch(attemptId);
