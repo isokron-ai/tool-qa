@@ -80,9 +80,9 @@ that item only.
    `retry_throttled` instead: not counted towards `MAX_RETRIES`, and sent out
    again for as long as 7 days after the run_key's first throttled retry
    (`RETRY_WINDOW_MS`), so throttling never costs a whole tier max age. An
-   accepted bundle with no observation records and at least one retryable
-   skip is recorded with result outcome `skips_only`, which the pump looks at
-   again after a day; one with only permanent skips is an ordinary result.
+   accepted bundle with no observation records whose every skip is retryable
+   is recorded with result outcome `skips_only`, which the pump looks at
+   again after a day; one with any permanent skip is an ordinary result.
 
 Steps 5 to 8 read untrusted bytes, so they run in a worker thread
 ([`analyze.mjs`](analyze.mjs)) with no environment, a 1 GiB heap limit and a

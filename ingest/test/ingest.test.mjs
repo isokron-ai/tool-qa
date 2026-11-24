@@ -640,7 +640,7 @@ test('R-SUB-04: a throttled bundle is sent back as retry_throttled, not counted 
   assert.equal(capped.r.outcome, 'accepted');
 });
 
-test('R-SUB-06: an accepted bundle with a retryable skip and no records is recorded as skips_only; permanent skips are not', async () => {
+test('R-SUB-06: an accepted bundle whose every skip is retryable and no records is recorded as skips_only; any permanent skip is not', async () => {
   const files = defaultFiles();
   delete files['observations/check.ndjson'];
   // Retries ran out: retryable skips, nothing measured.
@@ -650,9 +650,10 @@ test('R-SUB-06: an accepted bundle with a retryable skip and no records is recor
   const throttled = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED]), files }), ledger: fakeLedger([expectedRow({ throttled: 40, throttled_since: new Date(NOW().getTime() - 8 * 86_400_000).toISOString() })]) });
   assert.equal(throttled.r.outcome, 'accepted');
   assert.equal(throttled.ledger.records[0].resultOutcome, 'skips_only');
-  // One retryable skip among permanent ones still counts.
+  // Any permanent skip makes it an ordinary result, even beside a retryable one.
   const mixed = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED, { stage: 'start', reason: 'remote_only' }]), files }) });
-  assert.equal(mixed.ledger.records[0].resultOutcome, 'skips_only');
+  assert.equal(mixed.r.outcome, 'accepted');
+  assert.equal(mixed.ledger.records[0].resultOutcome, undefined);
   // Only permanent skips: an ordinary result, kept for the tier max age.
   for (const reason of ['remote_only', 'no_runnable_artifact', 'policy_excluded']) {
     const permanent = await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'scan', reason }]), files }) });

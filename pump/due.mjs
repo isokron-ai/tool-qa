@@ -8,8 +8,8 @@
 //                  says what moved compared with the last result for the pair:
 //                  nothing yet, the subject's SHA or digest, or our tool, oracle,
 //                  probe, image or settings versions.
-//   skips_only     the last result was accepted but held no records and a
-//                  retryable skip whose retries ran out, and is older than
+//   skips_only     the last result was accepted but held no records and only
+//                  retryable skips whose retries ran out, and is older than
 //                  skips_only_max_age_days (R-SUB-06), sooner than the
 //                  tier's max age.
 //   change_event   a change event (release, new SHA, advisory) arrived after the
