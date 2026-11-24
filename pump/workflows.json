@@ -3,7 +3,7 @@
   "description": "Worker workflows the pump may dispatch. A workflow is dispatched only when enabled is true. versions, image_digest and settings_state go into every run_key, so changing any of them makes every subject due again for that workflow. Lease and slot expiry = 1.5 x (setup_minutes + shard_size x minutes_per_subject) + 10 minutes. slots_max caps open dispatches for the workflow. The worker contract is in docs/INTERFACES.md.",
   "workflows": {
     "scan-static": {
-      "enabled": false,
+      "enabled": true,
       "repo": "isokron-ai/mcp-check",
       "file": "scan-static.yml",
       "ref": "main",
@@ -11,7 +11,7 @@
       "setup_minutes": 3,
       "minutes_per_subject": 1,
       "slots_max": 3,
-      "versions": { "tool": {}, "oracle": {}, "probe": {} },
+      "versions": { "tool": { "mcp-check": "60b88f0" }, "oracle": {}, "probe": {} },
       "image_digest": null,
       "settings_state": "default"
     },
