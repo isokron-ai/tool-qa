@@ -740,20 +740,90 @@ artifact that is not in the folder's `index.ndjson` yet:
   checked against the sha256 in the artifact's manifest;
 - `ingest-*` into `<dest>/ingest/<YYYY-MM-DD>/<artifact name>/` (the UTC day
   the artifact was made; the pump's are named `ingest-<run id>-<run attempt>`),
-  still age-encrypted: nothing is decrypted, and an artifact holding a file
-  that is not an age file is refused. Each one gets a line in
+  still age-encrypted: nothing is decrypted. Each one gets a line in
   `<dest>/ingest/manifest.ndjson`: `artifact_id`, `artifact`, `run_id`,
   `run_attempt` (or `attempt_id` for a manual re-ingest), `created_at`,
   `date`, `dir`, `artifact_bytes`, `artifact_sha256`, and `files` (each
   `name`, `bytes`, `sha256`).
 
+Only artifacts made by this repository's own workflows on `main` are pulled:
+`ingest-*` from `pump.yml` or `ingest.yml`, `registry-*` from
+`history-registry.yml`, `history-packages-*` and `history-popularity-*` from
+their workflows. The artifact's run must be in this repository, not a fork
+(`head_repository_id` equal to `repository_id`), on branch `main`, and its
+workflow file is looked up once per run. A pull request from a fork can upload
+an artifact with any name, so anything else is logged as `REFUSED, not from our
+own workflow on main`, and left alone: not downloaded, not quarantined, and not
+a failure.
+
 Every download is checked against the artifact's sha256 digest when GitHub
-gives one. It never overwrites or deletes anything in the folder. An artifact
-that fails a check is left out and tried again next time, and the command
-exits 1. `<dest>/.last-pull.json` keeps its place for each kind; each run looks
-back one hour before it. A kind with no place yet (ingest, in a folder made
-before ingest outputs were pulled) is listed in full. If the list of artifacts
-runs past 500 pages, the place is not moved and the command exits 1.
+gives one. Each file is written and synced to disk in a temporary
+`.partial-<id>-<pid>` folder, which is then renamed into place. Index and
+manifest lines are synced as they are appended, and `.last-pull.json` is
+replaced whole (a synced temporary file, renamed) after them. It never
+overwrites or deletes anything in the archive. A history artifact that fails a
+check is left out and tried again next time, and the command exits 1.
+`<dest>/.last-pull.json` keeps its place for each kind; each run looks back one
+hour before it. A kind with no place yet (ingest, in a folder made before
+ingest outputs were pulled) is listed in full. If the list of artifacts runs
+past 500 pages, the place is not moved and the command exits 1.
+
+**Quarantine.** An ingest artifact is the only copy of its results, so a check
+that would fail the same way every run does not throw it away. Every file in
+it must be a non-empty `*.tar.age` file that starts like an age file, is not
+named `.artifact.json` (in any case), has no empty or `.` part in its name, and
+is not the same name as another file once case and Unicode form are ignored
+(`A.tar.age` and `a.tar.age` are one file on a Mac's disk). When one fails (for
+example a plain file, a 0-byte file, an entry past the 1 GiB unzip cap, or the
+`.tmp-<pid>` file `ingest/collect.mjs` leaves when the pump is cancelled), the
+zip itself cannot be read, or the files cannot be written under their names on
+this disk (a name too long, say):
+
+- the download is kept as it came, still encrypted, in
+  `<dest>/quarantine/<artifact id>-<name>.zip` (`.download` for an artifact
+  uploaded unzipped), with `<artifact id>-<name>.reason.json` beside it: the
+  problems, each refused file's name, size, sha256 and reason, and the files
+  kept;
+- the files that pass are archived in the usual place;
+- its index and manifest lines carry `partial: true`, `problems`, `refused`
+  and `quarantine` (the path of the kept download); `dir` is `null` when no
+  file passed.
+
+The artifact is then done: it is not tried again, and the run still exits 0,
+with a notification. Only a download that cannot be trusted (it does not match
+the digest, or, with no digest, its size is not the artifact's) is tried again
+next run. Nothing in the quarantine folder is ever decrypted.
+
+**One run at a time.** A run holds the folder `<dest>/.lock` (`owner.json`
+inside names its pid, host, start time and `touched_at`, which it updates after
+each artifact). A second run that finds a live holder logs it and exits 0
+without doing anything. A lock from this host is taken over only once its pid is
+gone, however long the run has taken (a first backfill can take many hours, and
+a Mac may sleep in the middle). A lock from another host, whose pid cannot be
+checked here, is taken over once it has not been touched for 12 hours. The
+takeover happens under a second lock, `<dest>/.lock.takeover`, and only if the
+owner file still names the holder judged stale, so two runs never both take
+one. At start, `.partial-*` folders and files left by a run whose pid is gone are
+removed.
+
+**Alerts.** From the command line, after a successful run (nothing failed, the
+list complete) it writes `<dest>/.last-ok.json` and sets the repository
+variable `ARCHIVE_LAST_OK` on the repository it pulls from, through the API with
+the same token, to JSON such as
+`{"at":"2026-11-24T06:00:00.000Z","pulled":3,"recovered":0,"quarantined":0,"already":41,"refused_foreign":0,"failed":0,"listed":120}`.
+The token needs to be able to write Actions variables (the GitHub CLI's token,
+signed in as an admin of the repository, can). A freshness check, such as one in the watchdog, can read it to tell
+that the archive is still running. A workflow must read it as
+`${{ vars.ARCHIVE_LAST_OK }}` (passed to its step through `env:`): the job's
+`GITHUB_TOKEN` cannot read repository variables through the REST API. The check
+to add: amber when `at` is more than 12 hours old; red after 24 hours, or when
+the variable is empty, is not JSON, or `at` is not a date. It shows a macOS notification (via
+`osascript`) when a run fails, when it quarantines an artifact (or finds one quarantined by a run that died before indexing it), when the
+heartbeat cannot be set, and, with a failed or locked-out run, when the last
+good run is more than 24 hours old. Neither the heartbeat nor a notification
+happens on a dry run, or when `CI` or `GITHUB_ACTIONS` is set.
+`--no-heartbeat` and `--no-notify` turn each off; `ARCHIVE_PULL_NOTIFY=0`
+also turns notifications off.
 
 The archived files are the sealed tars themselves; decrypt one with
 `age --decrypt -i ingest-identity.txt -o item.tar <file>`, as in "Reading
@@ -800,9 +870,8 @@ the paths) and load it with `launchctl bootstrap gui/$(id -u)` on that file:
 
 `PATH` is set so the job can find the GitHub CLI for its token. A Mac that is
 asleep runs a missed interval when it wakes. To run it at once, `launchctl
-kickstart gui/$(id -u)/ai.isokron.tool-qa.archive-pull`. Two pulls into one
-folder at the same time are not guarded against, so start one by hand only
-when the agent is not running. Check the log after the first
+kickstart gui/$(id -u)/ai.isokron.tool-qa.archive-pull`. A run started by
+hand while the agent is pulling finds the lock and exits. Check the log after the first
 run; a full first pull takes a while, because it paces itself under the API
 limits. To update the code it runs, `git -C ~/isokron-archive/tool-qa-code
 pull --ff-only` after a change to the script is merged.
