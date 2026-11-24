@@ -17,8 +17,9 @@
 //     `ingest-<run id>-<run attempt>`, and a manual re-ingest's
 //     `ingest-<attempt id>`), stored still age-encrypted in
 //     `<dest>/ingest/<YYYY-MM-DD>/<name>/` (the UTC day the artifact was made),
-//     with one line per artifact in `<dest>/ingest/manifest.ndjson`: run id, run
-//     attempt, and each file's name, size and sha256. Nothing is decrypted.
+//     with one line per artifact in `<dest>/ingest/manifest.ndjson`: its kind
+//     (pump, state-archive or re-ingest), run id, run attempt, and each file's
+//     name, size and sha256. Nothing is decrypted.
 //
 // For every such artifact that has not expired and is not in the index yet, it:
 //   0. checks it was made by our own workflow for its kind (pump.yml or
@@ -225,12 +226,27 @@ const isAge = (data) =>
   (data.length >= AGE_BINARY.length && data.subarray(0, AGE_BINARY.length).equals(AGE_BINARY)) ||
   (data.length >= AGE_ARMOR.length && data.subarray(0, AGE_ARMOR.length).equals(AGE_ARMOR));
 
+/**
+ * What an ingest artifact is, for its manifest line: `pump` (the pump's sealed
+ * outputs, ingest-<run id>-<run attempt>), `state-archive` (rows the pump moved
+ * out of the live state, ingest-state-archive-<run id>-<run attempt>; see
+ * pump/prune.mjs) or `re-ingest` (a manual re-ingest, ingest-<attempt id>).
+ * Lines written before this field have none.
+ */
+export function ingestKind(name) {
+  const n = String(name);
+  if (/^ingest-state-archive-\d+-\d+$/.test(n)) return 'state-archive';
+  if (/^ingest-\d+-\d+$/.test(n)) return 'pump';
+  return 're-ingest';
+}
+
 /** The manifest line for one archived ingest artifact. */
 function manifestLine(marker, dir) {
   const { run_id, run_attempt, attempt_id } = ingestRun(marker);
   return {
     artifact_id: marker.id,
     artifact: marker.name,
+    kind: ingestKind(marker.name),
     run_id,
     run_attempt,
     attempt_id,
