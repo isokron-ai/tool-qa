@@ -53,13 +53,13 @@ async function localS3() {
   return { objects, requests, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => server.close(r)) };
 }
 
-test('R-OFF-11: the R2 store sends If-None-Match, Content-MD5, x-amz-checksum-sha256 and sha256 metadata; reads them back; an existing key is "exists"', { skip: !installed && 'the S3 client is not installed (npm ci --prefix offsite)' }, async () => {
+test('R-OFF-11: the R2 store sends If-None-Match, Content-MD5, x-amz-checksum-sha256 (when asked) and sha256 metadata; reads them back; an existing key is "exists"', { skip: !installed && 'the S3 client is not installed (npm ci --prefix offsite)' }, async () => {
   const s3 = await localS3();
   const store = await createR2Store({ accountId: 'a'.repeat(32), bucket: 'isokron-loop-backup', accessKeyId: 'AKIA_SYNTHETIC', secretAccessKey: 'synthetic-secret', endpoint: s3.url, maxAttempts: 1 });
   try {
     const body = Buffer.from('age-encryption.org/v1\nbody');
     const d = { md5: hash('md5', body), sha256: hash('sha256', body) };
-    const put = await store.put('ingest/2026-03-02/x/x.zip', body, d);
+    const put = await store.put('ingest/2026-03-02/x/x.zip', body, { ...d, sendSha256: true });
     assert.equal(put.etag, d.md5);
     const req = s3.requests.find((r) => r.method === 'PUT');
     assert.equal(req.bucket, 'isokron-loop-backup');
@@ -76,8 +76,8 @@ test('R-OFF-11: the R2 store sends If-None-Match, Content-MD5, x-amz-checksum-sh
     assert.equal(page.next, null);
     assert.ok((await store.get('ingest/2026-03-02/x/x.zip')).equals(body));
     assert.equal(await store.get('nope'), null);
-    // Without the sha256 header (OFFSITE_SHA256_HEADER=off) the metadata still goes.
-    await store.put('k2', body, { ...d, sendSha256: false });
+    // By default (OFFSITE_SHA256_HEADER unset: R2 refuses the header with Content-MD5) it is not sent; the metadata still goes.
+    await store.put('k2', body, d);
     const r2 = s3.requests.filter((r) => r.method === 'PUT').at(-1);
     assert.equal(r2.headers['x-amz-checksum-sha256'], undefined);
     assert.equal(r2.headers['x-amz-meta-sha256'], d.sha256);

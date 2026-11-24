@@ -619,8 +619,8 @@ export class Sim {
         env: {
           GITHUB_REPOSITORY: TOOLQA, GITHUB_TOKEN: `ghs_wdjob${run.id}`, GITHUB_REF_NAME: 'main', LOOP_SLOTS: vars.LOOP_SLOTS ?? '',
           AGE_IDENTITY: this.identity, ARCHIVE_LAST_OK: JSON.stringify({ at: iso(this.t - HOUR), pulled: 1, quarantined: 0 }),
-          // The off-site backup is outside the simulated loop (watchdog/test/offsite.test.mjs covers it).
-          LANE_OFFSITE_ENABLED: 'false', ...lanes,
+          // The off-site backup and the keep-forever copy are outside the simulated loop (watchdog/test/offsite.test.mjs covers it).
+          LANE_OFFSITE_ENABLED: 'false', LANE_KEEP_FOREVER_ENABLED: 'false', ...lanes,
         },
         now: () => this.t,
         sleep: t.sleep,
