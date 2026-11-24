@@ -238,6 +238,92 @@ push state by hand or run the manual re-ingest workflow, first switch the pump
 off (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going. The
 watchdog only downloads a copy and never pushes.
 
+## State snapshots
+
+The state asset is overwritten on every pump run, so on its own a damaged or
+deleted asset would start the loop from empty. The workflow
+[`state-snapshot.yml`](../.github/workflows/state-snapshot.yml) keeps
+versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
+
+- **When.** Every hour at minute 41, and on `workflow_dispatch`. The GitHub
+  schedule on this repository has not fired reliably, so the operator's
+  stand-in scheduler (the Mac script that also dispatches the history
+  workflows) dispatches it every hour too, unless a run started in the last
+  50 minutes. Two runs in one hour do no harm: the second finds the state
+  unchanged.
+- **Where.** The pre-release tagged `state-snapshots`, as
+  `state-<UTC time>-<first 8 hex of sha256>.sqlite.age` (for example
+  `state-20261124T034100Z-6e511772.sqlite.age`), each with the label
+  `sha256:<hex>`, plus `manifest.json`: for every snapshot its time, sha256,
+  size, and the source asset's id and `updated_at`; and `current_at`, the last
+  time a run saw the newest snapshot equal the live state.
+- **Still encrypted.** A snapshot is the state asset's age ciphertext, byte for
+  byte. The workflow holds no key and never decrypts; its job has only
+  `contents: write` and no environment or secrets.
+- **Copy check.** The run downloads the live asset, checks the bytes against
+  its `sha256:` label, and checks the asset is still the same one (id, label,
+  `updated_at`) after the download. If the pump pushed in between, it copies
+  once more, then gives up until the next run. It refuses an asset with no
+  label or that is not age ciphertext. Each new snapshot is downloaded back
+  and checked before the manifest names it.
+- **Dedupe.** If the newest snapshot already has the live sha256, nothing is
+  uploaded; only `current_at` in the manifest moves on.
+- **Retention.** The 48 newest snapshots, plus the newest snapshot of each UTC
+  day of the last 30 days; the rest are deleted. The count is of snapshots,
+  not hours: an idle loop makes no new ones, so it never ages out the copies
+  it would need. The manifest is written before anything is deleted, and the
+  next run picks up any asset a failed delete left behind.
+- **Switches.** `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` and
+  `LANE_STATE_SNAPSHOT_ENABLED`, like every loop job. While the loop is
+  stopped the state does not change, so nothing is lost.
+
+**Health.** The watchdog reads the manifest and shows a `state-snapshot` check
+on the health issue: amber when `current_at` is more than 3 hours old (or there
+is no snapshot yet), red after 6 hours ("The loop health issue" below).
+
+**Restore drill.** [`snapshot/restore.mjs`](../snapshot/restore.mjs), on an
+operator's machine with age installed and the state identity (default
+`~/.isokron/loop-age-identity.key`, or `--identity <file>`; it is never
+printed):
+
+```sh
+node snapshot/restore.mjs list
+node snapshot/restore.mjs drill                      # the newest snapshot
+node snapshot/restore.mjs drill --snapshot state-20261124T034100Z-6e511772.sqlite.age
+```
+
+`drill` downloads the snapshot, checks its sha256, size and name against the
+manifest, decrypts it into a private temporary directory, checks that SQLite
+opens it and that `PRAGMA integrity_check` says `ok`, and prints the schema
+version, the fence counter and the row count of every table (subjects and
+results first). The decrypted copy is deleted before it exits. It needs no
+token for a public repository (it uses `GITHUB_TOKEN` or `gh auth token` if
+there is one). Run it after any change to the state code, and now and then
+anyway: a backup nobody has restored is a hope, not a backup.
+
+**Restore for real** (`drill --apply`). First stop the pump: set
+`LANE_PUMP_ENABLED=false` (or `LOOP_ENABLED`, or `LOOP_PAUSE_UNTIL` at least 10
+minutes ahead) and wait until no `pump` or `ingest` run is queued or running.
+`--apply` checks both and refuses otherwise; it needs a token that can write
+releases and read repository variables (`gh auth token` of an admin). It then:
+
+1. takes a normal snapshot of the live state, so the restore can be undone (if
+   the live asset cannot be copied, it says so and goes on);
+2. uploads the chosen snapshot's ciphertext, unchanged, under a temporary name;
+3. checks the live asset is still the one it saw, and stops without changing
+   anything if not;
+4. renames the old `state.sqlite` to `state.sqlite.replaced-<time>` (the pump
+   never reads that name; delete it by hand once you no longer need it) and
+   renames the upload to `state.sqlite`.
+
+Then switch the pump back on. Its next run pulls the restored state. Work the
+loop did after the snapshot is not in it: dispatches sent since then are
+unknown to the restored state, so their results are not ingested and their
+subjects come due again. Fences issued after the snapshot can be issued again,
+but a result is matched on its attempt id as well as its fence, and attempt
+ids are random for every dispatch, so an old bundle is never taken for a new
+dispatch.
+
 ## Subjects: where they come from
 
 The due list works on the `subjects` table. Today its only source is the seed
