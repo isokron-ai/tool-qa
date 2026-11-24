@@ -10,7 +10,8 @@
 // drill  downloads one snapshot (default: the newest), checks it against the
 //        manifest (sha256, size, name) and its asset label, decrypts it locally
 //        with the age identity (default ~/.isokron/loop-age-identity.key; the key
-//        is never printed), checks the database opens and passes
+//        is never printed), gunzips it if it is compressed (snapshots taken
+//        since loop upgrade #14; older ones are not), checks the database opens and passes
 //        `PRAGMA integrity_check`, and reports its schema version, the fence
 //        counter and the row count of every table (subjects and results first).
 //        The decrypted copy is written to a private temporary directory and
@@ -39,7 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 import { evaluateGuard, parseIsoTime } from '../scripts/guard.mjs';
-import { stateCrypto } from '../scripts/state-asset.mjs';
+import { decodeState, stateCrypto } from '../scripts/state-asset.mjs';
 import { createReleaseClient } from './github.mjs';
 import {
   MANIFEST, SNAPSHOT_TAG, SOURCE_ASSET, SOURCE_TAG, SOURCE_UPLOAD_PREFIX,
@@ -153,6 +154,15 @@ export async function applySnapshot({ gh, bytes, sha, expectedLive, now = Date.n
   return { asset_id: up.id, replaced_kept_as: keptAs };
 }
 
+/** Do the live asset's bytes hash to `sha`? A download that fails counts as no. */
+async function liveMatches(gh, live, sha) {
+  try {
+    return sha256(await gh.download(live)) === sha;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The drill. Returns a report object; throws on any failed check.
  */
@@ -188,8 +198,11 @@ export async function drill({
       }
     }
     const file = join(dir, 'state.sqlite');
-    writeFileSync(file, plain, { mode: 0o600 });
+    const { data, compressed } = decodeState(Buffer.from(plain));
+    writeFileSync(file, data, { mode: 0o600 });
     report.decrypted_bytes = plain.length;
+    report.compressed = compressed;
+    report.database_bytes = data.length;
     Object.assign(report, inspectDatabase(file));
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -226,7 +239,11 @@ export async function drill({
     log(`restore: could not snapshot the live state first (${liveSnapshotError}); it will be kept on the "${SOURCE_TAG}" release under a new name instead`);
   }
   const live = pickSource((await gh.getRelease(SOURCE_TAG))?.assets);
-  if (live && labelSha(live.label) === entry.sha256) return { ...report, applied: false, note: 'the live state already is this snapshot', saved_live_as: savedLiveAs };
+  // The live asset's label is only a claim about its bytes: a damaged asset
+  // can keep the label of the good copy, so the bytes decide (R-CHAOS-06).
+  if (live && labelSha(live.label) === entry.sha256 && (await liveMatches(gh, live, entry.sha256))) {
+    return { ...report, applied: false, note: 'the live state already is this snapshot', saved_live_as: savedLiveAs };
+  }
   const applied = await applySnapshot({ gh, bytes, sha: entry.sha256, expectedLive: live, now, log });
   return {
     ...report, applied: true, saved_live_as: savedLiveAs, live_snapshot_error: liveSnapshotError,

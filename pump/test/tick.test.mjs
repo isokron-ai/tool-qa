@@ -283,3 +283,78 @@ test('R-ING-24: the ref is read again just before each send; a merge since the t
   assert.ok(lines.some((l) => /moved to b{40} since this tick began/.test(l)));
   db.close();
 });
+
+test('R-CHAOS-05: a dispatch that fails with a server or network error stays pending with its slot and leases; a refusal is closed at once', async () => {
+  for (const [err, kept] of [
+    [new GitHubError('POST dispatches returned 502: Bad Gateway', { status: 502, method: 'POST', path: '/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/dispatches' }), true],
+    [new GitHubError('POST dispatches: network error: socket hang up', { status: 0, method: 'POST', path: '/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/dispatches' }), true],
+    [new GitHubError('GET runs returned 503', { status: 503, method: 'GET', path: '/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/runs' }), true],
+    [new GitHubError('POST dispatches returned 422: Unexpected inputs', { status: 422, method: 'POST', path: '/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/dispatches' }), false],
+  ]) {
+    const { c, db, config, newId } = setup({ subjects: 2 });
+    const d = recorder(() => { throw err; });
+    const s = await runTick({ db, now: c.now, config, workerSlots: 3, dispatcher: d, newId });
+    assert.equal(s.failed, 1);
+    const row = db.getDispatch('att-001');
+    assert.equal(row.status, kept ? 'pending' : 'failed', err.message);
+    assert.equal(db.openSlots().length, kept ? 1 : 0, 'the slot is held only while the run may exist');
+    assert.equal(db.getLease(row.items[0].run_key).holder, kept ? 'att-001' : null);
+    if (kept) assert.equal(s.unconfirmed, 1);
+    db.close();
+  }
+});
+
+test('R-CHAOS-02: run_keys the pump holds are not dispatched this tick', async () => {
+  const { c, db, config, newId } = setup({ subjects: 4, workflows: { 'live-probe': wf({ shard_size: 1 }) } });
+  const d = recorder();
+  const first = await runTick({ db, now: c.now, config, workerSlots: 0, dispatcher: d, newId });
+  assert.equal(first.due, null);
+  const { dueFromState } = await import('../due.mjs');
+  const keys = dueFromState(db, { now: c.now(), tiers: config.tiers, workflows: config.workflows }).map((x) => x.run_key);
+  const held = new Set(keys.slice(0, 3));
+  const s = await runTick({ db, now: c.now, config, workerSlots: 10, dispatcher: d, newId, holdRunKeys: held });
+  assert.equal(s.due, 1);
+  assert.equal(d.calls.length, 1);
+  assert.equal(JSON.parse(d.calls[0].inputs.items)[0].run_key, keys[3]);
+  db.close();
+});
+
+test('R-CHAOS-08: a server or network error before the dispatch POST (the ref re-read, the token mint) sent nothing: the dispatch is closed at once', async () => {
+  const cases = [
+    ['the ref re-read', new GitHubError('GET /repos/isokron-ai/mcp-check/branches/main returned 502', { status: 502, method: 'GET', path: '/repos/isokron-ai/mcp-check/branches/main' }), 'resolve'],
+    ['the ref re-read, network', new GitHubError('GET branches: network error', { status: 0, method: 'GET', path: '/repos/isokron-ai/mcp-check/branches/main' }), 'resolve'],
+    ['the token mint', new GitHubError('POST /app/installations/1/access_tokens returned 503', { status: 503, method: 'POST', path: '/app/installations/1/access_tokens' }), 'dispatch'],
+    ['an error with no request', new Error('socket hang up'), 'dispatch'],
+  ];
+  for (const [what, err, where] of cases) {
+    const { c, db, config, newId } = setup({ subjects: 2 });
+    let reads = 0;
+    const d = recorder(() => {
+      if (where === 'dispatch') throw err;
+      return {};
+    });
+    d.resolveRef = async () => {
+      reads += 1;
+      if (where === 'resolve' && reads === 2) throw err; // the re-read right before sending
+      return 'f'.repeat(40);
+    };
+    const s = await runTick({ db, now: c.now, config, workerSlots: 3, dispatcher: d, newId });
+    assert.equal(s.failed, 1, what);
+    assert.equal(s.unconfirmed ?? 0, 0, what);
+    assert.equal(db.getDispatch('att-001').status, 'failed', `${what}: nothing was sent, so nothing stays pending`);
+    assert.equal(db.openSlots().length, 0, what);
+    db.close();
+  }
+});
+
+test('R-CHAOS-08: only the dispatch POST and the poll for its run count as maybe sent', async () => {
+  const { ambiguous } = await import('../tick.mjs');
+  const e = (status, method, path) => new GitHubError('x', { status, method, path });
+  assert.equal(ambiguous(e(502, 'POST', '/repos/o/r/actions/workflows/w.yml/dispatches')), true);
+  assert.equal(ambiguous(e(0, 'GET', '/repos/o/r/actions/workflows/w.yml/runs')), true);
+  assert.equal(ambiguous(e(502, 'GET', '/repos/o/r/branches/main')), false);
+  assert.equal(ambiguous(e(502, 'POST', '/app/installations/1/access_tokens')), false);
+  assert.equal(ambiguous(e(502, 'GET', '/repos/o/r/actions/workflows/w.yml/dispatches')), false);
+  assert.equal(ambiguous(e(422, 'POST', '/repos/o/r/actions/workflows/w.yml/dispatches')), false);
+  assert.equal(ambiguous(new BudgetExceededError('spent', { family: 'dispatch' })), false);
+});

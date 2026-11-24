@@ -16,16 +16,40 @@ person by hand (docs/OPERATIONS.md).
 ## Subjects
 
 The due list reads `db.listSubjects()` and skips retired subjects
-(`retired_at` set). The pump fills the table from the seed at start-up
-(`syncSeedSubjects(db, { now, file })` in `pump/subjects.mjs`; docs/OPERATIONS.md,
-"Subjects: where they come from"). A subject id is what the worker receives as
-`subject`: for the seed's GitHub subjects, `owner/name`. kv `subjects.seed`
-holds `{ file, source, sha256, mapping, subjects, tiers, retired, loaded_at }`
-for the last load.
+(`retired_at` set), subjects whose repository cannot be found (`gone_at` set)
+and subjects merged into another (`alias_of` set). The pump fills the table
+from the seed at start-up (`syncSeedSubjects(db, { now, file })` in
+`pump/subjects.mjs`; docs/OPERATIONS.md, "Subjects: where they come from").
+kv `subjects.seed` holds `{ file, source, sha256, mapping, subjects, tiers,
+retired, loaded_at }` for the last load.
 
-- `db.setSubjectVersion({ id, kind, source, tier, sha, artifactDigest, now })`
+**Subject key, identity and name (state schema v8, loop upgrade #15).**
+
+- `subjects.id` is the subject key: the owner/name the subject had when it
+  was first seen, frozen. run_keys (`subject_id` field), leases, dispatch
+  items, attempts and results name it, so it never changes.
+- `subjects.repo_id` is the identity: GitHub's numeric repository id, with
+  `node_id` and `repo_created_at`. At most one subject per id (a unique
+  index). NULL until the pump looks it up (`pump/identity.mjs`,
+  `refreshIdentities`); a subject not looked up yet works exactly as before.
+- `subjects.name` is the repository's current owner/name, what the worker
+  receives as `subject` (the item's `subject_name`). It follows renames and
+  transfers; for subjects from before v8 it starts as the key.
+- `id_status` (`ok`, `error`, `not_found`, `duplicate`, `conflict`, or NULL
+  before the first lookup), `id_checked_at`, `gone_at` and `alias_of` say how
+  the last lookup went. Every change is a row in `subject_events`
+  (`id_bound`, `renamed`, `transferred`, `merged`, `not_found`,
+  `found_again`, `id_conflict`), read with `db.listSubjectEvents(subject?)`.
+- `db.applyIdentityLookup(key, {status, node, via}, { now })` applies one
+  lookup (see its comment in `state/db.mjs` for the guards: the merge keeps
+  the subject with history and moves the binding to it, a repository created
+  after the subject was first seen is refused), and
+  `db.identityCandidates({ now, retryMs, limit })` lists who to look up.
+
+- `db.setSubjectVersion({ id, kind, source, tier, sha, artifactDigest, name, now })`
   inserts or updates a subject and clears `retired_at`. A new sha or digest
-  moves `changed_at`; pass the current ones to keep them.
+  moves `changed_at`; pass the current ones to keep them. `name` is used only
+  when the subject is new (default: the key).
 - `db.retireSubjects({ sourcePrefix, keep, now })` retires every active
   subject whose `source` starts with `sourcePrefix` and whose id is not in
   `keep`. Returns the number retired.
@@ -43,7 +67,7 @@ inputs, all strings:
 |---|---|
 | `shard_id` | The shard's id, such as `scan-static-3f2a9c01b7d4`. Unique per dispatch. |
 | `attempt_id` | The dispatch's id in the state store. Results must quote it. |
-| `items` | JSON array, one entry per piece of work: `[{"subject": "...", "run_key": "<64 hex>", "fence": 17}, ...]`. At most 60,000 characters. |
+| `items` | JSON array, one entry per piece of work: `[{"subject": "...", "run_key": "<64 hex>", "fence": 17}, ...]`. `subject` is the repository's current owner/name (for a GitHub subject); the result is recorded under the subject key by `run_key`, so a rename before ingest changes nothing. At most 60,000 characters. |
 
 A worker workflow must:
 
@@ -89,7 +113,12 @@ works; `items` holds between one and `shard_size` entries.
 How long a dispatch may take: 1.5 × (`setup_minutes` + items ×
 `minutes_per_subject`) + 10 minutes, from `pump/workflows.json`. After that its
 leases and its slot expire, the pump closes it as `lease_expired`, and the work
-is due again. A result that arrives later is stored as rejected.
+is due again. A result whose run completed later (by the run's `updated_at`
+from GitHub) is stored as rejected. A run that completed inside the lease is on
+time even when the pump only judges it after the lease ran out: `recordResult`
+checks the lease against the run's completion (`completedAt`, R-CHAOS-02), and
+until ingest has looked at such an expired dispatch the pump does not send its
+work again (`holdRunKeys` in `runTick`).
 
 ## Ingest in the pump
 
@@ -141,7 +170,7 @@ What `collect()` does, oldest dispatch first, for each dispatch from
 | Run not finished, or GitHub does not know it | Wait. A run that never finishes is handled by lease expiry. |
 | Run finished | Check the run and list its artifacts once (`openAttempt()` in [`ingest/ingest.mjs`](../ingest/ingest.mjs), steps in [`ingest/README.md`](../ingest/README.md)). Then, for each item without a result, in index order: judge it against its own artifact `result-<attempt_id>-<index>.tar.age`, record the decision with `db.recordResult()`, and seal the item's outputs to `worker-kit/ingest.pub` as `ingest-<attempt_id>-<index>.tar.age` in the outputs directory. Recording and sealing one item are one transaction (`db.txAsync()`): if sealing fails, nothing is recorded for that item, the other items go on, and a later tick tries it again. Once every item has a result, the dispatch is closed as `run_completed` (frees its slot and any lease left), unless the store already closed it as `results_in`. |
 | Refused before any item was judged | Unknown attempt, wrong repo or run, run not found: nothing is recorded, the report is sealed as `ingest-<attempt_id>.tar.age`, and the dispatch is closed. |
-| Lease expired before the run finished | Still judged for six hours after the dispatch was closed, at most every ten minutes; the store keeps the late results as rejected. |
+| Lease expired before ingest looked | Still judged for six hours after the dispatch was closed, at most every ten minutes (a look the API budget stopped does not count; R-CHAOS-07). A run that completed inside its lease is accepted if no newer lease was granted; one that completed later is kept as rejected. |
 
 The `deadline` is checked before every item, so a large shard may be judged
 over several ticks; items already recorded are skipped.
@@ -184,7 +213,15 @@ such attempt: `attempt_id`, `workflow`, `repo`, `workflow_file` (a path under
 `workflow_sha`, `canaries` (always empty for now: none are injected yet),
 `status`, `shard_id`, `created`, `expires`, and `items`, one per dispatched
 item in dispatch order:
-`{ index, run_key, fence, subject, current_fence, outcome, resolved }`.
+`{ index, run_key, fence, subject, subject_name, repo_id, name, current_fence, outcome, resolved }`.
+`subject` is the subject key the result is recorded under; `subject_name`
+the owner/name the worker was sent (null for dispatches from before schema
+v8); `repo_id` and `name` the subject's repository id (null until looked up)
+and its name now. Ingest copies them into each item's `ingest.json`
+(`ledger.subject`, `ledger.subject_name`, `ledger.repo_id`,
+`ledger.subject_current_name`), and `longitudinal/` groups results by
+`ledger.subject`, so one repository's history stays one subject across a
+rename.
 `retries` is the number of `retry_later` decisions for the item's run_key
 since its last accepted result that measured something (`results.measured_at`;
 a `skips_only` result does not reset it, R-SUB-08) (`db.retryLaterCount(runKey)`);
@@ -242,7 +279,7 @@ The dispatch row with its items, or `undefined`. Fields include `repo`,
 `workflow`, `workflow_file`, `ref`, `status` (`pending`, `dispatched`, `done`,
 `failed`, `expired`), `run_id`, `run_url`, `workflow_sha` and `expires`. Each
 item has `item_index` (its 0-based position in the `items` input), `run_key`,
-`subject`, `fence` and `resolved`, in index order. Ingest uses it to check
+`subject`, `subject_name`, `fence` and `resolved`, in index order. Ingest uses it to check
 that a result came from the run the pump started, in the repository and at the
 workflow commit it expected.
 
@@ -278,6 +315,13 @@ an earlier rejection into an acceptance.
 | `run_sha_mismatch` | The worker run was at another commit than the one recorded at dispatch: the worker branch moved between the pump reading it and GitHub starting the run, or someone else's run took the shard's run name. The work is due again. Three such dispatches of one workflow in a row pause that workflow for six hours (`pump.paused:<workflow>` below). | no |
 | `retry_later` | Every skip in the bundle is retryable (a rate limit, an upstream outage): the item is sent out again after a backoff (`retry_backoff_minutes` in `pump/tiers.json`, doubled for each retry), at most three times per run_key, then the bundle is accepted with its skips. | no |
 | ingest's `reason`, or `rejected_by_ingest` | Ingest rejected the result. | yes |
+
+`completedAt` (optional, ms or ISO): when GitHub says the worker run
+completed. The lease's expiry is checked against it instead of `now` when it is
+earlier, so a run that finished in time is not `lease_expired` because the pump
+looked later (R-CHAOS-02). A newer lease still makes the fence stale. The
+pump's ingest passes the run's `updated_at`, or the item's artifact
+`created_at` when that is later (R-CHAOS-10); the manual re-ingest passes none.
 
 Every call is kept as an attempt, accepted or not; a rejected result never
 overwrites an accepted one. When the attempt is current, its lease is released.

@@ -80,9 +80,22 @@ function normalizeItem(it, position, bad) {
   if (!(throttled >= 0)) bad('throttled');
   const since = pick(it, 'throttled_since') ?? null;
   if (since !== null && (typeof since !== 'string' || !Number.isFinite(Date.parse(since)))) bad('throttled_since');
+  // Who the item is (state schema v8): the subject key it is recorded under,
+  // the owner/name the worker was sent, the repository id and current name.
+  // Optional, and only present when set (a ledger from before v8 has only the
+  // key); a malformed one is left out, never fatal: the result is judged by
+  // run_key and fence alone.
+  const text = (k) => {
+    const v = pick(it, k);
+    return typeof v === 'string' && v.length >= 1 && v.length <= 512 && !/[\s\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(v) ? v : null;
+  };
+  const repoIdRaw = pick(it, 'repo_id');
+  const repoId = Number.isSafeInteger(repoIdRaw) && repoIdRaw > 0 ? repoIdRaw : null;
   return {
     index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries,
     throttled, throttled_since: since,
+    ...Object.fromEntries(Object.entries({ subject: text('subject'), subject_name: text('subject_name'), repo_id: repoId, name: text('name') })
+      .filter(([, v]) => v !== null)),
   };
 }
 
@@ -140,11 +153,27 @@ function normalizeRecord(answer, requested) {
   return { accepted: answer.accepted, reason: answer.reason ?? null };
 }
 
-function wrap({ getAttempt, recordResult, close, now }) {
+/**
+ * When the result was in, for the store's lease check (R-CHAOS-02): the run's
+ * completion, or the item's artifact upload if that is later (R-CHAOS-10).
+ * null when the run's completion is not known (the store then uses now).
+ */
+export function resultInAt(completedAt, artifactCreatedAt) {
+  const done = completedAt === null || completedAt === undefined ? NaN : (typeof completedAt === 'number' ? completedAt : Date.parse(completedAt));
+  if (!Number.isFinite(done)) return null;
+  const art = artifactCreatedAt ? Date.parse(artifactCreatedAt) : NaN;
+  return Number.isFinite(art) ? Math.max(done, art) : done;
+}
+
+function wrap({ getAttempt, recordResult, close, now, completedAt }) {
   return {
     kind: 'state',
     getAttempt: (id) => normalizeAttempt(getAttempt(id)),
-    recordResult: (r) => normalizeRecord(recordResult(now ? { ...r, now: now() } : r), r),
+    recordResult: (r) => {
+      const { artifactCreatedAt, ...rest } = r;
+      const inAt = resultInAt(completedAt, artifactCreatedAt);
+      return normalizeRecord(recordResult({ ...rest, ...(now ? { now: now() } : {}), ...(inAt !== null ? { completedAt: inAt } : {}) }), r);
+    },
     close,
   };
 }
@@ -153,13 +182,15 @@ function wrap({ getAttempt, recordResult, close, now }) {
  * The ledger over a StateDb that is already open (the pump's). close() leaves
  * it open; its owner closes it.
  * @param {{getAttempt: Function, recordResult: Function}} db  a StateDb
- * @param {{now?: () => number|Date}} [opts]  the time recordResult stores
+ * @param {{now?: () => number|Date, completedAt?: number|string|null}} [opts]
+ *   now: the time recordResult stores; completedAt: when GitHub says the
+ *   worker run completed, which the store checks the lease against (R-CHAOS-02)
  */
-export function dbLedger(db, { now } = {}) {
+export function dbLedger(db, { now, completedAt = null } = {}) {
   if (typeof db?.getAttempt !== 'function' || typeof db?.recordResult !== 'function') {
     throw new LedgerError('ledger: the state store has no getAttempt()/recordResult()');
   }
-  return wrap({ getAttempt: (id) => db.getAttempt(id), recordResult: (r) => db.recordResult(r), close: () => {}, now });
+  return wrap({ getAttempt: (id) => db.getAttempt(id), recordResult: (r) => db.recordResult(r), close: () => {}, now, completedAt });
 }
 
 function stateLedger(mod, path) {

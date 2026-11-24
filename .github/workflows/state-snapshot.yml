@@ -4,8 +4,9 @@ name: state-snapshot
 # the "state" release, still age-encrypted (this workflow holds no key and never
 # decrypts), to the "state-snapshots" release as
 # state-<UTC time>-<sha8>.sqlite.age, with a manifest.json. Skips the upload when
-# the state is unchanged since the newest snapshot; keeps the 48 newest
-# snapshots and the newest of each UTC day for 30 days. The GitHub schedule on
+# the state is unchanged since the newest snapshot; keeps the 24 newest
+# snapshots, the newest of each UTC day for 14 days and of each UTC week for
+# 8 weeks. The GitHub schedule on
 # this repository has not fired reliably, so the operator's stand-in scheduler
 # also dispatches it every hour. See docs/OPERATIONS.md, "State snapshots".
 

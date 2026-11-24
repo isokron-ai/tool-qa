@@ -6,7 +6,7 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
-import { SOURCES, acquireLock, archivePull, canNotify, commandOf, kindOf, main, notifyMac, resolveToken } from '../scripts/archive-pull.mjs';
+import { SOURCES, acquireLock, archivePull, canNotify, commandOf, ingestKind, kindOf, main, notifyMac, resolveToken } from '../scripts/archive-pull.mjs';
 import { API, fakeApi, fakeClock } from './lib/fake-api.mjs';
 import { makeZip } from './lib/zip.mjs';
 
@@ -262,6 +262,7 @@ test('ingest artifacts are archived sealed, by day and run, with one manifest li
   assert.equal(m.length, 1);
   assert.equal(m[0].artifact_id, 7);
   assert.equal(m[0].artifact, 'ingest-70-2');
+  assert.equal(m[0].kind, 'pump');
   assert.equal(m[0].run_id, 70);
   assert.equal(m[0].run_attempt, 2);
   assert.equal(m[0].attempt_id, null);
@@ -296,6 +297,26 @@ test('a manual re-ingest artifact uploaded unzipped is kept as its one sealed fi
   assert.equal(m.run_id, 30, 'the run id comes from the artifact');
   assert.equal(m.run_attempt, null);
   assert.equal(m.attempt_id, '5c1e0f2a-0000-4000-8000-000000000001');
+  assert.equal(m.kind, 're-ingest');
+  w.cleanup();
+});
+
+test('R-PRUNE-05: a state archive is marked kind state-archive in the ingest manifest, not taken for a manual re-ingest', async () => {
+  const w = world();
+  const zip = makeZip([{ name: 'state-archive-81-1.tar.age', data: AGE('rows'), method: 'store' }]);
+  w.add(9, 'ingest-state-archive-81-1', zip, { hoursAgo: 2, digest: `sha256:${sha(zip)}` });
+  const out = await archivePull(w.opts);
+  assert.deepEqual(out.failed, []);
+  const [m] = manifestLines(w.dest);
+  assert.equal(m.kind, 'state-archive');
+  assert.equal(m.artifact, 'ingest-state-archive-81-1');
+  assert.deepEqual(m.files.map((f) => f.name), ['state-archive-81-1.tar.age']);
+  // The fields from before stay as they were, so older readers see no change.
+  assert.equal(m.attempt_id, 'state-archive-81-1');
+  assert.equal(m.run_attempt, null);
+  assert.equal(ingestKind('ingest-70-2'), 'pump');
+  assert.equal(ingestKind('ingest-5c1e0f2a-0000-4000-8000-000000000001.tar.age'), 're-ingest');
+  assert.equal(ingestKind('ingest-state-archive-x'), 're-ingest');
   w.cleanup();
 });
 
@@ -1125,6 +1146,7 @@ test('R-ARC-20: every artifact a workflow here uploads under an archived prefix 
     'history-popularity- history-popularity.yml',
     'ingest- ingest.yml',
     'ingest- pump.yml',
+    'ingest-state-archive- pump.yml',
     'registry- history-registry.yml',
   ]);
   const files = new Set(readdirSync(dir));

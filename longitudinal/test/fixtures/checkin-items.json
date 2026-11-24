@@ -1,0 +1,558 @@
+{
+ "items": [
+  {
+   "subject": "acme/py-one",
+   "lane": "scan-static",
+   "at": "2026-11-20T10:00:00Z",
+   "attempt": "att-a",
+   "index": 0,
+   "run_id": 1001,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "no_runnable_artifact",
+     "evidence": "results/scan-static.json",
+     "retryable": false
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "skipped",
+    "detail": "no_tools",
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "acme/py-two",
+   "lane": "scan-static",
+   "at": "2026-11-20T10:01:00Z",
+   "attempt": "att-a",
+   "index": 1,
+   "run_id": 1001,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "no_runnable_artifact",
+     "evidence": "results/scan-static.json",
+     "retryable": false
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "skipped",
+    "detail": "no_tools",
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "globex/py-three",
+   "lane": "scan-static",
+   "at": "2026-11-20T10:02:00Z",
+   "attempt": "att-a",
+   "index": 2,
+   "run_id": 1001,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "no_runnable_artifact",
+     "evidence": "results/scan-static.json",
+     "retryable": false
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "skipped",
+    "detail": "no_tools",
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "acme/py-one",
+   "lane": "scan-static",
+   "at": "2026-11-22T10:00:00Z",
+   "attempt": "att-b",
+   "index": 0,
+   "run_id": 1002,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "graded",
+    "detail": null,
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": {
+     "fidelity": "derived",
+     "from": "source",
+     "language": "python",
+     "approximate": true,
+     "tools_listed": 3,
+     "tools_left_out": 0,
+     "tools_conditional": 0,
+     "unresolved_names": 0,
+     "registration_not_seen": 0,
+     "unreadable": {
+      "input_schemas": 0,
+      "descriptions": 0,
+      "annotations": 0
+     },
+     "listing_truncated": false
+    }
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "acme/dotnet-srv",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:00:00Z",
+   "attempt": "att-c",
+   "index": 0,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "no_runnable_artifact",
+     "evidence": "results/scan-static.json",
+     "retryable": false
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "skipped",
+    "detail": "unsupported_language",
+    "language_hint": "C#",
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "modelcontextprotocol/servers",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:05:00Z",
+   "attempt": "att-c",
+   "index": 1,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "no_runnable_artifact",
+     "evidence": "results/scan-static.json",
+     "retryable": false
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "skipped",
+    "detail": "multiple_servers",
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 1
+  },
+  {
+   "subject": "acme/go-big",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:10:00Z",
+   "attempt": "att-c",
+   "index": 2,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "graded",
+    "detail": null,
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": {
+     "fidelity": "derived",
+     "from": "source",
+     "language": "go",
+     "approximate": true,
+     "tools_listed": 3,
+     "tools_left_out": 0,
+     "tools_conditional": 0,
+     "unresolved_names": 2,
+     "registration_not_seen": 0,
+     "unreadable": {
+      "input_schemas": 0,
+      "descriptions": 4,
+      "annotations": 0
+     },
+     "listing_truncated": false
+    }
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "globex/go-two",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:11:00Z",
+   "attempt": "att-c",
+   "index": 3,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "graded",
+    "detail": null,
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": {
+     "fidelity": "derived",
+     "from": "source",
+     "language": "go",
+     "approximate": true,
+     "tools_listed": 3,
+     "tools_left_out": 0,
+     "tools_conditional": 0,
+     "unresolved_names": 0,
+     "registration_not_seen": 0,
+     "unreadable": {
+      "input_schemas": 0,
+      "descriptions": 1,
+      "annotations": 0
+     },
+     "listing_truncated": false
+    }
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "acme/needs-creds",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:12:00Z",
+   "attempt": "att-c",
+   "index": 4,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "start_requires_credentials",
+     "retryable": false
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "skipped",
+    "detail": "needs_credentials",
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "acme/rate",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:13:00Z",
+   "attempt": "att-c",
+   "index": 5,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "rate_limited",
+     "retryable": true
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "skipped",
+    "detail": "rate_limited",
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": 403,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "acme/policy",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:14:00Z",
+   "attempt": "att-c",
+   "index": 6,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "quarantined",
+     "retryable": false
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "skipped",
+    "detail": "quarantined",
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "initech/secret-name-srv",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:15:00Z",
+   "attempt": "att-c",
+   "index": 7,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [
+    {
+     "stage": "static",
+     "reason": "tool_error",
+     "evidence": "results/scan-static.json",
+     "retryable": false,
+     "fault": "tool"
+    }
+   ],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "error",
+    "detail": "boom at initech/secret-name-srv",
+    "language_hint": null,
+    "error_name": "SecretNameSrvError",
+    "list_error": "fetch failed for secret-name-srv",
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": null
+   },
+   "server_json": 0
+  },
+  {
+   "subject": "acme/clean",
+   "lane": "scan-static",
+   "at": "2026-11-21T09:16:00Z",
+   "attempt": "att-c",
+   "index": 8,
+   "run_id": 1003,
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "skips": [],
+   "result": {
+    "format": "isokron-mcp-check-scan-static/1",
+    "status": "graded",
+    "detail": null,
+    "language_hint": null,
+    "error_name": null,
+    "list_error": null,
+    "http_status": null,
+    "listing": {
+     "via": "github",
+     "truncated": false,
+     "source_files": 10,
+     "files_read": 10,
+     "budget_hit": false
+    },
+    "list": {
+     "fidelity": "exact",
+     "from": "catalog",
+     "language": null,
+     "approximate": true,
+     "tools_listed": 3,
+     "tools_left_out": 0,
+     "tools_conditional": 0,
+     "unresolved_names": 0,
+     "registration_not_seen": 0,
+     "unreadable": {
+      "input_schemas": 0,
+      "descriptions": 0,
+      "annotations": 0
+     },
+     "listing_truncated": false
+    }
+   },
+   "server_json": 0
+  }
+ ]
+}

@@ -269,7 +269,12 @@ export async function openAttempt(input, deps) {
   }
 
   async function judgeItem(item, abandon) {
-    const report = { ...base, ledger: { run_key: item.run_key, fence: item.fence, current_fence: item.current_fence, ...base.ledger } };
+    // The subject is named by its key and repository id, never only by the
+    // name the worker was sent (state schema v8): a rename between dispatch
+    // and ingest changes nothing about which subject this result is.
+    const who = {};
+    for (const k of ['subject', 'subject_name', 'repo_id', 'name']) if (item[k] !== null && item[k] !== undefined) who[k === 'name' ? 'subject_current_name' : k] = item[k];
+    const report = { ...base, ledger: { run_key: item.run_key, fence: item.fence, current_fence: item.current_fence, ...who, ...base.ledger } };
     let ciphertext = null;
     let manifestBytes = null;
     let files = null;
@@ -281,6 +286,9 @@ export async function openAttempt(input, deps) {
       const extra = total - problems.length;
       const wantedRecord = {
         run_key: item.run_key, attempt_id: row.attempt_id, fence: item.fence, outcome, accepted: outcome === 'accepted', reason,
+        // When the item's artifact was uploaded (GitHub's time), so the store
+        // never counts a result as on time before its bundle existed (R-CHAOS-10).
+        ...(report.artifact?.created_at && Number.isFinite(Date.parse(report.artifact.created_at)) ? { artifactCreatedAt: report.artifact.created_at } : {}),
         ...(outcome === 'accepted' && resultOutcome ? { resultOutcome } : {}),
         // The result's fault side and coverage state (R-COV-02): a tool-fault
         // skip is stored as unassessed_tool, never as excluded or the subject's.

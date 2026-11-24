@@ -17,7 +17,7 @@
 // It never throws: anything unexpected is an amber item, so a bad manifest
 // cannot take the watchdog run down with it.
 
-import { MANIFEST, SNAPSHOT_TAG, newest, parseManifest } from './snapshot.mjs';
+import { MANIFEST, NAME_RE, SNAPSHOT_TAG, newest, parseManifest } from './snapshot.mjs';
 
 const HOUR = 3600 * 1000;
 export const SNAPSHOT_THRESHOLDS = Object.freeze({ amberMs: 3 * HOUR, redMs: 6 * HOUR, futureMs: 5 * 60 * 1000 });
@@ -60,17 +60,23 @@ function judge({ now, manifest, error = null, missing = null, laneOn = true }) {
 /**
  * Read the manifest from the public snapshot release. `gh` is
  * snapshot/github.mjs createReleaseClient(). Returns { manifest },
- * { manifest: null, missing: 'release' | 'manifest' } or { error }.
+ * { manifest: null, missing: 'release' | 'manifest' } or { error }, with
+ * `total_bytes` and `count` (every asset on the release, and the snapshot
+ * assets among them) once the release could be listed.
  */
 export async function readSnapshotManifest(gh) {
   try {
     const release = await gh.getRelease(SNAPSHOT_TAG);
-    if (!release) return { manifest: null, missing: 'release' };
+    if (!release) return { manifest: null, missing: 'release', total_bytes: 0, count: 0 };
     const assets = await gh.listAssets(release);
+    const totals = {
+      total_bytes: assets.reduce((n, x) => n + (Number.isSafeInteger(x.size) && x.size > 0 ? x.size : 0), 0),
+      count: assets.filter((x) => NAME_RE.test(String(x.name))).length,
+    };
     const a = assets.find((x) => x.name === MANIFEST);
-    if (!a) return { manifest: null, missing: 'manifest' };
+    if (!a) return { manifest: null, missing: 'manifest', ...totals };
     const manifest = parseManifest((await gh.download(a)).toString('utf8'));
-    return manifest ? { manifest } : { error: `${MANIFEST} is not a snapshot manifest` };
+    return manifest ? { manifest, ...totals } : { error: `${MANIFEST} is not a snapshot manifest`, ...totals };
   } catch (err) {
     return { error: err?.message ?? String(err) };
   }

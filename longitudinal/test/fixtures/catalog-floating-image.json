@@ -1,0 +1,82 @@
+{
+ "about": "R-DRIFT-12: live-probe ran an image by a floating tag (the identifier says latest; the registry version says 1.0.0) and the tool list changed with the digest. The probed tag is what counts: floating, so not an event.",
+ "subject": "acme/float-image",
+ "items": [
+  {
+   "lane": "live-probe",
+   "observed_at": "2026-11-20T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "tool_list_sha256",
+     "value": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "field": "registry_package_register_type",
+     "value": "oci"
+    },
+    {
+     "field": "registry_package_identifier",
+     "value": "ghcr.io/acme/float-image:latest"
+    },
+    {
+     "field": "registry_package_version",
+     "value": "1.0.0"
+    },
+    {
+     "field": "oci_digest",
+     "value": "8888888888888888888888888888888888888888888888888888888888888888"
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "live-probe",
+   "observed_at": "2026-11-22T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "tool_list_sha256",
+     "value": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "field": "registry_package_register_type",
+     "value": "oci"
+    },
+    {
+     "field": "registry_package_identifier",
+     "value": "ghcr.io/acme/float-image:latest"
+    },
+    {
+     "field": "registry_package_version",
+     "value": "1.0.0"
+    },
+    {
+     "field": "oci_digest",
+     "value": "9999999999999999999999999999999999999999999999999999999999999999"
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "catalog_events": [],
+  "excluded": {
+   "floating_tag": 1
+  }
+ }
+}

@@ -61,6 +61,8 @@ const TOKEN_MARGIN_MS = 5 * MINUTE;
  * ingest_error. Three ticks rule out a passing glitch.
  */
 export const MAX_ITEM_FAILURES = 3;
+/** How long after its lease expired a dispatch's late result is still judged. */
+export const LATE_MS = 6 * HOUR;
 /**
  * collect()'s deadline is when it starts nothing new (the pump's run end minus
  * two minutes). A GitHub call already running may finish within this grace,
@@ -76,6 +78,13 @@ export class IngestSetupError extends Error {
     super(message);
     this.name = 'IngestSetupError';
   }
+}
+
+/** When GitHub says a completed run finished (its updated_at), in ms; null if it does not say. */
+export function completedAt(run) {
+  if (run?.status !== 'completed') return null;
+  const t = Date.parse(run.updated_at);
+  return Number.isFinite(t) ? t : null;
 }
 
 /** ISO time to the second (the form GitHub's created filter documents). */
@@ -117,7 +126,7 @@ export function createCollector({
   loadRegistry = loadPinnedRegistry,
   crypto = {},
   allowNoControls = false,
-  lateMs = 6 * HOUR,
+  lateMs = LATE_MS,
   recheckLateMs = 10 * MINUTE,
   maxItemFailures = MAX_ITEM_FAILURES,
   judge = {},
@@ -220,9 +229,9 @@ export function createCollector({
         break;
       }
       const open = d.status === 'pending' || d.status === 'dispatched';
+      const lastSeen = lateSeen.get(d.attempt_id);
       if (!open) {
-        const last = lateSeen.get(d.attempt_id);
-        if (last !== undefined && t - last < recheckLateMs) continue;
+        if (lastSeen !== undefined && t - lastSeen < recheckLateMs) continue;
         lateSeen.set(d.attempt_id, t);
       }
       summary.checked += 1;
@@ -278,7 +287,9 @@ export function createCollector({
 
         // The ledger row, the run checks and the artifact list, once per dispatch.
         const opened = await openAttempt({ repo: d.repo, runId: Number(runId), attemptId: d.attempt_id }, {
-          ledger: dbLedger(db, { now }),
+          // The lease is checked against when the run completed, not when
+          // this tick got to it (R-CHAOS-02).
+          ledger: dbLedger(db, { now, completedAt: completedAt(run) }),
           github: {
             getRun: async () => run,
             listRunArtifacts: (repo, id) => client.listRunArtifacts(repo, id),
@@ -397,6 +408,13 @@ export function createCollector({
       } catch (err) {
         if (err instanceof IngestSetupError) throw err;
         if (err?.name === 'BudgetExceededError') {
+          // Not looked at after all: a late dispatch is first in line on the
+          // next tick, not held back ten minutes while its work is sent again
+          // (R-CHAOS-07).
+          if (!open) {
+            if (lastSeen === undefined) lateSeen.delete(d.attempt_id);
+            else lateSeen.set(d.attempt_id, lastSeen);
+          }
           summary.stopped = 'budget';
           log(`ingest: stopped for this tick by the API budget (${err.message})`);
           break;

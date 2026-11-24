@@ -53,6 +53,26 @@ export function planShards(due, workflows, { openByWorkflow = new Map() } = {}) 
   return shards;
 }
 
+const SENT_RE = /\/actions\/workflows\/[^/]+\/(dispatches|runs)$/;
+
+/**
+ * A dispatch that failed in a way that does not say whether GitHub acted on it:
+ * a server error or a network failure on the dispatch POST itself, or on the
+ * poll for its run that follows a POST GitHub accepted. Anything before the
+ * POST (re-reading the ref, minting the token) sent nothing (R-CHAOS-08); nor
+ * did a refusal (4xx), a rate limit or our own budget.
+ */
+export function ambiguous(err) {
+  if (err instanceof BudgetExceededError || err?.name === 'BudgetExceededError') return false;
+  if (err?.name !== 'GitHubError') return false;
+  const status = Number(err?.status);
+  if (!(status === 0 || status >= 500)) return false;
+  const method = String(err.method ?? '').toUpperCase();
+  const path = String(err.path ?? '');
+  if (!SENT_RE.test(path)) return false;
+  return path.endsWith('/dispatches') ? method === 'POST' : method === 'GET';
+}
+
 function stopReason(err) {
   if (err instanceof BudgetExceededError || err?.name === 'BudgetExceededError') return 'budget';
   const status = Number(err?.status);
@@ -69,12 +89,15 @@ function stopReason(err) {
  *   dispatcher: { dispatch: (req: object) => Promise<object> }, log?: (line: string) => void,
  *   newId?: () => string, hooks?: object, deadline?: number }} args
  *   deadline: no new shard is started at or after this time (ms).
+ *   holdRunKeys: optional Set of run_keys not to dispatch this tick (the pump
+ *   holds work whose expired dispatch ingest has not looked at yet; R-CHAOS-02).
  *   beforeSend: optional async () => boolean, called once after the tick's
  *   dispatches are recorded as pending and before any is sent; the pump saves
  *   the state there. false (or a throw) withdraws them all unsent.
  */
 export async function runTick({
   db, now = Date.now, config, workerSlots, dispatcher, log = () => {}, newId = randomUUID, hooks = NO_HOOKS, deadline, beforeSend,
+  holdRunKeys = null,
 }) {
   const t0 = now();
   const reaped = reapExpired(db, { now: t0 });
@@ -98,7 +121,8 @@ export async function runTick({
   summary.paused = [...paused];
   if (!(workerSlots > 0)) return summary;
 
-  const due = dueFromState(db, { now: t0, tiers: config.tiers, workflows: config.workflows, hooks }).filter((d) => !paused.has(d.workflow));
+  const due = dueFromState(db, { now: t0, tiers: config.tiers, workflows: config.workflows, hooks })
+    .filter((d) => !paused.has(d.workflow) && !holdRunKeys?.has(d.run_key));
   summary.due = due.length;
   if (due.length === 0) return summary;
 
@@ -150,7 +174,9 @@ export async function runTick({
     for (const it of shard.items) {
       db.recordRunKey(it.run_key, { subject: it.subject, workflow: shard.workflow, fields: it.fields, now: t });
       const l = db.acquireLease(it.run_key, attemptId, { ttlMs, now: t });
-      if (l.acquired) leased.push({ run_key: it.run_key, subject: it.subject, fence: l.fence });
+      // subject: the key the result is recorded under; subject_name: the
+      // current owner/name, what the worker clones or reads (schema v8).
+      if (l.acquired) leased.push({ run_key: it.run_key, subject: it.subject, subject_name: it.name ?? it.subject, fence: l.fence });
     }
     if (leased.length === 0) {
       db.releaseSlotForAttempt(attemptId, 'nothing_leased', { now: t });
@@ -228,9 +254,21 @@ export async function runTick({
       log(`dispatched ${shardId}: ${leased.length} item(s) to ${wf.repo} ${wf.file}${out?.runId ? `, run ${out.runId}` : ', run not matched yet'}`);
     } catch (err) {
       const message = String(err?.message ?? err);
-      db.failDispatch(attemptId, { error: message, now: now() });
       summary.failed += 1;
-      log(`dispatch of ${shardId} failed: ${message}`);
+      if (ambiguous(err)) {
+        // A server error or a lost connection after the request went out: GitHub
+        // may have started the run anyway (R-CHAOS-05). The dispatch stays
+        // pending with its slot and leases, as if the pump had died after
+        // sending (R-ING-10): ingest finds its run by name if there is one,
+        // and otherwise its lease expires and the work is due again. Freeing
+        // them now would let a run the slot ledger does not count go on, its
+        // result never judged, while the same work is sent again.
+        summary.unconfirmed = (summary.unconfirmed ?? 0) + 1;
+        log(`dispatch of ${shardId} may or may not have started a run (${message}); it stays pending until ingest finds its run or its lease expires`);
+      } else {
+        db.failDispatch(attemptId, { error: message, now: now() });
+        log(`dispatch of ${shardId} failed: ${message}`);
+      }
       const stop = stopReason(err);
       if (stop) {
         summary.stopped = stop;

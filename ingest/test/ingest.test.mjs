@@ -772,3 +772,19 @@ test('R-COV-02: a rejected item carries no fault or coverage to the ledger (only
   assert.equal(ledger.records[0].fault, undefined);
   assert.equal(ledger.records[0].coverage, undefined);
 });
+
+test('R-SUBJ-02: the report names the subject by its key and repository id, with the name the worker was sent and the name it has now', async () => {
+  const ledger = fakeLedger([expectedRow({ subject: 'acme/server', subject_name: 'acme/server', repo_id: 42, name: 'newco/server' })]);
+  const { r } = await run({ ledger });
+  assert.equal(r.outcome, 'accepted');
+  const report = json(r.outputs.get('accepted/att-1/0/ingest.json'));
+  assert.deepEqual(
+    [report.ledger.subject, report.ledger.subject_name, report.ledger.repo_id, report.ledger.subject_current_name],
+    ['acme/server', 'acme/server', 42, 'newco/server'],
+  );
+  // A ledger from before state schema v8 has none of them; a malformed one is left out, never fatal.
+  const old = await run({ ledger: fakeLedger([expectedRow({ subject_name: 'has space', repo_id: -3 })]) });
+  assert.equal(old.r.outcome, 'accepted');
+  const rep = json(old.r.outputs.get('accepted/att-1/0/ingest.json'));
+  assert.ok(!('subject_name' in rep.ledger) && !('repo_id' in rep.ledger));
+});

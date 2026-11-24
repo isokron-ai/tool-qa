@@ -1,0 +1,583 @@
+{
+  "schema": "tool-qa/perf/1",
+  "server": "kronicle-lite",
+  "package": "kronicle-lite",
+  "version": "0.12.1",
+  "integrity": "sha512-um6MEFLhcyX+fKbt8Kumr+Lsl206TJ31JpM5g3OVq7itM/kU+Zv/GUsk+kynZPcm1GoJ2ErA1Jrsme134XVKUg==",
+  "measured_at": "2026-11-24T09:37:56.593Z",
+  "inspector": {
+    "package": "@modelcontextprotocol/inspector",
+    "version": "2.16.0",
+    "mode": "--load",
+    "scenario": "weighted read-only mix (perf/servers.json)",
+    "flags": [
+      "--load-scenario",
+      "--load",
+      "--load-concurrency",
+      "8",
+      "--load-duration",
+      "20",
+      "--load-warmup",
+      "3",
+      "--load-connections (http)",
+      "--load-churn --load-churn-calls 3 (http)"
+    ]
+  },
+  "runner": {
+    "os": "Linux 7.0.0-1017-azure",
+    "arch": "x64",
+    "cpus": 4,
+    "node": "v24.22.3",
+    "calibration_ms": 26.65,
+    "github_runner": "github-hosted"
+  },
+  "profiles": {
+    "stdio": {
+      "transport": "stdio",
+      "workload": {
+        "scenario": [
+          "get_system_state x4",
+          "recall x4",
+          "verify_chain x1",
+          "anchor_status x1"
+        ],
+        "concurrency": 8,
+        "sessions": 1,
+        "warmup_s": 3,
+        "duration_s": 20,
+        "repeats": 3
+      },
+      "repeats": [
+        {
+          "requests": 5385,
+          "ok": 5385,
+          "errorRate": 0,
+          "okThroughput": 268.91,
+          "latencyMs": {
+            "min": 0.6354,
+            "mean": 29.68,
+            "p50": 28.89,
+            "p90": 40.52,
+            "p95": 45.65,
+            "p99": 56.41,
+            "p999": 68.22,
+            "max": 69.75
+          },
+          "steps": [
+            {
+              "name": "orient",
+              "requests": 2154,
+              "ok": 2154,
+              "errorRate": 0,
+              "p50": 28.59,
+              "p95": 45.73,
+              "p99": 56.93,
+              "errors": []
+            },
+            {
+              "name": "recall",
+              "requests": 2154,
+              "ok": 2154,
+              "errorRate": 0,
+              "p50": 28.87,
+              "p95": 45.59,
+              "p99": 56.43,
+              "errors": []
+            },
+            {
+              "name": "verify_chain",
+              "requests": 539,
+              "ok": 539,
+              "errorRate": 0,
+              "p50": 30.99,
+              "p95": 46.26,
+              "p99": 54.72,
+              "errors": []
+            },
+            {
+              "name": "anchor_status",
+              "requests": 538,
+              "ok": 538,
+              "errorRate": 0,
+              "p50": 27.48,
+              "p95": 43.1,
+              "p99": 52.81,
+              "errors": []
+            }
+          ]
+        },
+        {
+          "requests": 5343,
+          "ok": 5343,
+          "errorRate": 0,
+          "okThroughput": 266.68,
+          "latencyMs": {
+            "min": 0.6491,
+            "mean": 29.95,
+            "p50": 28.94,
+            "p90": 41.4,
+            "p95": 47.87,
+            "p99": 57.83,
+            "p999": 66.68,
+            "max": 67.15
+          },
+          "steps": [
+            {
+              "name": "orient",
+              "requests": 2137,
+              "ok": 2137,
+              "errorRate": 0,
+              "p50": 28.55,
+              "p95": 47.94,
+              "p99": 57.75,
+              "errors": []
+            },
+            {
+              "name": "recall",
+              "requests": 2137,
+              "ok": 2137,
+              "errorRate": 0,
+              "p50": 28.94,
+              "p95": 48,
+              "p99": 58.37,
+              "errors": []
+            },
+            {
+              "name": "verify_chain",
+              "requests": 535,
+              "ok": 535,
+              "errorRate": 0,
+              "p50": 30.86,
+              "p95": 48.04,
+              "p99": 55.78,
+              "errors": []
+            },
+            {
+              "name": "anchor_status",
+              "requests": 534,
+              "ok": 534,
+              "errorRate": 0,
+              "p50": 27.92,
+              "p95": 45.54,
+              "p99": 55.85,
+              "errors": []
+            }
+          ]
+        },
+        {
+          "requests": 5368,
+          "ok": 5368,
+          "errorRate": 0,
+          "okThroughput": 268.13,
+          "latencyMs": {
+            "min": 0.6444,
+            "mean": 29.77,
+            "p50": 28.55,
+            "p90": 41.11,
+            "p95": 46.48,
+            "p99": 56.04,
+            "p999": 67.32,
+            "max": 79.42
+          },
+          "steps": [
+            {
+              "name": "orient",
+              "requests": 2147,
+              "ok": 2147,
+              "errorRate": 0,
+              "p50": 28.18,
+              "p95": 46.52,
+              "p99": 55.62,
+              "errors": []
+            },
+            {
+              "name": "recall",
+              "requests": 2147,
+              "ok": 2147,
+              "errorRate": 0,
+              "p50": 28.62,
+              "p95": 46.73,
+              "p99": 56.07,
+              "errors": []
+            },
+            {
+              "name": "verify_chain",
+              "requests": 537,
+              "ok": 537,
+              "errorRate": 0,
+              "p50": 30.79,
+              "p95": 46.4,
+              "p99": 53.86,
+              "errors": []
+            },
+            {
+              "name": "anchor_status",
+              "requests": 537,
+              "ok": 537,
+              "errorRate": 0,
+              "p50": 27.52,
+              "p95": 42.72,
+              "p99": 56.35,
+              "errors": []
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "repeats": 3,
+        "requests": 16096,
+        "failed": 0,
+        "p50_ms": 28.89,
+        "p95_ms": 46.48,
+        "p99_ms": 56.41,
+        "error_rate": 0,
+        "ok_per_s": 268.1,
+        "p95_spread": 1.05,
+        "steps": {
+          "orient": {
+            "requests": 6438,
+            "p50_ms": 28.55,
+            "p95_ms": 46.52,
+            "error_rate": 0
+          },
+          "recall": {
+            "requests": 6438,
+            "p50_ms": 28.87,
+            "p95_ms": 46.73,
+            "error_rate": 0
+          },
+          "verify_chain": {
+            "requests": 1611,
+            "p50_ms": 30.86,
+            "p95_ms": 46.4,
+            "error_rate": 0
+          },
+          "anchor_status": {
+            "requests": 1609,
+            "p50_ms": 27.52,
+            "p95_ms": 43.1,
+            "error_rate": 0
+          }
+        }
+      }
+    },
+    "http": {
+      "transport": "http",
+      "workload": {
+        "scenario": [
+          "get_system_state x4",
+          "recall x4",
+          "verify_chain x1",
+          "anchor_status x1"
+        ],
+        "concurrency": 8,
+        "sessions": 8,
+        "warmup_s": 3,
+        "duration_s": 20,
+        "repeats": 3
+      },
+      "repeats": [
+        {
+          "requests": 3033,
+          "ok": 3033,
+          "errorRate": 0,
+          "okThroughput": 151.24,
+          "latencyMs": {
+            "min": 18.27,
+            "mean": 52.82,
+            "p50": 44.02,
+            "p90": 89.3,
+            "p95": 94.72,
+            "p99": 108.52,
+            "p999": 123.26,
+            "max": 134.59
+          },
+          "steps": [
+            {
+              "name": "orient",
+              "requests": 1213,
+              "ok": 1213,
+              "errorRate": 0,
+              "p50": 44.52,
+              "p95": 96.09,
+              "p99": 110.13,
+              "errors": []
+            },
+            {
+              "name": "recall",
+              "requests": 1213,
+              "ok": 1213,
+              "errorRate": 0,
+              "p50": 43.09,
+              "p95": 95.32,
+              "p99": 106.75,
+              "errors": []
+            },
+            {
+              "name": "verify_chain",
+              "requests": 304,
+              "ok": 304,
+              "errorRate": 0,
+              "p50": 47.59,
+              "p95": 88.72,
+              "p99": 96.88,
+              "errors": []
+            },
+            {
+              "name": "anchor_status",
+              "requests": 303,
+              "ok": 303,
+              "errorRate": 0,
+              "p50": 38.95,
+              "p95": 92.09,
+              "p99": 107.54,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 351,
+            "failed": 0,
+            "connectMs": {
+              "min": 23.96,
+              "mean": 73.34,
+              "p50": 71.37,
+              "p90": 110.73,
+              "p95": 116.58,
+              "p99": 131.6,
+              "p999": 154.29,
+              "max": 154.29
+            },
+            "latencyMs": {
+              "min": 7.86,
+              "mean": 36.93,
+              "p50": 34.02,
+              "p90": 59.73,
+              "p95": 66.05,
+              "p99": 81.8,
+              "p999": 92.54,
+              "max": 95.16
+            },
+            "elapsedMs": 8059.04,
+            "requests": 1039,
+            "errorRate": 0
+          }
+        },
+        {
+          "requests": 3011,
+          "ok": 3011,
+          "errorRate": 0,
+          "okThroughput": 150.25,
+          "latencyMs": {
+            "min": 11,
+            "mean": 53.19,
+            "p50": 44.13,
+            "p90": 90.3,
+            "p95": 94.65,
+            "p99": 108.67,
+            "p999": 125.79,
+            "max": 137.17
+          },
+          "steps": [
+            {
+              "name": "orient",
+              "requests": 1205,
+              "ok": 1205,
+              "errorRate": 0,
+              "p50": 45.02,
+              "p95": 94.84,
+              "p99": 104.94,
+              "errors": []
+            },
+            {
+              "name": "recall",
+              "requests": 1204,
+              "ok": 1204,
+              "errorRate": 0,
+              "p50": 43.34,
+              "p95": 95.22,
+              "p99": 108.81,
+              "errors": []
+            },
+            {
+              "name": "verify_chain",
+              "requests": 301,
+              "ok": 301,
+              "errorRate": 0,
+              "p50": 48.62,
+              "p95": 89.71,
+              "p99": 100.38,
+              "errors": []
+            },
+            {
+              "name": "anchor_status",
+              "requests": 301,
+              "ok": 301,
+              "errorRate": 0,
+              "p50": 39.45,
+              "p95": 93.78,
+              "p99": 111.58,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 345,
+            "failed": 0,
+            "connectMs": {
+              "min": 25.4,
+              "mean": 73.46,
+              "p50": 71.3,
+              "p90": 109.02,
+              "p95": 118.99,
+              "p99": 143.04,
+              "p999": 147.13,
+              "max": 147.13
+            },
+            "latencyMs": {
+              "min": 9.23,
+              "mean": 37.79,
+              "p50": 34.9,
+              "p90": 60.07,
+              "p95": 70.29,
+              "p99": 81.59,
+              "p999": 96.43,
+              "max": 112.37
+            },
+            "elapsedMs": 8038.5,
+            "requests": 1024,
+            "errorRate": 0
+          }
+        },
+        {
+          "requests": 3119,
+          "ok": 3119,
+          "errorRate": 0,
+          "okThroughput": 155.62,
+          "latencyMs": {
+            "min": 11.42,
+            "mean": 51.35,
+            "p50": 42.69,
+            "p90": 87.38,
+            "p95": 92.33,
+            "p99": 103.31,
+            "p999": 120.02,
+            "max": 136.03
+          },
+          "steps": [
+            {
+              "name": "orient",
+              "requests": 1248,
+              "ok": 1248,
+              "errorRate": 0,
+              "p50": 42.91,
+              "p95": 94.04,
+              "p99": 104.9,
+              "errors": []
+            },
+            {
+              "name": "recall",
+              "requests": 1247,
+              "ok": 1247,
+              "errorRate": 0,
+              "p50": 41.96,
+              "p95": 92.59,
+              "p99": 103.72,
+              "errors": []
+            },
+            {
+              "name": "verify_chain",
+              "requests": 312,
+              "ok": 312,
+              "errorRate": 0,
+              "p50": 48.61,
+              "p95": 86.13,
+              "p99": 90.37,
+              "errors": []
+            },
+            {
+              "name": "anchor_status",
+              "requests": 312,
+              "ok": 312,
+              "errorRate": 0,
+              "p50": 38.57,
+              "p95": 90.05,
+              "p99": 97.11,
+              "errors": []
+            }
+          ],
+          "churn": {
+            "opened": 349,
+            "failed": 0,
+            "connectMs": {
+              "min": 24.78,
+              "mean": 71.93,
+              "p50": 69.31,
+              "p90": 110.49,
+              "p95": 119.41,
+              "p99": 134.38,
+              "p999": 153.83,
+              "max": 153.83
+            },
+            "latencyMs": {
+              "min": 8.44,
+              "mean": 37.6,
+              "p50": 34,
+              "p90": 62.44,
+              "p95": 70.61,
+              "p99": 83.33,
+              "p999": 101.63,
+              "max": 105.1
+            },
+            "elapsedMs": 8042.9,
+            "requests": 1037,
+            "errorRate": 0
+          }
+        }
+      ],
+      "summary": {
+        "repeats": 3,
+        "requests": 9163,
+        "failed": 0,
+        "p50_ms": 44.02,
+        "p95_ms": 94.65,
+        "p99_ms": 108.52,
+        "error_rate": 0,
+        "ok_per_s": 151.2,
+        "p95_spread": 1.03,
+        "steps": {
+          "orient": {
+            "requests": 3666,
+            "p50_ms": 44.52,
+            "p95_ms": 94.84,
+            "error_rate": 0
+          },
+          "recall": {
+            "requests": 3664,
+            "p50_ms": 43.09,
+            "p95_ms": 95.22,
+            "error_rate": 0
+          },
+          "verify_chain": {
+            "requests": 917,
+            "p50_ms": 48.61,
+            "p95_ms": 88.72,
+            "error_rate": 0
+          },
+          "anchor_status": {
+            "requests": 916,
+            "p50_ms": 38.95,
+            "p95_ms": 92.09,
+            "error_rate": 0
+          }
+        },
+        "churn": {
+          "sessions_opened": 1045,
+          "connect_failed": 0,
+          "connect_p50_ms": 71.3,
+          "connect_p95_ms": 118.99,
+          "call_p95_ms": 70.29,
+          "sessions_per_s": 43.4
+        }
+      }
+    }
+  }
+}

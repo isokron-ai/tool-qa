@@ -38,8 +38,16 @@
 //
 // Environment for encryption: AGE_IDENTITY (pull of an encrypted asset),
 // AGE_BIN and AGE_KEYGEN_BIN (default: age and age-keygen on PATH).
+//
+// Compression (loop upgrade #14): push gzips the database before it encrypts
+// it (the database compresses about 4x), and checks the gzip reads back to the
+// same bytes first. pull tells the two forms apart after decrypting by their
+// first bytes (gzip 1f 8b, or the SQLite header), so an asset or snapshot from
+// before compression still reads. `push --no-compress` writes the old form,
+// for going back to code from before compression (docs/OPERATIONS.md).
 
 import { createHash } from 'node:crypto';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,7 +69,38 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
 /** Who the state asset is encrypted to (committed; public keys only). */
 export const STATE_RECIPIENTS = fileURLToPath(new URL('../state/state.pub', import.meta.url));
-const MAX_STATE_BYTES = 1024 ** 3;
+export const MAX_STATE_BYTES = 1024 ** 3;
+const GZIP_LEVEL = 6;
+
+const isGzip = (buf) => Buffer.isBuffer(buf) && buf.length >= 3 && buf[0] === 0x1f && buf[1] === 0x8b && buf[2] === 0x08;
+
+/**
+ * What goes inside the age envelope: the database, gzipped unless
+ * `compress` is false. Fails closed if the gzip does not read back to the
+ * same bytes.
+ */
+export function encodeState(database, { compress = true } = {}) {
+  if (!compress) return database;
+  const packed = gzipSync(database, { level: GZIP_LEVEL });
+  const back = decodeState(packed).data;
+  if (!back.equals(database)) throw new Error('refusing to push the state: its gzip does not read back to the same bytes');
+  return packed;
+}
+
+/**
+ * The database from what was inside the age envelope: gunzipped when it
+ * starts like gzip, as it is otherwise (an asset from before compression).
+ * At most `maxBytes` once decompressed.
+ * @returns {{data: Buffer, compressed: boolean}}
+ */
+export function decodeState(buf, { maxBytes = MAX_STATE_BYTES } = {}) {
+  if (!isGzip(buf)) return { data: buf, compressed: false };
+  try {
+    return { data: gunzipSync(buf, { maxOutputLength: maxBytes }), compressed: true };
+  } catch (err) {
+    throw new Error(`the state is gzip that does not decompress (${err?.code ?? err?.message ?? err})`);
+  }
+}
 
 /**
  * Encryption of the state asset with the age binary.
@@ -108,6 +147,12 @@ function quickCheck(file) {
   }
 }
 
+/** Mark an error as one that may pass if tried again later (err.transient = true). */
+function transient(err) {
+  err.transient = true;
+  return err;
+}
+
 function makeClient({ repo, token, fetch, apiUrl, sleep, log }) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repo || ''))) {
     throw new Error(`repository must be "owner/name", got ${JSON.stringify(repo)}`);
@@ -140,7 +185,7 @@ function makeClient({ repo, token, fetch, apiUrl, sleep, log }) {
       try {
         res = await fetch(url, { method, headers: headers(extraHeaders, withAuth), body, redirect });
       } catch (err) {
-        if (i >= attempts) throw new Error(scrub(`GitHub ${method} ${new URL(url).pathname} failed: ${err.message}`));
+        if (i >= attempts) throw transient(new Error(scrub(`GitHub ${method} ${new URL(url).pathname} failed: ${err.message}`)));
         await doSleep(1000 * 2 ** (i - 1));
         continue;
       }
@@ -151,7 +196,11 @@ function makeClient({ repo, token, fetch, apiUrl, sleep, log }) {
         await doSleep(Number.isFinite(after) && after >= 0 ? after * 1000 : 1000 * 2 ** (i - 1));
         continue;
       }
-      throw await failure(method, url, res);
+      const err = await failure(method, url, res);
+      // A server error, a rate limit or a lost connection may pass by itself;
+      // the caller can tell it from a state that is wrong (R-CHAOS-03).
+      if (RETRY_STATUS.has(res.status) || (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0')) transient(err);
+      throw err;
     }
   }
 
@@ -279,15 +328,16 @@ export async function pullState({
   if (m && m[1] !== digest) throw new Error(`asset ${asset.name} checksum mismatch (label ${m[1]}, got ${digest})`);
   if (!m) log(`asset ${asset.name} has no sha256 label; checksum not verified`);
   const encrypted = isAgeCiphertext(blob);
-  let data;
+  let opened;
   if (encrypted) {
-    data = await box.decrypt(blob);
+    opened = await box.decrypt(blob);
   } else if (allowPlaintext) {
     log(`asset ${asset.name} is plaintext (from before the state was encrypted); reading it for the one-time migration`);
-    data = blob;
+    opened = blob;
   } else {
     throw new Error(`asset ${asset.name} is not age ciphertext; refusing to use it. The state asset must be encrypted (docs/OPERATIONS.md, "State encryption")`);
   }
+  const { data, compressed } = decodeState(Buffer.from(opened));
   assertSqlite(data, `asset ${asset.name}`);
   mkdirSync(dirname(file), { recursive: true });
   const partial = `${file}.download`;
@@ -299,9 +349,9 @@ export async function pullState({
     rmSync(partial, { force: true });
     throw err;
   }
-  writeFileSync(recordPath(file), JSON.stringify({ ...describe(asset, digest), encrypted }));
-  log(`pulled ${asset.name} (${blob.length} bytes${encrypted ? ' encrypted' : ', plaintext'}, sha256 ${digest})`);
-  return { status: 'pulled', bytes: blob.length, sha256: digest, asset: asset.name, encrypted };
+  writeFileSync(recordPath(file), JSON.stringify({ ...describe(asset, digest), encrypted, compressed }));
+  log(`pulled ${asset.name} (${blob.length} bytes${encrypted ? ' encrypted' : ', plaintext'}${compressed ? `, gzip of ${data.length}` : ''}, sha256 ${digest})`);
+  return { status: 'pulled', bytes: blob.length, sha256: digest, asset: asset.name, encrypted, compressed, databaseBytes: data.length };
 }
 
 /**
@@ -310,7 +360,7 @@ export async function pullState({
  */
 export async function pushState({
   repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, now = Date.now(), expected, force = false,
-  identity, ageBin, keygenBin, tmpDir, crypto,
+  identity, ageBin, keygenBin, tmpDir, crypto, compress = true,
 } = {}) {
   if (!token) throw new Error('GITHUB_TOKEN is required to push the state asset');
   const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
@@ -322,7 +372,9 @@ export async function pushState({
   // quickCheck opens and closes its own handle, so no connection is open while we read and hash the file.
   assertSqlite(readFileSync(file), file);
   quickCheck(file);
-  const data = await box.encrypt(readFileSync(file));
+  const database = readFileSync(file);
+  const payload = encodeState(database, { compress });
+  const data = await box.encrypt(payload);
   // Fail closed: whatever encrypt returned, only age ciphertext is uploaded.
   if (!Buffer.isBuffer(data) || !isAgeCiphertext(data)) throw new Error('refusing to push the state: the encrypted copy is not age ciphertext');
   const digest = sha256(data);
@@ -355,8 +407,8 @@ export async function pushState({
   const after = await gh.getRelease();
   const mine = after && (after.assets || []).find((a) => a.id === uploaded.id);
   writeFileSync(recordPath(file), JSON.stringify({ id: uploaded.id, name: ASSET_NAME, sha256: digest, updated_at: mine?.updated_at ?? null }));
-  log(`pushed ${ASSET_NAME} (${data.length} bytes encrypted, sha256 ${digest})`);
-  return { status: 'pushed', bytes: data.length, sha256: digest, assetId: uploaded.id };
+  log(`pushed ${ASSET_NAME} (${data.length} bytes encrypted${compress ? `, gzip of ${database.length}` : ', not compressed'}, sha256 ${digest})`);
+  return { status: 'pushed', bytes: data.length, sha256: digest, assetId: uploaded.id, compressed: compress, databaseBytes: database.length };
 }
 
 /**
@@ -387,12 +439,13 @@ export async function migrateState(opts = {}) {
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
-  const opts = { command, file: DEFAULT_FILE, repo: undefined, force: false };
+  const opts = { command, file: DEFAULT_FILE, repo: undefined, force: false, compress: true };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === '--file') opts.file = rest[++i];
     else if (a.startsWith('--file=')) opts.file = a.slice(7);
     else if (a === '--force') opts.force = true;
+    else if (a === '--no-compress') opts.compress = false;
     else if (a === '--repo') opts.repo = rest[++i];
     else if (a.startsWith('--repo=')) opts.repo = a.slice(7);
     else throw new Error(`unknown argument ${JSON.stringify(a)}`);
@@ -409,7 +462,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     opts.repo = opts.repo || env.GITHUB_REPOSITORY;
     if (!opts.repo) throw new Error('set GITHUB_REPOSITORY or pass --repo owner/name');
   } catch (err) {
-    process.stderr.write(`state-asset: ${err.message}\nusage: node scripts/state-asset.mjs pull|push|migrate [--file path] [--repo owner/name] [--force]\n`);
+    process.stderr.write(`state-asset: ${err.message}\nusage: node scripts/state-asset.mjs pull|push|migrate [--file path] [--repo owner/name] [--force] [--no-compress]\n`);
     return 2;
   }
   const args = {
@@ -417,6 +470,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     token: env.GITHUB_TOKEN || undefined,
     file: opts.file,
     force: opts.force,
+    compress: opts.compress,
     apiUrl: env.GITHUB_API_URL,
     log: (m) => process.stderr.write(`${m}\n`),
     identity: env.AGE_IDENTITY || undefined,

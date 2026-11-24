@@ -170,6 +170,7 @@ test('R-SUB-01: the pump loads the seed at start-up, before the first tick, and 
     },
     newId: (() => { let i = 0; return () => `att-${++i}`; })(),
     ingest: null,
+    identity: null, // no network here; pump/test/identity.test.mjs covers the id lookups in a pump run
   };
   try {
     const out = await runPump(opts);

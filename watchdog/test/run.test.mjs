@@ -57,6 +57,8 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
       GITHUB_REPOSITORY: REPO, LOOP_SLOTS: '4', GITHUB_REF_NAME: 'main', GITHUB_TOKEN: 'ghs_synthetic_job_token',
       // a fresh heartbeat from the Mac archive pull (watchdog/archive.mjs)
       ARCHIVE_LAST_OK: JSON.stringify({ at: ago(60), pulled: 2, quarantined: 0, refused_foreign: 0 }),
+      // the off-site backup has its own tests (watchdog/test/offsite.test.mjs)
+      LANE_OFFSITE_ENABLED: 'false',
     },
     now: c.now,
     sleep: c.sleep,
