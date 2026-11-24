@@ -1,9 +1,10 @@
 {
   "version": 1,
-  "description": "Worker workflows the pump may dispatch. A workflow is dispatched only when enabled is true. versions, image_digest and settings_state go into every run_key, so changing any of them makes every subject due again for that workflow. Lease and slot expiry = 1.5 x (setup_minutes + shard_size x minutes_per_subject) + 10 minutes. slots_max caps open dispatches for the workflow. The worker contract is in docs/INTERFACES.md.",
+  "description": "Worker workflows the pump may dispatch. A workflow is dispatched only when enabled is true. versions, image_digest and settings_state go into every run_key, so changing any of them makes every subject due again for that workflow. Lease and slot expiry = 1.5 x (setup_minutes + shard_size x minutes_per_subject) + 10 minutes. slots_max caps open dispatches for the workflow. runs_untrusted says whether the workflow runs third-party code (servers, builds); a workflow that does not say false counts as true, and none of those is dispatched while the sandbox breaker is open (pump/breaker.mjs, docs/OPERATIONS.md). The worker contract is in docs/INTERFACES.md.",
   "workflows": {
     "scan-static": {
       "enabled": false,
+      "runs_untrusted": false,
       "repo": "isokron-ai/mcp-check",
       "file": "scan-static.yml",
       "ref": "main",
@@ -17,6 +18,7 @@
     },
     "live-probe": {
       "enabled": false,
+      "runs_untrusted": true,
       "repo": "isokron-ai/mcp-check",
       "file": "live-probe.yml",
       "ref": "main",
@@ -30,6 +32,7 @@
     },
     "scan-deep": {
       "enabled": false,
+      "runs_untrusted": true,
       "repo": "isokron-ai/mcp-check",
       "file": "scan-deep.yml",
       "ref": "main",
@@ -43,6 +46,7 @@
     },
     "build-probe": {
       "enabled": false,
+      "runs_untrusted": true,
       "repo": "isokron-ai/mcp-check",
       "file": "build-probe.yml",
       "ref": "main",
@@ -56,6 +60,7 @@
     },
     "writecheck": {
       "enabled": false,
+      "runs_untrusted": true,
       "repo": "isokron-ai/mcp-writecheck-action",
       "file": "corpus.yml",
       "ref": "main",
@@ -69,6 +74,7 @@
     },
     "meta-github": {
       "enabled": false,
+      "runs_untrusted": false,
       "repo": "isokron-ai/tool-qa",
       "file": "meta-github.yml",
       "ref": "main",
@@ -82,6 +88,7 @@
     },
     "meta-registry": {
       "enabled": false,
+      "runs_untrusted": false,
       "repo": "isokron-ai/tool-qa",
       "file": "meta-registry.yml",
       "ref": "main",

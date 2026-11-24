@@ -20,6 +20,11 @@
 //   workflow:<file>      an expected workflow GitHub disabled for inactivity
 //                        (amber; the watchdog re-enables it) or one disabled by
 //                        hand (off).
+//   sandbox-breaker      the nightly sandbox conformance status (pump/breaker.mjs):
+//                        green while it passed within 36 hours; red while it is
+//                        red, stale or unreadable and a lane that runs third-party
+//                        code is enabled (the pump holds those lanes); amber when
+//                        it would hold lanes but none is enabled.
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -77,7 +82,7 @@ const baseName = (path) => String(path).split('/').pop();
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], state, workflows = [], expected = [] }) {
+export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -173,5 +178,27 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
     }
   }
 
+  // the sandbox breaker
+  if (breaker) checks.push(breakerCheck(breaker));
+
   return { checks, actions };
+}
+
+/**
+ * The health item for the sandbox breaker. `breaker` is pump/breaker.mjs
+ * breakerFrom() plus `untrusted` (every lane that runs third-party code) and
+ * `enabled` (those of them that are enabled).
+ */
+export function breakerCheck({ tripped, reason, summary, run_url: link, untrusted = [], enabled = [] }) {
+  const item = { id: 'sandbox-breaker', status: 'green', summary: `closed: ${summary}` };
+  if (link) item.link = link;
+  if (!tripped) return item;
+  if (enabled.length) {
+    item.status = 'red';
+    item.summary = `open (${reason}): the pump holds ${enabled.join(', ')}: ${summary}`;
+  } else {
+    item.status = 'amber';
+    item.summary = `open (${reason}): would hold ${untrusted.join(', ') || 'nothing'} (none enabled): ${summary}`;
+  }
+  return item;
 }

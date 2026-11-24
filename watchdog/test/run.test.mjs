@@ -8,6 +8,7 @@ import { runWatchdog } from '../run.mjs';
 import { parseBody } from '../health.mjs';
 import { openState } from '../../state/db.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
+import { greenStatus } from '../../test/lib/conformance.mjs';
 
 const REPO = 'isokron-ai/tool-qa';
 const MIN = 60_000;
@@ -59,6 +60,7 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
     apiUrl: API,
     log: () => {},
     stateDir: dir,
+    readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
     mintToken: async (args) => {
       mints.push(args);
       return { token: 'ghs_synthetic_app_token', expiresAt: c.t + 3_600_000 };
@@ -173,5 +175,62 @@ test('a failed pump dispatch is reported in the issue instead of failing the run
   const c = out.checks.find((x) => x.id === 'pump-dispatch');
   assert.equal(c.status, 'red');
   assert.match(c.summary, /422/);
+  w.cleanup();
+});
+
+test('R-WD-01: the sandbox breaker is on the health issue: red while it holds an enabled lane, amber with none enabled, green when it passed', async () => {
+  const lanes = (enabled) => ({
+    'live-probe': { enabled, runs_untrusted: true },
+    writecheck: { enabled: false, runs_untrusted: true },
+    'scan-static': { enabled: true, runs_untrusted: false },
+  });
+  // Green.
+  let w = world({ seed: () => {} });
+  w.opts.workerWorkflows = lanes(true);
+  let out = await runWatchdog(w.opts);
+  let b = out.checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(b.status, 'green');
+  assert.match(b.summary, /^closed: sandbox conformance passed 60 minutes ago on ubuntu24\/20261117\.1, gVisor 20261116\.0$/);
+  assert.equal(b.link, 'https://github.com/isokron-ai/mcp-surface-corpus/actions/runs/1');
+  w.cleanup();
+  // Red: stale, with live-probe enabled.
+  w = world({ seed: () => {} });
+  w.opts.workerWorkflows = lanes(true);
+  w.opts.readConformance = async () => ({ status: greenStatus(w.c.t - 40 * 3_600_000) });
+  out = await runWatchdog(w.opts);
+  b = out.checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(b.status, 'red');
+  assert.match(b.summary, /^open \(stale\): the pump holds live-probe: the last sandbox conformance pass is from 40\.0 hours ago/);
+  assert.equal(out.overall, 'red');
+  assert.equal(parseBody(w.issues[0].body).checks.find((c) => c.id === 'sandbox-breaker').status, 'red');
+  w.cleanup();
+  // Amber: unreadable, nothing untrusted enabled.
+  w = world({ seed: () => {} });
+  w.opts.workerWorkflows = lanes(false);
+  w.opts.readConformance = async () => { throw new Error('socket hang up'); };
+  out = await runWatchdog(w.opts);
+  b = out.checks.find((c) => c.id === 'sandbox-breaker');
+  assert.equal(b.status, 'amber');
+  assert.match(b.summary, /^open \(unreadable\): would hold live-probe, writecheck \(none enabled\): the conformance status cannot be read: socket hang up/);
+  w.cleanup();
+});
+
+test('R-WD-01: the watchdog fetches the conformance status itself, with no token', async () => {
+  const w = world({ seed: () => {} });
+  delete w.opts.readConformance;
+  w.opts.workerWorkflows = { 'live-probe': { enabled: true, runs_untrusted: true } };
+  const seen = [];
+  const inner = w.opts.fetch;
+  w.opts.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url);
+    if (url.hostname === 'github.com') {
+      seen.push({ url: url.href, auth: new Headers(init.headers ?? {}).get('authorization') });
+      return new Response(JSON.stringify(greenStatus(w.c.t - 2 * 3_600_000)), { status: 200 });
+    }
+    return inner(input, init);
+  };
+  const out = await runWatchdog(w.opts);
+  assert.deepEqual(seen, [{ url: 'https://github.com/isokron-ai/mcp-surface-corpus/releases/download/conformance/conformance-status.json', auth: null }]);
+  assert.equal(out.checks.find((c) => c.id === 'sandbox-breaker').status, 'green');
   w.cleanup();
 });

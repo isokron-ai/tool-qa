@@ -295,6 +295,8 @@ To start it:
    it exists in its repository and uploads one result bundle per item
    ([`worker-kit/README.md`](../worker-kit/README.md)). Until then the pump
    has nothing to dispatch.
+   A workflow that runs third-party code also needs `"runs_untrusted": true`
+   and a passing nightly sandbox status ("The sandbox breaker" below).
 3. Set `LOOP_SLOTS` (for example 5) and `LOOP_ENABLED=true`.
 4. Run the pump by hand once, or wait for the schedule.
 
@@ -317,6 +319,57 @@ To stop it:
 A running pump run notices none of these until its next start; cancel it from
 the Actions tab if it must stop at once. Its dispatches stay in the state, and
 their leases expire as usual.
+
+## The sandbox breaker
+
+Lanes that run third-party code (servers, builds) run it only inside the
+sandbox of `isokron-ai/mcp-surface-corpus`. That repository runs the sandbox
+self test and its mutation matrix every night (`conformance-nightly.yml`, 03:41
+UTC, whatever the loop's switches say) and publishes the result as a small
+public file, readable without a token:
+
+```
+https://github.com/isokron-ai/mcp-surface-corpus/releases/download/conformance/conformance-status.json
+```
+
+The pump reads it at the start of each run, when an enabled workflow runs
+third-party code, and judges it again on every tick. The breaker is **open**
+while the status is:
+
+| Reason | Means |
+|---|---|
+| `red` | The last nightly run failed: `ok` is not true, or the self test or the mutations did not pass. |
+| `stale` | The last pass is more than 36 hours old (or the file claims a time more than 10 minutes ahead). |
+| `unreadable` | The file could not be fetched (after one retry), is over 16 KiB, is not JSON, or is not a well-formed status. |
+
+While it is open the pump dispatches none of the workflows marked
+`"runs_untrusted": true` in `pump/workflows.json` (today `live-probe`,
+`writecheck`, `build-probe` and `scan-deep`; a workflow that does not say
+`false` counts as `true`). Source-only workflows (`scan-static`,
+`meta-github`, `meta-registry`) keep running. The run logs `pump: sandbox
+breaker open (<reason>): not dispatching <lanes>: <why>` once, keeps what it
+saw as `pump.breaker` in the state (and in `pump.last_tick`), and does not
+fail. Work already dispatched is not recalled; each such job runs the sandbox
+self test on its own runner before any target. The breaker closes by itself
+at the next pump run after a passing nightly status.
+
+The watchdog reads the same file and shows it as `sandbox-breaker` on the
+health issue (below).
+
+To clear it:
+
+1. Open the latest `conformance-nightly` run in `mcp-surface-corpus` (the
+   health issue links it when the status names one). Red: the failing job's
+   log and its telemetry artifact say which case or mutation failed; the
+   runner image, kernel, Docker and gVisor versions are in the status file.
+2. Stale: check that `conformance-nightly.yml` is still enabled there (GitHub
+   disables scheduled workflows after 60 days without a commit) and run it by
+   hand (Actions → conformance-nightly → Run workflow).
+3. Unreadable: check that the `conformance` release and its asset
+   `conformance-status.json` exist; the nightly run makes them.
+
+There is no switch to override the breaker. To run an untrusted lane anyway,
+fix or rerun the nightly; to stop worrying about it, disable the lane.
 
 ## The GitHub App and the `loop` environment
 
@@ -378,6 +431,7 @@ person. off: switched off on purpose.
 | `slots`, `dispatches` | Rows more than 15 minutes past their expiry (red): the pump is not reaping. | See the `pump` check and the latest pump logs. |
 | `run:<workflow>` | The latest scheduled or dispatched run of a loop workflow failed (red). | Open the linked run. Cancelled and skipped runs are ignored. |
 | `workflow:<file>` | Amber: GitHub disabled the workflow for inactivity and the watchdog turned it back on. Red: turning it back on failed. Off: someone disabled it by hand. | For red, enable it under Actions → the workflow. |
+| `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled. | Open the linked `conformance-nightly` run and follow "To clear it" above. |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.

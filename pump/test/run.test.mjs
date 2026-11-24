@@ -8,6 +8,7 @@ import { runPump } from '../run.mjs';
 import { ApiBudget } from '../budgets.mjs';
 import { openState } from '../../state/db.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
+import { greenStatus } from '../../test/lib/conformance.mjs';
 import { IngestSetupError } from '../../ingest/collect.mjs';
 import { parseRegistry } from '../../ingest/registry.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
@@ -72,6 +73,8 @@ function harness({ slots = '3', subjects = 4, successor, ingest = null } = {}) {
     newId: () => `att-${++id}`,
     successorFile: successor ? join(dir, 'successor.json') : undefined,
     ingest,
+    // The sandbox breaker: a green nightly status from an hour ago (no network).
+    readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
   };
   if (successor) writeFileSync(opts.successorFile, JSON.stringify(successor));
   return { dir, stateFile, c, calls, lines, opts, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -404,5 +407,80 @@ test('R-ING-11: the API budget is saved with the state and seeds the next run', 
   const second = new ApiBudget({ now: h.c.now, sleep: h.c.sleep });
   await runPump({ ...h.opts, budget: second });
   assert.equal(second.snapshot().used.contents, 7, 'the second run counts the first run\'s calls');
+  h.cleanup();
+});
+
+// The sandbox breaker: a source-only workflow next to live-probe.
+const staticWf = { ...wf, file: 'scan-static.yml', runs_untrusted: false, slots_max: 3 };
+const withStatic = (h) => { h.opts.config = { tiers, workflows: { 'live-probe': wf, 'scan-static': staticWf } }; return h; };
+
+test('R-WD-01: a red, stale or unreadable conformance status holds every untrusted workflow; source-only ones still run', async () => {
+  const cases = [
+    ['red', (t) => ({ status: { ...greenStatus(t - 3_600_000), ok: false, selftest: 'fail' } })],
+    ['stale', (t) => ({ status: greenStatus(t - 37 * 3_600_000) })],
+    ['unreadable', () => ({ error: 'HTTP 404' })],
+    ['unreadable', () => { throw new Error('network down'); }],
+    ['unreadable', () => ({ status: { hello: 'world' } })],
+  ];
+  for (const [reason, read] of cases) {
+    const h = withStatic(harness({ slots: '3', subjects: 4 }));
+    h.opts.readConformance = async () => read(h.c.t);
+    h.opts.maxRunMs = 60_000;
+    const out = await runPump(h.opts);
+    assert.equal(out.ok, true, `${reason}: the run itself is fine`);
+    assert.ok(h.calls.dispatch.length > 0, `${reason}: scan-static still dispatched`);
+    assert.deepEqual([...new Set(h.calls.dispatch.map((d) => d.workflowFile))], ['scan-static.yml'], `${reason}: live-probe held`);
+    assert.ok(h.lines.some((l) => l.startsWith(`pump: sandbox breaker open (${reason}): not dispatching live-probe`)), reason);
+    const db = openState(h.stateFile);
+    const b = db.getKv('pump.breaker');
+    assert.equal(b.tripped, true);
+    assert.equal(b.reason, reason);
+    assert.deepEqual(b.held, ['live-probe']);
+    assert.deepEqual(db.getKv('pump.last_tick').breaker, { tripped: true, reason, held: ['live-probe'] });
+    db.close();
+    h.cleanup();
+  }
+});
+
+test('R-WD-01: a fresh green status lets untrusted workflows run; the status is read once per run and only when one is enabled', async () => {
+  let reads = 0;
+  const h = withStatic(harness({ slots: '3', subjects: 4 }));
+  h.opts.readConformance = async () => { reads += 1; return { status: greenStatus(h.c.t - 3_600_000) }; };
+  await runPump(h.opts);
+  assert.equal(reads, 1);
+  assert.ok(h.calls.dispatch.some((d) => d.workflowFile === 'live-probe.yml'));
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('pump.breaker').tripped, false);
+  db.close();
+  h.cleanup();
+
+  // Only source-only workflows enabled: nothing to hold, nothing read.
+  const s = harness({ slots: '3', subjects: 2 });
+  s.opts.config = { tiers, workflows: { 'scan-static': staticWf } };
+  s.opts.readConformance = async () => { throw new Error('must not be read'); };
+  await runPump(s.opts);
+  assert.ok(s.calls.dispatch.length > 0);
+  s.cleanup();
+
+  // A workflow that does not say runs_untrusted counts as untrusted.
+  const u = harness({ slots: '3', subjects: 2 });
+  const { runs_untrusted: _gone, ...unsaid } = staticWf;
+  u.opts.config = { tiers, workflows: { 'scan-static': unsaid } };
+  u.opts.readConformance = async () => ({ error: 'HTTP 404' });
+  await runPump(u.opts);
+  assert.equal(u.calls.dispatch.length, 0, 'held: it did not say it was source-only');
+  u.cleanup();
+});
+
+test('R-WD-01: a status that ages past 36 hours during a run trips the breaker on the next tick', async () => {
+  const h = withStatic(harness({ slots: '3', subjects: 30 }));
+  // Checked 36 h minus 3 minutes ago: green for the first tick, stale from the third (150 s apart).
+  h.opts.readConformance = async () => ({ status: greenStatus(h.c.t - 36 * 3_600_000 + 3 * 60_000) });
+  await runPump(h.opts);
+  assert.ok(h.lines.some((l) => l.startsWith('pump: sandbox breaker closed')));
+  assert.ok(h.lines.some((l) => l.startsWith('pump: sandbox breaker open (stale)')));
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('pump.breaker').reason, 'stale');
+  db.close();
   h.cleanup();
 });

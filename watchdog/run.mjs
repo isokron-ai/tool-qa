@@ -11,6 +11,8 @@
 //   3. downloads a copy of the state asset with the job token (read-only) and
 //      reads open slots, waiting dispatches and the pump's successor result;
 //   4. evaluates the checks (watchdog/checks.mjs);
+//      It also reads the public nightly sandbox conformance status (no token;
+//      pump/breaker.mjs), the same file the pump reads for its breaker;
 //   5. dispatches pump.yml if no pump run started for 20 minutes, and
 //      re-enables loop workflows GitHub disabled for inactivity;
 //   6. rewrites the "Loop health" issue (watchdog/health.mjs).
@@ -39,6 +41,8 @@ import { openState } from '../state/db.mjs';
 import { appTokenMinter } from '../pump/app-token.mjs';
 import { ApiBudget } from '../pump/budgets.mjs';
 import { createClient, scrub } from '../pump/github.mjs';
+import { breakerFrom, readConformance as readConformanceStatus, untrustedWorkflows } from '../pump/breaker.mjs';
+import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 
@@ -88,6 +92,8 @@ export async function runWatchdog({
   pull = pullState,
   stateDir,
   expected = loadExpected(),
+  readConformance,
+  workerWorkflows,
 } = {}) {
   const repo = env.GITHUB_REPOSITORY;
   if (!repo || !repo.includes('/')) throw new Error('GITHUB_REPOSITORY is required (owner/name)');
@@ -134,8 +140,22 @@ export async function runWatchdog({
     if (!stateDir) rmSync(dir, { recursive: true, force: true });
   }
 
+  // The sandbox breaker, as the pump sees it.
+  const wfs = workerWorkflows ?? loadConfig().workflows;
+  let conformance;
+  try {
+    conformance = await (readConformance ?? (() => readConformanceStatus({ fetch, sleep })))();
+  } catch (err) {
+    conformance = { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) };
+  }
+  const breaker = {
+    ...breakerFrom({ read: conformance, now: now() }),
+    untrusted: untrustedWorkflows(wfs),
+    enabled: untrustedWorkflows(wfs, { enabledOnly: true }),
+  };
+
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected, breaker });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
     c.summary = `could not read the state asset: ${stateError.slice(0, 200)}`;

@@ -28,6 +28,15 @@
 // cost is one more push in a tick that dispatches. After any failed push the
 // run dispatches nothing more and ends after one housekeeping tick (R-ING-09).
 //
+// The sandbox circuit breaker (pump/breaker.mjs): when an enabled workflow runs
+// third-party code, the run reads the public nightly sandbox conformance status
+// once, at its start. While that status is red, older than 36 hours or
+// unreadable, no such workflow is dispatched (they are left out of every tick's
+// due list); source-only workflows (`"runs_untrusted": false`) still are. What
+// the run saw is kept as `pump.breaker` in the state and in `pump.last_tick`.
+// Work already dispatched is not recalled: it runs the sandbox self test on its
+// own runner before any target.
+//
 // The pump is the state's only writer: ingest runs inside it, never as a
 // separate job. Before it dispatches anything, the run checks that ingest can
 // judge the results (worker-kit/ingest.pub holds the real key and AGE_IDENTITY
@@ -58,6 +67,7 @@ import { openState } from '../state/db.mjs';
 import { pullState, pushState } from '../scripts/state-asset.mjs';
 import { appTokenMinter } from './app-token.mjs';
 import { ApiBudget, budgetedFetch } from './budgets.mjs';
+import { allowedWorkflows, breakerFrom, readConformance as readConformanceStatus, untrustedWorkflows } from './breaker.mjs';
 import { createDispatcher } from './dispatch.mjs';
 import { dueFromState, loadConfig } from './due.mjs';
 import { scrub } from './github.mjs';
@@ -66,6 +76,7 @@ import { planShards, runTick } from './tick.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
 export const BUDGET_KEY = 'pump.api_budget';
+export const BREAKER_KEY = 'pump.breaker';
 
 const isSetupError = (err) => err instanceof IngestSetupError || err?.name === 'IngestSetupError';
 
@@ -97,6 +108,7 @@ export async function runPump({
   maxRunMs = 11 * 60_000,
   tickIntervalMs = 150_000,
   newId,
+  readConformance,
 } = {}) {
   const start = now();
   const deadline = start + maxRunMs;
@@ -165,6 +177,23 @@ export async function runPump({
     }
   }
 
+  // The breaker: read once per run, judged again (for age) on every tick.
+  const untrusted = untrustedWorkflows(cfg.workflows, { enabledOnly: true });
+  let conformance = null;
+  if (workerSlots > 0 && untrusted.length) {
+    try {
+      conformance = await (readConformance ?? (() => readConformanceStatus({ fetch, sleep })))();
+    } catch (err) {
+      conformance = { error: String(err?.message ?? err).slice(0, 200) };
+    }
+  }
+  let lastBreaker = null;
+  const breakerNow = () => {
+    if (!conformance) return null;
+    const b = breakerFrom({ read: conformance, now: now() });
+    return { ...b, held: b.tripped ? untrusted : [] };
+  };
+
   await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, ...stateKeys });
   const db = openState(stateFile);
   // The hourly API caps hold across runs (R-ING-11): this run starts with the
@@ -218,8 +247,17 @@ export async function runPump({
         }
       }
       const slots = blocked || pushFailed ? 0 : workerSlots;
+      const breaker = breakerNow();
+      if (breaker && (lastBreaker === null || breaker.tripped !== lastBreaker.tripped || breaker.reason !== lastBreaker.reason)) {
+        say(breaker.tripped
+          ? `pump: sandbox breaker open (${breaker.reason}): not dispatching ${breaker.held.join(', ')}: ${breaker.summary}`
+          : `pump: sandbox breaker closed: ${breaker.summary}`);
+        db.setKv(BREAKER_KEY, { ...breaker, at: new Date(now()).toISOString() }, { now: now() });
+        lastBreaker = breaker;
+      }
+      const tickConfig = breaker?.tripped ? { ...cfg, workflows: allowedWorkflows(cfg.workflows, breaker) } : cfg;
       const summary = await runTick({
-        db, now, config: cfg, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline,
+        db, now, config: tickConfig, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline,
         // The pending dispatches are saved before any is sent (R-ING-10).
         beforeSend: () => save(`tick ${ticks}, before dispatching`),
       });
@@ -230,7 +268,7 @@ export async function runPump({
       const ingestNote = ingested
         ? { checked: ingested.checked, judged: ingested.judged, recorded: ingested.recorded, outcomes: ingested.outcomes, errors: ingested.errors, stopped: ingested.stopped }
         : null;
-      db.setKv('pump.last_tick', { ...summary, loopBudget, requested, ingest: ingestNote, blocked }, { now: now() });
+      db.setKv('pump.last_tick', { ...summary, loopBudget, requested, ingest: ingestNote, blocked, breaker: breaker ? { tripped: breaker.tripped, reason: breaker.reason, held: breaker.held } : null }, { now: now() });
       say(`pump: tick ${ticks}: due ${summary.due ?? '-'}, dispatched ${summary.dispatched}, failed ${summary.failed}, reaped ${summary.reaped}${summary.stopped ? `, stopped (${summary.stopped})` : ''}`);
       if (summary.dispatched || summary.failed || summary.withdrawn || summary.reaped || summary.reapedSlots || ingested?.changed) await save(`tick ${ticks}`);
       if (slots === 0 || summary.stopped === 'unauthorized') break;
