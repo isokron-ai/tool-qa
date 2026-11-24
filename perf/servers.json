@@ -1,0 +1,89 @@
+{
+  "_comment": "Our own servers only. Each is installed from npm at the release being measured and run on loopback or over stdio on the runner. Third-party and remote servers are never listed here (docs/PERFORMANCE.md).",
+  "servers": {
+    "kronicle-lite": {
+      "package": "kronicle-lite",
+      "repo": "isokron-ai/kronicle-lite",
+      "rebuild": ["better-sqlite3"],
+      "profiles": ["stdio", "http"],
+      "stdio_args": ["serve", "--data-dir", "{data}"],
+      "http_args": ["serve", "--http", "--port", "{port}", "--data-dir", "{data}"],
+      "bearer_file": "http-bearer.token",
+      "seed": {
+        "tool": "put_document",
+        "count": 24,
+        "args": { "slug": "perf-{{seq}}", "title": "Perf note {{seq}}", "markdown": "# Perf note {{seq}}\n\nDeploys go to the staging cluster first. Note number {{seq}} is part of the fixed load fixture.\n" }
+      },
+      "scenario": [
+        { "name": "orient", "method": "tools/call", "tool": "get_system_state", "args": { "focus": "pulse" }, "weight": 4 },
+        { "name": "recall", "method": "tools/call", "tool": "recall", "args": { "query": "staging cluster deploys", "top_k": 5 }, "weight": 4 },
+        { "name": "verify_chain", "method": "tools/call", "tool": "verify_chain", "args": {}, "weight": 1 },
+        { "name": "anchor_status", "method": "tools/call", "tool": "anchor_status", "args": {}, "weight": 1 }
+      ]
+    },
+    "sea-lite": {
+      "package": "sea-lite",
+      "repo": "isokron-ai/sea-lite",
+      "rebuild": ["better-sqlite3"],
+      "profiles": ["stdio", "http"],
+      "stdio_args": ["serve", "--data-dir", "{data}"],
+      "http_args": ["serve", "--http", "--port", "{port}", "--data-dir", "{data}"],
+      "bearer_file": "http-bearer.token",
+      "seed": {
+        "tool": "sea_create",
+        "count": 24,
+        "args": { "title": "Perf ticket {{seq}}", "body": "A ticket in the fixed load fixture.", "tags": ["perf"] }
+      },
+      "scenario": [
+        { "name": "list", "method": "tools/call", "tool": "sea_list", "args": { "limit": 20 }, "weight": 4 },
+        { "name": "stats", "method": "tools/call", "tool": "sea_stats", "args": {}, "weight": 2 },
+        { "name": "history", "method": "tools/call", "tool": "sea_history", "args": { "limit": 20 }, "weight": 2 },
+        { "name": "scope_check", "method": "tools/call", "tool": "sea_scope_check", "args": { "paths": ["src/a.ts", "src/b.ts"] }, "weight": 2 }
+      ]
+    },
+    "mcp-check": {
+      "package": "@isokron/mcp-check",
+      "bin": "mcp-check-server",
+      "repo": "isokron-ai/mcp-check",
+      "rebuild": [],
+      "profiles": ["stdio"],
+      "stdio_args": [],
+      "seed": null,
+      "scenario": [
+        { "name": "check", "method": "tools/call", "tool": "check_tools_list", "args": { "tools_list": "@fixtures/tools-list-small.json" }, "weight": 3 },
+        { "name": "explain", "method": "tools/call", "tool": "explain_check", "args": { "check_id": "anthropic-title" }, "weight": 3 },
+        { "name": "compare", "method": "tools/call", "tool": "compare_tools_lists", "args": { "before": "@fixtures/tools-list-small.json", "after": "@fixtures/tools-list-small.json" }, "weight": 1 }
+      ]
+    },
+    "tiny-tracker": {
+      "package": "@mcp-write-safety/tiny-tracker",
+      "bin": "tiny-tracker",
+      "repo": "isokron-ai/mcp-write-safety",
+      "rebuild": [],
+      "profiles": ["http"],
+      "note": "0.3.0 serves Streamable HTTP only; its usage text lists a stdio mode that does not exist (R-PERF-01).",
+      "http_args": ["all", "--port", "{port}"],
+      "seed": {
+        "tool": "create_ticket",
+        "count": 24,
+        "args": { "title": "Perf ticket {{seq}}" }
+      },
+      "scenario": [
+        { "name": "list_projects", "method": "tools/call", "tool": "list_projects", "args": {}, "weight": 2 },
+        { "name": "list_tickets", "method": "tools/call", "tool": "list_tickets", "args": { "project": "inbox" }, "weight": 3 },
+        { "name": "get_ticket", "method": "tools/call", "tool": "get_ticket", "args": { "id": "T-{{rand:1-24}}" }, "weight": 3 }
+      ]
+    },
+    "fixture": {
+      "_comment": "Control, not a product: a dependency-free stdio server with a settable delay. Proves the harness sees a slowdown (R-PERF-02).",
+      "local_script": "fixture-server.mjs",
+      "repo": null,
+      "profiles": ["stdio"],
+      "stdio_args": [],
+      "seed": null,
+      "scenario": [
+        { "name": "echo", "method": "tools/call", "tool": "echo", "args": { "text": "hello" }, "weight": 1 }
+      ]
+    }
+  }
+}

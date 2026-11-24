@@ -76,6 +76,7 @@ Details, and what to do in an emergency: [docs/OPERATIONS.md](docs/OPERATIONS.md
 | `scripts/ledger.mjs`, `ledger/`, `.github/workflows/ledger.yml` | The cross-repo regression ledger: every tool repository's `REGRESSIONS.md` in one place ([`docs/LEDGER.md`](docs/LEDGER.md), `ledger/ledger.json`), refreshed daily by a pull request |
 | `.github/workflows/lint-workflows.yml` | Reusable workflow lint (actionlint, zizmor, policy check) |
 | `.github/workflows/lint.yml`, `test.yml` | Lint and unit tests on push and pull request |
+| `perf/`, `docs/PERFORMANCE.md`, `.github/workflows/perf-baselines.yml` | Performance baselines for our own servers: the pinned Inspector `--load`, each release compared only with its own previous release |
 | `docs/` | Architecture, operations, the interfaces between pump, workers and ingest, and [the measurement rule](docs/MEASUREMENTS.md) (separate claims, never one score) |
 
 ## Development
