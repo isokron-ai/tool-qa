@@ -21,7 +21,8 @@
 //     v-prefixed or behind a package prefix (pkg@1.2.3, pkg-v1.2.3, sub/v1.2.3),
 //     with an optional pre-release or build suffix, and no floating word
 //     (snapshot, dev, nightly, edge, latest, main, master, canary) in the
-//     prefix or the pre-release. latest, main, v1, 1.2, 1.0.0-SNAPSHOT and
+//     pre-release or as a bare one-word prefix (a package prefix such as
+//     mcp-main@ or edge-runtime- is not checked). latest, main, v1, 1.2, 1.0.0-SNAPSHOT and
 //     other floating tags are expected to move; they are counted, never events.
 //   - A move that looks like a fix-up re-tag is kept, ranked low. git: the old
 //     and new targets were made within FIXUP_WINDOW_MS of each other (tagger
@@ -64,8 +65,16 @@ export function versionLikeTag(tag) {
   if (typeof tag !== 'string' || tag.length > 255) return false;
   const m = VERSION_TAG_RE.exec(tag);
   if (!m) return false;
-  const words = `${m[1]} ${m[2] ?? ''}`.toLowerCase().split(/[^a-z0-9]+/);
-  return !words.some((w) => FLOATING_WORDS.includes(w));
+  // The pre-release part is checked word by word. A prefix only when it is one bare word (nightly-1.0.0,
+  // master/v1.0.0): a package prefix (ending in @) or one of several parts (edge-runtime-v2.0.0) names a
+  // package, and a floating word inside a package name says nothing about the tag (R-DRIFT-25).
+  if ((m[2] ?? '').toLowerCase().split(/[^a-z0-9]+/).some((w) => FLOATING_WORDS.includes(w))) return false;
+  const prefix = m[1];
+  if (prefix && !prefix.endsWith('@')) {
+    const bare = prefix.slice(0, -1).toLowerCase();
+    if (/^[a-z0-9]+$/.test(bare) && FLOATING_WORDS.includes(bare)) return false;
+  }
+  return true;
 }
 
 const ms = (t) => (typeof t === 'string' ? Date.parse(t) : NaN);
