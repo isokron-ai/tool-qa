@@ -253,5 +253,7 @@ test('loadConfig reads the shipped tiers and workflows files', () => {
   for (const t of ['T0', 'T1', 'T2', 'T3', 'T4']) assert.ok(c.tiers.tiers[t], t);
   assert.ok(c.workflows['live-probe']);
   // Nothing is dispatched until a worker workflow is switched on.
-  assert.ok(Object.values(c.workflows).every((w) => w.enabled === false));
+  // Pins which lanes are switched on, so turning one on needs a reviewed test change.
+  assert.deepEqual(Object.entries(c.workflows).filter(([, w]) => w.enabled === true).map(([k]) => k).sort(), ['scan-static']);
+  assert.ok(Object.values(c.workflows).every((w) => typeof w.enabled === 'boolean'));
 });
