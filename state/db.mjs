@@ -25,6 +25,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const SCHEMA_VERSION = 5;
 export const MAX_SLOTS = 15;
+/** How far apart one tick's dispatches may be created and still count as one burst (R-ING-26). */
+export const SHA_BURST_MS = 30_000;
 
 const MIGRATIONS = [
   { version: 1, sql: () => readFileSync(new URL('./schema.sql', import.meta.url), 'utf8') },
@@ -782,6 +784,85 @@ export class StateDb {
       GROUP BY a.run_key
     `).all();
     return rows.filter((r) => Date.parse(r.last) + Math.min(maxMs, baseMs * 2 ** Math.min(10, r.n - 1)) > t).map((r) => r.run_key);
+  }
+
+  // ---- run_sha_mismatch alarm (R-ING-22) ----
+  //
+  // run_sha_mismatch does not count towards parking a run_key (R-ING-18), so on
+  // its own nothing would stop a workflow whose every run is at the wrong
+  // commit (a branch that keeps moving, a run name someone else keeps taking).
+  // Ingest counts consecutive dispatches of a workflow rejected that way; at
+  // `limit` the workflow is paused for `pauseMs` (kv pump.paused:<workflow>):
+  // the pump dispatches none of it and fails its runs, which shows red on the
+  // health issue, until the pause ends. A dispatch whose run passed the checks
+  // resets the count.
+
+  /**
+   * One more dispatch of `workflow` rejected as run_sha_mismatch. `sha` is the
+   * commit recorded with that dispatch and `created` when the dispatch was
+   * made. The shards of one tick that a merge overtook (all recorded at the old
+   * commit, all run at the new one) are one burst and count once (R-ING-24).
+   * A mismatch belongs to the current burst only when it has the burst's
+   * recorded commit AND its dispatch was made within `burstMs` of the burst's
+   * FIRST dispatch (R-ING-26). One tick reserves all its shards in one loop of
+   * local writes, so their `created` times lie within seconds. Ticks start
+   * 150 s apart, but each runs ingest first and ingest's length varies, so
+   * there is no fixed minimum gap between two ticks' dispatches: usually about
+   * two minutes, yet as little as ~10 s when one tick's ingest runs long and
+   * the next one's is short. 30 s holds one tick's shards with room to spare;
+   * two ticks that happen to land within 30 s of a burst's start count once
+   * (one mismatch missed, not a chain), and since the burst's start never
+   * moves, repeats cannot chain from tick to tick. The same commit in later
+   * ticks therefore keeps counting, and a cause that persists at a fixed
+   * commit (someone taking the run names, a ref GitHub resolves differently)
+   * still pauses the workflow (R-ING-25).
+   * Returns {count, paused}.
+   */
+  noteShaMismatch(workflow, { sha = null, created = null, now, limit = 3, pauseMs = 6 * 3_600_000, burstMs = SHA_BURST_MS } = {}) {
+    const key = `pump.sha_mismatch:${workflow}`;
+    const prev = this.getKv(key);
+    const before = Number.isSafeInteger(prev?.count) ? prev.count : 0;
+    const at = created === null || created === undefined ? NaN : toMs(created);
+    const burstAt = prev?.burst_created ? Date.parse(prev.burst_created) : NaN;
+    const sameBurst = Number.isFinite(at) && Number.isFinite(burstAt) && Math.abs(at - burstAt) <= burstMs;
+    if (before > 0 && sha !== null && prev.last_sha === sha && sameBurst) {
+      this.setKv(key, { ...prev, last: iso(now) }, { now }); // the burst's start stays where it was
+      return { count: before, paused: false };
+    }
+    const count = before + 1;
+    if (count < limit) {
+      this.setKv(key, {
+        count, first: prev?.first ?? iso(now), last: iso(now), last_sha: sha, burst_created: Number.isFinite(at) ? iso(at) : null,
+      }, { now });
+      return { count, paused: false };
+    }
+    this.setKv(`pump.paused:${workflow}`, {
+      reason: 'run_sha_mismatch', count, since: iso(now), until: iso(toMs(now) + pauseMs),
+    }, { now });
+    this.deleteKv(key);
+    return { count, paused: true };
+  }
+
+  /**
+   * Replace the expected commit of a dispatch not sent yet (pending): the pump
+   * reads the ref again just before sending (R-ING-24).
+   */
+  updateDispatchSha(attemptId, workflowSha) {
+    const r = this.raw.prepare("UPDATE dispatches SET workflow_sha = ? WHERE attempt_id = ? AND status = 'pending'").run(workflowSha, attemptId);
+    return r.changes > 0;
+  }
+
+  /** A dispatch of `workflow` whose run passed the run checks: the count starts again. */
+  clearShaMismatch(workflow) {
+    this.deleteKv(`pump.sha_mismatch:${workflow}`);
+  }
+
+  /** [{workflow, reason, count, since, until}] paused now. */
+  pausedWorkflows({ now } = {}) {
+    const t = toMs(now);
+    return this.raw.prepare("SELECT key, value FROM kv WHERE key LIKE 'pump.paused:%' ORDER BY key").all()
+      .map((r) => ({ workflow: r.key.slice('pump.paused:'.length), ...JSON.parse(r.value) }))
+      .filter((p) => Date.parse(p.until) > t);
   }
 
   // ---- ingest failures ----

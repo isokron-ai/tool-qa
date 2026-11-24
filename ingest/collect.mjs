@@ -47,7 +47,7 @@ import { fileURLToPath } from 'node:url';
 
 import { writeTar } from '../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from './age.mjs';
-import { makeGithub } from './github.mjs';
+import { makeGithub, sleepUnless } from './github.mjs';
 import { MAX_BUNDLE_BYTES, openAttempt } from './ingest.mjs';
 import { dbLedger } from './ledger.mjs';
 import { loadRegistry as loadPinnedRegistry } from './registry.mjs';
@@ -67,6 +67,7 @@ export const MAX_ITEM_FAILURES = 3;
  * which takes it to the pump run's end; then it is aborted (R-ING-17).
  */
 export const CALL_GRACE_MS = 2 * MINUTE;
+const MAX_TIMER_MS = 2 ** 31 - 1;
 const SEAL_TO = fileURLToPath(new URL('../worker-kit/ingest.pub', import.meta.url));
 
 /** Ingest cannot work as set up (keys, contract). The pump must not dispatch work. */
@@ -88,7 +89,7 @@ function isoSeconds(ms) {
  * @param {string} [o.identity]       the age identity (default env.AGE_IDENTITY, read now)
  * @param {Function} [o.fetch]        the pump passes its budgeted fetch
  * @param {string} [o.apiUrl]
- * @param {(ms: number) => Promise<void>} [o.sleep]
+ * @param {(ms: number, signal?: AbortSignal) => Promise<void>} [o.sleep]  ends early when signal aborts
  * @param {number} [o.retries]        retries per GitHub call (ingest/github.mjs)
  * @param {string} [o.outDir]         where sealed outputs go (default $RUNNER_TEMP/ingest-out)
  * @param {string} [o.sealTo]         recipients file (default worker-kit/ingest.pub)
@@ -108,7 +109,7 @@ export function createCollector({
   identity = env.AGE_IDENTITY,
   fetch = globalThis.fetch,
   apiUrl = env.GITHUB_API_URL || 'https://api.github.com',
-  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  sleep = sleepUnless,
   retries = 3,
   outDir = join(env.RUNNER_TEMP || tmpdir(), 'ingest-out'),
   sealTo = SEAL_TO,
@@ -199,7 +200,10 @@ export function createCollector({
     // No GitHub call outlives `deadline` + callGraceMs (R-ING-17): in the pump
     // that is the run's end, four minutes before the job's time limit.
     const end = deadline + callGraceMs;
-    callDeadline = Number.isFinite(end) ? AbortSignal.timeout(Math.max(0, end - now())) : null;
+    // A timer cannot wait past 2^31 - 1 ms (Node fires it after 1 ms instead), so a deadline further off than
+    // that is none at all (R-ING-21).
+    const wait = end - now();
+    callDeadline = Number.isFinite(wait) && wait <= MAX_TIMER_MS ? AbortSignal.timeout(Math.max(0, wait)) : null;
     const summary = {
       checked: 0, waiting: 0, judged: 0, recorded: 0, closed: 0, correlated: 0, errors: 0,
       stopped: null, outcomes: {}, changed: false,
@@ -315,6 +319,7 @@ export function createCollector({
         // is retried forever (R-ING-05).
         let decided = 0;
         let stopped = false;
+        const reasons = []; // of the items decided now, for the run_sha_mismatch alarm
         const failures = new Map(); // log line -> item indexes
         const decide = async (item, abandon) => {
           let sealed = false;
@@ -328,6 +333,7 @@ export function createCollector({
             return res;
           });
           decided += 1;
+          reasons.push(r.reason);
           summary.judged += 1;
           summary.outcomes[r.outcome] = (summary.outcomes[r.outcome] ?? 0) + 1;
           if (r.recorded) summary.recorded += 1;
@@ -369,6 +375,14 @@ export function createCollector({
             }
             failures.set(line, [...(failures.get(line) ?? []), item.index]);
           }
+        }
+        // R-ING-22: count dispatches whose run was at the wrong commit; one whose run passed resets the count.
+        if (reasons.includes('run_sha_mismatch')) {
+          const alarm = db.noteShaMismatch(d.workflow, { sha: d.workflow_sha ?? null, created: d.created ?? null, now: now() });
+          summary.changed = true;
+          log(`ingest: ${label}: run at another commit than recorded at dispatch (${alarm.count} dispatch${alarm.count === 1 ? '' : 'es'} in a row)${alarm.paused ? `; ${d.workflow} is paused` : ''}`);
+        } else if (reasons.some((x) => x === null || !(/^run_/.test(x) || x === 'stale_fence' || x === 'ingest_error'))) {
+          db.clearShaMismatch(d.workflow);
         }
         for (const [line, indexes] of failures) {
           const which = indexes.length === 1 ? `item ${indexes[0]}` : `items ${indexes.join(', ')}`;

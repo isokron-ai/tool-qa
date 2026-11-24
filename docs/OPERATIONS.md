@@ -371,6 +371,14 @@ Each tick, in this order:
    sent and the pending dispatches are withdrawn.
 4. **Push** the state if anything changed.
 
+If three dispatches of one workflow in a row come back with runs at another
+commit than the pump recorded when it sent them (`run_sha_mismatch`: its
+worker branch keeps moving, or someone else dispatches the workflow with the
+same run names), the pump pauses that workflow for six hours: it dispatches
+none of it, and every pump run fails with `pump: <workflow> is paused until
+...`, so the health issue shows the pump red. Find out who moves the branch or
+runs the workflow; the pause ends on its own (kv `pump.paused:<workflow>`).
+
 If any push fails, the run dispatches nothing more, does one housekeeping
 tick (reap and ingest), tries a final push and fails (red). Look at the
 `pump: state push (...) failed` line; the next run starts from the last state
