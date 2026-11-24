@@ -1,0 +1,125 @@
+{
+ "about": "R-DRIFT-07: scan-static on one commit: a list change with a new mcp-check version or a new run_key is excluded; with the same tools and run_key it is our reader (tool side), never a subject event. A new commit is not drift.",
+ "subject": "acme/source-server",
+ "items": [
+  {
+   "lane": "scan-static",
+   "observed_at": "2026-11-20T00:00:00.000Z",
+   "run_key": "000000000000000000000000000000000000000000000000000000000000000a",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.0"
+    }
+   ],
+   "subject_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "observations": [],
+   "result": {
+    "status": "graded",
+    "catalog_hash": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "tool_count": 3,
+    "commit": {
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "date": "2026-11-19T00:00:00Z"
+    }
+   }
+  },
+  {
+   "lane": "scan-static",
+   "observed_at": "2026-11-21T00:00:00.000Z",
+   "run_key": "000000000000000000000000000000000000000000000000000000000000000b",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "observations": [],
+   "result": {
+    "status": "graded",
+    "catalog_hash": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+    "tool_count": 4,
+    "commit": {
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "date": "2026-11-19T00:00:00Z"
+    }
+   }
+  },
+  {
+   "lane": "scan-static",
+   "observed_at": "2026-11-22T00:00:00.000Z",
+   "run_key": "000000000000000000000000000000000000000000000000000000000000000c",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "observations": [],
+   "result": {
+    "status": "graded",
+    "catalog_hash": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+    "tool_count": 4,
+    "commit": {
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "date": "2026-11-19T00:00:00Z"
+    }
+   }
+  },
+  {
+   "lane": "scan-static",
+   "observed_at": "2026-11-23T00:00:00.000Z",
+   "run_key": "000000000000000000000000000000000000000000000000000000000000000c",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "observations": [],
+   "result": {
+    "status": "graded",
+    "catalog_hash": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+    "tool_count": 5,
+    "commit": {
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "date": "2026-11-19T00:00:00Z"
+    }
+   }
+  },
+  {
+   "lane": "scan-static",
+   "observed_at": "2026-11-24T00:00:00.000Z",
+   "run_key": "000000000000000000000000000000000000000000000000000000000000000d",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "observations": [],
+   "result": {
+    "status": "graded",
+    "catalog_hash": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+    "tool_count": 6,
+    "commit": {
+     "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "date": "2026-11-23T00:00:00Z"
+    }
+   }
+  }
+ ],
+ "expect": {
+  "catalog_events": [],
+  "excluded": {
+   "tool_version_changed": 1,
+   "run_key_changed": 1,
+   "new_commit": 1
+  },
+  "tool_side": 1
+ }
+}
