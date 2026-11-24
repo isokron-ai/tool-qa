@@ -40,3 +40,28 @@ jobs:
           AGE_BIN: ${{ runner.temp }}/age/age
           AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
         run: node --test
+
+  # The chaos suite (chaos/): the real pump, ingest, successor, watchdog,
+  # snapshot and restore code run end to end, over many ticks and runs,
+  # against an in-memory GitHub with injected faults. No network, no secrets,
+  # nothing touches the live loop. The weekly long soak is chaos-soak.yml.
+  chaos:
+    name: chaos suite (end to end, simulated GitHub)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Chaos suite
+        env:
+          TOOL_QA_CHAOS: '1'
+        run: node --test 'chaos/*.test.mjs'

@@ -10,6 +10,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "check-workflows": "node scripts/check-workflows.mjs .github/workflows"
+    "check-workflows": "node scripts/check-workflows.mjs .github/workflows",
+    "test:chaos": "TOOL_QA_CHAOS=1 node --test 'chaos/*.test.mjs'",
+    "soak": "node chaos/soak.mjs"
   }
 }

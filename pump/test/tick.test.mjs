@@ -283,3 +283,37 @@ test('R-ING-24: the ref is read again just before each send; a merge since the t
   assert.ok(lines.some((l) => /moved to b{40} since this tick began/.test(l)));
   db.close();
 });
+
+test('R-CHAOS-05: a dispatch that fails with a server or network error stays pending with its slot and leases; a refusal is closed at once', async () => {
+  for (const [err, kept] of [
+    [new GitHubError('POST dispatches returned 502: Bad Gateway', { status: 502 }), true],
+    [new GitHubError('POST dispatches: network error: socket hang up', { status: 0 }), true],
+    [new GitHubError('POST dispatches returned 422: Unexpected inputs', { status: 422 }), false],
+  ]) {
+    const { c, db, config, newId } = setup({ subjects: 2 });
+    const d = recorder(() => { throw err; });
+    const s = await runTick({ db, now: c.now, config, workerSlots: 3, dispatcher: d, newId });
+    assert.equal(s.failed, 1);
+    const row = db.getDispatch('att-001');
+    assert.equal(row.status, kept ? 'pending' : 'failed', err.message);
+    assert.equal(db.openSlots().length, kept ? 1 : 0, 'the slot is held only while the run may exist');
+    assert.equal(db.getLease(row.items[0].run_key).holder, kept ? 'att-001' : null);
+    if (kept) assert.equal(s.unconfirmed, 1);
+    db.close();
+  }
+});
+
+test('R-CHAOS-02: run_keys the pump holds are not dispatched this tick', async () => {
+  const { c, db, config, newId } = setup({ subjects: 4, workflows: { 'live-probe': wf({ shard_size: 1 }) } });
+  const d = recorder();
+  const first = await runTick({ db, now: c.now, config, workerSlots: 0, dispatcher: d, newId });
+  assert.equal(first.due, null);
+  const { dueFromState } = await import('../due.mjs');
+  const keys = dueFromState(db, { now: c.now(), tiers: config.tiers, workflows: config.workflows }).map((x) => x.run_key);
+  const held = new Set(keys.slice(0, 3));
+  const s = await runTick({ db, now: c.now, config, workerSlots: 10, dispatcher: d, newId, holdRunKeys: held });
+  assert.equal(s.due, 1);
+  assert.equal(d.calls.length, 1);
+  assert.equal(JSON.parse(d.calls[0].inputs.items)[0].run_key, keys[3]);
+  db.close();
+});

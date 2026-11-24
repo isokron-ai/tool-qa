@@ -404,3 +404,33 @@ test('R-COV-02: ingest over the real store records a tool-fault skip as unassess
   assert.deepEqual([row.fault, row.coverage, row.assessed_at], ['tool', 'unassessed_tool', null]);
   db.close();
 });
+
+test('R-CHAOS-02: a result whose run completed before the lease ran out is on time, even recorded after it; a later one is not; a newer lease always wins', () => {
+  const db = openState(':memory:');
+  const ttlMs = 10 * MIN;
+  const [a] = dispatch(db, { attemptId: 'att-on-time', items: [{ runKey: KEY_A, subject: 'repo:1' }], ttlMs });
+  const [b] = dispatch(db, { attemptId: 'att-late', items: [{ runKey: KEY_B, subject: 'repo:2' }], ttlMs });
+  const later = T0 + 15 * MIN; // both leases ran out at T0 + 10 minutes
+  db.reapExpiredDispatches({ now: later });
+  const onTime = db.recordResult({ run_key: KEY_A, attempt_id: 'att-on-time', fence: a.fence, accepted: true, outcome: 'accepted', completedAt: T0 + 8 * MIN, now: later });
+  assert.deepEqual([onTime.accepted, onTime.reason], [true, null]);
+  assert.equal(db.getResult(KEY_A).attempt_id, 'att-on-time');
+  const late = db.recordResult({ run_key: KEY_B, attempt_id: 'att-late', fence: b.fence, accepted: true, outcome: 'accepted', completedAt: T0 + 12 * MIN, now: later });
+  assert.deepEqual([late.accepted, late.reason], [false, 'lease_expired']);
+  // Without completedAt (the manual re-ingest) the store judges by now, as before.
+  const db2 = openState(':memory:');
+  const [c] = dispatch(db2, { attemptId: 'att-x', ttlMs });
+  assert.equal(db2.recordResult({ run_key: KEY_A, attempt_id: 'att-x', fence: c.fence, accepted: true, outcome: 'accepted', now: later }).reason, 'lease_expired');
+  // A newer lease makes the old fence stale whatever the run's time.
+  const db3 = openState(':memory:');
+  const [d] = dispatch(db3, { attemptId: 'att-old', ttlMs });
+  db3.reapExpiredDispatches({ now: later });
+  dispatch(db3, { attemptId: 'att-new', ttlMs, now: later });
+  assert.equal(db3.recordResult({ run_key: KEY_A, attempt_id: 'att-old', fence: d.fence, accepted: true, outcome: 'accepted', completedAt: T0 + MIN, now: later + MIN }).reason, 'stale_fence');
+  // A completedAt in the future (clock skew) never moves the check later than now.
+  const db4 = openState(':memory:');
+  const [e] = dispatch(db4, { attemptId: 'att-skew', ttlMs });
+  assert.equal(db4.recordResult({ run_key: KEY_A, attempt_id: 'att-skew', fence: e.fence, accepted: true, outcome: 'accepted', completedAt: later + 60 * MIN, now: later }).reason, 'lease_expired');
+  for (const x of [db, db2, db3, db4]) x.close();
+});
+
