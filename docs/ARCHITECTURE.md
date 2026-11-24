@@ -240,6 +240,19 @@ actions pinned to full commit SHAs, no `pull_request_target`, no event data
 interpolated into `run:` (that covers `inputs`, `github.head_ref` and step or job
 outputs too), no `secrets: inherit` or `write-all`, and `concurrency` on every scheduled workflow.
 
+## Drift signals (longitudinal)
+
+`longitudinal/derive.mjs` compares each subject's successive accepted results,
+read from the archive (still encrypted there; decrypted in memory on the
+operator's machine), and derives three signals: a force-pushed version tag
+(`git_tag_moves`, from meta-github's `git_tag_targets`), an image tag that
+resolves to a new digest (`oci_tag_moves`, from meta-registry's
+`oci_tag_digests`), and a tool list that changes at an unchanged release
+(`catalog_drift_same_version`, from live-probe and scan-static). It is a
+separate step, not part of ingest: ingest keeps no observation history in the
+state store, and the archive is the only complete history. See
+[`longitudinal/README.md`](../longitudinal/README.md).
+
 ## Not done yet
 
 - Worker workflows in the tool repos. All are switched off in

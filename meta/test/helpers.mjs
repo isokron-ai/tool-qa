@@ -40,6 +40,13 @@ export function ghNode(over = {}) {
         { tagName: 'v1.3.0', publishedAt: '2026-11-21T09:03:26Z', createdAt: '2026-11-21T09:03:26Z', isPrerelease: false, isLatest: false, releaseAssets: { totalCount: 0 } },
       ],
     },
+    tagRefs: {
+      totalCount: 2,
+      nodes: [
+        { name: 'v1.3.1', target: { __typename: 'Commit', oid: 'b'.repeat(40), committedDate: '2026-11-22T19:40:00Z' } },
+        { name: 'v1.3.0', target: { __typename: 'Tag', oid: 'd'.repeat(40), tagger: { date: '2026-11-21T09:00:00Z' }, target: { __typename: 'Commit', oid: 'c'.repeat(40), committedDate: '2026-11-21T08:58:00Z' } } },
+      ],
+    },
     openIssues: { totalCount: 0 }, closedIssues: { totalCount: 1 }, openPRs: { totalCount: 1 }, mergedPRs: { totalCount: 20 }, closedPRs: { totalCount: 2 },
     rootTree: { entries: [{ name: 'README.md', type: 'blob' }, { name: 'LICENSE', type: 'blob' }, { name: 'SECURITY.md', type: 'blob' }, { name: 'CONTRIBUTING.md', type: 'blob' }] },
     githubTree: { entries: [{ name: 'dependabot.yml', type: 'blob' }, { name: 'workflows', type: 'tree' }, { name: 'CODEOWNERS', type: 'blob' }] },

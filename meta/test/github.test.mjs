@@ -1,8 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildQuery, collect, createBudget, GRAPHQL_BATCH, graphFacts, lastPage, subjectOutput } from '../github.mjs';
+import { readFileSync } from 'node:fs';
+
+import { buildQuery, collect, createBudget, GRAPHQL_BATCH, graphFacts, lastPage, subjectOutput, tagTargets } from '../github.mjs';
 import { createHttp } from '../lib/http.mjs';
+import { sanitize, sha256Hex, stableJson } from '../lib/common.mjs';
+import { fixtureFetch, forgeryControl } from '../controls.mjs';
+import { laneOf } from '../lanes.mjs';
 import { ghNode, githubFetch } from './helpers.mjs';
 
 const httpFor = (f) => createHttp({ fetch: f, sleep: async () => {} });
@@ -36,8 +41,9 @@ test('subjectOutput: the facts land in registry fields with their types; no skip
   const out = await collect({ http: httpFor(f), repos: ['isokron-ai/mcp-check'], token: 't', budget: createBudget() });
   const o = subjectOutput({ ...out.get('isokron-ai/mcp-check'), observedAt: '2026-11-24T00:00:00Z' });
   const by = Object.fromEntries(o.records.map((r) => [r.field, r.value]));
-  assert.deepEqual(Object.keys(by).sort(), ['branch_rules_public', 'community_profile', 'contributors_counts', 'issues_prs_summary', 'owner_org_facts',
-    'releases_summary', 'repo_core', 'repo_owner_type', 'repo_popularity', 'scorecard_api_result', 'security_posture', 'workflow_health']);
+  assert.deepEqual(Object.keys(by).sort(), ['branch_rules_public', 'community_profile', 'contributors_counts', 'git_tag_map_sha256', 'git_tag_targets',
+    'issues_prs_summary', 'owner_org_facts', 'releases_summary', 'repo_core', 'repo_owner_type', 'repo_popularity', 'scorecard_api_result', 'security_posture',
+    'workflow_health']);
   assert.equal(by.repo_core.github_id, 1463720077);
   assert.equal(by.repo_core.description.length, 'Grades a tool list.'.length);
   assert.equal(by.repo_owner_type, 'Organization');
@@ -114,4 +120,43 @@ test('a repository too large for the contributors API is recorded as null with w
   assert.equal(c.value, null);
   assert.match(c.why, /large|not visible/);
   assert.deepEqual(o.skips, []);
+});
+
+test('R-DRIFT-01: meta-github records each tag\'s target (an annotated tag peeled once) and a hash of the tag map, in the same GraphQL batch', async () => {
+  const f = githubFetch({ repos: { 'isokron-ai/mcp-check': ghNode() } });
+  const out = await collect({ http: httpFor(f), repos: ['isokron-ai/mcp-check'], token: 't', budget: createBudget() });
+  assert.equal(f.calls.filter((c) => c.url === 'https://api.github.com/graphql').length, 1);
+  assert.match(buildQuery(['a/b']).query, /tagRefs: refs\(refPrefix: "refs\/tags\/", first: 100, orderBy: \{field: TAG_COMMIT_DATE, direction: DESC\}\)/);
+  const o = subjectOutput({ ...out.get('isokron-ai/mcp-check'), observedAt: '2026-11-24T00:00:00Z' });
+  const by = Object.fromEntries(o.records.map((r) => [r.field, r.value]));
+  const t = by.git_tag_targets;
+  assert.deepEqual([t.basis, t.order, t.total, t.sample_size, t.truncated], ['graphql_refs_tags', 'tag_commit_date_desc', 2, 2, false]);
+  assert.deepEqual(t.tags, [
+    { tag: 'v1.3.1', commit: 'b'.repeat(40), tag_object: null, commit_date: '2026-11-22T19:40:00Z', tagged_at: null },
+    { tag: 'v1.3.0', commit: 'c'.repeat(40), tag_object: 'd'.repeat(40), commit_date: '2026-11-21T08:58:00Z', tagged_at: '2026-11-21T09:00:00Z' },
+  ]);
+  const map = [['v1.3.0', 'c'.repeat(40), 'd'.repeat(40)], ['v1.3.1', 'b'.repeat(40), null]];
+  assert.equal(by.git_tag_map_sha256, sha256Hex(stableJson(map)));
+  assert.equal(t.map_sha256, by.git_tag_map_sha256);
+  // A tag of a tag keeps no commit; an answer without tag refs is null with why.
+  assert.equal(tagTargets({ totalCount: 1, nodes: [{ name: 'v2.0.0', target: { __typename: 'Tag', oid: 'e'.repeat(40), target: { __typename: 'Tag', oid: 'f'.repeat(40) } } }] }).tags[0].commit, null);
+  const bare = subjectOutput({ graph: { status: 'ok', node: ghNode({ tagRefs: undefined }) }, rest: {}, observedAt: '2026-11-24T00:00:00Z' });
+  assert.deepEqual(bare.records.filter((r) => r.field.startsWith('git_tag')).map((r) => [r.field, r.value, r.why]),
+    [['git_tag_targets', null, 'the answer had no tag refs'], ['git_tag_map_sha256', null, 'the answer had no tag refs']]);
+});
+
+test('R-DRIFT-09: tag names and image answers are upstream text: the forgery controls plant identity text in them and stay contained', async () => {
+  for (const lane of ['meta-github', 'meta-registry']) {
+    const r = await forgeryControl(laneOf(lane), { marker: `FORGERYMARK${'0'.repeat(24)}` });
+    assert.equal(r.control.observed, 'contained', lane);
+    const answers = r.files['raw/control-forgery/answers.json'];
+    assert.match(answers, lane === 'meta-github' ? /"tagRefs"/ : /"HEAD"/, `${lane}: the planted answers include the new reads`);
+  }
+  const outs = await laneOf('meta-github').collect({ http: createHttp({ fetch: fixtureFetch(JSON.parse(readFileSync(new URL('../fixtures/forgery-meta-github.json', import.meta.url), 'utf8').split('__MARKER__').join('M'.repeat(20))).routes), retries: 0, sleep: async () => {} }), repos: ['forgery-target/forgery-target'], token: null, budget: createBudget() });
+  const tags = outs.get('forgery-target/forgery-target').records.find((x) => x.field === 'git_tag_targets').value.tags;
+  assert.deepEqual(tags.map((t) => [t.tag, t.commit]), [['[removed: identity-like text]', 'c'.repeat(40)], ['v0.1.0', 'c'.repeat(40)]]);
+  const regOuts = await laneOf('meta-registry').collect({ http: createHttp({ fetch: fixtureFetch(JSON.parse(readFileSync(new URL('../fixtures/forgery-meta-registry.json', import.meta.url), 'utf8').split('__MARKER__').join('M'.repeat(20))).routes), retries: 0, sleep: async () => {} }), repos: ['forgery-target/forgery-target'] });
+  const oci = regOuts.get('forgery-target/forgery-target').records.find((x) => x.field === 'oci_tag_digests').value;
+  assert.deepEqual(oci.map((x) => [x.reference, x.tag, x.status, x.digest]), [['ghcr.io/forgery-target/forgery-target', '1.0.0', 'ok', `sha256:${'e'.repeat(64)}`]]);
+  assert.equal(sanitize(oci)[0].media_type, '[removed: identity-like text]');
 });

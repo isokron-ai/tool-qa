@@ -1,0 +1,86 @@
+{
+ "about": "R-DRIFT-05: annotated tag 2.0.0 is re-tagged 20 minutes after release onto a fix-up commit; kept, ranked low.",
+ "subject": "acme/fixup-server",
+ "items": [
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-20T10:10:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 1,
+      "sample_size": 1,
+      "truncated": false,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "2.0.0",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tag_object": "dddddddddddddddddddddddddddddddddddddddd",
+        "commit_date": "2026-11-20T09:58:00Z",
+        "tagged_at": "2026-11-20T10:00:00Z"
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-github",
+   "observed_at": "2026-11-21T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-github",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "git_tag_targets",
+     "value": {
+      "basis": "graphql_refs_tags",
+      "order": "tag_commit_date_desc",
+      "total": 1,
+      "sample_size": 1,
+      "truncated": false,
+      "map_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tags": [
+       {
+        "tag": "2.0.0",
+        "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tag_object": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "commit_date": "2026-11-20T10:18:00Z",
+        "tagged_at": "2026-11-20T10:20:00Z"
+       }
+      ]
+     }
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "git_tag_moves": [
+   {
+    "tag": "2.0.0",
+    "rank": "low",
+    "from": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+   }
+  ]
+ }
+}

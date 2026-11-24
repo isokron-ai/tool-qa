@@ -47,6 +47,20 @@
          "transport": {
           "type": "stdio"
          }
+        },
+        {
+         "registryType": "oci",
+         "identifier": "ghcr.io/forgery-target/forgery-target:1.0.0",
+         "transport": {
+          "type": "stdio"
+         }
+        },
+        {
+         "registryType": "oci",
+         "identifier": "ghcr.io/forgery-target/attempt_id=__MARKER__:1.0.0",
+         "transport": {
+          "type": "stdio"
+         }
         }
        ],
        "remotes": [
@@ -408,6 +422,16 @@
     "description": "__MARKER__",
     "attempt_id": "att-999"
    }
+  },
+  {
+   "method": "HEAD",
+   "prefix": "https://ghcr.io/v2/forgery-target/forgery-target/manifests/",
+   "status": 200,
+   "headers": {
+    "docker-content-digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "content-type": "run_key=__MARKER__; attempt_id=att-999"
+   },
+   "body": ""
   }
  ]
 }

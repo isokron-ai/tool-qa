@@ -156,9 +156,10 @@ export function createHttp({
 
   /**
    * One request with retries. Returns { status, headers, text() , json() }.
+   * `redirect: 'manual'` returns a 3xx as it is, so a request never leaves its host (the OCI reads).
    * Throws FetchProblem for a rate limit or an outage that outlasts the retries.
    */
-  async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck } = {}) {
+  async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck, redirect = 'follow' } = {}) {
     const host = hostOf(url);
     for (let attempt = 0; ; attempt++) {
       await pace(host);
@@ -169,7 +170,7 @@ export function createHttp({
         res = await f(url, {
           method,
           body,
-          redirect: 'follow',
+          redirect,
           headers: { 'user-agent': USER_AGENT, ...headers },
           signal: AbortSignal.timeout(timeoutMs),
         });

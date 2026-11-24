@@ -5,7 +5,8 @@
 //             facts, popularity, owner type, releases, issue and pull request
 //             counts, security policy, the public view of branch protection,
 //             community files, workflow files and dependency-update config,
-//             read from the default branch's tree. GITHUB_TOKEN has 1,000
+//             read from the default branch's tree, and the newest 100 tags
+//             with their targets (git_tag_targets). GITHUB_TOKEN has 1,000
 //             points an hour per repository.
 //   REST      three calls per repository, all conditional (ETag; a 304 does
 //             not count against the 1,000 requests an hour GITHUB_TOKEN has
@@ -29,19 +30,21 @@
 // skip, never a failed shard (R-META-01).
 
 import { FetchProblem, mapLimit, readJsonCapped } from './lib/http.mjs';
-import { bool, daysBetween, int, median, record, skipFor, str, textDigest, time } from './lib/common.mjs';
+import { bool, daysBetween, int, median, record, sanitize, sha256Hex, skipFor, stableJson, str, textDigest, time } from './lib/common.mjs';
 
 export const LANE = 'meta-github';
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 const API = 'https://api.github.com';
 const SCORECARD = 'https://api.scorecard.dev/projects/github.com';
 export const GRAPHQL_BATCH = 10;
 const RELEASE_SAMPLE = 20;
+/** Tags read per repository, newest commit first (git_tag_targets). */
+export const TAG_SAMPLE = 100;
 const GH_HEADERS = { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' };
 
 /** Settings that go into the settings digest of every bundle. */
 export const SETTINGS = Object.freeze({
-  lane: LANE, version: VERSION, graphql_batch: GRAPHQL_BATCH, release_sample: RELEASE_SAMPLE,
+  lane: LANE, version: VERSION, graphql_batch: GRAPHQL_BATCH, release_sample: RELEASE_SAMPLE, tag_sample: TAG_SAMPLE,
   rest: ['contributors?anon=false', 'rules/branches/{default}', 'private-vulnerability-reporting'],
   scorecard: 'api.scorecard.dev',
 });
@@ -63,6 +66,7 @@ fragment R on Repository {
   pullRequestTemplates { filename }
   defaultBranchRef { name target { oid } refUpdateRule { requiredApprovingReviewCount requiredStatusCheckContexts allowsForcePushes allowsDeletions requiresLinearHistory requiresSignatures requiresCodeOwnerReviews requiresConversationResolution } }
   releases(first: ${RELEASE_SAMPLE}, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { tagName publishedAt createdAt isPrerelease isLatest releaseAssets { totalCount } } }
+  tagRefs: refs(refPrefix: "refs/tags/", first: ${TAG_SAMPLE}, orderBy: {field: TAG_COMMIT_DATE, direction: DESC}) { totalCount nodes { name target { __typename oid ... on Commit { committedDate } ... on Tag { tagger { date } target { __typename oid ... on Commit { committedDate } } } } } }
   openIssues: issues(states: OPEN) { totalCount }
   closedIssues: issues(states: CLOSED) { totalCount }
   openPRs: pullRequests(states: OPEN) { totalCount }
@@ -270,6 +274,54 @@ export async function scorecardRead(http, repo) {
 const names = (tree) => (Array.isArray(tree?.entries) ? tree.entries : []);
 const hasFile = (tree, re) => names(tree).some((e) => e?.type === 'blob' && typeof e.name === 'string' && re.test(e.name));
 
+const OID_RE = /^[0-9a-f]{40}$/;
+const oid = (v) => (typeof v === 'string' && OID_RE.test(v) ? v : null);
+
+/**
+ * The release tags and what each points to (git_tag_targets), from the
+ * repository's tag refs, newest commit first, at most TAG_SAMPLE. A
+ * lightweight tag points at its commit; an annotated tag is a tag object,
+ * peeled once to its commit (a tag of a tag keeps `commit: null`). Tag names
+ * are upstream text: each is sanitised before it is kept or hashed, so the
+ * hash can be recomputed from what is kept. `map_sha256` is the sha256 of the
+ * canonical JSON of the sorted [tag, commit, tag object] list.
+ * Returns null when the answer has no tag refs (an older query, a fixture).
+ */
+export function tagTargets(refs) {
+  if (!refs || typeof refs !== 'object' || !Array.isArray(refs.nodes)) return null;
+  const tags = [];
+  const seen = new Set();
+  for (const n of refs.nodes.slice(0, TAG_SAMPLE)) {
+    const name = sanitize(str(n?.name, 255));
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const t = n.target ?? {};
+    if (t.__typename === 'Tag') {
+      const inner = t.target ?? {};
+      tags.push({
+        tag: name,
+        commit: inner.__typename === 'Commit' ? oid(inner.oid) : null,
+        tag_object: oid(t.oid),
+        commit_date: inner.__typename === 'Commit' ? time(inner.committedDate) : null,
+        tagged_at: time(t.tagger?.date),
+      });
+    } else {
+      tags.push({ tag: name, commit: t.__typename === 'Commit' ? oid(t.oid) : null, tag_object: null, commit_date: time(t.committedDate), tagged_at: null });
+    }
+  }
+  const map = tags.map((x) => [x.tag, x.commit, x.tag_object]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const total = int(refs.totalCount);
+  return {
+    basis: 'graphql_refs_tags',
+    order: 'tag_commit_date_desc',
+    total,
+    sample_size: tags.length,
+    truncated: total !== null ? total > tags.length : null,
+    map_sha256: sha256Hex(stableJson(map)),
+    tags,
+  };
+}
+
 /** Pure mapping from the GraphQL node to the facts we keep. */
 export function graphFacts(node, observedAt) {
   const root = node.rootTree;
@@ -386,6 +438,7 @@ export function graphFacts(node, observedAt) {
       issue_templates: Array.isArray(node.issueTemplates) ? node.issueTemplates.length : null,
       pull_request_templates: Array.isArray(node.pullRequestTemplates) ? node.pullRequestTemplates.length : null,
     },
+    git_tag_targets: tagTargets(node.tagRefs),
     workflow_health: {
       basis: 'default_branch_tree',
       workflow_files: wf.length,
@@ -409,7 +462,7 @@ function stageOf(r) {
  * @param {{graph: {status: string, node?: object, problem?: string}, rest?: object, scorecard?: object, observedAt: string}} p
  */
 export const FIELDS = Object.freeze(['repo_core', 'repo_owner_type', 'repo_popularity', 'owner_org_facts', 'releases_summary', 'issues_prs_summary',
-  'contributors_counts', 'security_posture', 'branch_rules_public', 'community_profile', 'workflow_health']);
+  'contributors_counts', 'security_posture', 'branch_rules_public', 'community_profile', 'workflow_health', 'git_tag_targets', 'git_tag_map_sha256']);
 
 /** The output for a subject whose data made the lane throw: every field null, one skip that is not retried. */
 export function subjectErrorOutput(stage = 'collect') {
@@ -443,6 +496,8 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }
     records.push(record('issues_prs_summary', g.issues_prs_summary));
     records.push(record('community_profile', g.community_profile));
     records.push(record('workflow_health', g.workflow_health));
+    records.push(record('git_tag_targets', g.git_tag_targets, 'the answer had no tag refs'));
+    records.push(record('git_tag_map_sha256', g.git_tag_targets?.map_sha256 ?? null, 'the answer had no tag refs'));
 
     const c = rest.contributors;
     stages.contributors = stageOf(c);
