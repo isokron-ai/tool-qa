@@ -661,12 +661,16 @@ export class StateDb {
    *   resultOutcome: what the results row stores as its outcome when accepted
    *   (default: outcome); ingest passes 'skips_only' for a result with no
    *   records whose every skip is retryable (R-SUB-06).
+   *   completedAt: when GitHub says the worker run completed (ms or ISO).
+   *   The lease's expiry is checked against it when it is earlier than now,
+   *   so a run that finished in time is not rejected as lease_expired because
+   *   the pump looked later (R-CHAOS-02).
    *   fault, coverage: the result's fault side and coverage state
    *   (worker-kit/contract.mjs resultFault, R-COV-02); stored on the results
    *   row, NULL when not given. coverage 'assessed' also sets assessed_at.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, completedAt = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -689,7 +693,15 @@ export class StateDb {
       else if (item.fence !== fence) why = 'fence_mismatch';
       else if (item.resolved !== null) why = 'duplicate_result';
       else {
-        const c = this.checkFence(runKey, fence, { holder: attemptId, now });
+        // A result is on time if its run finished before the lease ran out,
+        // even when the pump only judged it afterwards (R-CHAOS-02): the lease
+        // bounds the worker, not the pump's next tick. completedAt is when
+        // GitHub says the run completed (never the worker's own claim), and
+        // only ever moves the check earlier. A newer lease still makes this
+        // fence stale, whatever the time.
+        const done = completedAt === null || completedAt === undefined ? NaN : toMs(completedAt);
+        const asOf = Number.isFinite(done) && done < toMs(now) ? done : now;
+        const c = this.checkFence(runKey, fence, { holder: attemptId, now: asOf });
         if (!c.ok) why = c.reason;
         else current = true;
       }

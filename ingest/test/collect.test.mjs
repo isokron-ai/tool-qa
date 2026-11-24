@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { openState } from '../../state/db.mjs';
-import { ApiBudget, budgetedFetch } from '../../pump/budgets.mjs';
+import { ApiBudget, BudgetExceededError, budgetedFetch } from '../../pump/budgets.mjs';
 import { API, fakeApi } from '../../test/lib/fake-api.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt } from '../age.mjs';
@@ -992,4 +992,38 @@ test('R-ING-26: same-commit mismatches from separate ticks only ~130 s apart sti
   assert.deepEqual(counts, [1, 1, 2, 2], 'the third is 40 s after the burst began: a new one');
   assert.ok(SHA_BURST_MS < 150_000);
   db.close();
+});
+
+test('R-CHAOS-07: a late dispatch whose look the API budget stopped is looked at on the next tick, not ten minutes later; an earlier look keeps counting', async () => {
+  for (const seenBefore of [false, true]) {
+    const { db } = setup();
+    db.reapExpiredDispatches({ now: T0 + 31 * MIN });
+    const api = worker({ run: defaultRun({ status: 'in_progress', conclusion: null }) });
+    const gate = { budget: false };
+    const fetch = async (url, init) => {
+      if (gate.budget) throw new BudgetExceededError('actions: API calls are blocked by a rate limit', { family: 'actions', reason: 'blocked' });
+      return api.fetch(url, init);
+    };
+    const h = harness({ api, fetch });
+    try {
+      h.clock.t = T0 + 40 * MIN;
+      if (seenBefore) {
+        assert.equal((await h.collect(db)).waiting, 1, 'looked at once');
+        h.clock.t += 11 * MIN; // due for its next look
+      }
+      gate.budget = true;
+      assert.equal((await h.collect(db)).stopped, 'budget');
+      gate.budget = false;
+      h.clock.t += MIN;
+      const s = await h.collect(db);
+      assert.equal(s.checked, 1, `looked at a minute after the stopped look (seen before: ${seenBefore})`);
+      assert.equal(s.waiting, 1);
+      // A look that did happen still throttles the next one.
+      h.clock.t += MIN;
+      assert.equal((await h.collect(db)).checked, 0);
+    } finally {
+      h.cleanup();
+      db.close();
+    }
+  }
 });
