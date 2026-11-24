@@ -216,3 +216,14 @@ test('R-COV-08: the pin and its test copy agree: commit, path and sha256 move to
   assert.equal(source.path, REGISTRY_PATH);
   assert.equal(REGISTRY_URL, `https://raw.githubusercontent.com/${source.repo}/${source.commit}/${source.path}`);
 });
+
+test('the pinned registry declares the live-probe oracle stage fields (mcp-results #8), with the types mcp-check writes', async () => {
+  const { readFileSync } = await import('node:fs');
+  const reg = parseRegistry(readFileSync(new URL('../../meta/test/fixtures/registry-pinned.yaml', import.meta.url), 'utf8'));
+  assert.equal(reg.sha256, REGISTRY_SHA256, 'the test copy is the file ingest pins');
+  const want = { oracle_stage: 'object', sdk_client_results: 'array', conformance_suite: 'object', conformance_summary: 'object', conformance_checks: 'array', oracle_disagreements: 'array' };
+  for (const [id, type] of Object.entries(want)) assert.equal(reg.fields.get(id) && reg.fields.get(id).type, type, id);
+  const line = (field, value) => `${JSON.stringify({ field, value, stage: 'live' })}\n`;
+  const obs = new Map([['observations/live.ndjson', Buffer.from(line('oracle_stage', { status: 'ran' }) + line('sdk_client_results', []) + line('conformance_checks', []))]]);
+  assert.equal(validateObservations(obs, { ...reg, source: 'test' }).ok, true);
+});

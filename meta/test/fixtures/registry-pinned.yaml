@@ -175,6 +175,24 @@ fields:
   - {id: subscriptions_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: list_changed_notifications, layer: protocol, type: integer, unit: count, source: scan-live, class: P, redaction: null, status: active}
   - {id: client_feature_use, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: [R1], status: planned}
+  # The live-probe lane's oracle stage (isokron-ai/mcp-check corpus/LIVE-PROBE.md, "Oracles"): independent official
+  # SDK clients (TypeScript 1.x and 2.x, Python, Go), each pinned, list the tools; the official conformance suite,
+  # pinned by version and git commit, runs the read-only server scenarios of each frozen requirement set (spec
+  # revisions 2025-11-25 and 2026-07-28) through a stdio-to-HTTP bridge, so its results are payload-level only.
+  # sdk_client_results: one entry per client: client, sdk, sdk_version, outcome (listed | init_failed | list_failed
+  # | timeout | client_error | unavailable | skipped), stage, protocol_negotiated (a spec revision, or other),
+  # tool_count, catalog_sha256 (the checker engine's catalog hash of what the client listed),
+  # catalog_defaults_sha256 (the same with annotations that only state the spec default left out),
+  # catalog_vs_reader (same | same_but_annotation_defaults | different), names_sha256, pages, ms. conformance_suite: package,
+  # version, git_commit, integrity, requirement_sets_sha256, bridge (name, version, counts). conformance_summary:
+  # per spec revision, the counts of pass | fail | expected_fail | warning | info | skipped | bridge_excluded |
+  # not_applicable, the scenarios run, and every scenario of the frozen set not run, with why (calls_tool,
+  # gets_prompt, reads_resource, subscribes, changes_server_state, needs_fixture_server, transport_only, or a time or
+  # install reason). conformance_checks: one entry per check: spec_revision, scenario, check, status, scored.
+  - {id: sdk_client_results, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: conformance_suite, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: conformance_summary, layer: protocol, type: object, unit: count, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: conformance_checks, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: tasks_extension_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: cancellation_behaviour, layer: protocol, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: error_battery_results, layer: protocol, type: array, unit: none, source: scan-live, class: P, redaction: [R1], status: planned}
@@ -396,6 +414,12 @@ fields:
   - {id: coverage_state, layer: tool_telemetry, type: enum, unit: none, source: ingest-compact, class: P, redaction: null, status: active}
   - {id: differential_disagreements, layer: tool_telemetry, type: array, unit: none, source: ingest-compact, class: X, redaction: null, status: planned}
   - {id: differential_disagreement_rates, layer: tool_telemetry, type: object, unit: ratio, source: ingest-compact, class: PA, redaction: null, status: planned}
+  # oracle_stage: whether the live-probe oracle stage ran for the subject (status ran | skipped | error | absent, mode
+  # full | clients_only, why, ms). oracle_disagreements: the worker's own disagreements between our reader, the SDK
+  # clients and the conformance suite, each with its design class (D4 schema_mismatch, D6 live_client, D7
+  # lint_vs_conformance, D12 crash/timeout), the two oracles, the kind and counts; leads for triage, never a verdict.
+  - {id: oracle_stage, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
+  - {id: oracle_disagreements, layer: tool_telemetry, type: array, unit: none, source: scan-live, class: X, redaction: null, status: planned}
   - {id: coverage_contribution, layer: tool_telemetry, type: object, unit: none, source: ingest-compact, class: PA, redaction: null, status: planned}
   - {id: canary_run_outcomes, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: planned}
   - {id: runner_env, layer: tool_telemetry, type: object, unit: none, source: scan-live, class: P, redaction: null, status: active}
