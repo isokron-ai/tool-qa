@@ -9,6 +9,12 @@
 const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
 const USER_AGENT = 'isokron-tool-qa-state-snapshot';
 
+/** Mark an error as one that may pass if tried again later (err.transient = true). */
+function transient(err) {
+  err.transient = true;
+  return err;
+}
+
 export function createReleaseClient({ repo, token, fetch = globalThis.fetch, apiUrl, sleep, log = () => {} }) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repo || ''))) {
     throw new Error(`repository must be "owner/name", got ${JSON.stringify(repo)}`);
@@ -39,7 +45,7 @@ export function createReleaseClient({ repo, token, fetch = globalThis.fetch, api
       try {
         res = await fetch(url, { method, headers: headers(extraHeaders, withAuth), body, redirect });
       } catch (err) {
-        if (i >= attempts) throw new Error(scrub(`GitHub ${method} ${new URL(url).pathname} failed: ${err.message}`));
+        if (i >= attempts) throw transient(new Error(scrub(`GitHub ${method} ${new URL(url).pathname} failed: ${err.message}`)));
         await doSleep(1000 * 2 ** (i - 1));
         continue;
       }
@@ -50,7 +56,11 @@ export function createReleaseClient({ repo, token, fetch = globalThis.fetch, api
         await doSleep(Number.isFinite(after) && after >= 0 ? after * 1000 : 1000 * 2 ** (i - 1));
         continue;
       }
-      throw await failure(method, url, res);
+      const err = await failure(method, url, res);
+      // A server error, a rate limit or a lost connection may pass by itself;
+      // callers can tell it from a real refusal (R-CHAOS-09).
+      if (RETRY_STATUS.has(res.status) || (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0')) transient(err);
+      throw err;
     }
   }
 
