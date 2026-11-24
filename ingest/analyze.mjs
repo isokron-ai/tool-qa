@@ -23,6 +23,9 @@ import { cleanHit, cleanProblem, makeLabeler, MAX_LISTED } from './hygiene.mjs';
 import { scanFiles } from './redact.mjs';
 import { validateObservations } from './registry.mjs';
 
+/** Retryable skip reasons that are throttling, not the subject (R-SUB-04). */
+export const THROTTLE_SKIPS = Object.freeze(['rate_limited', 'upstream_unavailable']);
+
 /**
  * Wall-clock limit for judging one item. Within the bundle caps
  * (worker-kit/contract.mjs) judging takes a few seconds even on crafted input
@@ -77,6 +80,7 @@ export function readBundle(plaintext, { maxBundleBytes } = {}) {
  * @returns {{outcome: 'accepted'|'rejected'|'quarantined', reason: string|null,
  *   problems: object[], problemsTotal: number, report: object, retryable?: boolean}}
  *   retryable (accepted only): the bundle has skips and every one is retryable
+ *   throttled (accepted only): retryable, and every skip is rate_limited or upstream_unavailable
  */
 export function analyzeBundle(plaintext, ctx) {
   const { exp, registry, canaries = [], allowNoControls = false, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES } = ctx;
@@ -126,6 +130,9 @@ export function analyzeBundle(plaintext, ctx) {
   };
   // Every stage that did not run may succeed later (R-ING-16).
   const retryable = manifest.skips.length > 0 && retryableSkips === manifest.skips.length;
+  // Throttled: every skip is a retryable rate limit or upstream outage, which
+  // says nothing about the subject (R-SUB-04).
+  const throttled = retryable && manifest.skips.every((sk) => THROTTLE_SKIPS.includes(sk.reason));
 
   // 6. forgery: the bundle must name this item's run_key and fence
   const forged = checkBundle(manifest, files, exp, { requireControl: !allowNoControls })
@@ -153,7 +160,7 @@ export function analyzeBundle(plaintext, ctx) {
   };
   if (hits.length > 0) return done('quarantined', 'secret_scan');
 
-  return { ...done('accepted', null), retryable };
+  return { ...done('accepted', null), retryable, throttled };
 }
 
 /**

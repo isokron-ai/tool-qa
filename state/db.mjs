@@ -67,12 +67,13 @@ function checkTtl(ttlMs) {
 // Rejection reasons that say nothing about the run_key's own work (identity or
 // fencing failures), so they don't count towards parking it.
 // retry_later (the worker hit a passing condition) is bounded on its own
-// (ingest MAX_RETRIES) and is not counted either. Nor is run_sha_mismatch
+// (ingest MAX_RETRIES) and is not counted either, nor is retry_throttled (a
+// rate limit or upstream outage, bounded by ingest RETRY_WINDOW_MS; R-SUB-04). Nor is run_sha_mismatch
 // (R-ING-18): the run was at another commit than the one recorded at dispatch,
 // because the worker branch moved between the pump reading it and GitHub
 // starting the run, or because someone else's run took the shard's run name.
 // Neither says anything about the run_key's own work.
-const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'", "'retry_later'", "'run_sha_mismatch'"].join(', ');
+const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'", "'retry_later'", "'retry_throttled'", "'run_sha_mismatch'"].join(', ');
 
 function plain(row) {
   return row ? { ...row } : undefined;
@@ -561,7 +562,9 @@ export class StateDb {
    * item's run_key lease now (a newer one means the item is stale). outcome is
    * null until a result for this attempt, run_key and fence is recorded.
    * retries is how many retry_later decisions the run_key has had since its
-   * last accepted result (retryLaterCount).
+   * last accepted result (retryLaterCount); throttled and throttled_since are
+   * the count and first time of its retry_throttled decisions since then
+   * (retryThrottled; R-SUB-04).
    * canaries is always empty for now (none are injected yet). When they are,
    * they live only here, in the state database, which is stored encrypted
    * (scripts/state-asset.mjs); they must never go into dispatch inputs (shown
@@ -585,6 +588,7 @@ export class StateDb {
         outcome: rec ? rec.outcome ?? (rec.accepted === 1 ? 'accepted' : 'rejected') : null,
         resolved: it.resolved,
         retries: this.retryLaterCount(it.run_key),
+        ...this.retryThrottled(it.run_key),
       };
     });
     const file = String(d.workflow_file);
@@ -647,10 +651,13 @@ export class StateDb {
    *
    * @param {{run_key: string, attempt_id: string, fence: number, outcome?: string,
    *   verdict?: 'accepted'|'rejected', accepted?: boolean, reason?: string,
-   *   digest?: string, now?: number|string|Date}} args
+   *   digest?: string, resultOutcome?: string, now?: number|string|Date}} args
+   *   resultOutcome: what the results row stores as its outcome when accepted
+   *   (default: outcome); ingest passes 'skips_only' for a result with skips
+   *   and no records (R-SUB-06).
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -695,7 +702,7 @@ export class StateDb {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (run_key) DO UPDATE SET attempt_id = excluded.attempt_id, fence = excluded.fence,
               outcome = excluded.outcome, digest = excluded.digest, accepted_at = excluded.accepted_at
-          `).run(runKey, item.subject, item.workflow, attemptId, fence, outcome, digest, t);
+          `).run(runKey, item.subject, item.workflow, attemptId, fence, resultOutcome ?? outcome, digest, t);
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {
@@ -751,20 +758,30 @@ export class StateDb {
     `).get(runKey, runKey).n;
   }
 
+  /** retry_throttled decisions for a run_key since its last accepted result: {throttled, throttled_since}. */
+  retryThrottled(runKey) {
+    const r = this.raw.prepare(`
+      SELECT COUNT(*) AS n, MIN(received) AS first FROM attempts WHERE run_key = ? AND reason = 'retry_throttled'
+        AND received > COALESCE((SELECT accepted_at FROM results WHERE run_key = ?), '')
+    `).get(runKey, runKey);
+    return { throttled: Number(r.n), throttled_since: r.first ?? null };
+  }
+
   /**
-   * run_keys sent back as retry_later that must wait before they are due again:
-   * the n-th retry waits baseMs x 2^(n-1) after the decision.
+   * run_keys sent back as retry_later or retry_throttled that must wait before
+   * they are due again: the n-th retry waits baseMs x 2^(n-1) after the
+   * decision, at most maxMs (R-SUB-04).
    * @returns {string[]}
    */
-  retryLaterWaiting({ now, baseMs }) {
+  retryLaterWaiting({ now, baseMs, maxMs = Infinity }) {
     const t = toMs(now);
     const rows = this.raw.prepare(`
       SELECT a.run_key, COUNT(*) AS n, MAX(a.received) AS last FROM attempts a
-      WHERE a.reason = 'retry_later' AND a.run_key IS NOT NULL
+      WHERE a.reason IN ('retry_later', 'retry_throttled') AND a.run_key IS NOT NULL
         AND a.received > COALESCE((SELECT accepted_at FROM results r WHERE r.run_key = a.run_key), '')
       GROUP BY a.run_key
     `).all();
-    return rows.filter((r) => Date.parse(r.last) + baseMs * 2 ** Math.min(10, r.n - 1) > t).map((r) => r.run_key);
+    return rows.filter((r) => Date.parse(r.last) + Math.min(maxMs, baseMs * 2 ** Math.min(10, r.n - 1)) > t).map((r) => r.run_key);
   }
 
   // ---- ingest failures ----

@@ -580,9 +580,12 @@ test('R-ING-03: a full-size bundle of crafted text is judged well inside the tim
 const retryMeta = (skips) => ({ skips });
 const RATE_LIMITED = { stage: 'fetch', reason: 'rate_limited', retryable: true };
 const UPSTREAM = { stage: 'install', reason: 'upstream_unavailable', retryable: true };
+// A retryable skip that is not throttling: bounded by MAX_RETRIES (since R-SUB-04,
+// rate limits and upstream outages have their own time window).
+const START_TIMEOUT = { stage: 'start', reason: 'timeout_start', retryable: true };
 
 test('R-ING-16: a bundle whose every skip is retryable is sent back as retry_later; the retries are bounded', async () => {
-  const bundle = makeBundle({ meta: retryMeta([RATE_LIMITED, UPSTREAM]) });
+  const bundle = makeBundle({ meta: retryMeta([START_TIMEOUT, RATE_LIMITED]) });
   const first = await run({ bundle });
   assert.equal(first.r.outcome, 'rejected');
   assert.equal(first.r.reason, 'retry_later');
@@ -610,4 +613,42 @@ test('R-ING-16: one skip that is not retryable, or no skips at all, is accepted 
   // A retryable skip never outranks a real problem.
   const bad = await run({ bundle: makeBundle({ meta: retryMeta([RATE_LIMITED]), identity: { fence: 6 } }) });
   assert.equal(bad.r.reason, 'fence_mismatch');
+});
+
+test('R-SUB-04: a throttled bundle is sent back as retry_throttled, not counted towards MAX_RETRIES, for up to the retry window', async () => {
+  const bundle = makeBundle({ meta: retryMeta([RATE_LIMITED, UPSTREAM]) });
+  const first = await run({ bundle });
+  assert.equal(first.r.outcome, 'rejected');
+  assert.equal(first.r.reason, 'retry_throttled');
+  assert.deepEqual(first.ledger.records.map((x) => [x.outcome, x.reason]), [['rejected', 'retry_throttled']]);
+  assert.deepEqual(json(first.r.outputs.get('rejected/att-1/0/ingest.json')).retries, { throttled_before: 0, throttled_since: null, window_ms: 7 * 86_400_000 });
+
+  // Earlier retry_later decisions and many throttled ones do not end it while the window is open.
+  const sixDays = new Date(NOW().getTime() - 6 * 86_400_000).toISOString();
+  const later = await run({ bundle, ledger: fakeLedger([expectedRow({ retries: 5, throttled: 20, throttled_since: sixDays })]) });
+  assert.equal(later.r.reason, 'retry_throttled');
+  assert.match(json(later.r.outputs.get('rejected/att-1/0/ingest.json')).problems[0].detail, /throttled retry 21/);
+
+  // Seven days after the first throttled retry it is kept as it is: accepted, with its skips.
+  const eightDays = new Date(NOW().getTime() - 8 * 86_400_000).toISOString();
+  const kept = await run({ bundle, ledger: fakeLedger([expectedRow({ retries: 0, throttled: 30, throttled_since: eightDays })]) });
+  assert.equal(kept.r.outcome, 'accepted');
+  assert.equal(json(kept.r.outputs.get('accepted/att-1/0/ingest.json')).retries.exhausted, true);
+
+  // A retryable skip that is not throttling still goes through the count cap.
+  const capped = await run({ bundle: makeBundle({ meta: retryMeta([START_TIMEOUT]) }), ledger: fakeLedger([expectedRow({ retries: 3, throttled: 9, throttled_since: sixDays })]) });
+  assert.equal(capped.r.outcome, 'accepted');
+});
+
+test('R-SUB-06: an accepted bundle with skips and no records is recorded with result outcome skips_only', async () => {
+  const files = defaultFiles();
+  delete files['observations/check.ndjson'];
+  const only = await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'scan', reason: 'no_runnable_artifact' }]), files }) });
+  assert.equal(only.r.outcome, 'accepted');
+  assert.equal(only.ledger.records[0].resultOutcome, 'skips_only');
+  // Records, or no skips at all, are an ordinary result.
+  const measured = await run({ bundle: makeBundle({ meta: retryMeta([{ stage: 'scan', reason: 'no_runnable_artifact' }]) }) });
+  assert.equal(measured.ledger.records[0].resultOutcome, undefined);
+  const empty = await run({ bundle: makeBundle({ files }) });
+  assert.equal(empty.ledger.records[0].resultOutcome, undefined);
 });

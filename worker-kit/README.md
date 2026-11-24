@@ -93,8 +93,12 @@ action for it:
   lease and slot are freed and the pump sends it out again after a backoff
   (30, 60, then 120 minutes, `retry_backoff_minutes` in `pump/tiers.json`).
   After three `retry_later` decisions for the same run_key, the next such
-  bundle is accepted with its skips. A bundle with at least one skip that is
-  not retryable is judged as before.
+  bundle is accepted with its skips. When every skip is `rate_limited` or
+  `upstream_unavailable`, the item is rejected as `retry_throttled` instead:
+  those do not count towards the three, and the item is sent out again
+  (backoff capped at 6 hours) for up to 7 days after its first throttled
+  retry. A bundle with at least one skip that is not retryable is judged as
+  before.
 - `controls[].kind` is `known_good`, `known_bad`, `malicious`,
   `protocol_variant` or `forgery`; `expected` and `observed` are short labels
   such as `contained` (lower case letters, digits, `_`). Ingest rejects the bundle unless every

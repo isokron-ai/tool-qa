@@ -8,6 +8,10 @@
 //                  says what moved compared with the last result for the pair:
 //                  nothing yet, the subject's SHA or digest, or our tool, oracle,
 //                  probe, image or settings versions.
+//   skips_only     the last result was accepted but held only skips and no
+//                  records (nothing was measured) and is older than
+//                  skips_only_max_age_days (R-SUB-06), sooner than the
+//                  tier's max age.
 //   change_event   a change event (release, new SHA, advisory) arrived after the
 //                  pair's last result.
 //   stale          the last result is older than the tier's max age for the
@@ -22,8 +26,9 @@
 // Retired subjects (no longer in their source list, pump/subjects.mjs), pairs
 // whose tier says `never`, pairs already in flight, pairs on a disabled
 // workflow, run_keys parked after too many rejections, and run_keys sent back
-// as retry_later that are still in their backoff (retry_backoff_minutes in
-// pump/tiers.json, doubled for each retry) are skipped. A tier
+// as retry_later or retry_throttled that are still in their backoff
+// (retry_backoff_minutes in pump/tiers.json, doubled for each retry, at most
+// retry_backoff_max_minutes) are skipped. A tier
 // cell in `sample` mode is due only through a sampling hook.
 //
 // computeDue() is pure. dueFromState() reads its inputs from the state store.
@@ -117,7 +122,7 @@ function whyNoResult(fields, last) {
  * @param {{id:string, tier:number, sha?:string, artifact_digest?:string, changed_at?:string, retired_at?:string}[]} input.subjects
  * @param {Record<string, object>} input.workflows  name -> workflow config (pump/workflows.json)
  * @param {object} input.tiers  parsed pump/tiers.json
- * @param {Map<string, {run_key:string, accepted_at:string, fields:object}>} input.lastResults
+ * @param {Map<string, {run_key:string, accepted_at:string, outcome?:string, fields:object}>} input.lastResults
  *        "<subject>\0<workflow>" -> newest accepted result for the pair
  * @param {Set<string>} input.resultKeys  run_keys that have an accepted result
  * @param {Set<string>} input.inFlight    "<subject>\0<workflow>" pairs with a live dispatch
@@ -158,6 +163,10 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
         if (reasons.length === 0 && last && maxAge !== null && now - toMs(last.accepted_at) > maxAge * DAY_MS) {
           reasons.push('stale');
         }
+        const skipsDays = Number(tiers.skips_only_max_age_days);
+        if (reasons.length === 0 && last?.outcome === 'skips_only' && Number.isFinite(skipsDays) && now - toMs(last.accepted_at) > skipsDays * DAY_MS) {
+          reasons.push('skips_only');
+        }
       }
       if (h.leadReverify(s, name, ctx)) reasons.push('lead_reverify');
       if (h.determinism(s, name, ctx)) reasons.push('determinism_sample');
@@ -191,14 +200,16 @@ export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
     const prev = lastResults.get(pk);
     if (prev && prev.accepted_at >= r.accepted_at) continue;
     const rk = db.getRunKey(r.run_key);
-    lastResults.set(pk, { run_key: r.run_key, accepted_at: r.accepted_at, fields: rk ? JSON.parse(rk.fields) : {} });
+    lastResults.set(pk, { run_key: r.run_key, accepted_at: r.accepted_at, outcome: r.outcome ?? null, fields: rk ? JSON.parse(rk.fields) : {} });
   }
   const inFlight = new Set(db.inFlight({ now }).map((p) => pairKey(p.subject, p.workflow)));
   const maxRejections = Number.isInteger(tiers.max_rejections) && tiers.max_rejections > 0 ? tiers.max_rejections : 3;
   const parked = new Set(db.rejectedRunKeys(maxRejections).map((r) => r.run_key));
   const backoff = Number(tiers.retry_backoff_minutes);
   const baseMs = (Number.isFinite(backoff) && backoff >= 0 ? backoff : 30) * 60_000;
-  if (typeof db.retryLaterWaiting === 'function') for (const k of db.retryLaterWaiting({ now, baseMs })) parked.add(k);
+  const cap = Number(tiers.retry_backoff_max_minutes);
+  const maxMs = Number.isFinite(cap) && cap > 0 ? cap * 60_000 : Infinity;
+  if (typeof db.retryLaterWaiting === 'function') for (const k of db.retryLaterWaiting({ now, baseMs, maxMs })) parked.add(k);
   return { now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, hooks };
 }
 

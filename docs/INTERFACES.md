@@ -186,7 +186,14 @@ such attempt: `attempt_id`, `workflow`, `repo`, `workflow_file` (a path under
 item in dispatch order:
 `{ index, run_key, fence, subject, current_fence, outcome, resolved }`.
 `retries` is the number of `retry_later` decisions for the item's run_key
-since its last accepted result (`db.retryLaterCount(runKey)`).
+since its last accepted result (`db.retryLaterCount(runKey)`); `throttled` and
+`throttled_since` are the number and first time of its `retry_throttled`
+decisions since then (`db.retryThrottled(runKey)`).
+
+`recordResult` also takes `resultOutcome`, what the results row stores as its
+outcome when the result is accepted (default: `outcome`). Ingest passes
+`skips_only` for a bundle with skips and no observation records; the due list
+looks at such a result again after `skips_only_max_age_days` (R-SUB-06).
 
 `index` is the item's 0-based position in the `items` input the worker got,
 which names its result artifact; `current_fence` is the fence of the
@@ -250,7 +257,8 @@ an earlier rejection into an acceptance.
 | `stale_fence` | A newer lease exists; the work was sent out again. | no |
 | `lease_expired`, `lease_released`, `no_lease`, `unknown_fence`, `holder_mismatch` | The lease is not live any more. | yes |
 | `run_sha_mismatch` | The worker run was at another commit than the one recorded at dispatch: the worker branch moved between the pump reading it and GitHub starting the run, or someone else's run took the shard's run name. The work is due again. | no |
-| `retry_later` | Every skip in the bundle is retryable (a rate limit, an upstream outage): the item is sent out again after a backoff (`retry_backoff_minutes` in `pump/tiers.json`, doubled for each retry), at most three times per run_key, then the bundle is accepted with its skips. | no |
+| `retry_later` | Every skip in the bundle is retryable (a rate limit, an upstream outage): the item is sent out again after a backoff (`retry_backoff_minutes` in `pump/tiers.json`, doubled for each retry), at most three times per run_key, then the bundle is accepted with its skips. Since R-SUB-04 this is for retryable skips other than rate limits and upstream outages. | no |
+| `retry_throttled` | Every skip in the bundle is a retryable `rate_limited` or `upstream_unavailable`: the item is sent out again after the same backoff, capped at `retry_backoff_max_minutes`, for as long as 7 days after its run_key's first throttled retry (ingest `RETRY_WINDOW_MS`); not counted towards the three retries. Then the bundle is accepted with its skips. | no |
 | ingest's `reason`, or `rejected_by_ingest` | Ingest rejected the result. | yes |
 
 Every call is kept as an attempt, accepted or not; a rejected result never

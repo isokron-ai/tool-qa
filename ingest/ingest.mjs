@@ -34,7 +34,11 @@
 //                only counted
 //   9. retry     a bundle that passed but whose every skip is retryable is
 //                rejected as retry_later, at most MAX_RETRIES times per run_key;
-//                after that it is accepted as skipped
+//                after that it is accepted as skipped. When every skip is a
+//                rate limit or an upstream outage it is rejected as
+//                retry_throttled instead: not counted towards MAX_RETRIES, and
+//                sent back for as long as RETRY_WINDOW_MS since the run_key's
+//                first throttled retry (R-SUB-04)
 //
 // Steps 5 to 8 run in a worker thread with a time and memory limit
 // (analyze.mjs): past the limit the item is rejected as ingest_timeout, a
@@ -87,6 +91,15 @@ export const REPORT_SCHEMA_VERSION = 1;
  * each retry (pump/due.mjs), so three retries span a few hours.
  */
 export const MAX_RETRIES = 3;
+/**
+ * How long an item whose every skip is a retryable rate limit or upstream
+ * outage keeps being sent back (retry_throttled), counted from its run_key's
+ * first throttled retry since its last accepted result (R-SUB-04). The pump's
+ * backoff is capped (retry_backoff_max_minutes in pump/tiers.json), so this is
+ * many tries, and honest throttling never turns into a gap of a whole tier
+ * max age.
+ */
+export const RETRY_WINDOW_MS = 7 * 86_400_000;
 // The size caps live in the result contract (worker-kit/contract.mjs).
 export { MAX_ARTIFACT_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES };
 export const OUTCOME_DIRS = Object.freeze({ accepted: 'accepted', rejected: 'rejected', quarantined: 'quarantine' });
@@ -146,7 +159,7 @@ export async function openAttempt(input, deps) {
   const {
     ledger, github, decrypt, registry, now = () => new Date(), allowNoControls = false,
     maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES,
-    analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS, maxRetries = MAX_RETRIES,
+    analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS, maxRetries = MAX_RETRIES, retryWindowMs = RETRY_WINDOW_MS,
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
 
@@ -241,6 +254,7 @@ export async function openAttempt(input, deps) {
     let ciphertext = null;
     let manifestBytes = null;
     let files = null;
+    let resultOutcome = null; // 'skips_only' for an accepted result with skips and no records (R-SUB-06)
 
     // `total` is the number of problems before `problems` was capped.
     async function finish(outcome, reason, problems = [], total = problems.length) {
@@ -248,6 +262,7 @@ export async function openAttempt(input, deps) {
       const extra = total - problems.length;
       const wantedRecord = {
         run_key: item.run_key, attempt_id: row.attempt_id, fence: item.fence, outcome, accepted: outcome === 'accepted', reason,
+        ...(outcome === 'accepted' && resultOutcome ? { resultOutcome } : {}),
       };
       const answer = (await ledger.recordResult(wantedRecord)) ?? { accepted: wantedRecord.accepted, reason };
       const recorded = { accepted: answer.accepted === true, reason: typeof answer.reason === 'string' ? answer.reason : null };
@@ -383,9 +398,20 @@ export async function openAttempt(input, deps) {
     const a = verdict.result;
     Object.assign(report, a.report);
     if (a.outcome !== 'accepted') return finish(a.outcome, a.reason, a.problems, a.problemsTotal);
-    if (a.retryable === true) {
+    if (a.retryable === true && a.throttled === true) {
+      // Throttled (R-SUB-04): not counted towards maxRetries; sent back while
+      // the run_key's first throttled retry is within the window.
+      const since = item.throttled_since ? Date.parse(item.throttled_since) : null;
+      const elapsed = since === null ? 0 : now().getTime() - since;
+      report.retries = { throttled_before: item.throttled ?? 0, throttled_since: item.throttled_since ?? null, window_ms: retryWindowMs };
+      if (!(elapsed >= retryWindowMs)) {
+        return reject('retry_throttled', [{ reason: 'retry_throttled', detail: `every skip is a rate limit or an upstream outage; throttled retry ${(item.throttled ?? 0) + 1}, within ${Math.round(retryWindowMs / 3_600_000)} h of the first` }]);
+      }
+      report.retries.exhausted = true;
+    } else if (a.retryable === true) {
       // Nothing ran that could not run later: send it back, a bounded number
-      // of times (the ledger counts earlier retry_later decisions per run_key).
+      // of times (the ledger counts earlier retry_later decisions per run_key;
+      // retry_throttled ones are not counted).
       const used = Number.isSafeInteger(item.retries) && item.retries > 0 ? item.retries : 0;
       report.retries = { before: used, max: maxRetries };
       if (used < maxRetries) {
@@ -398,6 +424,9 @@ export async function openAttempt(input, deps) {
     } catch (err) {
       return reject('ingest_error', [{ reason: 'ingest_error', detail: `reading the accepted bundle failed: ${errorText(err)}` }]);
     }
+    // Skips and no records: nothing was measured. The due list looks again
+    // after skips_only_max_age_days (pump/tiers.json), not the tier max age.
+    if (Number(report.bundle?.skips) > 0 && Number(report.observations?.records) === 0) resultOutcome = 'skips_only';
     return finish('accepted', null);
   }
 
@@ -437,6 +466,7 @@ function checkRun(run, row, seen) {
  * @param {number} [deps.maxBundleBytes]
  * @param {number} [deps.maxFileBytes]
  * @param {number} [deps.maxRetries]  retry_later decisions per run_key before a retryable bundle is kept
+ * @param {number} [deps.retryWindowMs]  how long a throttled bundle keeps being sent back (retry_throttled)
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
  *   outcome and reason are the items' own when they all agree; otherwise outcome

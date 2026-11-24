@@ -256,10 +256,22 @@ run, inside the pump (the one writer), before the first tick. The log line is
   kind `github`, source `seed-v1` (set when the subject is first seen), and a
   tier. The commit SHA is left empty: the scan-static worker reads the head of
   the default branch itself. A SHA or digest set by another writer is kept.
-- **A seed that cannot be read or is malformed** (duplicate id, an id that is
-  not `owner/name`, an unknown population) is refused whole. Nothing is
-  written, the subjects already in the state stay, and the run fails (red)
-  with `pump: subjects: seed not loaded, ...`.
+- **A seed that cannot be read or is malformed** (no `size`, a `size` that
+  does not match, a duplicate id, an id that is not `owner/name`, an unknown
+  population) is refused whole. So is a state error during the load. Nothing
+  is written, the subjects already in the state stay, and the run fails (red)
+  with `pump: subjects: seed not loaded, ...`. kv `subjects.seed` records the
+  path actually loaded (`file`).
+- **Shrink guard (R-SUB-03).** A seed that would retire more than 10% of the
+  active seed subjects is refused the same way (`... would retire N of M
+  active seed subjects ...`), so a truncated or wrong file cannot retire
+  nearly everything. To retire more on purpose, set the one-shot override
+  `subjects.seed.allow_retire` to `true` in kv: switch the pump off
+  (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going, pull the
+  state, run
+  `node -e "import('./state/db.mjs').then(({openState})=>{const d=openState('state/state.sqlite');d.setKv('subjects.seed.allow_retire',true);d.close()})"`,
+  push it, and switch the pump back on. The load that uses it clears it and
+  says so in its log line.
 
 **Tiers.** From the seed's own population labels:
 
@@ -282,6 +294,26 @@ applies to a subject with no SHA and no digest: 1 day for T0, then 7, 14, 30
 and 90 days for T1 to T4. Without it, T0 would never be scanned again after
 its first result. A new tool version in `pump/workflows.json` still makes
 every subject due at once.
+
+**Skips only (R-SUB-06).** An accepted result whose bundle held skips and no
+observation records measured nothing. It is stored with outcome `skips_only`
+and is due again after `skips_only_max_age_days` (1 day, reason `skips_only`)
+instead of the tier max age (up to 30 days).
+
+**Throttling (R-SUB-04).** A result whose every skip is a retryable
+`rate_limited` or `upstream_unavailable` is sent back as `retry_throttled`.
+It does not use up the three `retry_later` retries: it is sent out again
+after the usual backoff, capped at `retry_backoff_max_minutes` (6 hours), for
+up to 7 days after the run_key's first throttled retry. Only then is it kept
+as a skip.
+
+**Before switching on a lane that runs third-party code.** In
+`pump/tiers.json`, `live-probe` is `always` for every tier, T0 to T4 (and
+`build-probe` is `always` for T0 to T2, `writecheck` for T0 and T1). The seed's 977
+sample subjects would all be due for it at once. Before any lane that runs
+third-party code is switched on, review its tier cells (mode and max age) for
+the subjects actually loaded, and change them in the same reviewed PR as the
+switch.
 
 **Leaving the seed.** A subject removed from a later seed is not deleted; its
 results and history stay. It is marked retired (`subjects.retired_at`), the

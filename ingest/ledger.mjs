@@ -73,7 +73,15 @@ function normalizeItem(it, position, bad) {
   const retriesRaw = pick(it, 'retries');
   const retries = retriesRaw === undefined || retriesRaw === null ? 0 : toInt(retriesRaw);
   if (!(retries >= 0)) bad('retries');
-  return { index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries };
+  const throttledRaw = pick(it, 'throttled');
+  const throttled = throttledRaw === undefined || throttledRaw === null ? 0 : toInt(throttledRaw);
+  if (!(throttled >= 0)) bad('throttled');
+  const since = pick(it, 'throttled_since') ?? null;
+  if (since !== null && (typeof since !== 'string' || !Number.isFinite(Date.parse(since)))) bad('throttled_since');
+  return {
+    index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries,
+    throttled, throttled_since: since,
+  };
 }
 
 /**
