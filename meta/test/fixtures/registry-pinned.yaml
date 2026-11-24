@@ -15,10 +15,13 @@
 #   class      publish class, explained below
 #   redaction  null, or a list of redaction rule ids (R1 to R4) applied before
 #              the value is stored
-#   status     planned: not written by any merged worker or ingest yet
-#              active: written today by a merged worker (scan-static,
-#                live-probe, meta-github, meta-registry) or by tool-qa ingest
-#              deprecated: no longer written; ingest refuses it
+#   status     planned: not emitted by any merged worker code or by ingest yet
+#              active: emitted by merged worker code (scan-static, live-probe,
+#                meta-github, meta-registry) or set by tool-qa ingest. The lane
+#                may be disabled: which lanes the live loop runs is in tool-qa
+#                pump/workflows.json (`enabled`), not here, so "active" does
+#                not mean collected today
+#              deprecated: no longer emitted; ingest refuses it
 #
 # Publish classes, in plain words
 #   P    Public for each server, automatically, once the release checks and the
