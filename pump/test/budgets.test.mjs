@@ -6,7 +6,7 @@ import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
 
 const headers = (h) => new Headers(h);
 
-test('default families cover dispatch, artifacts, contents, issues, graphql and search within 2,500/h', () => {
+test('R-ING-27: default families cover dispatch, artifacts, contents, issues, graphql and search within 2,500/h, with 1,200 artifact calls an hour', () => {
   for (const f of ['dispatch', 'actions', 'artifacts', 'contents', 'issues', 'graphql', 'search', 'auth']) assert.ok(DEFAULT_FAMILIES[f], f);
   const b = new ApiBudget();
   assert.equal(b.totalPerHour, 2500);
