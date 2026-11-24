@@ -548,9 +548,13 @@ It writes the state, so **pause the pump first**:
 
 The ingest job runs in the `pump` concurrency group, so it never overlaps a
 pump run. GitHub keeps at most one waiting run per group and cancels the older
-one when another queues, so run one attempt at a time, and run it again if it
-shows as cancelled (a scheduled pump run, which stops at once while the lane is
-off, can take its place).
+one when another queues. The pump's schedule queues a run every 30 minutes,
+even while its lane is off (that run then stops at once), so a re-ingest that
+is still waiting when it fires is cancelled: **if the ingest job shows as
+cancelled, run the workflow again.** Run one attempt at a time. Once the job
+holds the group it checks the kill switches and the pump lane again (they may
+have changed while it waited) and stops, red and having judged nothing, if
+the loop or the ingest lane is now off or the pump is back on.
 
 | Name | Kind | Where | Needed |
 |---|---|---|---|

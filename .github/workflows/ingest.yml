@@ -1,7 +1,14 @@
 name: ingest
 
 # Manual re-ingest: judge one worker attempt by hand and record the decision in
-# the loop state. The pump ingests every finished worker run itself, inline in
+# the loop state.
+#
+# The ingest job waits in the `pump` concurrency group, and only one run may
+# wait there: a scheduled pump run (every 30 minutes, even while the pump lane
+# is off) that arrives meanwhile replaces this waiting job, which then shows as
+# cancelled. If that happens, run this workflow again. Once the job holds the
+# group it checks the kill switch and the pump lane again, since either may
+# have changed while it waited. The pump ingests every finished worker run itself, inline in
 # each tick, and is the only state writer while it runs; this workflow is for
 # an attempt the pump did not judge (for example one it gave up on). Pause the
 # pump first (LANE_PUMP_ENABLED=false) and wait for its last run to finish;
@@ -78,6 +85,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The guard job ran before this job waited for the `pump` group. Check
+      # again now that it holds the group (R-ING-13).
+      - name: Kill switch, again after waiting
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_INGEST_ENABLED: ${{ vars.LANE_INGEST_ENABLED }}
+          LANE_PUMP_ENABLED: ${{ vars.LANE_PUMP_ENABLED }}
+        run: |
+          node scripts/guard.mjs --job ingest --no-slots
+          proceed="$(sed -n 's/^proceed=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+          if [ "$proceed" != "true" ]; then
+            echo "::error title=ingest::the loop or the ingest lane was switched off while this run waited; nothing was judged"
+            exit 1
+          fi
+          if [ -z "$LANE_PUMP_ENABLED" ] || [ "$LANE_PUMP_ENABLED" = "true" ]; then
+            echo "::error title=ingest::the pump was switched back on while this run waited; it is the only state writer, so nothing was judged. Pause it again and re-run"
+            exit 1
+          fi
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
