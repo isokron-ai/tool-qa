@@ -866,7 +866,7 @@ use the one test (`isEnabled` in `pump/due.mjs`), and the pump refuses to load
 `pump/workflows.json` when `enabled` or `runs_untrusted` is not a real boolean.
 Which lanes are trusted is pinned by a test (`R-WD-04`), so changing a flag
 needs that test changed and a review. Source-only workflows (`scan-static`,
-`meta-github`, `meta-registry`) keep running. The run logs `pump: sandbox
+`meta-github`, `meta-registry`, `release-diff`) keep running. The run logs `pump: sandbox
 breaker open (<reason>): not dispatching <lanes>: <why>` once, keeps what it
 saw as `pump.breaker` in the state (and in `pump.last_tick`), and does not
 fail. Work already dispatched is not recalled; each such job runs the sandbox

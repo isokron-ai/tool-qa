@@ -9,10 +9,10 @@ const HOUR = 3_600_000;
 const NOW = Date.parse('2026-11-24T12:00:00Z');
 const workflows = JSON.parse(readFileSync(new URL('../workflows.json', import.meta.url), 'utf8')).workflows;
 
-test('R-WD-01: workflows.json marks every lane: live-probe, writecheck, build-probe and scan-deep run third-party code; scan-static and meta-* do not', () => {
+test('R-WD-01: workflows.json marks every lane: live-probe, writecheck, build-probe and scan-deep run third-party code; scan-static, meta-* and release-diff do not', () => {
   for (const [name, wf] of Object.entries(workflows)) assert.equal(typeof wf.runs_untrusted, 'boolean', `${name} says runs_untrusted`);
   assert.deepEqual(untrustedWorkflows(workflows), ['build-probe', 'live-probe', 'scan-deep', 'writecheck']);
-  assert.deepEqual(Object.keys(allowedWorkflows(workflows, { tripped: true })).sort(), ['meta-github', 'meta-registry', 'scan-static']);
+  assert.deepEqual(Object.keys(allowedWorkflows(workflows, { tripped: true })).sort(), ['meta-github', 'meta-registry', 'release-diff', 'scan-static']);
   assert.equal(allowedWorkflows(workflows, { tripped: false }), workflows);
   assert.equal(runsUntrusted({}), true, 'unsaid is untrusted');
   assert.equal(runsUntrusted({ runs_untrusted: 'false' }), true, 'only the boolean false is trusted');
@@ -119,9 +119,10 @@ test('R-WD-02: one isEnabled everywhere: only enabled === true dispatches; loadC
   assert.throws(() => loadConfig({ workflowsPath: f }), /pump\/workflows\.json: a: enabled must be true or false/);
 });
 
-test('R-WD-04: the trusted set is pinned: exactly scan-static, meta-github and meta-registry say runs_untrusted false', () => {
+test('R-WD-04: the trusted set is pinned: exactly scan-static, meta-github, meta-registry and release-diff say runs_untrusted false', () => {
   const trusted = Object.entries(workflows).filter(([, wf]) => wf.runs_untrusted === false).map(([n]) => n).sort();
-  assert.deepEqual(trusted, ['meta-github', 'meta-registry', 'scan-static'], 'changing a lane to trusted needs this test changed, and review');
+  // release-diff reads package archives and source archives as data with our own readers; nothing from them runs.
+  assert.deepEqual(trusted, ['meta-github', 'meta-registry', 'release-diff', 'scan-static'], 'changing a lane to trusted needs this test changed, and review');
   for (const n of untrustedWorkflows(workflows)) assert.ok('sandbox_sha' in workflows[n], `${n} names the sandbox commit it pins (null until it does)`);
 });
 

@@ -72,22 +72,28 @@ export function createCache({ path = null, now = () => Date.now() } = {}) {
 }
 
 /**
- * Read a response body as text, at most `max` bytes. A larger body (by its
+ * Read a response body as bytes, at most `max` bytes. A larger body (by its
  * Content-Length, or once the stream passes the cap) is cancelled and throws
  * FetchProblem too_large; nothing past the cap is held in memory.
  */
-export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
+export async function readBytesCapped(res, max = MAX_BODY_BYTES, where = '') {
   const declared = Number(res.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > max) {
     await res.body?.cancel?.().catch(() => {});
     throw new FetchProblem('too_large', `${where}: the answer is ${declared} bytes, over the ${max}-byte cap`);
   }
-  if (!res.body) return '';
+  if (!res.body) return Buffer.alloc(0);
   const reader = res.body.getReader();
   const chunks = [];
   let total = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    let step;
+    try {
+      step = await reader.read();
+    } catch (err) {
+      throw new FetchProblem('upstream_unavailable', `${where}: the answer stopped (${err?.name === 'TimeoutError' || err?.name === 'AbortError' ? 'timed out' : 'network error'})`);
+    }
+    const { done, value } = step;
     if (done) break;
     total += value.byteLength;
     if (total > max) {
@@ -96,7 +102,14 @@ export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+}
+
+/**
+ * Read a response body as text, at most `max` bytes (readBytesCapped).
+ */
+export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
+  return (await readBytesCapped(res, max, where)).toString('utf8');
 }
 
 /** readCapped, parsed as JSON; a body that is not JSON is upstream_unavailable. */
@@ -156,11 +169,15 @@ export function createHttp({
 
   /**
    * One request with retries. Returns { status, headers, text() , json() }.
-   * `redirect: 'manual'` returns a 3xx as it is, so a request never leaves its host (the OCI reads).
+   * `redirect` is passed to fetch ('follow' by default). 'manual' returns a 3xx as it is,
+   * so a request never leaves its host (the OCI reads, release-diff's allowed hosts).
+   * `timeoutMs` overrides the per-request time limit (it covers reading the body too);
+   * `retries` overrides the extra tries (0 for a long download: a retry would double the wait).
    * Throws FetchProblem for a rate limit or an outage that outlasts the retries.
    */
-  async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck, redirect = 'follow' } = {}) {
+  async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck, redirect = 'follow', timeoutMs: callTimeoutMs, retries: callRetries } = {}) {
     const host = hostOf(url);
+    const maxRetries = callRetries ?? retries;
     for (let attempt = 0; ; attempt++) {
       await pace(host);
       stats.requests++;
@@ -172,17 +189,17 @@ export function createHttp({
           body,
           redirect,
           headers: { 'user-agent': USER_AGENT, ...headers },
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: AbortSignal.timeout(callTimeoutMs ?? timeoutMs),
         });
       } catch (err) {
-        if (attempt < retries) { stats.retries++; await sleep(1000 * 2 ** attempt); continue; }
+        if (attempt < maxRetries) { stats.retries++; await sleep(1000 * 2 ** attempt); continue; }
         throw new FetchProblem('upstream_unavailable', `${host}: ${err?.name === 'TimeoutError' ? 'timed out' : 'network error'}`);
       }
       const limited = res.status === 429 || (rateLimitCheck ? rateLimitCheck(res) : false);
       if (limited || res.status >= 500) {
         const ra = Number(res.headers.get('retry-after'));
         const waitMs = Number.isFinite(ra) && ra >= 0 ? ra * 1000 : 1000 * 2 ** attempt;
-        if (attempt < retries && waitMs <= maxRetryWaitMs) { stats.retries++; await sleep(waitMs); continue; }
+        if (attempt < maxRetries && waitMs <= maxRetryWaitMs) { stats.retries++; await sleep(waitMs); continue; }
         await res.body?.cancel?.().catch(() => {});
         throw new FetchProblem(limited ? 'rate_limited' : 'upstream_unavailable', `${host}: HTTP ${res.status}`, { status: res.status, retryAfterMs: Number.isFinite(ra) ? ra * 1000 : null });
       }
@@ -207,13 +224,13 @@ export function createHttp({
     return memo.get(key);
   }
 
-  async function fetchSummary(url, { extract, version, headers = {}, rateLimitCheck, parse = 'json', cacheKey = url, onResponse } = {}) {
+  async function fetchSummary(url, { extract, version, headers = {}, rateLimitCheck, parse = 'json', cacheKey = url, onResponse, redirect = 'follow' } = {}) {
     const hit = cache.get(cacheKey);
     const usable = hit && hit.v === version;
     const h = { ...headers };
     if (usable && hit.etag) h['if-none-match'] = hit.etag;
     else if (usable && hit.last_modified) h['if-modified-since'] = hit.last_modified;
-    const res = await request(url, { headers: h, rateLimitCheck });
+    const res = await request(url, { headers: h, rateLimitCheck, redirect });
     if (onResponse) onResponse(res);
     if (res.status === 304 && usable) {
       stats.not_modified++;

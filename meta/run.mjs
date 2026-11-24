@@ -2,7 +2,7 @@
 // Worker of the metadata lanes: one shard of subjects in, one bundle
 // directory per item out, ready for the worker kit.
 //
-//   node meta/run.mjs <meta-github|meta-registry> <out-dir>
+//   node meta/run.mjs <meta-github|meta-registry|release-diff> <out-dir>
 //
 // Environment:
 //   SHARD_ID, ATTEMPT_ID, ITEMS   the dispatch inputs (docs/INTERFACES.md)
@@ -117,10 +117,10 @@ export async function runShard({
       o = { records: [], skips: [{ stage: 'known_answer', reason: known.unavailable, retryable: true }], stages: { known_answer: known.unavailable }, sha: null };
       outcome = 'known_answer_unavailable';
     } else if (!item.repo) {
-      o = { records: [], skips: [{ stage: 'collect', reason: 'policy_excluded' }], stages: { collect: 'not_a_github_repository' }, sha: null };
+      o = { records: [], skips: [lane.runSkips?.notGithub ?? { stage: 'collect', reason: 'policy_excluded' }], stages: { collect: 'not_a_github_repository' }, sha: null };
       outcome = 'not_a_github_repository';
     } else if (!results.has(item.repo)) {
-      o = { records: [], skips: [{ stage: 'collect', reason: 'upstream_unavailable', retryable: true }], stages: { collect: 'shard_deadline' }, sha: null };
+      o = { records: [], skips: [lane.runSkips?.deadline ?? { stage: 'collect', reason: 'upstream_unavailable', retryable: true }], stages: { collect: 'shard_deadline' }, sha: null };
       outcome = 'shard_deadline';
     } else {
       o = results.get(item.repo);
@@ -162,8 +162,8 @@ export async function runShard({
 
 export async function main(argv = process.argv.slice(2), env = process.env, io = {}) {
   const write = io.write ?? ((s) => process.stdout.write(s));
-  if (argv.length !== 2 || !['meta-github', 'meta-registry'].includes(argv[0])) {
-    write('usage: node meta/run.mjs <meta-github|meta-registry> <out-dir>\n');
+  if (argv.length !== 2 || !['meta-github', 'meta-registry', 'release-diff'].includes(argv[0])) {
+    write('usage: node meta/run.mjs <meta-github|meta-registry|release-diff> <out-dir>\n');
     return 2;
   }
   const [laneName, out] = argv;

@@ -16,7 +16,7 @@ switched on yet, so there is no scanning yet.**
 
 | Where | What | Runs target code? |
 |---|---|---|
-| this repo (`tool-qa`) | Orchestration: history capture, the due list, leases, the slot ledger, the state store, collection and checks of results, loop health. Also the two metadata workers, `meta-github` and `meta-registry` ([meta/](meta/README.md)), which read public metadata only | No, never |
+| this repo (`tool-qa`) | Orchestration: history capture, the due list, leases, the slot ledger, the state store, collection and checks of results, loop health. Also the two metadata workers, `meta-github` and `meta-registry`, which read public metadata only, and `release-diff`, which compares published npm and PyPI packages with their source as data ([meta/](meta/README.md)) | No, never |
 | our tool repos (for example `mcp-check`) | Workers: each tool runs against servers inside its own repo, as that tool's regression suite. Started only by dispatch from this repo | Yes, sandboxed |
 | `mcp-results` | Published data (later phase) | No |
 

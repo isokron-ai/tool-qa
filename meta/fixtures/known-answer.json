@@ -1,5 +1,5 @@
 {
- "about": "Known answers for the metadata lanes' known-answer control (meta/controls.mjs): facts about our own repository that do not change (ids, creation times, first published versions), or only grow (release count). exact: equal; at_least: a number no smaller; contains: these elements are in the observed list. meta-registry facts come only from entries in the subject owner's own io.github namespace, and only the expected npm package is compared.",
+ "about": "Known answers for the metadata lanes' known-answer control (meta/controls.mjs): facts about our own repository that do not change (ids, creation times, first published versions), or only grow (release count). exact: equal; at_least: a number no smaller; contains: these elements are in the observed list. meta-registry facts come only from entries in the subject owner's own io.github namespace, and only the expected npm package is compared. release-diff names its own subjects and pins the versions it reads, so its facts are those of fixed, immutable releases.",
  "subject": "isokron-ai/mcp-check",
  "meta-github": {
   "exact": {
@@ -33,6 +33,72 @@
      "package": "@isokron/mcp-check",
      "created_at": "2026-11-19T05:55:56Z",
      "repository_matches_subject": true
+    }
+   ]
+  }
+ },
+ "release-diff": {
+  "subjects": [
+   "isokron-ai/mcp-check",
+   "isokron-ai/mcp-write-safety-kits"
+  ],
+  "pins": {
+   "npm:@isokron/mcp-check": "1.3.1",
+   "pypi:mcp-write-safety-kit": "0.1.0"
+  },
+  "contains": {
+   "discovered": [
+    "npm:@isokron/mcp-check",
+    "pypi:mcp-write-safety-kit"
+   ],
+   "artifacts": [
+    {
+     "key": "npm:@isokron/mcp-check@1.3.1:npm_tarball",
+     "outcome": "compared",
+     "linked_by": "provenance",
+     "provenance_verified": true,
+     "provenance_commit": "5e2668aed07efeb61beb2f3761bc3348af2075c3",
+     "tag": "v1.3.1",
+     "tag_match": "exact",
+     "tag_commit": "5e2668aed07efeb61beb2f3761bc3348af2075c3",
+     "basis": "tag",
+     "files": 32,
+     "identical": 32,
+     "unexplained": 0,
+     "findings": [],
+     "held": 0
+    },
+    {
+     "key": "pypi:mcp-write-safety-kit@0.1.0:sdist",
+     "outcome": "compared",
+     "linked_by": "provenance",
+     "provenance_verified": true,
+     "provenance_commit": "45e35044400254a4de121b52f2e2856e765536c2",
+     "tag": "py-v0.1.0",
+     "tag_match": "ecosystem_prefixed",
+     "tag_commit": "45e35044400254a4de121b52f2e2856e765536c2",
+     "basis": "tag",
+     "files": 34,
+     "identical": 27,
+     "unexplained": 0,
+     "findings": [],
+     "held": 0
+    },
+    {
+     "key": "pypi:mcp-write-safety-kit@0.1.0:wheel",
+     "outcome": "compared",
+     "linked_by": "provenance",
+     "provenance_verified": true,
+     "provenance_commit": "45e35044400254a4de121b52f2e2856e765536c2",
+     "tag": "py-v0.1.0",
+     "tag_match": "ecosystem_prefixed",
+     "tag_commit": "45e35044400254a4de121b52f2e2856e765536c2",
+     "basis": "tag",
+     "files": 20,
+     "identical": 13,
+     "unexplained": 0,
+     "findings": [],
+     "held": 0
     }
    ]
   }

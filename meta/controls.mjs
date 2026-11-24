@@ -18,13 +18,15 @@
 //   hold no marker, no identity-shaped key, no identity-shaped text and no
 //   envelope. Contained means upstream data cannot pose as a result.
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 
 import { TEXT_CLAIM_RE } from '../ingest/forgery.mjs';
 import { createCache, createHttp } from './lib/http.mjs';
 import { sanitize } from './lib/common.mjs';
 import { createBudget } from './github.mjs';
+import { writeTar } from '../worker-kit/tar.mjs';
 
 export const CONTROL_FORMAT = 'isokron-tool-qa-meta-control/1';
 export const KNOWN_ANSWER_SUBJECT = 'isokron-ai/mcp-check';
@@ -67,17 +69,23 @@ export function compareFacts(spec, observed) {
  */
 export async function knownAnswerControl(lane, { http, token, budget, spec = loadKnownAnswer() }) {
   const want = spec[lane.name];
-  const subject = spec.subject ?? KNOWN_ANSWER_SUBJECT;
+  // A lane may name its own known-answer subjects and pin the versions it reads (release-diff).
+  const subjects = Array.isArray(want?.subjects) ? want.subjects : [spec.subject ?? KNOWN_ANSWER_SUBJECT];
+  const subject = subjects.length === 1 ? subjects[0] : subjects;
   let observed = null;
   let mismatches;
   let error = null;
   try {
-    const outs = await lane.collect({ http, repos: [subject], token, budget });
-    const o = outs.get(subject);
-    if (!o) throw new Error('the lane returned nothing for the known-answer subject');
-    const passing = lane.factProblem(o, want);
-    if (passing) return { unavailable: passing, control: null, files: {} };
-    observed = lane.facts(o);
+    const outs = await lane.collect({ http, repos: subjects, token, budget, ...(want?.pins ? { pins: want.pins } : {}) });
+    const parts = [];
+    for (const s of subjects) {
+      const o = outs.get(s);
+      if (!o) throw new Error('the lane returned nothing for the known-answer subject');
+      const passing = lane.factProblem(o, want);
+      if (passing) return { unavailable: passing, control: null, files: {} };
+      parts.push(lane.facts(o));
+    }
+    observed = parts.length === 1 ? parts[0] : lane.mergeFacts(parts);
     mismatches = compareFacts(want, observed);
   } catch (err) {
     error = err?.code ?? 'error';
@@ -91,13 +99,32 @@ export async function knownAnswerControl(lane, { http, token, budget, spec = loa
   };
 }
 
-/** A fetch that answers from the forgery fixture: the first route whose prefix the URL starts with. */
+/**
+ * A fetch that answers from the forgery fixture: the first route whose method
+ * and prefix match. A route's body is JSON or text, or one built here after
+ * the marker is in place (so its bytes carry the marker):
+ *   tgz: { "<path>": "<text>" }   a gzip-compressed tar of those files
+ *   pkt_lines: ["<line>", ...]     Git pkt-lines, then a flush
+ * In a text body, __SHA512__<prefix>__ and __SHA256__<prefix>__ become the
+ * digests of the built route with that prefix (npm's integrity, PyPI's sha256).
+ */
 export function fixtureFetch(routes) {
+  const built = new Map();
+  for (const r of routes) {
+    if (r.tgz) built.set(r.prefix, gzipSync(writeTar(Object.entries(r.tgz).map(([path, text]) => ({ path, data: Buffer.from(text) })))));
+    else if (r.pkt_lines) built.set(r.prefix, Buffer.from(r.pkt_lines.map((l) => (Buffer.byteLength(`${l}\n`) + 4).toString(16).padStart(4, '0') + `${l}\n`).join('') + '0000'));
+  }
+  const fill = (text) => text.replace(/__SHA(512|256)__(.+?)__/g, (m, bits, prefix) => {
+    const b = built.get(prefix);
+    if (!b) return m;
+    return bits === '512' ? `sha512-${createHash('sha512').update(b).digest('base64')}` : createHash('sha256').update(b).digest('hex');
+  });
   return async (url, init = {}) => {
     const method = (init.method ?? 'GET').toUpperCase();
     const r = routes.find((x) => (x.method ?? 'GET') === method && url.startsWith(x.prefix));
     if (!r) return new Response('not found', { status: 404 });
-    const body = typeof r.body === 'string' ? r.body : JSON.stringify(r.body);
+    if (built.has(r.prefix)) return new Response(built.get(r.prefix), { status: r.status ?? 200, headers: r.headers ?? { 'content-type': 'application/octet-stream' } });
+    const body = fill(typeof r.body === 'string' ? r.body : JSON.stringify(r.body));
     return new Response(body, { status: r.status ?? 200, headers: r.headers ?? { 'content-type': 'application/json' } });
   };
 }

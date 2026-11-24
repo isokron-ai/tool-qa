@@ -26,6 +26,7 @@
       "live-probe": { "mode": "always", "max_age_days": null, "capture_range_max_age_days": null },
       "meta-github": { "mode": "always", "max_age_days": 1 },
       "meta-registry": { "mode": "always", "max_age_days": 1 },
+      "release-diff": { "mode": "always", "max_age_days": 1 },
       "scan-deep": { "mode": "always", "max_age_days": null },
       "build-probe": { "mode": "always", "max_age_days": null },
       "writecheck": { "mode": "always", "max_age_days": 1 }
@@ -35,6 +36,7 @@
       "live-probe": { "mode": "always", "max_age_days": 7, "capture_range_max_age_days": 30 },
       "meta-github": { "mode": "always", "max_age_days": 7 },
       "meta-registry": { "mode": "always", "max_age_days": 7 },
+      "release-diff": { "mode": "always", "max_age_days": 7 },
       "scan-deep": { "mode": "always", "max_age_days": null },
       "build-probe": { "mode": "always", "max_age_days": null },
       "writecheck": { "mode": "always", "max_age_days": null }
@@ -44,6 +46,7 @@
       "live-probe": { "mode": "always", "max_age_days": 14, "capture_range_max_age_days": 30 },
       "meta-github": { "mode": "always", "max_age_days": 7 },
       "meta-registry": { "mode": "always", "max_age_days": 7 },
+      "release-diff": { "mode": "always", "max_age_days": 14 },
       "scan-deep": { "mode": "always", "max_age_days": null },
       "build-probe": { "mode": "always", "max_age_days": null },
       "writecheck": { "mode": "sample", "max_age_days": null }
@@ -53,6 +56,7 @@
       "live-probe": { "mode": "always", "max_age_days": 30, "capture_range_max_age_days": null },
       "meta-github": { "mode": "always", "max_age_days": 30 },
       "meta-registry": { "mode": "always", "max_age_days": 30 },
+      "release-diff": { "mode": "always", "max_age_days": 30 },
       "scan-deep": { "mode": "sample", "max_age_days": null },
       "build-probe": { "mode": "sample", "max_age_days": null },
       "writecheck": { "mode": "sample", "max_age_days": null }
@@ -62,6 +66,7 @@
       "live-probe": { "mode": "always", "max_age_days": 90, "capture_range_max_age_days": null },
       "meta-github": { "mode": "always", "max_age_days": null },
       "meta-registry": { "mode": "always", "max_age_days": null },
+      "release-diff": { "mode": "always", "max_age_days": 90 },
       "scan-deep": { "mode": "never", "max_age_days": null },
       "build-probe": { "mode": "never", "max_age_days": null },
       "writecheck": { "mode": "never", "max_age_days": null }
