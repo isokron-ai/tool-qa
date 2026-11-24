@@ -51,6 +51,7 @@ import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 import { archiveCheck } from './archive.mjs';
 import { offsiteCheck } from './offsite.mjs';
+import { keepCheck, readKeepStatus } from '../keep/health.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
 
@@ -88,6 +89,7 @@ export function readState(file) {
         'pump.api_budget': db.getKv('pump.api_budget') ?? null,
         'pump.last_run': db.getKv('pump.last_run') ?? null,
         'state.size': db.getKv('state.size') ?? null,
+        'retention.seal': db.getKv('retention.seal') ?? null,
       },
     };
   } finally {
@@ -114,6 +116,7 @@ export async function runWatchdog({
   workerWorkflows,
   loadWorkerConfig = () => loadConfig().workflows,
   readSnapshot,
+  readKeep,
 } = {}) {
   const repo = env.GITHUB_REPOSITORY;
   if (!repo || !repo.includes('/')) throw new Error('GITHUB_REPOSITORY is required (owner/name)');
@@ -215,6 +218,17 @@ export async function runWatchdog({
   // The Mac archive pull's heartbeat, a repository variable passed in by the workflow.
   checks.push(archiveCheck({ now: now(), raw: env.ARCHIVE_LAST_OK }));
   checks.push(await offsiteCheck({ client, repo, now: now(), env, fetch, sleep })); // the off-site backup's heartbeat artifact (watchdog/offsite.mjs)
+  // The keep-forever copy: the status on the "keep-forever" release (keep/health.mjs).
+  {
+    let keep;
+    try {
+      keep = await (readKeep ?? (() => readKeepStatus(createReleaseClient({ repo, token: env.GITHUB_TOKEN || undefined, fetch, apiUrl, sleep }))))();
+    } catch (err) {
+      keep = { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) };
+    }
+    const lane = env[laneVariable('keep-forever')];
+    checks.push(keepCheck({ now: now(), status: keep?.status ?? null, error: keep?.error ? scrub(String(keep.error), secrets) : null, missing: keep?.missing ?? null, laneOn: lane === undefined || lane === '' || lane === 'true' }));
+  }
 
   if (actions.dispatchPump) {
     const ref = env.GITHUB_REF_NAME || 'main';

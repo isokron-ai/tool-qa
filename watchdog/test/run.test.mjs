@@ -59,6 +59,8 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
       ARCHIVE_LAST_OK: JSON.stringify({ at: ago(60), pulled: 2, quarantined: 0, refused_foreign: 0 }),
       // the off-site backup has its own tests (watchdog/test/offsite.test.mjs)
       LANE_OFFSITE_ENABLED: 'false',
+      // the keep-forever copy and the seal record have their own tests (keep/test/health.test.mjs)
+      LANE_KEEP_FOREVER_ENABLED: 'false',
     },
     now: c.now,
     sleep: c.sleep,
@@ -396,3 +398,27 @@ test('R-SNAP-17: a snapshot manifest with null entries, one that throws, or a ti
   }
 });
 
+
+test('R-RET-19: the health issue carries the keep-forever copy and the seal record: a stalled copy and a failed compression are amber and red', async () => {
+  const w = world({
+    seed: (db, c) => {
+      db.setKv('retention.seal', { at: new Date(c.t).toISOString(), sealed: 5, bytes_in: 500, bytes_out: 50, failures: { compress: 3, keep: 0 }, streak: 3, last_failure: { kind: 'compress', what: 'x', error: 'zstd exploded' } }, { now: c.t });
+    },
+  });
+  delete w.opts.env.LANE_KEEP_FOREVER_ENABLED;
+  const at = (ms) => new Date(w.c.t - ms).toISOString();
+  w.opts.readKeep = async () => ({ status: { version: 1, at: at(MIN), status: 'ok', last_ok_at: at(MIN), copied: { artifacts: 1, bytes: 1 }, pending: { count: 4, oldest_at: at(45 * 24 * 60 * MIN) } } });
+  const out = await runWatchdog(w.opts);
+  const keep = out.checks.find((c) => c.id === 'keep-forever');
+  assert.equal(keep.status, 'amber');
+  assert.match(keep.summary, /4 artifact\(s\) wait/);
+  assert.equal(out.checks.find((c) => c.id === 'retention-seal').status, 'red');
+  assert.equal(out.overall, 'red');
+  // Switched off by its lane variable: off, not amber.
+  const off = world({ seed: () => {} });
+  const done = await runWatchdog(off.opts);
+  assert.equal(done.checks.find((c) => c.id === 'keep-forever').status, 'off');
+  assert.equal(done.checks.find((c) => c.id === 'retention-seal').status, 'green');
+  w.cleanup();
+  off.cleanup();
+});

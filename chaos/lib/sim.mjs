@@ -547,7 +547,11 @@ export class Sim {
         ingestOptions: {
           crypto: {
             decrypt: (ct) => openWith(this.identity, ct),
-            encrypt: (pt, recipients) => sealTo(recipients, pt),
+            encrypt: (pt, recipients) => {
+              this.sealCalls = (this.sealCalls ?? 0) + 1;
+              if (this.sealFault?.(this.sealCalls)) throw new Error('injected: disk full while sealing');
+              return sealTo(recipients, pt);
+            },
             publicKey: () => this.ingestPub,
           },
           registry: this.registry,
@@ -564,6 +568,9 @@ export class Sim {
         crypto: fakeStateCrypto({ identity: this.identity, recipients: this.statePub }),
       });
     } finally {
+      // pump.yml: "Upload the keep-forever gap markers", if: always().
+      const gaps = join(dir, 'keep-gap-out');
+      if (existsSync(gaps)) (this.keepGaps ??= []).push(...readdirSync(gaps));
       // pump.yml: "Upload the staged state archive", if: always().
       this.uploadArchive(run, join(dir, 'state-archive'), say);
     }
@@ -619,8 +626,8 @@ export class Sim {
         env: {
           GITHUB_REPOSITORY: TOOLQA, GITHUB_TOKEN: `ghs_wdjob${run.id}`, GITHUB_REF_NAME: 'main', LOOP_SLOTS: vars.LOOP_SLOTS ?? '',
           AGE_IDENTITY: this.identity, ARCHIVE_LAST_OK: JSON.stringify({ at: iso(this.t - HOUR), pulled: 1, quarantined: 0 }),
-          // The off-site backup is outside the simulated loop (watchdog/test/offsite.test.mjs covers it).
-          LANE_OFFSITE_ENABLED: 'false', ...lanes,
+          // The off-site backup and the keep-forever copy are outside the simulated loop (watchdog/test/offsite.test.mjs covers it).
+          LANE_OFFSITE_ENABLED: 'false', LANE_KEEP_FOREVER_ENABLED: 'false', ...lanes,
         },
         now: () => this.t,
         sleep: t.sleep,

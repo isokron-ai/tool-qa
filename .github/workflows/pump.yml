@@ -81,6 +81,7 @@ jobs:
           node pump/run.mjs --state "$RUNNER_TEMP/state/state.sqlite"
           --successor-result "$RUNNER_TEMP/successor.json"
           --ingest-out "$RUNNER_TEMP/ingest-out"
+          --keep-out "$RUNNER_TEMP/keep-out"
           --state-archive-out "$RUNNER_TEMP/state-archive"
       # Sealed ingest outputs (ingest-<attempt>-<index>.tar.age), readable only with
       # AGE_IDENTITY. Uploaded even if the pump step failed, so outputs of
@@ -91,6 +92,28 @@ jobs:
         with:
           name: ingest-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ingest-out/
+          retention-days: 90
+          if-no-files-found: ignore
+      # The keep-forever part of the same outputs (keep-*.tar.age, catalog-*.tar.age),
+      # each also zstd and age: results, manifests, observations, one tool list
+      # per distinct catalog. The full bundles above are kept 30 days; this is
+      # what the keep-forever copy (keep-forever.yml) and the archive keep for good.
+      - name: Upload the keep-forever outputs (90 days)
+        if: always() && steps.guard.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ingest-keep-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/keep-out/
+          retention-days: 90
+          if-no-files-found: ignore
+      # Marks the runs whose keep-forever file could not be written for some item
+      # (keep-gap-*.tar.age): the off-site prune then keeps that run's full bundles.
+      - name: Upload the keep-forever gap markers (90 days)
+        if: always() && steps.guard.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ingest-keepgap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/keep-gap-out/
           retention-days: 90
           if-no-files-found: ignore
       # The state archive this run staged (state-archive-<run id>-<attempt>.tar.age,

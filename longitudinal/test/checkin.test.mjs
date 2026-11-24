@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import { analyse, byTime, failuresOf, itemsFromEntries, loadSeed, main, readArchive, renderMarkdown, subjectWeight, DEFAULT_CONFIG } from '../checkin.mjs';
 import { ageEncrypt } from '../../ingest/age.mjs';
+import { packBundle } from '../../worker-kit/bundle.mjs';
 import { writeTar } from '../../worker-kit/tar.mjs';
 
 const FIX = new URL('./fixtures/', import.meta.url);
@@ -218,6 +219,40 @@ test('R-CHECKIN-09: the archive is read sealed, in memory, and nothing decrypted
     assert.equal(items.length, fixture.items.length);
     const r = analyse(items, { seed: loadSeed(SEED_FILE), tierWeights });
     assert.equal(find(r, (x) => x.class === 'no_tools_found').unlocks, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-RET-20: the archive reads sealed files made before and after zstd, and an item that is in a full bundle and in its keep-forever file counts once', { skip: !haveAge && 'age is not installed' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'checkin-zstd-'));
+  try {
+    const key = spawnSync(KEYGEN, [], { encoding: 'utf8' });
+    const identity = /AGE-SECRET-KEY-1[0-9A-Z]+/.exec(key.stdout + key.stderr)[0];
+    const recipient = /(age1[0-9a-z]+)/.exec(key.stderr + key.stdout)[1];
+    const seal = (name, tar) => {
+      const d = join(dir, 'ingest', '2026-11-24', name.split('/')[0]);
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, name.split('/')[1]), ageEncrypt({ plaintext: tar, recipients: [recipient], ageBin: AGE }));
+    };
+    const all = entriesOf().map((e) => ({ path: e.path, data: e.data }));
+    const tar = writeTar(all);
+    seal('ingest-1-1/ingest-x-0.tar.age', tar); // sealed before the upgrade: a plain tar
+    seal('ingest-2-1/ingest-y-0.tar.age', packBundle(tar)); // the same bundle, zstd
+    seal('ingest-keep-2-1/keep-y-0.tar.age', packBundle(tar)); // and its keep-forever file
+    const { items, stats } = readArchive(dir, { identity });
+    assert.equal(stats.sealed, 3);
+    assert.equal(stats.failed, 0);
+    assert.equal(items.length, fixture.items.length, 'each item once, not once per file');
+    const only = mkdtempSync(join(tmpdir(), 'checkin-zstd-only-'));
+    try {
+      const d = join(only, 'ingest', '2026-11-24', 'ingest-keep-3-1');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'keep-z-0.tar.age'), ageEncrypt({ plaintext: packBundle(tar), recipients: [recipient], ageBin: AGE }));
+      assert.equal(readArchive(only, { identity }).items.length, fixture.items.length, 'after the full bundle has expired, the keep-forever file alone is enough');
+    } finally {
+      rmSync(only, { recursive: true, force: true });
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 10
     environment: loop
     permissions:
-      contents: read # checkout, a read-only copy of the state asset and the snapshot manifest
+      contents: read # checkout, a read-only copy of the state asset, the snapshot manifest and the keep-forever status
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,6 +59,7 @@ jobs:
           LANE_HISTORY_POPULARITY_ENABLED: ${{ vars.LANE_HISTORY_POPULARITY_ENABLED }}
           LANE_STATE_SNAPSHOT_ENABLED: ${{ vars.LANE_STATE_SNAPSHOT_ENABLED }}
           LANE_OFFSITE_ENABLED: ${{ vars.LANE_OFFSITE_ENABLED }}
+          LANE_KEEP_FOREVER_ENABLED: ${{ vars.LANE_KEEP_FOREVER_ENABLED }}
           APP_ID: ${{ vars.APP_ID }}
           APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

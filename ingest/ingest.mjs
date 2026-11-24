@@ -74,6 +74,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   artifactName, legacyArtifactName, MANIFEST_NAME, MAX_ARTIFACT_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, sha256Hex,
 } from '../worker-kit/contract.mjs';
+import { packBundle } from '../worker-kit/bundle.mjs';
 import { isSafeRelativePath, writeTar } from '../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from './age.mjs';
 import { JUDGE_TIMEOUT_MS, readBundle, runAnalysis } from './analyze.mjs';
@@ -694,7 +695,14 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
     if (result.outputs.size > 0) {
       if (opts.sealed) {
         const tar = writeTar([...result.outputs].map(([path, data]) => ({ path, data })));
-        const box = ageEncrypt({ plaintext: tar, recipients, ageBin, maxBytes: tar.length });
+        // zstd before age (loop upgrade 20); a failure seals the plain tar, which readers also take.
+        let body = tar;
+        try {
+          body = packBundle(tar);
+        } catch (err) {
+          process.stderr.write(`ingest: could not compress the sealed output (${err?.message ?? err}); sealing it as a plain tar\n`);
+        }
+        const box = ageEncrypt({ plaintext: body, recipients, ageBin, maxBytes: body.length });
         mkdirSync(dirname(resolve(opts.sealed)), { recursive: true });
         writeFileSync(opts.sealed, box, { mode: 0o600 });
         chmodSync(opts.sealed, 0o600);

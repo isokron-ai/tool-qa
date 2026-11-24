@@ -19,7 +19,7 @@
 //
 // `md5` and `sha256` are the body's digests in hex. The PUT carries
 // Content-MD5 (R2 refuses a body that does not match it), x-amz-checksum-sha256
-// (unless `sendSha256` is false) and the sha256 again as user metadata
+// (only when `sendSha256` is true; R2 refuses it together with Content-MD5, so it is off by default) and the sha256 again as user metadata
 // (x-amz-meta-sha256), which HEAD returns so an object can be checked later
 // without downloading it.
 //
@@ -97,7 +97,7 @@ export async function createR2Store({ accountId, bucket, accessKeyId, secretAcce
         throw fail(`HEAD ${key}`, err);
       }
     },
-    async put(key, body, { md5, sha256, sendSha256 = true, contentType = 'application/octet-stream' }) {
+    async put(key, body, { md5, sha256, sendSha256 = false, contentType = 'application/octet-stream' }) {
       try {
         const res = await client.send(new S3.PutObjectCommand({
           Bucket: bucket,

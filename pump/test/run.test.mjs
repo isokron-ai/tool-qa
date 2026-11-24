@@ -11,6 +11,7 @@ import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
 import { backed, greenStatus } from '../../test/lib/conformance.mjs';
 import { IngestSetupError } from '../../ingest/collect.mjs';
 import { parseRegistry } from '../../ingest/registry.mjs';
+import { unpackBundle } from '../../worker-kit/bundle.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
 import {
   artifactEntry, defaultRun, fakeDecrypt, fakeEncrypt, makeBundle, REGISTRY_TEXT, RUN_ID, WORKER_REPO, WORKFLOW_SHA,
@@ -243,7 +244,7 @@ test('a finished worker run is ingested in the next tick and recorded before tha
   assert.deepEqual(h.minted, [{ repositories: ['mcp-check'], permissions: { actions: 'read' } }]);
   const used = h.budget.snapshot().used;
   assert.ok(used.actions >= 1 && used.artifacts >= 2, `ingest calls go through the API budget: ${JSON.stringify(used)}`);
-  const files = readTar(fakeDecrypt(readFileSync(join(h.outDir, `ingest-${d.attempt_id}-0.tar.age`)))).map((e) => e.path);
+  const files = readTar(unpackBundle(fakeDecrypt(readFileSync(join(h.outDir, `ingest-${d.attempt_id}-0.tar.age`))))).map((e) => e.path);
   assert.ok(files.includes(`accepted/${d.attempt_id}/0/ingest.json`));
   assert.ok(h.lines.some((l) => /^ingest: live-probe shard .* item 0: accepted, recorded, outputs sealed$/.test(l)), h.lines.join('\n'));
   assert.ok(h.lines.every((l) => !l.includes('ghs_synthetic_')), 'tokens are never logged');
@@ -268,7 +269,7 @@ test('a shard of three subjects: one bundle per item, each judged and recorded, 
   db.close();
 
   for (const i of [0, 1, 2]) {
-    const files = readTar(fakeDecrypt(readFileSync(join(h.outDir, `ingest-${d.attempt_id}-${i}.tar.age`)))).map((e) => e.path);
+    const files = readTar(unpackBundle(fakeDecrypt(readFileSync(join(h.outDir, `ingest-${d.attempt_id}-${i}.tar.age`))))).map((e) => e.path);
     assert.ok(files.includes(`accepted/${d.attempt_id}/${i}/ingest.json`), `item ${i}: ${files.join(', ')}`);
     assert.ok(h.lines.some((l) => l.endsWith(`item ${i}: accepted, recorded, outputs sealed`)), h.lines.join('\n'));
   }

@@ -2,7 +2,7 @@
 // The pump: one run of .github/workflows/pump.yml.
 //
 //   node pump/run.mjs [--state state/state.sqlite] [--successor-result <file>]
-//                     [--max-minutes 11] [--tick-seconds 150] [--ingest-out <dir>]
+//                     [--max-minutes 11] [--tick-seconds 150] [--ingest-out <dir>] [--keep-out <dir>]
 //                     [--state-archive-out <dir>]
 //   node pump/run.mjs --plan [--state <file>]   print the due list from a local file
 //
@@ -73,7 +73,8 @@
 //                      subject id lookups (pump/identity.mjs)
 //
 // Ingest outputs are sealed to worker-kit/ingest.pub and written to --ingest-out
-// (default $RUNNER_TEMP/ingest-out); pump.yml uploads that directory.
+// (default $RUNNER_TEMP/ingest-out); pump.yml uploads that directory. The keep-forever
+// part of each (loop upgrade 20) goes to --keep-out (default keep-out beside it).
 
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -464,7 +465,7 @@ export function plan({ stateFile = DEFAULT_STATE, now = Date.now(), config = loa
 }
 
 function parseArgs(argv) {
-  const opts = { stateFile: DEFAULT_STATE, successorFile: undefined, maxMinutes: 11, tickSeconds: 150, ingestOut: undefined, archiveOut: undefined, plan: false };
+  const opts = { stateFile: DEFAULT_STATE, successorFile: undefined, maxMinutes: 11, tickSeconds: 150, ingestOut: undefined, keepOut: undefined, archiveOut: undefined, plan: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => {
@@ -477,6 +478,7 @@ function parseArgs(argv) {
     else if (a === '--max-minutes') opts.maxMinutes = Number(val());
     else if (a === '--tick-seconds') opts.tickSeconds = Number(val());
     else if (a === '--ingest-out') opts.ingestOut = val();
+    else if (a === '--keep-out') opts.keepOut = val();
     else if (a === '--state-archive-out') opts.archiveOut = val();
     else if (a === '--plan') opts.plan = true;
     else throw new Error(`unknown argument ${JSON.stringify(a)}`);
@@ -510,7 +512,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       successorFile: opts.successorFile,
       maxRunMs: opts.maxMinutes * 60_000,
       tickIntervalMs: opts.tickSeconds * 1000,
-      ingestOptions: opts.ingestOut ? { outDir: opts.ingestOut } : {},
+      ingestOptions: { ...(opts.ingestOut ? { outDir: opts.ingestOut } : {}), ...(opts.keepOut ? { keepDir: opts.keepOut } : {}) },
       archiveDir: opts.archiveOut,
     });
     return out.ok ? 0 : 1;

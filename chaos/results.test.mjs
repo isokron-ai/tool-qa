@@ -144,3 +144,19 @@ test('8c: the pump runner\'s clock 90 s ahead of GitHub, with no run id in the d
     assertRecovered(sim);
   });
 });
+
+// ---- loop upgrade 20: a keep-forever file that cannot be written ----
+
+test('R-RET-26: one item\'s keep-forever file fails to write while the others succeed: every result is still judged and recorded, and a gap marker is sealed so the prune keeps that run\'s full bundles', CHAOS, async () => {
+  await withSim({}, async (sim) => {
+    // Per item the pump seals its full bundle, then its keep-forever file: call 2 is the first item's keep file.
+    sim.sealFault = (n) => n === 2;
+    startPump(sim);
+    await sim.runFor(2 * HOUR);
+    assert.equal(sim.missing().length, 0, 'every subject still has its result');
+    assert.ok((sim.keepGaps ?? []).length >= 1, `a gap marker was sealed: ${JSON.stringify(sim.keepGaps)}`);
+    assert.ok(sim.keepGaps.every((n) => /^keep-gap-.+\.tar\.age$/.test(n)));
+    for (const [k, n] of acceptedPerKey(sim)) assert.equal(n, 1, `${k.slice(0, 12)} accepted once`);
+    assertRecovered(sim);
+  });
+});

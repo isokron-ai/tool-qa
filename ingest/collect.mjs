@@ -40,21 +40,49 @@
 // (pump/budgets.mjs budgetedFetch); a BudgetExceededError ends this tick's
 // ingest: items recorded before it stay recorded, nothing more is judged.
 
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { packBundle } from '../worker-kit/bundle.mjs';
 import { writeTar } from '../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from './age.mjs';
 import { makeGithub, sleepUnless } from './github.mjs';
 import { MAX_BUNDLE_BYTES, openAttempt } from './ingest.mjs';
 import { dbLedger } from './ledger.mjs';
 import { loadRegistry as loadPinnedRegistry } from './registry.mjs';
+import { keepSet } from './retention.mjs';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const TOKEN_MARGIN_MS = 5 * MINUTE;
+/**
+ * Record in kv `retention.seal` what one seal did: bytes before and after
+ * compression, and any failure. `streak` counts seals in a row with a failure
+ * (the watchdog's amber at one, red at three). Never throws into the seal.
+ */
+export function noteSeal(db, { bytesIn, bytesOut, keptBytes = 0, failures = [], at }) {
+  try {
+    const prev = db.getKv(SEAL_KEY) ?? {};
+    const failed = failures.length > 0;
+    const next = {
+      at: new Date(at).toISOString(),
+      sealed: (prev.sealed ?? 0) + 1,
+      bytes_in: (prev.bytes_in ?? 0) + bytesIn,
+      bytes_out: (prev.bytes_out ?? 0) + bytesOut,
+      kept_bytes: (prev.kept_bytes ?? 0) + keptBytes,
+      failures: { compress: (prev.failures?.compress ?? 0) + failures.filter((f) => f.kind === 'compress').length, keep: (prev.failures?.keep ?? 0) + failures.filter((f) => f.kind === 'keep').length },
+      streak: failed ? (prev.streak ?? 0) + 1 : 0,
+      last_failure: failed ? { at: new Date(at).toISOString(), kind: failures[0].kind, what: failures[0].what, error: failures[0].error } : prev.last_failure ?? null,
+    };
+    db.setKv(SEAL_KEY, next, { now: at });
+  } catch {
+    // the note is only for the health issue
+  }
+}
+export const SEAL_KEY = 'retention.seal';
+
 /**
  * How many times the pump may fail to judge one item (an error of ours, not
  * a transient GitHub or network one) before it records the item as rejected
@@ -101,6 +129,9 @@ function isoSeconds(ms) {
  * @param {(ms: number, signal?: AbortSignal) => Promise<void>} [o.sleep]  ends early when signal aborts
  * @param {number} [o.retries]        retries per GitHub call (ingest/github.mjs)
  * @param {string} [o.outDir]         where sealed outputs go (default $RUNNER_TEMP/ingest-out)
+ * @param {string} [o.keepDir]        where the keep-forever files go (default keep-out beside outDir)
+ * @param {string} [o.gapDir]         where a keep-forever gap marker goes (default keep-gap-out beside outDir)
+ * @param {(tar: Buffer) => Buffer} [o.compress]  zstd for a tar before it is sealed (default worker-kit/bundle.mjs packBundle)
  * @param {string} [o.sealTo]         recipients file (default worker-kit/ingest.pub)
  * @param {object} [o.registry]       a loaded field registry (default: the pinned one, fetched once)
  * @param {Function} [o.loadRegistry]
@@ -121,6 +152,9 @@ export function createCollector({
   sleep = sleepUnless,
   retries = 3,
   outDir = join(env.RUNNER_TEMP || tmpdir(), 'ingest-out'),
+  keepDir = join(dirname(outDir), 'keep-out'),
+  gapDir = join(dirname(outDir), 'keep-gap-out'),
+  compress = packBundle,
   sealTo = SEAL_TO,
   registry = null,
   loadRegistry = loadPinnedRegistry,
@@ -186,15 +220,70 @@ export function createCollector({
     return client;
   }
 
-  function seal(attemptId, outputs, recipients) {
-    const tar = writeTar([...outputs].map(([path, data]) => ({ path, data })));
-    const box = encrypt(tar, recipients);
-    mkdirSync(outDir, { recursive: true, mode: 0o700 });
-    const file = join(outDir, `ingest-${attemptId}.tar.age`);
+  function writeSealed(dir, name, box) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = join(dir, name);
     const tmp = `${file}.tmp-${process.pid}`;
     writeFileSync(tmp, box, { mode: 0o600 });
     chmodSync(tmp, 0o600);
     renameSync(tmp, file);
+    return file;
+  }
+
+  /**
+   * zstd of a tar before it is sealed (loop upgrade 20). A failure never stops
+   * the seal: the tar is sealed as it is, which readers also take, and the
+   * failure is counted for the watchdog.
+   */
+  function pack(tar, failures, what) {
+    try {
+      return compress(tar);
+    } catch (err) {
+      failures.push({ kind: 'compress', what, error: String(err?.message ?? err).slice(0, 200) });
+      return tar;
+    }
+  }
+
+  /**
+   * Seal one item's outputs: the full bundle (`ingest-<attempt>.tar.age`, kept
+   * 30 days) and the keep-forever part of it in `keepDir` (`keep-<attempt>.tar.age`,
+   * and `catalog-<sha256>.tar.age` once per distinct tool list). All of it is
+   * zstd, then age. What happened is noted in kv `retention.seal` for the watchdog.
+   */
+  function seal(attemptId, outputs, recipients, db, at) {
+    const failures = [];
+    const tar = writeTar([...outputs].map(([path, data]) => ({ path, data })));
+    const body = pack(tar, failures, `ingest-${attemptId}`);
+    const file = writeSealed(outDir, `ingest-${attemptId}.tar.age`, encrypt(body, recipients));
+    let keptBytes = 0;
+    try {
+      const { keep, catalogs } = keepSet(outputs);
+      if (keep.size > 0) {
+        const keepTar = writeTar([...keep].map(([path, data]) => ({ path, data })));
+        const box = encrypt(pack(keepTar, failures, `keep-${attemptId}`), recipients);
+        writeSealed(keepDir, `keep-${attemptId}.tar.age`, box);
+        keptBytes += box.length;
+      }
+      for (const [sha, data] of catalogs) {
+        if (existsSync(join(keepDir, `catalog-${sha}.tar.age`))) continue;
+        const catTar = writeTar([{ path: 'tools.json', data }]);
+        const box = encrypt(pack(catTar, failures, `catalog-${sha}`), recipients);
+        writeSealed(keepDir, `catalog-${sha}.tar.age`, box);
+        keptBytes += box.length;
+      }
+    } catch (err) {
+      failures.push({ kind: 'keep', what: `keep-${attemptId}`, error: String(err?.message ?? err).slice(0, 200) });
+      // The artifact of keep files may still exist, so the prune cannot tell from it that this item has no
+      // keep-forever file. The marker (uploaded as ingest-keepgap-<run>-<attempt>) tells it to keep this run's
+      // full bundles. If even the marker cannot be written the item is not recorded: it is judged again next tick.
+      try {
+        const gap = writeTar([{ path: 'gap.json', data: Buffer.from(`${JSON.stringify({ attempt: attemptId, error: failures.at(-1).error })}\n`) }]);
+        writeSealed(gapDir, `keep-gap-${attemptId}.tar.age`, encrypt(gap, recipients));
+      } catch (gapErr) {
+        throw new Error(`the keep-forever file of ${attemptId} could not be written (${failures.at(-1).error}) and neither could its gap marker (${String(gapErr?.message ?? gapErr).slice(0, 120)}); not recorded`);
+      }
+    }
+    if (db) noteSeal(db, { bytesIn: tar.length, bytesOut: body.length, keptBytes, failures, at });
     return file;
   }
 
@@ -312,7 +401,7 @@ export function createCollector({
           let sealed = false;
           db.tx(() => {
             if (r.outputs.size > 0) {
-              seal(d.attempt_id, r.outputs, recipients);
+              seal(d.attempt_id, r.outputs, recipients, db, now());
               sealed = true;
             }
             closeIfOpen();
@@ -337,7 +426,7 @@ export function createCollector({
           const r = await db.txAsync(async () => {
             const res = await opened.judge(item, abandon ? { abandon } : {});
             if (res.outputs.size > 0) {
-              seal(`${d.attempt_id}-${item.index}`, res.outputs, recipients);
+              seal(`${d.attempt_id}-${item.index}`, res.outputs, recipients, db, now());
               sealed = true;
             }
             db.clearIngestFailures(d.attempt_id, item.index);
