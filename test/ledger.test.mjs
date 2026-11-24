@@ -224,7 +224,7 @@ test('a full run: every repo read, rows resolved to pull requests, merges and re
     assert.deepEqual(l.counts, { total: 14, 'isokron-ai/tool-qa': 5, 'isokron-ai/mcp-check': 2, 'isokron-ai/mcp-surface-corpus': 5, 'isokron-ai/mcp-writecheck-action': 2, 'isokron-ai/mcp-write-safety': 0 });
     assert.deepEqual(l.sources.find((s) => s.repo === 'isokron-ai/mcp-write-safety'), { repo: 'isokron-ai/mcp-write-safety', ref: 'main', path: 'REGRESSIONS.md', status: 'absent' });
     const rec = (id) => l.records.find((r) => r.id === id);
-    const keys = ['repo', 'id', 'title', 'description', 'severity', 'severity_note', 'found_by', 'test', 'fix_commit', 'fix_commits', 'fix_pr', 'fix_prs', 'merged_at', 'released_in', 'url'];
+    const keys = ['repo', 'id', 'title', 'description', 'severity', 'severity_note', 'found_by', 'test', 'fix_commit', 'fix_commits', 'fix_pr', 'fix_prs', 'found_at', 'found_at_source', 'pinned_at', 'merged_at', 'released_in', 'released_at', 'url'];
     for (const r of l.records) assert.deepEqual(Object.keys(r), keys);
 
     // Two fix commits in two pull requests: the row is merged when the last one is.
@@ -253,7 +253,7 @@ test('a full run: every repo read, rows resolved to pull requests, merges and re
     assert.match(md, /mcp-write-safety\) \| 0 \(no ledger yet\)/);
     assert.match(md, /- isokron-ai\/mcp-surface-corpus: normalised: test references written `file` `name` read as `file` › `name`\./);
     assert.match(md, /- isokron-ai\/tool-qa: already in that shape\./);
-    assert.match(md, /\| R-SS-01 \| high \| .* \| review \| .* \| \[0866426\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/commit\/0866426\) \| \[#3\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/pull\/3\) \| 2026-11-23 \| v1\.4\.0 \|/);
+    assert.match(md, /\| R-SS-01 \| high \| .* \| review \| .* \| \[0866426\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/commit\/0866426\) \| \[#3\]\(https:\/\/github\.com\/isokron-ai\/mcp-check\/pull\/3\) \|  \|  \| 2026-11-23 \| v1\.4\.0 \(2026-11-25\) \|/);
     assert.match(md, /## Unresolved\n\n- /);
     assert.match(md, /R-ING-19 \(test\): pump\/test\/dispatch\.test\.mjs › .*: no test of exactly that name on main/);
 
@@ -377,38 +377,262 @@ test('R-LED-02: only an open pull request from this repository counts as the wor
 });
 
 const WF = parseYaml(readFileSync(fileURLToPath(new URL('../.github/workflows/ledger.yml', import.meta.url)), 'utf8'));
+const PUBLISH_STEP = WF.jobs.publish.steps.find((s) => s.name === 'Open or update the pull request');
 
-test('R-LED-02: with only a fork\'s pull request on ledger/refresh, the workflow neither closes it nor counts it as its own', () => {
-  const step = WF.jobs.publish.steps.find((s) => s.name === 'Open or update the pull request');
-  assert.match(step.run, /--json number,isCrossRepository,headRepositoryOwner \| node scripts\/ledger-own-pr\.mjs "\$OWNER"/);
+const BASE = 'b'.repeat(40);
+const BASE_TREE = 'c'.repeat(40);
+const TREE = 'd'.repeat(40);
+const NEW = 'e'.repeat(40);
+const OLD = 'f'.repeat(40);
+
+// Runs the publish step's script with a fake `git` and a fake `gh`. The fake gh answers the API calls from
+// `opts`, applies the step's own --jq filters with the real jq, and keeps every request body.
+function runPublish(opts = {}) {
+  const o = {
+    status: ' M docs/LEDGER.md\n', prList: [], branch: null, apiTree: TREE,
+    made: { sha: NEW, verification: { verified: true } }, recheck: null,
+    statuses: [{ context: 'dispatched/test', state: 'success' }, { context: 'dispatched/lint', state: 'success' }, { context: 'other', state: 'pending' }],
+    runs: [], ...opts,
+  };
   const dir = mkdtempSync(join(tmpdir(), 'ledger-wf-'));
   try {
     const bin = join(dir, 'bin');
     mkdirSync(bin);
-    const fork = JSON.stringify([{ number: 7, isCrossRepository: true, headRepositoryOwner: { login: 'someone' } }]);
-    writeFileSync(join(bin, 'gh'), `#!/usr/bin/env bash\necho "gh $*" >> "${dir}/calls"\nif [ "$1 $2" = "pr list" ]; then echo '${fork}'; fi\nexit 0\n`);
-    writeFileSync(join(bin, 'git'), `#!/usr/bin/env bash\necho "git $*" >> "${dir}/calls"\nif [ "$1" = status ]; then printf '%s' "$GIT_STATUS"; fi\nexit 0\n`);
+    const commits = { [NEW]: o.recheck ?? o.made };
+    if (o.branch) commits[OLD] = o.branch;
+    writeFileSync(join(dir, 'prlist.json'), JSON.stringify(o.prList));
+    writeFileSync(join(dir, 'refs.json'), JSON.stringify(o.branch ? [{ ref: 'refs/heads/ledger/refresh-old', object: { sha: BASE } }, { ref: 'refs/heads/ledger/refresh', object: { sha: OLD } }] : []));
+    writeFileSync(join(dir, 'tree.json'), JSON.stringify({ sha: o.apiTree }));
+    writeFileSync(join(dir, 'made.json'), JSON.stringify(o.made));
+    for (const [sha, c] of Object.entries(commits)) writeFileSync(join(dir, `commit-${sha}.json`), JSON.stringify(c));
+    writeFileSync(join(dir, 'status.json'), JSON.stringify({ state: 'pending', statuses: o.statuses }));
+    writeFileSync(join(dir, 'runs.json'), JSON.stringify({ total_count: o.runs.length, workflow_runs: o.runs }));
+    writeFileSync(join(bin, 'gh'), `#!/usr/bin/env bash
+D='${dir}'
+echo "gh $*" >> "$D/calls"
+if [ "$1 $2" = "pr list" ]; then cat "$D/prlist.json"; exit 0; fi
+[ "$1" = api ] || exit 0
+shift
+method=GET; ep=""; jqf=""; input=""; silent=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -X) method="$2"; shift ;;
+    --jq) jqf="$2"; shift ;;
+    --input) input="$2"; shift ;;
+    --silent) silent=1 ;;
+    -f|-F) shift ;;
+    repos/*) ep="$1" ;;
+  esac
+  shift
+done
+n=$(wc -l < "$D/calls" | tr -d ' ')
+if [ "$input" = - ]; then cat > "$D/body-$n.json"; fi
+case "$method $ep" in
+  "GET repos/isokron-ai/tool-qa/git/matching-refs/heads/ledger/refresh") resp="$(cat "$D/refs.json")" ;;
+  "GET repos/isokron-ai/tool-qa/git/commits/"*) resp="$(cat "$D/commit-\${ep##*/}.json")" ;;
+  "GET repos/isokron-ai/tool-qa/commits/${OLD}/status") resp="$(cat "$D/status.json")" ;;
+  "GET repos/isokron-ai/tool-qa/actions/runs?head_sha=${OLD}&per_page=100") resp="$(cat "$D/runs.json")" ;;
+  "POST repos/isokron-ai/tool-qa/git/trees") resp="$(cat "$D/tree.json")" ;;
+  "POST repos/isokron-ai/tool-qa/git/commits") resp="$(cat "$D/made.json")" ;;
+  *) resp='{}' ;;
+esac
+if [ -n "$jqf" ]; then printf '%s' "$resp" | jq -r "$jqf"; elif [ -z "$silent" ]; then printf '%s\\n' "$resp"; fi
+`);
+    writeFileSync(join(bin, 'git'), `#!/usr/bin/env bash
+echo "git $*" >> '${dir}/calls'
+case "$1" in
+  status) printf '%s' "$GIT_STATUS" ;;
+  rev-parse) if [ "$2" = HEAD ]; then echo ${BASE}; else echo ${BASE_TREE}; fi ;;
+  write-tree) echo ${TREE} ;;
+esac
+exit 0
+`);
     chmodSync(join(bin, 'gh'), 0o755);
     chmodSync(join(bin, 'git'), 0o755);
-    const go = (status) => {
-      writeFileSync(join(dir, 'calls'), '');
-      writeFileSync(join(dir, 'summary'), '');
-      const r = spawnSync('bash', ['-e', '-c', step.run], {
-        cwd: fileURLToPath(new URL('../', import.meta.url)),
-        encoding: 'utf8',
-        env: { PATH: `${bin}:${process.env.PATH}`, REPO: 'isokron-ai/tool-qa', OWNER: 'isokron-ai', BRANCH: 'ledger/refresh', GIT_STATUS: status, GITHUB_STEP_SUMMARY: join(dir, 'summary') },
-      });
-      return { status: r.status, out: r.stdout + r.stderr, calls: readFileSync(join(dir, 'calls'), 'utf8') };
-    };
-    const same = go('');
-    assert.equal(same.status, 0, same.out);
-    assert.doesNotMatch(same.calls, /gh pr close/, 'the fork\'s pull request is not closed');
-    const changed = go(' M docs/LEDGER.md\n');
-    assert.equal(changed.status, 0, changed.out);
-    assert.match(changed.calls, /gh pr create -R isokron-ai\/tool-qa --base main --head ledger\/refresh/, 'a pull request of its own is opened');
-    assert.doesNotMatch(changed.out, /Updated pull request #7/);
+    writeFileSync(join(dir, 'calls'), '');
+    writeFileSync(join(dir, 'summary'), '');
+    const r = spawnSync('bash', ['-e', '-c', PUBLISH_STEP.run], {
+      cwd: fileURLToPath(new URL('../', import.meta.url)),
+      encoding: 'utf8',
+      env: { PATH: `${bin}:${process.env.PATH}`, REPO: 'isokron-ai/tool-qa', OWNER: 'isokron-ai', BRANCH: 'ledger/refresh', GIT_STATUS: o.status, GITHUB_STEP_SUMMARY: join(dir, 'summary') },
+    });
+    const calls = readFileSync(join(dir, 'calls'), 'utf8');
+    const bodies = {};
+    calls.split('\n').forEach((line, i) => {
+      const m = /^gh api -X POST repos\/isokron-ai\/tool-qa\/git\/(trees|commits) --input -/.exec(line);
+      if (m) bodies[m[1]] = JSON.parse(readFileSync(join(dir, `body-${i + 1}.json`), 'utf8'));
+    });
+    return { status: r.status, out: r.stdout + r.stderr, calls, bodies };
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const WRITES = /gh api -X (POST|PATCH)|gh workflow run|git (commit|push)|gh pr create/;
+
+test('R-LED-02: with only a fork\'s pull request on ledger/refresh, the workflow neither closes it nor counts it as its own', () => {
+  assert.match(PUBLISH_STEP.run, /--json number,isCrossRepository,headRepositoryOwner \| node scripts\/ledger-own-pr\.mjs "\$OWNER"/);
+  const prList = [{ number: 7, isCrossRepository: true, headRepositoryOwner: { login: 'someone' } }];
+  const same = runPublish({ status: '', prList });
+  assert.equal(same.status, 0, same.out);
+  assert.doesNotMatch(same.calls, /gh pr close/, 'the fork\'s pull request is not closed');
+  const changed = runPublish({ prList });
+  assert.equal(changed.status, 0, changed.out);
+  assert.match(changed.calls, /gh pr create -R isokron-ai\/tool-qa --base main --head ledger\/refresh/, 'a pull request of its own is opened');
+  assert.doesNotMatch(changed.out, /Updated pull request #7/);
+});
+
+test('R-LED-09: the refresh commit is made through the API so GitHub signs it, never with git commit and a push', () => {
+  assert.doesNotMatch(PUBLISH_STEP.run, /git\b[^\n]*\b(commit|push)\b/, 'no git commit or push in the step');
+  assert.doesNotMatch(PUBLISH_STEP.run, /credential\.helper/);
+
+  // A new branch: tree, commit and ref are created through the API, in that order.
+  const fresh = runPublish();
+  assert.equal(fresh.status, 0, fresh.out);
+  const writes = fresh.calls.split('\n').filter((l) => /^gh api -X \S+ repos\/isokron-ai\/tool-qa\/git\//.test(l));
+  assert.deepEqual(writes, [
+    'gh api -X POST repos/isokron-ai/tool-qa/git/trees --input - --jq .sha',
+    'gh api -X POST repos/isokron-ai/tool-qa/git/commits --input - --jq [.sha, (.verification.verified | tostring)] | join(" ")',
+    `gh api -X POST repos/isokron-ai/tool-qa/git/refs -f ref=refs/heads/ledger/refresh -f sha=${NEW} --silent`,
+  ]);
+  assert.equal(fresh.bodies.trees.base_tree, BASE_TREE);
+  assert.deepEqual(fresh.bodies.trees.tree.map((e) => [e.path, e.mode, e.type]),
+    [['ledger/ledger.json', '100644', 'blob'], ['ledger/cache.json', '100644', 'blob'], ['docs/LEDGER.md', '100644', 'blob']]);
+  assert.equal(fresh.bodies.trees.tree[2].content, readFileSync(fileURLToPath(new URL('../docs/LEDGER.md', import.meta.url)), 'utf8'), 'the file as generated');
+  assert.deepEqual(fresh.bodies.commits, { message: "Ledger: refresh from the tool repositories' REGRESSIONS.md", tree: TREE, parents: [BASE] });
+  assert.ok(!('author' in fresh.bodies.commits) && !('committer' in fresh.bodies.commits), 'no author or committer, or GitHub would not sign it');
+
+  // An existing branch (an old unsigned commit) is moved with a forced ref update, only to the new commit.
+  const old = runPublish({ branch: { sha: OLD, tree: { sha: TREE }, parents: [{ sha: BASE }], verification: { verified: false } } });
+  assert.equal(old.status, 0, old.out);
+  assert.match(old.calls, new RegExp(`gh api -X PATCH repos/isokron-ai/tool-qa/git/refs/heads/ledger/refresh -f sha=${NEW} -F force=true`));
+
+  // A commit that is not verified, even on a second look, never reaches the branch.
+  const unsigned = runPublish({ made: { sha: NEW, verification: { verified: false } }, recheck: { sha: NEW, verification: { verified: false } } });
+  assert.notEqual(unsigned.status, 0);
+  assert.match(unsigned.out, /is not verified/);
+  assert.doesNotMatch(unsigned.calls, /git\/refs|gh pr create|gh workflow run/);
+  // The answer to the create call can lag; a verified second look is enough.
+  const late = runPublish({ made: { sha: NEW, verification: { verified: false } }, recheck: { sha: NEW, verification: { verified: true } } });
+  assert.equal(late.status, 0, late.out);
+  assert.match(late.calls, /git\/refs -f ref=refs\/heads\/ledger\/refresh/);
+
+  // The API must build exactly the tree generated here.
+  const wrongTree = runPublish({ apiTree: 'a'.repeat(40) });
+  assert.notEqual(wrongTree.status, 0);
+  assert.match(wrongTree.out, /is not the one generated here/);
+  assert.doesNotMatch(wrongTree.calls, /git\/commits --input|git\/refs/);
+
+  // Nothing changed against main: no write at all.
+  const same = runPublish({ status: '' });
+  assert.equal(same.status, 0, same.out);
+  assert.doesNotMatch(same.calls, WRITES);
+
+  // The branch already holds this tree on this main commit, verified: no new commit, no new checks.
+  const held = runPublish({ branch: { sha: OLD, tree: { sha: TREE }, parents: [{ sha: BASE }], verification: { verified: true } },
+    prList: [{ number: 12, isCrossRepository: false, headRepositoryOwner: { login: 'isokron-ai' } }] });
+  assert.equal(held.status, 0, held.out);
+  assert.match(held.out, /already holds this ledger/);
+  assert.doesNotMatch(held.calls, WRITES);
+  // ...but on an older main commit it is rebuilt.
+  const stale = runPublish({ branch: { sha: OLD, tree: { sha: TREE }, parents: [{ sha: '9'.repeat(40) }], verification: { verified: true } } });
+  assert.match(stale.calls, /git\/refs\/heads\/ledger\/refresh -f sha=/);
+});
+
+test('R-LED-10: after a new refresh commit the workflow dispatches test.yml and lint.yml on ledger/refresh, and their results show on the pull request as commit statuses', () => {
+  // The dispatched workflows: they can be dispatched, still run on pull requests, and a dispatched run reports its
+  // result as a commit status (a dispatched run's check runs do not show on a pull request).
+  for (const [f, need, ctx] of [['test.yml', 'node', 'dispatched/test'], ['lint.yml', 'workflows', 'dispatched/lint']]) {
+    const wf = parseYaml(readFileSync(fileURLToPath(new URL(`../.github/workflows/${f}`, import.meta.url)), 'utf8'));
+    assert.ok('workflow_dispatch' in wf.on, `${f} can be dispatched`);
+    assert.ok('pull_request' in wf.on, `${f} still runs on pull requests`);
+    const { report } = wf.jobs;
+    assert.deepEqual(report.needs, [need], f);
+    assert.equal(report.if, "${{ !cancelled() && github.event_name == 'workflow_dispatch' }}", f);
+    assert.deepEqual(report.permissions, { statuses: 'write' }, f);
+    assert.ok(report.steps.every((st) => !st.uses), `${f}: the report job checks out nothing`);
+    assert.equal(report.steps[0].env.RESULT, `\${{ needs.${need}.result }}`);
+    assert.equal(report.steps[0].env.SHA, '${{ github.sha }}');
+    for (const [result, state] of [['success', 'success'], ['failure', 'failure'], ['skipped', 'failure'], ['cancelled', 'failure']]) {
+      const dir = mkdtempSync(join(tmpdir(), 'ledger-report-'));
+      try {
+        writeFileSync(join(dir, 'gh'), `#!/usr/bin/env bash\necho "gh $*" >> '${dir}/calls'\n`);
+        chmodSync(join(dir, 'gh'), 0o755);
+        const r = spawnSync('bash', ['-e', '-c', report.steps[0].run], { encoding: 'utf8',
+          env: { PATH: `${dir}:${process.env.PATH}`, REPO: 'isokron-ai/tool-qa', SHA: NEW, RESULT: result, RUN_URL: 'https://example.test/run' } });
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(readFileSync(join(dir, 'calls'), 'utf8').trim(),
+          `gh api -X POST repos/isokron-ai/tool-qa/statuses/${NEW} -f state=${state} -f context=${ctx} -f description=${report.steps[0].run.match(/description="([^:]+):/)[1]}: ${result} -f target_url=https://example.test/run --silent`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  }
+  assert.equal(WF.jobs.publish.permissions.actions, 'write');
+  assert.equal(WF.jobs.publish.permissions.statuses, 'write');
+
+  const fresh = runPublish();
+  assert.equal(fresh.status, 0, fresh.out);
+  const lines = fresh.calls.trim().split('\n');
+  const ref = lines.findIndex((l) => /git\/refs/.test(l));
+  const pr = lines.findIndex((l) => /^gh pr create/.test(l));
+  const pending = lines.map((l, i) => [l, i]).filter(([l]) => /\/statuses\//.test(l));
+  assert.deepEqual(pending.map(([l]) => l), ['test', 'lint'].map((w) =>
+    `gh api -X POST repos/isokron-ai/tool-qa/statuses/${NEW} -f state=pending -f context=dispatched/${w} -f description=${w}.yml dispatched on ledger/refresh --silent`));
+  const runs = lines.map((l, i) => [l, i]).filter(([l]) => /^gh workflow run/.test(l));
+  assert.deepEqual(runs.map(([l]) => l), [
+    'gh workflow run test.yml -R isokron-ai/tool-qa --ref ledger/refresh',
+    'gh workflow run lint.yml -R isokron-ai/tool-qa --ref ledger/refresh',
+  ]);
+  assert.ok(pending.every(([, i]) => i > ref && i > pr), 'statuses go on the commit the branch now holds');
+  assert.ok(runs.every(([, i]) => pending.every(([, j]) => i > j)), 'pending is set before the dispatch, so it never overwrites a result');
+
+  const updated = runPublish({ prList: [{ number: 12, isCrossRepository: false, headRepositoryOwner: { login: 'isokron-ai' } }],
+    branch: { sha: OLD, tree: { sha: 'a'.repeat(40) }, parents: [{ sha: BASE }], verification: { verified: true } } });
+  assert.equal(updated.status, 0, updated.out);
+  assert.match(updated.out, /Updated pull request #12/);
+  assert.equal((updated.calls.match(/^gh workflow run/gm) ?? []).length, 2, 'an updated pull request gets checks on its new head too');
+
+  const failed = runPublish({ apiTree: 'a'.repeat(40) });
+  assert.doesNotMatch(failed.calls, /gh workflow run|\/statuses\//, 'no dispatch when nothing was published');
+});
+
+test('R-LED-10: when the branch already holds the ledger, a dispatch an earlier run left undone is made again, unless its run is in flight', () => {
+  const held = (extra) => runPublish({ branch: { sha: OLD, tree: { sha: TREE }, parents: [{ sha: BASE }], verification: { verified: true } },
+    prList: [{ number: 12, isCrossRepository: false, headRepositoryOwner: { login: 'isokron-ai' } }], ...extra });
+  const dispatched = (r) => (r.calls.match(/^gh workflow run \S+/gm) ?? []).map((l) => l.slice(16));
+  const pendingSet = (r) => (r.calls.match(/^gh api -X POST \S+\/statuses\/\S+ -f state=pending -f context=\S+/gm) ?? []).map((l) => l.replace(/^.*\/statuses\/(\S+) .*context=(\S+)$/, '$1 $2'));
+  const runOf = (wf, status) => ({ path: `.github/workflows/${wf}.yml`, status, head_sha: OLD });
+
+  // An earlier run died after moving the ref, before any dispatch: no statuses at all.
+  const died = held({ statuses: [] });
+  assert.equal(died.status, 0, died.out);
+  assert.deepEqual(dispatched(died), ['test.yml', 'lint.yml']);
+  assert.deepEqual(pendingSet(died), [`${OLD} dispatched/test`, `${OLD} dispatched/lint`], 'pending goes on the branch head, before the dispatch');
+  assert.doesNotMatch(died.calls, /git\/(trees|commits --input|refs)/, 'still no new commit');
+
+  // It died after setting pending; one dispatch got through and finished, the other never ran.
+  const half = held({ statuses: [{ context: 'dispatched/test', state: 'success' }, { context: 'dispatched/lint', state: 'pending' }],
+    runs: [runOf('test', 'completed')] });
+  assert.deepEqual(dispatched(half), ['lint.yml']);
+  assert.deepEqual(pendingSet(half), [`${OLD} dispatched/lint`]);
+
+  // Pending, but its run is queued or running for this commit: wait for it.
+  const busy = held({ statuses: [{ context: 'dispatched/test', state: 'pending' }, { context: 'dispatched/lint', state: 'pending' }],
+    runs: [runOf('test', 'in_progress'), runOf('lint', 'queued'), runOf('ledger', 'in_progress')] });
+  assert.deepEqual(dispatched(busy), []);
+  assert.doesNotMatch(busy.calls, /\/statuses\//);
+  // A run of another workflow in flight does not count for test.yml.
+  const other = held({ statuses: [{ context: 'dispatched/test', state: 'pending' }, { context: 'dispatched/lint', state: 'success' }],
+    runs: [runOf('ledger', 'in_progress'), runOf('lint', 'in_progress')] });
+  assert.deepEqual(dispatched(other), ['test.yml']);
+
+  // Finished results, passing or failing, are not dispatched again.
+  for (const state of ['success', 'failure', 'error']) {
+    const done = held({ statuses: [{ context: 'dispatched/test', state }, { context: 'dispatched/lint', state }] });
+    assert.equal(done.status, 0, done.out);
+    assert.deepEqual(dispatched(done), [], state);
+    assert.doesNotMatch(done.calls, WRITES, state);
   }
 });
 
@@ -449,7 +673,7 @@ test('R-LED-05: generate holds a read-only token; only publish can write, and it
   const { generate, publish } = WF.jobs;
   assert.deepEqual(Object.keys(WF.jobs), ['generate', 'publish']);
   assert.deepEqual(generate.permissions, { contents: 'read' });
-  assert.deepEqual(publish.permissions, { contents: 'write', 'pull-requests': 'write' });
+  assert.deepEqual(publish.permissions, { actions: 'write', contents: 'write', 'pull-requests': 'write', statuses: 'write' });
   assert.equal(publish.needs, 'generate');
   for (const job of [generate, publish]) {
     const guard = job.steps[1];

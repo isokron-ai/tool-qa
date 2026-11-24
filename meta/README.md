@@ -8,7 +8,7 @@ from a subject: two read public metadata through public APIs, and
 | Lane | Workflow | Reads |
 |---|---|---|
 | `meta-github` | `.github/workflows/meta-github.yml` | GitHub GraphQL and REST, api.scorecard.dev |
-| `meta-registry` | `.github/workflows/meta-registry.yml` | the official MCP registry, npm, PyPI, crates.io, the Go module proxy, deps.dev |
+| `meta-registry` | `.github/workflows/meta-registry.yml` | the official MCP registry, npm, PyPI, crates.io, the Go module proxy, deps.dev, the allowlisted OCI registries (manifest HEAD only) |
 | `release-diff` | `.github/workflows/release-diff.yml` | npm and PyPI artifacts, their provenance, the repository's tags and source archive |
 
 The pump dispatches them like any worker (`pump/workflows.json`, shard size
@@ -36,7 +36,20 @@ One bundle per item, sealed by the worker kit as
 `security_posture`, `branch_rules_public`, `community_profile`,
 `workflow_health`, `scorecard_api_result` (the published result from
 api.scorecard.dev; `scorecard_result` is left for scan-deep's own Scorecard
-run).
+run), `git_tag_targets` and `git_tag_map_sha256`.
+
+`git_tag_targets` lists the newest 100 tags by commit date (`refs(refPrefix:
+"refs/tags/", first: 100, orderBy: TAG_COMMIT_DATE DESC)`, in the same GraphQL
+query as the rest), each with the commit it points to (an annotated tag is
+peeled once and keeps its tag object), the commit date and the tagger date,
+plus the total and whether the list was cut. `git_tag_map_sha256` is the
+sha256 of the canonical JSON of the sorted `[tag, commit, tag object]` list.
+Tag names are sanitised (and bidirectional control characters replaced)
+before they are kept or hashed. A GraphQL error on the tag refs is a failed
+read (`null` with why, a retryable `tag_refs` skip), not an empty list. They feed the
+force-pushed tag signal (`longitudinal/`). The tags cost no REST call; a batch
+of nine real repositories cost 1 GraphQL point with and without them (24 Nov
+2026).
 
 Per shard: one GraphQL query per 10 repositories, then three conditional REST
 calls per repository (contributor count from the `Link` header, the rules for
@@ -58,7 +71,29 @@ whose repository is the subject, with publish and status dates and the
 packages each version declares; an empty list when there is none),
 `npm_version_doc`, `npm_maintainer_count_and_change`, `npm_attestations`,
 `pypi_info`, `pypi_project_status`, `pypi_provenance`, `crates_crate_facts`,
-`go_module_facts`, `depsdev_facts`.
+`go_module_facts`, `depsdev_facts`, `oci_tag_digests`.
+
+`oci_tag_digests` holds the digest each declared image tag resolves to, for at
+most five tags per subject: the subject owner's own registry entries first
+(newest version first), then the seed list, then other entries that claim the
+repository. Each element has the image reference, the tag, the entry and
+version that declared it, the digest, the media type, how it was read and a
+status (`ok`, `not_found`, `unauthorized`, `host_not_allowed`,
+`no_digest_header`, `no_digest`, `too_large`, `token_unreadable`,
+`redirect_refused`, `rate_limited`, `upstream_unavailable`). An empty list means no OCI package. Only the hosts in
+`lib/oci.mjs` are asked (docker.io, ghcr.io, quay.io, public.ecr.aws,
+mcr.microsoft.com, registry.gitlab.com; the same allowlist as mcp-check's
+live-probe), and their token services. One tag is one manifest `HEAD`, which
+answers with `Docker-Content-Digest`; the first tag of an image also costs a
+401 and one anonymous token request. Redirects are not followed, no layer or
+blob is fetched, and Docker Hub never gets a manifest `GET` (it counts as a
+pull there), and an empty manifest is `no_digest`. A token realm must be
+https, on the default port, with no user or password, on the token-host list.
+So a subject costs at most 5 tags + 2 requests per image. A rate limit or an
+outage is a retryable `oci` skip. A refused realm, or a token answer we cannot
+use (over 64 KiB, not JSON, no token: `token_unreadable`, a `tool_error` skip
+with fault `tool` that is not retried), fails the same way every time. Any of
+these stops that host's remaining reads for the subject. They feed the moving image tag signal (`longitudinal/`).
 
 npm is read through its abbreviated document
 (`application/vnd.npm.install-v1+json`: versions, tags, deprecations,
@@ -77,7 +112,8 @@ The packages read are those the newest registry versions declare, plus the
 seed list's (`history/seed-v1.json`), at most five per ecosystem. The Go
 module `github.com/<owner>/<name>` is read through the proxy's `/cached-only/`
 endpoint, so the proxy never fetches from the origin for us. crates.io gets
-at most one request a second. No GitHub API is called.
+at most one request a second. No GitHub API is called (ghcr.io is read as a
+container registry, not the API).
 
 ## What is kept, and what is not
 

@@ -209,9 +209,16 @@ runs it is kept as the Release asset `state.sqlite` on the release tagged
 `state`. Code: [`state/schema.sql`](../state/schema.sql),
 [`state/db.mjs`](../state/db.mjs), [`scripts/state-asset.mjs`](../scripts/state-asset.mjs).
 Every hour [`state-snapshot.yml`](../.github/workflows/state-snapshot.yml)
-copies that asset, still encrypted, to the release `state-snapshots` (the 48
-newest copies and one a day for 30 days); `snapshot/restore.mjs` checks one and
-puts it back. See [OPERATIONS.md](OPERATIONS.md), "State snapshots".
+copies that asset, still encrypted, to the release `state-snapshots` (the 24
+newest copies, one a day for 14 days and one a week for 8 weeks);
+`snapshot/restore.mjs` checks one and puts it back. See
+[OPERATIONS.md](OPERATIONS.md), "State snapshots". The asset is the database
+gzipped, then encrypted. At the end of each run the pump moves closed history
+(dispatches, items, attempts, leases, slots and old run_key generations no
+decision reads any more) out of the state into sealed archives it uploads as
+artifacts, deleting rows only once their archive reads back
+([`state/prune.mjs`](../state/prune.mjs), [`pump/prune.mjs`](../pump/prune.mjs));
+see OPERATIONS.md, "State pruning and size".
 
 It uses Node's built-in `node:sqlite` module (Node 22.13 or newer), so there is
 no dependency to install. Ubuntu runners get that Node version through
@@ -244,6 +251,19 @@ and [`scripts/check-workflows.mjs`](../scripts/check-workflows.mjs): top-level
 actions pinned to full commit SHAs, no `pull_request_target`, no event data
 interpolated into `run:` (that covers `inputs`, `github.head_ref` and step or job
 outputs too), no `secrets: inherit` or `write-all`, and `concurrency` on every scheduled workflow.
+
+## Drift signals (longitudinal)
+
+`longitudinal/derive.mjs` compares each subject's successive accepted results,
+read from the archive (still encrypted there; decrypted in memory on the
+operator's machine), and derives three signals: a force-pushed version tag
+(`git_tag_moves`, from meta-github's `git_tag_targets`), an image tag that
+resolves to a new digest (`oci_tag_moves`, from meta-registry's
+`oci_tag_digests`), and a tool list that changes at an unchanged release
+(`catalog_drift_same_version`, from live-probe and scan-static). It is a
+separate step, not part of ingest: ingest keeps no observation history in the
+state store, and the archive is the only complete history. See
+[`longitudinal/README.md`](../longitudinal/README.md).
 
 ## Not done yet
 

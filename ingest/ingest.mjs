@@ -269,7 +269,12 @@ export async function openAttempt(input, deps) {
   }
 
   async function judgeItem(item, abandon) {
-    const report = { ...base, ledger: { run_key: item.run_key, fence: item.fence, current_fence: item.current_fence, ...base.ledger } };
+    // The subject is named by its key and repository id, never only by the
+    // name the worker was sent (state schema v8): a rename between dispatch
+    // and ingest changes nothing about which subject this result is.
+    const who = {};
+    for (const k of ['subject', 'subject_name', 'repo_id', 'name']) if (item[k] !== null && item[k] !== undefined) who[k === 'name' ? 'subject_current_name' : k] = item[k];
+    const report = { ...base, ledger: { run_key: item.run_key, fence: item.fence, current_fence: item.current_fence, ...who, ...base.ledger } };
     let ciphertext = null;
     let manifestBytes = null;
     let files = null;

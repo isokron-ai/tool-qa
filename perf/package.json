@@ -1,0 +1,10 @@
+{
+  "name": "tool-qa-perf",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Pinned tools for the performance-baseline workflow (perf-baselines.yml). Only the official MCP Inspector CLI; our own servers are installed per run at the release being measured.",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/inspector": "2.16.0"
+  }
+}

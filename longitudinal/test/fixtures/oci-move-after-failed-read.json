@@ -1,0 +1,107 @@
+{
+ "about": "R-DRIFT-11: 2.0.0 reads ok (d1), then the registry rate-limits us, then reads ok with a new digest (d2). The failed read in between must not hide the move.",
+ "subject": "acme/flaky-image",
+ "items": [
+  {
+   "lane": "meta-registry",
+   "observed_at": "2026-11-20T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-registry",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "oci_tag_digests",
+     "value": [
+      {
+       "server_name": "io.github.acme/flaky-image",
+       "registry_version": "2.0.0",
+       "reference": "ghcr.io/acme/flaky-image",
+       "tag": "2.0.0",
+       "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+       "media_type": null,
+       "via": "head",
+       "status": "ok"
+      }
+     ]
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-registry",
+   "observed_at": "2026-11-22T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-registry",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "oci_tag_digests",
+     "value": [
+      {
+       "server_name": "io.github.acme/flaky-image",
+       "registry_version": "2.0.0",
+       "reference": "ghcr.io/acme/flaky-image",
+       "tag": "2.0.0",
+       "digest": null,
+       "media_type": null,
+       "via": null,
+       "status": "rate_limited"
+      }
+     ]
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "meta-registry",
+   "observed_at": "2026-11-24T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000001",
+   "tools": [
+    {
+     "name": "tool-qa-meta-registry",
+     "version": "1.1.0"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "oci_tag_digests",
+     "value": [
+      {
+       "server_name": "io.github.acme/flaky-image",
+       "registry_version": "2.0.0",
+       "reference": "ghcr.io/acme/flaky-image",
+       "tag": "2.0.0",
+       "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+       "media_type": null,
+       "via": "head",
+       "status": "ok"
+      }
+     ]
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "oci_tag_moves": [
+   {
+    "tag": "2.0.0",
+    "rank": "medium",
+    "from": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "to": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "last_seen_before": "2026-11-20T00:00:00.000Z"
+   }
+  ]
+ }
+}

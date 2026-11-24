@@ -17,9 +17,14 @@ import { createClient } from './github.mjs';
 const MAX_ITEMS_CHARS = 60_000;
 const TOKEN_MARGIN_MS = 5 * 60_000;
 
-/** The workflow_dispatch inputs for one shard. */
+/**
+ * The workflow_dispatch inputs for one shard. Each item's `subject` is the
+ * repository's current owner/name (subject_name) when there is one, so the
+ * worker clones or reads what the repository is called now; the result is
+ * still recorded under the subject key, by run_key (state schema v8).
+ */
 export function workerInputs({ shardId, attemptId, items }) {
-  const list = items.map(({ subject, run_key, fence }) => ({ subject, run_key, fence }));
+  const list = items.map(({ subject, subject_name: name, run_key, fence }) => ({ subject: name ?? subject, run_key, fence }));
   const json = JSON.stringify(list);
   if (json.length > MAX_ITEMS_CHARS) throw new Error(`shard ${shardId}: items input is too large (${json.length} characters); use a smaller shard_size`);
   return { shard_id: String(shardId), attempt_id: String(attemptId), items: json };

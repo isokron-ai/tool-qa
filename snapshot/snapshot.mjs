@@ -23,8 +23,10 @@
 //      asset is gone is dropped. Dedupe only ever compares verified entries.
 //   3. if the newest snapshot has the same sha256, uploads nothing (dedupe);
 //      otherwise uploads the copy, downloads it back and checks it.
-//   4. retention: keeps the 48 newest snapshots and the newest snapshot of
-//      each UTC day of the last 30 days; prunes the rest.
+//   4. retention: keeps the 24 newest snapshots, the newest snapshot of each
+//      UTC day of the last 14 days and the newest of each UTC week (Monday
+//      to Sunday) of the last 8 weeks; prunes the rest. The newest snapshot
+//      is always kept.
 //   5. rewrites the manifest (time, sha256, size and the source asset's id and
 //      updated_at for every snapshot; `current_at`: when a run last saw the
 //      newest snapshot equal the live state), then deletes the pruned assets.
@@ -33,6 +35,11 @@
 // by a failed delete is picked up again by the next run. Environment:
 // GITHUB_TOKEN (contents: write), GITHUB_REPOSITORY, GITHUB_API_URL,
 // GITHUB_STEP_SUMMARY (optional).
+//
+// Since loop upgrade #14 the pump gzips the database before it encrypts it,
+// so new snapshots are about a quarter of the size; this job still never
+// decrypts and copies whatever ciphertext the pump pushed. Older snapshots
+// stay as they were and the restore drill reads both.
 
 import { createHash } from 'node:crypto';
 import { appendFileSync, realpathSync } from 'node:fs';
@@ -46,8 +53,9 @@ export const SOURCE_UPLOAD_PREFIX = `${SOURCE_ASSET}.upload-`;
 export const SNAPSHOT_TAG = 'state-snapshots';
 export const MANIFEST = 'manifest.json';
 const MANIFEST_UPLOAD_PREFIX = `${MANIFEST}.upload-`;
-export const KEEP_RECENT = 48;
-export const KEEP_DAYS = 30;
+export const KEEP_RECENT = 24;
+export const KEEP_DAYS = 14;
+export const KEEP_WEEKS = 8;
 export const NAME_RE = /^state-(\d{8}T\d{6}Z)-([0-9a-f]{8})\.sqlite\.age$/;
 const AGE_MAGIC = 'age-encryption.org/v1\n';
 const DAY = 24 * 3600 * 1000;
@@ -86,26 +94,39 @@ export function labelSha(label) {
 
 const byNewest = (a, b) => (a.created === b.created ? (a.name < b.name ? 1 : -1) : a.created < b.created ? 1 : -1);
 
+/** The UTC Monday (YYYY-MM-DD) of the week a time falls in. */
+export function weekOf(ms) {
+  const d = new Date(ms);
+  const back = (d.getUTCDay() + 6) % 7; // days since Monday
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - back)).toISOString().slice(0, 10);
+}
+
 /**
- * Which snapshots to keep: the `keepRecent` newest, plus the newest of each
- * UTC day whose snapshot is less than `keepDays` days old. Everything else is
- * pruned. The count is of snapshots, not hours: with dedupe, an idle loop
+ * Which snapshots to keep: the `keepRecent` newest (at least one, so the
+ * newest is never pruned), plus the newest of each UTC day whose snapshot is
+ * less than `keepDays` days old, plus the newest of each UTC week (from
+ * Monday) whose snapshot is less than `keepWeeks` weeks old. Everything else
+ * is pruned. The count is of snapshots, not hours: with dedupe, an idle loop
  * makes no new snapshots, so nothing it relies on ages out.
  * @returns {{ keep: object[], prune: object[] }} both newest first
  */
-export function selectRetention(entries, { now, keepRecent = KEEP_RECENT, keepDays = KEEP_DAYS } = {}) {
+export function selectRetention(entries, { now, keepRecent = KEEP_RECENT, keepDays = KEEP_DAYS, keepWeeks = KEEP_WEEKS } = {}) {
   const sorted = [...entries].sort(byNewest);
-  const keep = new Set(sorted.slice(0, keepRecent));
-  const cutoff = now - keepDays * DAY;
-  const days = new Set();
-  for (const e of sorted) {
-    const t = Date.parse(e.created);
-    if (!Number.isFinite(t) || t < cutoff) continue;
-    const day = new Date(t).toISOString().slice(0, 10);
-    if (days.has(day)) continue;
-    days.add(day);
-    keep.add(e);
-  }
+  const keep = new Set(sorted.slice(0, Math.max(1, keepRecent)));
+  const newestPer = (span, bucket) => {
+    const cutoff = now - span;
+    const seen = new Set();
+    for (const e of sorted) {
+      const t = Date.parse(e.created);
+      if (!Number.isFinite(t) || t < cutoff) continue;
+      const b = bucket(t);
+      if (seen.has(b)) continue;
+      seen.add(b);
+      keep.add(e);
+    }
+  };
+  newestPer(keepDays * DAY, (t) => new Date(t).toISOString().slice(0, 10));
+  newestPer(keepWeeks * 7 * DAY, weekOf);
   return { keep: sorted.filter((e) => keep.has(e)), prune: sorted.filter((e) => !keep.has(e)) };
 }
 
@@ -307,7 +328,7 @@ export function buildManifest({ repo, entries, currentAt, now }) {
     version: 1,
     about: 'Versioned copies of the loop state asset (age ciphertext, never decrypted here). See docs/OPERATIONS.md, "State snapshots".',
     source: { repo, tag: SOURCE_TAG, asset: SOURCE_ASSET },
-    retention: { keep_recent: KEEP_RECENT, keep_daily_days: KEEP_DAYS },
+    retention: { keep_recent: KEEP_RECENT, keep_daily_days: KEEP_DAYS, keep_weekly_weeks: KEEP_WEEKS },
     updated: new Date(now).toISOString(),
     current_at: currentAt,
     snapshots: [...entries].sort(byNewest).map(({ name, asset_id, created, sha256: s, size, source }) => ({ name, asset_id, created, sha256: s, size, source })),

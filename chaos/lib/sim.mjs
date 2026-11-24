@@ -37,9 +37,14 @@
 //   scenario marks an operator restore; no run_key has two accepted results;
 //   no accepted result carries a fence older than a lease granted before it
 //   was recorded; every accepted result is a bundle a worker really uploaded.
+//   A row may leave the state only once a state archive the pump staged
+//   (pump/prune.mjs) holds it: after each pump job the sim does what pump.yml's
+//   upload step does (the archive folder becomes the artifact
+//   ingest-state-archive-<run id>-1), opens the archive with the loop identity
+//   and remembers every row in it.
 
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -49,7 +54,8 @@ import { ApiBudget } from '../../pump/budgets.mjs';
 import { dispatchSuccessor } from '../../pump/successor.mjs';
 import { runKey, runKeyFields } from '../../pump/due.mjs';
 import { evaluateGuard } from '../../scripts/guard.mjs';
-import { pullState, pushState } from '../../scripts/state-asset.mjs';
+import { decodeState, encodeState, pullState, pushState } from '../../scripts/state-asset.mjs';
+import { KEYS as PRUNE_KEYS, readArchive } from '../../state/prune.mjs';
 import { openState } from '../../state/db.mjs';
 import { runWatchdog, loadExpected } from '../../watchdog/run.mjs';
 import { parseBody } from '../../watchdog/health.mjs';
@@ -137,9 +143,19 @@ export class SimDeadlock extends Error {}
 export class Sim {
   constructor({
     seed = 1, subjects = 6, slots = '3', shardSize = 2, start = START, vars = {}, verbose = false,
-    workflow = {}, pumpSkewMs = 0,
+    workflow = {}, pumpSkewMs = 0, prune = {}, lateMs, identity = {},
   } = {}) {
+    // runPump's `identity` options (pump/identity.mjs): the subject id lookups.
+    this.identityOpts = identity;
     this.pumpSkewMs = pumpSkewMs;
+    // Pruning (pump/prune.mjs): runPump's `prune` options, the late-result
+    // window ingest uses (it bounds the prune age), and whether the upload
+    // step stores the staged archive (false: it is lost, as when the step fails).
+    this.prune = prune;
+    this.lateMs = lateMs;
+    this.archiveUpload = true;
+    this.archived = new Set(); // `${table}:${key}` of every row an uploaded archive holds
+    this.archives = [];
     this.t = start;
     this.start = start;
     this.random = rng(seed);
@@ -191,6 +207,8 @@ export class Sim {
     this.subjects = [];
     for (let i = 0; i < subjects; i++) {
       this.subjects.push({ id: `chaos-org/server-${i}`, kind: 'github', source: 'seed:chaos', tier: 1, sha: createHash('sha1').update(`s${i}`).digest('hex') });
+      // Its public repository, which the pump's id lookups find (state schema v8).
+      this.gh.addPublicRepo(`chaos-org/server-${i}`, { databaseId: 9000 + i });
     }
     const seedFile = join(this.dir, 'seed.sqlite');
     const db = openState(seedFile);
@@ -507,37 +525,77 @@ export class Sim {
       run.successor = res;
     }
     await task.sleep(10_000); // set up node, install age
-    const out = await runPump({
-      env: { GITHUB_REPOSITORY: TOOLQA, GITHUB_TOKEN: `ghs_jobtoken${run.id}`, LOOP_SLOTS: String(g.slots), AGE_IDENTITY: this.identity, GITHUB_API_URL: API_HOST },
-      now: clock,
-      sleep: task.sleep,
-      fetch: task.fetch,
-      log: say,
-      stateFile: join(dir, 'state.sqlite'),
-      seedFile: null,
-      config: this.config,
-      pull: this.pullFor(task),
-      push: this.pushFor(task),
-      mintToken: this.mintToken(),
-      budget: new ApiBudget({ now: clock, sleep: task.sleep, random: this.random }),
-      ingestOptions: {
-        crypto: {
-          decrypt: (ct) => openWith(this.identity, ct),
-          encrypt: (pt, recipients) => sealTo(recipients, pt),
-          publicKey: () => this.ingestPub,
+    let out;
+    try {
+      out = await runPump({
+        env: {
+          GITHUB_REPOSITORY: TOOLQA, GITHUB_TOKEN: `ghs_jobtoken${run.id}`, LOOP_SLOTS: String(g.slots), AGE_IDENTITY: this.identity, GITHUB_API_URL: API_HOST,
+          GITHUB_RUN_ID: String(run.id), GITHUB_RUN_ATTEMPT: '1', ...(this.vars().LANE_STATE_PRUNE_ENABLED !== undefined ? { LANE_STATE_PRUNE_ENABLED: this.vars().LANE_STATE_PRUNE_ENABLED } : {}),
         },
-        registry: this.registry,
-        sealTo: this.sealFile,
-        outDir: join(dir, 'ingest-out'),
-      },
-      successorFile: run.successor ? successorFile : undefined,
-      newId: () => this.newId(),
-      readConformance: async () => { throw new Error('no untrusted lane in the chaos config'); },
-      verifyConformanceRun: async () => ({ ok: false, why: 'unused' }),
-    });
+        now: clock,
+        sleep: task.sleep,
+        fetch: task.fetch,
+        log: say,
+        stateFile: join(dir, 'state.sqlite'),
+        seedFile: null,
+        identity: this.identityOpts,
+        config: this.config,
+        pull: this.pullFor(task),
+        push: this.pushFor(task),
+        mintToken: this.mintToken(),
+        budget: new ApiBudget({ now: clock, sleep: task.sleep, random: this.random }),
+        ingestOptions: {
+          crypto: {
+            decrypt: (ct) => openWith(this.identity, ct),
+            encrypt: (pt, recipients) => sealTo(recipients, pt),
+            publicKey: () => this.ingestPub,
+          },
+          registry: this.registry,
+          sealTo: this.sealFile,
+          outDir: join(dir, 'ingest-out'),
+          ...(this.lateMs !== undefined ? { lateMs: this.lateMs } : {}),
+        },
+        successorFile: run.successor ? successorFile : undefined,
+        newId: () => this.newId(),
+        readConformance: async () => { throw new Error('no untrusted lane in the chaos config'); },
+        verifyConformanceRun: async () => ({ ok: false, why: 'unused' }),
+        archiveDir: join(dir, 'state-archive'),
+        prune: this.prune,
+        crypto: fakeStateCrypto({ identity: this.identity, recipients: this.statePub }),
+      });
+    } finally {
+      // pump.yml: "Upload the staged state archive", if: always().
+      this.uploadArchive(run, join(dir, 'state-archive'), say);
+    }
     run.pump = out;
     say(`run ended ok=${out.ok} ticks=${out.ticks} dispatched=${out.dispatched} failed=${out.failed}`);
     return out.ok ? 'success' : 'failure';
+  }
+
+  /**
+   * What pump.yml's archive upload step does: the folder's one file becomes
+   * the artifact ingest-state-archive-<run id>-<attempt> on the pump run. The
+   * sim then reads it with the loop identity and remembers its rows.
+   */
+  uploadArchive(run, folder, say) {
+    if (!existsSync(folder)) return;
+    for (const name of readdirSync(folder)) {
+      if (!name.endsWith('.tar.age')) continue;
+      const bytes = readFileSync(join(folder, name));
+      if (!this.archiveUpload) {
+        say(`upload step: the state archive ${name} was not stored (injected)`);
+        continue;
+      }
+      this.gh.uploadArtifact(TOOLQA, run, `ingest-state-archive-${run.id}-1`, bytes);
+      const { meta, rows } = readArchive(openWith(this.identity, bytes));
+      for (const r of rows) this.archived.add(this.archiveKey(r.table, r.row));
+      this.archives.push({ run: run.id, name, at: this.t, rows, meta });
+      say(`upload step: stored ${name} (${rows.length} rows)`);
+    }
+  }
+
+  archiveKey(table, row) {
+    return `${table}:${JSON.stringify(PRUNE_KEYS[table].map((k) => row[k]))}`;
   }
 
   newId() {
@@ -560,7 +618,9 @@ export class Sim {
       const out = await runWatchdog({
         env: {
           GITHUB_REPOSITORY: TOOLQA, GITHUB_TOKEN: `ghs_wdjob${run.id}`, GITHUB_REF_NAME: 'main', LOOP_SLOTS: vars.LOOP_SLOTS ?? '',
-          AGE_IDENTITY: this.identity, ARCHIVE_LAST_OK: JSON.stringify({ at: iso(this.t - HOUR), pulled: 1, quarantined: 0 }), ...lanes,
+          AGE_IDENTITY: this.identity, ARCHIVE_LAST_OK: JSON.stringify({ at: iso(this.t - HOUR), pulled: 1, quarantined: 0 }),
+          // The off-site backup is outside the simulated loop (watchdog/test/offsite.test.mjs covers it).
+          LANE_OFFSITE_ENABLED: 'false', ...lanes,
         },
         now: () => this.t,
         sleep: t.sleep,
@@ -631,7 +691,7 @@ export class Sim {
    */
   foreignWrite(mutate) {
     const live = this.liveAsset();
-    const plain = openWith(this.identity, this.gh.assetBytes(live.id));
+    const plain = decodeState(openWith(this.identity, this.gh.assetBytes(live.id))).data;
     const file = join(this.dir, `foreign-${++this.seq}.sqlite`);
     writeFileSync(file, plain);
     const db = openState(file);
@@ -640,7 +700,7 @@ export class Sim {
     } finally {
       db.close();
     }
-    const bytes = this.encryptState(readFileSync(file));
+    const bytes = this.encryptState(encodeState(readFileSync(file)));
     rmSync(file, { force: true });
     const sha = createHash('sha256').update(bytes).digest('hex');
     const rel = this.stateRelease();
@@ -781,7 +841,7 @@ export class Sim {
     const bytes = this.gh.assetBytes(asset.id);
     let plain;
     try {
-      plain = openWith(this.identity, bytes);
+      plain = decodeState(Buffer.from(openWith(this.identity, bytes))).data;
     } catch {
       return { unreadable: 'decrypt' };
     }
@@ -800,7 +860,9 @@ export class Sim {
           attempts: has('attempts') ? all('SELECT id, run_key, fence, attempt_id, accepted, reason, received, outcome FROM attempts ORDER BY id') : [],
           results: has('results') ? all('SELECT run_key, subject, attempt_id, fence, accepted_at, outcome FROM results') : [],
           dispatches: has('dispatches') ? all('SELECT attempt_id, shard_id, status, created, expires, closed, close_reason, run_id FROM dispatches') : [],
-          items: has('dispatch_items') ? all('SELECT attempt_id, run_key, subject, fence, resolved FROM dispatch_items') : [],
+          items: has('dispatch_items') ? all('SELECT * FROM dispatch_items') : [],
+          subjects: has('subjects') ? all('SELECT * FROM subjects ORDER BY id') : [],
+          subjectEvents: has('subject_events') ? all('SELECT * FROM subject_events ORDER BY id') : [],
           slots: has('slot_ledger') ? all('SELECT * FROM slot_ledger WHERE released IS NULL') : [],
           kv: has('kv') ? Object.fromEntries(all('SELECT key, value FROM kv').map((r) => [r.key, safeJson(r.value)])) : {},
         };
@@ -841,7 +903,9 @@ export class Sim {
     const attempts = new Map(cur.attempts.map((x) => [x.id, x]));
     for (const p of prev.attempts) {
       const c = attempts.get(p.id);
-      if (!c) this.violate(`${key}: attempt ${p.id} (${p.attempt_id} ${p.reason ?? 'accepted'}) disappeared`);
+      if (!c) {
+        if (!this.archived.has(this.archiveKey('attempts', p))) this.violate(`${key}: attempt ${p.id} (${p.attempt_id} ${p.reason ?? 'accepted'}) disappeared, and no state archive holds it`);
+      }
       else if (c.run_key !== p.run_key || c.fence !== p.fence || c.accepted !== p.accepted || c.attempt_id !== p.attempt_id) this.violate(`${key}: attempt ${p.id} changed`);
     }
     const results = new Map(cur.results.map((r) => [r.run_key, r]));
@@ -854,7 +918,9 @@ export class Sim {
     const forward = { pending: ['pending', 'dispatched', 'failed', 'done', 'expired'], dispatched: ['dispatched', 'done', 'expired'], done: ['done'], failed: ['failed'], expired: ['expired'] };
     for (const p of prev.dispatches) {
       const c = dispatches.get(p.attempt_id);
-      if (!c) this.violate(`${key}: dispatch ${p.attempt_id} disappeared`);
+      if (!c) {
+        if (!this.archived.has(this.archiveKey('dispatches', p))) this.violate(`${key}: dispatch ${p.attempt_id} disappeared, and no state archive holds it`);
+      }
       else if (!(forward[p.status] ?? []).includes(c.status)) this.violate(`${key}: dispatch ${p.attempt_id} went from ${p.status} to ${c.status}`);
     }
   }
@@ -868,6 +934,8 @@ export class Sim {
     const created = new Map(s.dispatches.map((d) => [d.attempt_id, d.created]));
     for (const a of accepted) {
       const item = s.items.find((i) => i.attempt_id === a.attempt_id && i.run_key === a.run_key);
+      // Its dispatch pruned (and archived) while the attempt stays: nothing to compare with.
+      if (!item && this.archived.has(this.archiveKey('dispatches', { attempt_id: a.attempt_id }))) continue;
       if (!item || item.fence !== a.fence) this.violate(`${key}: accepted ${a.attempt_id.slice(0, 8)} with fence ${a.fence} that its dispatch did not carry`);
       const newer = s.items.filter((i) => i.run_key === a.run_key && i.fence > a.fence && (created.get(i.attempt_id) ?? '') <= a.received);
       if (newer.length) this.violate(`${key}: accepted a stale fence ${a.fence} for ${a.run_key.slice(0, 12)} after fence ${newer[0].fence} was granted`);
@@ -900,7 +968,7 @@ export class Sim {
   /** Worker runs whose attempt the live state does not know. */
   orphanRuns(s = this.readLive()) {
     const known = new Set((s?.dispatches ?? []).map((d) => d.attempt_id));
-    return this.workerRuns.filter((r) => !known.has(r.inputs.attempt_id));
+    return this.workerRuns.filter((r) => !known.has(r.inputs.attempt_id) && !this.archived.has(this.archiveKey('dispatches', { attempt_id: r.inputs.attempt_id })));
   }
 
   /**

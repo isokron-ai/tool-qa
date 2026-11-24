@@ -32,6 +32,7 @@
 //   AGE_BIN, AGE_KEYGEN_BIN   optional paths of age and age-keygen
 //   ARCHIVE_LAST_OK     the Mac archive pull's heartbeat, `${{ vars.ARCHIVE_LAST_OK }}`
 //                       (watchdog/archive.mjs)
+//   LANE_OFFSITE_ENABLED  the off-site backup's lane switch (watchdog/offsite.mjs)
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -49,6 +50,7 @@ import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 import { archiveCheck } from './archive.mjs';
+import { offsiteCheck } from './offsite.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
 
@@ -81,8 +83,11 @@ export function readState(file) {
         'pump.successor': db.getKv('pump.successor') ?? null,
         'pump.conformance': db.getKv('pump.conformance') ?? null,
         'pump.subjects': db.getKv('pump.subjects') ?? null,
+        'pump.identity': db.getKv('pump.identity') ?? null,
         'pump.last_tick': db.getKv('pump.last_tick') ?? null,
         'pump.api_budget': db.getKv('pump.api_budget') ?? null,
+        'pump.last_run': db.getKv('pump.last_run') ?? null,
+        'state.size': db.getKv('state.size') ?? null,
       },
     };
   } finally {
@@ -146,7 +151,10 @@ export async function runWatchdog({
     mkdirSync(dir, { recursive: true });
     const file = join(dir, 'state.sqlite');
     const pulled = await pull({ repo, token: env.GITHUB_TOKEN || undefined, file, fetch, apiUrl, log: say, sleep, ...stateKeys });
-    if (pulled?.status !== 'absent') state = readState(file);
+    if (pulled?.status !== 'absent') {
+      state = readState(file);
+      state.asset = { bytes: Number.isSafeInteger(pulled?.bytes) ? pulled.bytes : null, compressed: pulled?.compressed ?? null };
+    }
   } catch (err) {
     // Still report everything else; the state checks are skipped this time.
     stateError = scrub(err?.message ?? String(err), secrets);
@@ -206,6 +214,7 @@ export async function runWatchdog({
   }
   // The Mac archive pull's heartbeat, a repository variable passed in by the workflow.
   checks.push(archiveCheck({ now: now(), raw: env.ARCHIVE_LAST_OK }));
+  checks.push(await offsiteCheck({ client, repo, now: now(), env, fetch, sleep })); // the off-site backup's heartbeat artifact (watchdog/offsite.mjs)
 
   if (actions.dispatchPump) {
     const ref = env.GITHUB_REF_NAME || 'main';

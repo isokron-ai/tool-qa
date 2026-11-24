@@ -1,0 +1,135 @@
+{
+ "about": "R-DRIFT-03: live-probe sees a different tool list from the same image digest, then from a new digest behind the same version tag.",
+ "subject": "acme/dynamic-image",
+ "items": [
+  {
+   "lane": "live-probe",
+   "observed_at": "2026-11-20T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000002",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "tool_list_sha256",
+     "value": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+     "field": "tool_count",
+     "value": 4
+    },
+    {
+     "field": "registry_package_register_type",
+     "value": "oci"
+    },
+    {
+     "field": "registry_package_identifier",
+     "value": "ghcr.io/acme/dynamic-image:1.0.0"
+    },
+    {
+     "field": "registry_package_version",
+     "value": "1.0.0"
+    },
+    {
+     "field": "oci_digest",
+     "value": "8888888888888888888888888888888888888888888888888888888888888888"
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "live-probe",
+   "observed_at": "2026-11-22T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000002",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "tool_list_sha256",
+     "value": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+     "field": "tool_count",
+     "value": 5
+    },
+    {
+     "field": "registry_package_register_type",
+     "value": "oci"
+    },
+    {
+     "field": "registry_package_identifier",
+     "value": "ghcr.io/acme/dynamic-image:1.0.0"
+    },
+    {
+     "field": "registry_package_version",
+     "value": "1.0.0"
+    },
+    {
+     "field": "oci_digest",
+     "value": "8888888888888888888888888888888888888888888888888888888888888888"
+    }
+   ],
+   "result": null
+  },
+  {
+   "lane": "live-probe",
+   "observed_at": "2026-11-24T00:00:00.000Z",
+   "run_key": "0000000000000000000000000000000000000000000000000000000000000003",
+   "tools": [
+    {
+     "name": "mcp-check",
+     "version": "1.3.1"
+    }
+   ],
+   "subject_sha": null,
+   "observations": [
+    {
+     "field": "tool_list_sha256",
+     "value": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+     "field": "tool_count",
+     "value": 6
+    },
+    {
+     "field": "registry_package_register_type",
+     "value": "oci"
+    },
+    {
+     "field": "registry_package_identifier",
+     "value": "ghcr.io/acme/dynamic-image:1.0.0"
+    },
+    {
+     "field": "registry_package_version",
+     "value": "1.0.0"
+    },
+    {
+     "field": "oci_digest",
+     "value": "9999999999999999999999999999999999999999999999999999999999999999"
+    }
+   ],
+   "result": null
+  }
+ ],
+ "expect": {
+  "catalog_events": [
+   {
+    "kind": "catalog_changed_same_image",
+    "rank": "medium"
+   },
+   {
+    "kind": "catalog_changed_with_tag_move",
+    "rank": "high"
+   }
+  ]
+ }
+}

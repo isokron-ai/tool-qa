@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The ledger workflow dispatches this on ledger/refresh: its pull request is
+  # opened with the job token, which starts no pull_request workflows. A
+  # dispatched run reports through a commit status (job report).
+  workflow_dispatch:
 
 permissions: {}
 
@@ -32,6 +36,14 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      # The off-site backup's S3 client (exact version, lockfile integrity, no
+      # install scripts), so its request test runs; without it that test skips.
+      - name: Install the off-site S3 client (lockfile)
+        run: npm ci --prefix offsite --ignore-scripts --no-audit --no-fund
+      # The pinned Inspector CLI (perf/package-lock.json), so the performance
+      # harness control (test/perf-harness.test.mjs) runs; without it that test skips.
+      - name: Install the pinned Inspector (lockfile)
+        run: npm ci --prefix perf --ignore-scripts --no-audit --no-fund
       # Without age the tests that use the real binaries skip themselves.
       - name: Install age (pinned version, sha256 checked)
         run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
@@ -65,3 +77,28 @@ jobs:
         env:
           TOOL_QA_CHAOS: '1'
         run: node --test 'chaos/*.test.mjs'
+
+  # A dispatched run's check runs do not show on a pull request (checked on
+  # pull request 22), so a dispatched run reports its result as a commit
+  # status, which does (R-LED-10). The ledger workflow sets it to pending
+  # before it dispatches. This job checks out nothing and runs no repo code.
+  report:
+    name: report the dispatched result
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    needs: [node]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Commit status dispatched/test
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RESULT: ${{ needs.node.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$RESULT" = success ]; then state=success; else state=failure; fi
+          gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="$state" -f context="dispatched/test" \
+            -f description="node --test: ${RESULT}" -f target_url="$RUN_URL" --silent

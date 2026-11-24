@@ -11,7 +11,16 @@
 // SEED_KV_KEY. When both match, nothing is written. Otherwise every seed subject
 // is upserted with setSubjectVersion() in one transaction.
 //
-//   id       owner/name, as the seed and the scan-static worker spell it
+//   id       the subject key: owner/name as the seed spelled it when the
+//            subject was first seen. It never changes (state schema v8):
+//            run_keys name it. A seed row is matched to its subject by the
+//            subject's current name first, then by key, then by a name it had
+//            before (case aside), so a rename, a transfer or a rebuilt seed
+//            never makes a second subject for one repository
+//            (resolveSeedSubjects). The repository's numeric id and current
+//            name are looked up separately (pump/identity.mjs).
+//   name     for a new subject, the seed's owner/name; afterwards only the
+//            identity lookup moves it
 //   kind     github
 //   source   seed-v<version> (the seed file's version field); only set when
 //            the subject is first seen
@@ -100,6 +109,73 @@ export function parseSeed(bytes) {
 }
 
 /**
+ * Which subject each seed row is: Map(seed id -> {key, isNew}). In order of
+ * preference, case aside: the active subject whose current name is the seed
+ * id; the subject whose key is the seed id; the subject that had the seed id
+ * as an earlier name (subject_events). A subject merged into another (alias_of)
+ * stands for that other one. Each subject takes at most one seed row; a row
+ * left over is a new subject, keyed by its seed id, or `<id>#2`, `#3` ... when
+ * that key is taken (the old name of a renamed repository reused by a new
+ * one).
+ */
+export function resolveSeedSubjects(db, seedIds) {
+  const subjects = db.listSubjects();
+  const byExactKey = new Map(subjects.map((s) => [s.id, s]));
+  const canon = (s) => {
+    let cur = s;
+    for (let i = 0; i < 8 && cur?.alias_of; i++) cur = byExactKey.get(cur.alias_of) ?? cur;
+    return cur?.alias_of ? undefined : cur;
+  };
+  const lower = (x) => String(x).toLowerCase();
+  const byName = new Map();
+  for (const s of subjects) {
+    if (s.alias_of || typeof s.name !== 'string') continue;
+    const k = lower(s.name);
+    const prev = byName.get(k);
+    // Prefer an active subject, then one bound to an id.
+    const rank = (x) => (x.retired_at === null ? 2 : 0) + (x.repo_id !== null ? 1 : 0);
+    if (!prev || rank(s) > rank(prev)) byName.set(k, s);
+  }
+  const byKey = new Map();
+  for (const s of subjects) if (!byKey.has(lower(s.id))) byKey.set(lower(s.id), s);
+  const byOld = new Map();
+  if (typeof db.listSubjectEvents === 'function') {
+    for (const e of db.listSubjectEvents()) {
+      if ((e.kind === 'renamed' || e.kind === 'transferred') && e.old_name) byOld.set(lower(e.old_name), byExactKey.get(e.subject));
+    }
+  }
+  const out = new Map();
+  const claimed = new Set();
+  const take = (id, s) => {
+    const c = canon(s);
+    if (!c || claimed.has(c.id)) return false;
+    claimed.add(c.id);
+    out.set(id, { key: c.id, isNew: false });
+    return true;
+  };
+  for (const id of seedIds) {
+    const s = byName.get(lower(id));
+    if (s) take(id, s);
+  }
+  for (const id of seedIds) {
+    if (out.has(id)) continue;
+    const s = byKey.get(lower(id));
+    if (s && take(id, s)) continue;
+    const o = byOld.get(lower(id));
+    if (o) take(id, o);
+  }
+  const taken = new Set(subjects.map((s) => lower(s.id)));
+  for (const id of seedIds) {
+    if (out.has(id)) continue;
+    let key = id;
+    for (let n = 2; taken.has(lower(key)); n++) key = `${id}#${n}`;
+    taken.add(lower(key));
+    out.set(id, { key, isNew: true });
+  }
+  return out;
+}
+
+/**
  * Load the seed into the state store unless this exact file and mapping are
  * already loaded. Never throws: a bad or missing seed file, a load that would
  * retire too many subjects, or a state error is returned as {error}; nothing is
@@ -125,8 +201,10 @@ export function syncSeedSubjects(db, { now = Date.now(), file = SEED_FILE, read 
     if (prev?.sha256 === seed.sha256 && prev?.mapping === MAPPING_VERSION) {
       return { loaded: false, source: seed.source, sha256: seed.sha256, subjects: prev.subjects, summary: `${seed.source} already loaded (${prev.subjects} subjects)` };
     }
+    // Each seed row's subject key (schema v8): renamed subjects keep theirs.
+    const resolved = resolveSeedSubjects(db, seed.subjects.map((s) => s.id));
     // How many active seed subjects this load would retire (R-SUB-03).
-    const keep = new Set(seed.subjects.map((s) => s.id));
+    const keep = new Set([...resolved.values()].map((r) => r.key));
     const active = db.listSubjects().filter((s) => s.retired_at == null && String(s.source).startsWith(SOURCE_PREFIX));
     const leaving = active.filter((s) => !keep.has(s.id)).length;
     const override = db.getKv(ALLOW_RETIRE_KV_KEY) === true;
@@ -137,10 +215,11 @@ export function syncSeedSubjects(db, { now = Date.now(), file = SEED_FILE, read 
     let retired = 0;
     db.tx(() => {
       for (const s of seed.subjects) {
-        const cur = db.getSubject(s.id);
+        const { key } = resolved.get(s.id);
+        const cur = db.getSubject(key);
         // A sha or digest set by another writer is kept: resetting it would read as a new version.
         db.setSubjectVersion({
-          id: s.id, kind: 'github', source: seed.source, tier: s.tier,
+          id: key, kind: 'github', source: seed.source, tier: s.tier, name: s.id,
           sha: cur?.sha ?? null, artifactDigest: cur?.artifact_digest ?? null, now,
         });
         tiers[`T${s.tier}`] = (tiers[`T${s.tier}`] ?? 0) + 1;

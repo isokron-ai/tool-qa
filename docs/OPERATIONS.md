@@ -68,6 +68,8 @@ The three history workflows capture public data and don't work in slots, so
 they run the guard with `--no-slots`: `LOOP_SLOTS=0` does not stop them. Use
 `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` or the lane switch for those. The same goes
 for the manual re-ingest workflow (see "Manual re-ingest").
+The off-site backup (`offsite-backup`, "Off-site backup") also runs the guard
+with `--no-slots`; its lane switch is `LANE_OFFSITE_ENABLED`.
 
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a
@@ -168,6 +170,14 @@ encrypts the database before upload, and `pull` decrypts it with
 `AGE_IDENTITY`, so both need age (`AGE_BIN`, `AGE_KEYGEN_BIN`) and `pull`
 needs the identity.
 
+Since loop upgrade #14 `push` gzips the database before it encrypts it (a
+state database compresses about 4x), and checks that the gzip reads back to
+the same bytes first. `pull`, the watchdog and the restore drill tell the two
+forms apart after decrypting by their first bytes, so an asset or snapshot
+from before compression still reads. `push --no-compress` writes the old form;
+it is only for going back to code from before #14 ("State pruning and size",
+"Going back").
+
 `push` needs a token with `contents: write`. It uploads under a temporary name,
 then deletes the old asset and renames the new one, so a failed push keeps the
 last good copy. `pull` checks the sha256 in the asset label and that the file
@@ -205,7 +215,8 @@ GITHUB_REPOSITORY=isokron-ai/tool-qa AGE_IDENTITY="$(cat my-identity.txt)" \
 ```
 
 Nothing else reads the state asset: the archive pull copies history
-artifacts and the sealed ingest outputs only, and needs no key.
+artifacts, the sealed ingest outputs and the sealed state archives
+(`ingest-state-archive-*`, "State pruning and size") only, and needs no key.
 
 **One-time migration** from the plaintext asset of earlier versions. Pause
 the pump (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going,
@@ -237,6 +248,89 @@ results itself, in the same process, so ingest never needs a second writer. To
 push state by hand or run the manual re-ingest workflow, first switch the pump
 off (`LANE_PUMP_ENABLED=false`) and wait until no pump run is going. The
 watchdog only downloads a copy and never pushes.
+
+## State pruning and size
+
+The state grew by about 2.2 KB per attempt and nothing removed rows (1.0 MB at
+350 attempts, 3.3 MB at 1,400). Since loop upgrade #14 the pump moves closed
+history out of it ([`state/prune.mjs`](../state/prune.mjs),
+[`pump/prune.mjs`](../pump/prune.mjs)), and records its size every run.
+
+**What stays, and why.** A row leaves only when nothing the loop decides reads
+it any more:
+
+| Table | Kept | Because |
+|---|---|---|
+| `counters` | always | the fence counter only grows |
+| `subjects`, `results`, `runs` | always | `results` holds the latest accepted result of every run_key, with coverage, fault, `assessed_at`, `measured_at` and `skips_streak`; the due list and `ever_assessed` read all of them |
+| `dispatches`, `dispatch_items` | while open, and for 7 days after they closed | ingest still judges a late result for 6 hours after an expired dispatch closed (R-CHAOS-02), duplicate detection and `getAttempt` read them; worker artifacts last 3 days, so after 7 nothing can be judged or re-ingested |
+| `leases` | for every run_key a kept item names, and while held and unexpired | fencing and stale-fence detection for in-flight and late work. A run_key with no lease row gets a fresh fence from the counter, as one never leased |
+| `attempts` | while their dispatch is kept; and, however old, every counted rejection after the run_key's last acceptance and every `retry_later` / `retry_throttled` after its last measured result | duplicates and late results; parking (`max_rejections`), the retry budget, the throttle window and the backoff count exactly these |
+| `slot_ledger` | open rows always; released rows for 7 days | |
+| `run_keys` | the run_key(s) of each (subject, workflow)'s newest result, any run_key a kept item names, and while it has a lease | the due list reads the newest result's fields; a run_key's fields are a function of the key, so one due again is recorded again unchanged |
+| `kv` | everything but `ingest.failures:<attempt>:<index>` of a pruned dispatch | the API budget and rate-limit blocks, pauses, the breaker memory, the successor and the seed state are never touched |
+
+The prune age is 7 days and can never be set below the late-result window plus
+an hour. A test builds weeks of history with every kind of result and checks
+that every reader (the due list, parking, the retry counters and backoff, the
+late-result query, `getAttempt` of every dispatch left, fencing, in-flight
+work, slots, results) answers the same before and after
+(`test/state-prune.test.mjs`).
+
+**How a pass runs.** At the end of each pump run, before the last push, and
+never after a push that failed:
+
+1. If an earlier run staged an archive, the pump looks for that artifact on
+   that run (an installation token with `actions: read`), downloads it, checks
+   its sha256 against the note in the state, decrypts it with
+   `AGE_IDENTITY` and reads every row back. Only then does it delete, in one
+   transaction, each archived row that is still exactly as archived and still
+   meets its rule. Then it runs `VACUUM` if at least a tenth of the file (and
+   256 KiB) is free.
+2. If no archive is waiting, it selects the next rows (oldest first, at most
+   50,000 rows and 30 seconds) and writes them as one archive into
+   `--state-archive-out`; `pump.yml` uploads it as the artifact
+   `ingest-state-archive-<run id>-<run attempt>` (90 days). Nothing is deleted
+   in this run.
+
+An archive that is not on its run within 6 hours, or does not read back, is
+given up: nothing is deleted, the `state-size` check turns amber once, and the
+rows are staged again. If a run dies after staging but before its push, the
+archive is uploaded but not noted; the rows are staged again later, so an
+archive can hold rows another one holds too. Readers keep one copy per table
+and key.
+
+**The archive.** `state-archive-<run id>-<attempt>.tar.age`, age-encrypted to
+`state/state.pub`, holds `state-archive.json` (what it is: the cutoff, the
+schema version, the run, rows per table, the sha256 of the rows) and
+`rows.ndjson.gz`, one `{"table", "row"}` line per row with every column. The
+artifact name starts with `ingest-`, so the archive pull and the off-site
+backup copy it like the ingest outputs, unchanged. To read one:
+
+```sh
+age -d -i ~/.isokron/loop-age-identity.key state-archive-<run>-1.tar.age | tar -xOf - rows.ndjson.gz | gunzip | head
+```
+
+**Switch.** `LANE_STATE_PRUNE_ENABLED` (repository variable): unset, empty or
+`true` is on; anything else stops staging and deleting. The size is still
+recorded.
+
+**The size metric.** Every pump run records kv `state.size`: database bytes,
+free pages, rows per table, the size of the asset it pulled, and the last
+prune result (kv `state.prune.last`). The watchdog's `state-size` check reads
+it, with the size of the asset it pulled and the total of the
+`state-snapshots` release. The thresholds: the pump refuses a state that
+decrypts or decompresses to more than 1 GiB (GitHub's own limit is 2 GiB per
+asset), so the database is amber over 256 MiB and red over 768 MiB; the
+off-site backup holds at most 8 GB and copies every snapshot, so the snapshot
+release is amber over 2 GB and red over 6 GB.
+
+**Going back.** A pump from before #14 cannot read a gzipped asset. To go back:
+pause the pump (`LANE_PUMP_ENABLED=false`) and wait until no pump run is
+going, then with this code `pull` and `push --no-compress` the state, then
+merge the revert, then turn the pump back on. Pruned rows stay in their
+archives; nothing needs them back. To stop pruning without going back, set
+`LANE_STATE_PRUNE_ENABLED=false`.
 
 ## State snapshots
 
@@ -284,7 +378,9 @@ versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
   time a run saw the newest snapshot equal the live state.
 - **Still encrypted.** A snapshot is the state asset's age ciphertext, byte for
   byte. The workflow holds no key and never decrypts; its job has only
-  `contents: write` and no environment or secrets.
+  `contents: write` and no environment or secrets. Since loop upgrade #14 the
+  pump gzips the database inside the encryption, so snapshots are about a
+  quarter of the size; older ones stay as they were, and the drill reads both.
 - **Copy check.** The run downloads the live asset, checks the bytes against
   its `sha256:` label, and checks the asset is still the same one (id, label,
   `updated_at`) after the download. If the pump pushed in between, it copies
@@ -301,8 +397,9 @@ versioned copies ([`snapshot/snapshot.mjs`](../snapshot/snapshot.mjs)):
   from its name, and one dated in the future is ignored.
 - **Dedupe.** If the newest snapshot already has the live sha256, nothing is
   uploaded; only `current_at` in the manifest moves on.
-- **Retention.** The 48 newest snapshots, plus the newest snapshot of each UTC
-  day of the last 30 days; the rest are deleted. The count is of snapshots,
+- **Retention.** The 24 newest snapshots, plus the newest snapshot of each UTC
+  day of the last 14 days and of each UTC week (Monday to Sunday) of the last
+  8 weeks; the rest are deleted. The newest is never deleted. The count is of snapshots,
   not hours: an idle loop makes no new ones, so it never ages out the copies
   it would need. The manifest is written before anything is deleted, and the
   next run picks up any asset a failed delete left behind.
@@ -379,9 +476,12 @@ run, inside the pump (the one writer), before the first tick. The log line is
   version are kept in kv as `subjects.seed`. When both match, nothing is
   written (`pump: subjects: seed-v1 already loaded (997 subjects)`).
   Otherwise every seed subject is upserted in one transaction.
-- **What is written.** id `owner/name` (what the scan-static worker takes),
-  kind `github`, source `seed-v1` (set when the subject is first seen), and a
-  tier. The commit SHA is left empty: the scan-static worker reads the head of
+- **What is written.** id `owner/name` as the seed spells it when the
+  subject is first seen (the subject key, frozen: see "Subject ids"), kind
+  `github`, source `seed-v1` (set when the subject is first seen), and a
+  tier. A seed row is matched to its subject by the subject's current name,
+  then its key, then a name it had before (case aside), so a rebuilt seed
+  that spells a renamed repository by its new name keeps its subject. The commit SHA is left empty: the scan-static worker reads the head of
   the default branch itself. A SHA or digest set by another writer is kept.
 - **A seed that cannot be read or is malformed** (no `size`, a `size` that
   does not match, a duplicate id, an id that is not `owner/name`, an unknown
@@ -516,6 +616,99 @@ sends three full shards of 25: our five, the 15 calibration subjects and the
 first T2 subjects first. Later ticks send nothing until results free a slot,
 so a full pass takes 14 rounds of up to 75, each about as long as one shard runs
 (at most about 30 minutes for 25 subjects), roughly 7 hours.
+
+## Subject ids (state schema v8)
+
+A subject is keyed by its GitHub repository's numeric id (loop upgrade #15),
+so a rename or a transfer never splits a server's history. Three things are
+kept apart:
+
+- **The subject key** (`subjects.id`): owner/name as first seen, frozen.
+  run_keys are computed from it, so it never moves: a rename makes nothing
+  due again, and the upgrade to schema v8 made nothing due again either.
+- **The identity** (`subjects.repo_id`, `node_id`, `repo_created_at`):
+  GitHub's numeric id, its GraphQL node id and its creation time.
+- **The name** (`subjects.name`): what the repository is called now. Workers
+  are sent this name (the item's `subject`), so they clone or read the
+  repository where it is today.
+
+**Lookups.** At the start of every pump run, after the seed load,
+`pump/identity.mjs` looks ids up with GraphQL: subjects without an id by
+name (GitHub follows renames and transfers), and bound subjects once a day
+by node id (which finds renames, transfers and deletions even when another
+repository took the old name). One query holds 100 repositories and costs
+one point; at most 4 queries a run, through the pump's API budget (family
+`graphql`) with the job's `GITHUB_TOKEN`. The 997 seed subjects take 10
+queries to backfill (three pump runs, about 30 minutes) and 10 a day after
+that. The log line is `pump: subject ids: ...` and kv `pump.identity` keeps
+the last pass; each change is logged as `pump: subject <key>: <event>`.
+
+**Never in the way.** A lookup that fails (rate limit, budget, outage, a bad
+answer) is logged and tried again an hour later; the run goes on. A subject
+not looked up yet is dispatched by its name, as before v8.
+
+**What a lookup can find** (each is a row in `subject_events`):
+
+| Event | What happened | What the loop does |
+|---|---|---|
+| `id_bound` | First lookup. | Records the id. |
+| `renamed`, `transferred` | New name, or new owner. | Workers get the new name from the next dispatch. The key, run_keys and results stay. A result sent under the old name and judged after the rename is recorded as usual (by run_key). |
+| `not_found` | Deleted, or turned private: no lookup is possible. | A subject-fault skip (`repo_not_visible`, fault `subject`): `gone_at` is set and the subject is not dispatched. Looked up again daily. A batch where more than 5 and more than 20% answer NOT_FOUND is not believed (most likely the token or its permissions changed): nothing is marked gone, those lookups are retried in an hour, and the health issue shows `subject-ids` red. |
+| `found_again` | Public again. | `gone_at` cleared; due as usual. |
+| `merged` | Two subjects are one repository, with the same id and creation time (a rebuilt seed listed the new name as a new row). | The survivor is the subject with history (results or attempts), else the one first seen earlier, whichever was bound first. If the newcomer was bound first, its binding (id, node id, creation time, name) moves to the survivor in the same transaction. The other is retired with `alias_of` pointing to the survivor, which is active if either was. |
+| `id_conflict` | The id answered with another creation time, or a bound subject's id answered another id (an id reused, which GitHub never does); or a first lookup by name found a repository created after the subject was first seen (a newcomer that took the old name: GitHub answers it ahead of the redirect). | Nothing is bound, renamed or merged; the subject keeps being dispatched under its last good name. The health issue shows `subject-ids` amber. Look at it by hand. |
+
+**Switch.** `LANE_SUBJECT_IDS_ENABLED` (repository variable): unset, empty or
+`true` runs the lookups; anything else stops them. The ids and names already
+found are still used, and the `subject-ids` health item shows `off`.
+
+**Read them.** Pull the state and run
+`sqlite3 state/state.sqlite "SELECT id, name, repo_id, id_status, gone_at FROM subjects WHERE name <> id OR id_status <> 'ok'"`
+and `SELECT * FROM subject_events ORDER BY id`.
+
+**Health.** The `subject-ids` item on the health issue (watchdog/identity.mjs)
+shows the last pass's not-found, conflict and merged counts: red when a pass
+stopped on a mass of NOT_FOUND and no batch has been believed since (kv
+`pump.identity` carries `mass_not_found_at` forward through runs with nothing
+to look up), or when more than 5 and more than 20% of the active subjects are
+marked gone; amber on any id conflict.
+
+**Accepting a conflict.** A conflict is sticky: the subject keeps its last
+good name and the amber stays until a person decides. Read its `id_conflict`
+event (`SELECT * FROM subject_events WHERE subject = '<key>' ORDER BY id`) and
+check on GitHub that the repository it found is the one the subject means.
+If it is: switch the pump off (`LANE_PUMP_ENABLED=false`) and wait until no
+pump run is going, pull the state, run
+`node scripts/subject-accept.mjs <key> --state state/state.sqlite`, push it,
+and switch the pump back on. The acceptance names exactly the repository the
+last `id_conflict` event found (its id and creation time). The next pump run
+looks the subject up again, and if the answer is that repository it is bound
+(event `id_bound`, with `accepted` saying when and which repository was
+accepted), whatever the reuse and squatter guards say; the amber clears with
+that run. The acceptance is used up by that one lookup whatever it answers
+(not found, an error, another repository: the conflict stands, accept again
+if still wanted) and lapses after 48 hours. An id that another subject holds
+is still refused: merge or retire one of the two by hand first. If the repository is not the right one, leave the
+conflict (the subject keeps being dispatched under its last good name) or
+retire the subject.
+
+**The v8 migration** runs in the first pump run with this code, in one
+transaction: it adds the columns and `subject_events`, sets every subject's
+name to its key and keeps every row. Code from before v8 refuses a v8 state
+(`state schema version 8 is newer than this code`), so going back means
+restoring the snapshot taken before the merge (see "State snapshots").
+
+**What going back costs.** Restoring the v7 snapshot throws away everything
+the loop recorded after it: every result, attempt and dispatch since the
+merge, the fence counter's progress, the API budget and every other kv row,
+and the ids looked up. Dispatches sent since then are unknown to the restored
+state, so their results are never ingested (their sealed ingest outputs stay
+in the archive), and that work is due again. The longer v8 has run, the more
+is lost; decide early. There is no down-migration: a v8 state could be taken
+back to v7 by dropping what v8 added (the R-SUBJ-01 test does exactly that),
+but no tool for it is shipped, so if v8 has run for long, prefer fixing
+forward (or switching the lookups off with `LANE_SUBJECT_IDS_ENABLED=false`)
+to a restore.
 
 ## The pump
 
@@ -772,6 +965,9 @@ person. off: switched off on purpose.
 | `archive` | The Mac archive pull's last good run (repository variable `ARCHIVE_LAST_OK`, set by `scripts/archive-pull.mjs`) is more than 12 hours old, or dated in the future (amber); more than 24 hours old, or the variable is empty, not JSON or has no valid `at` (red). `off` when the variable is `off` (stop the Mac's agent first, or its next good pull sets the variable again). | On the Mac: `tail ~/Library/Logs/tool-qa-archive-pull.log`, `launchctl print gui/$(id -u)/ai.isokron.tool-qa.archive-pull`, then `launchctl kickstart` it. See "Archive of history artifacts and ingest outputs". |
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
 | `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
+| `state-size` | The state database (or the asset it was pulled from) is over 256 MiB, the `state-snapshots` release holds over 2 GB, the last prune pass failed or gave up its archive, or a pump run finished without recording a size (amber); the database is over 768 MiB or the snapshots over 6 GB (red). The details show the database and asset size, the main row counts, the last prune result and the snapshot total. | A failed or given-up pass needs nothing if the next one succeeds; otherwise read the pump log's `prune:` lines. If the size keeps growing, check that pruning is on (`LANE_STATE_PRUNE_ENABLED`) and that `ingest-state-archive-*` artifacts are uploaded. Red: act before it reaches 1 GiB (see "State pruning and size"). |
+| `subject-ids` | The pump's last subject id pass (kv `pump.identity`) stopped on a mass of NOT_FOUND answers, or more than 5 and more than 20% of the active subjects are marked gone (red); any subject is in id conflict (amber). Green shows the not-found, conflict and merged counts; absent before the first pass. | Red on NOT_FOUND: check the pump job's `GITHUB_TOKEN` (nothing was marked gone; it retries hourly). Red on gone: read `subject_events` for `not_found`. Amber: read the `id_conflict` events and decide by hand (see "Subject ids"). |
+| `offsite-backup` | The off-site backup to R2: no good run for 12 hours, not configured yet, near the cost cap, or a run stopped early (amber); no good run for 24 hours, over the cost cap, or a verification failure (red). | Open the newest `offsite-backup` run's summary. See "Off-site backup". |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
@@ -797,10 +993,13 @@ artifact that is not in the folder's `index.ndjson` yet:
 - `history-*` and `registry-*` into `<dest>/<artifact name>/`, each file
   checked against the sha256 in the artifact's manifest;
 - `ingest-*` into `<dest>/ingest/<YYYY-MM-DD>/<artifact name>/` (the UTC day
-  the artifact was made; the pump's are named `ingest-<run id>-<run attempt>`),
-  still age-encrypted: nothing is decrypted. Each one gets a line in
-  `<dest>/ingest/manifest.ndjson`: `artifact_id`, `artifact`, `run_id`,
-  `run_attempt` (or `attempt_id` for a manual re-ingest), `created_at`,
+  the artifact was made; the pump's are named `ingest-<run id>-<run attempt>`,
+  and its state archives `ingest-state-archive-<run id>-<run attempt>`, "State
+  pruning and size"), still age-encrypted: nothing is decrypted. Each one gets a line in
+  `<dest>/ingest/manifest.ndjson`: `artifact_id`, `artifact`, `kind` (`pump`,
+  `state-archive` or `re-ingest`; lines written before it have none), `run_id`,
+  `run_attempt` (or `attempt_id` for a manual re-ingest; a state archive also
+  carries `state-archive-<run>-<attempt>` there), `created_at`,
   `date`, `dir`, `artifact_bytes`, `artifact_sha256`, and `files` (each
   `name`, `bytes`, `sha256`).
 
@@ -966,6 +1165,210 @@ hand while the agent is pulling finds the lock and exits. Check the log after th
 run; a full first pull takes a while, because it paces itself under the API
 limits. To update the code it runs, `git -C ~/isokron-archive/tool-qa-code
 pull --ff-only` after a change to the script is merged.
+
+## Off-site backup
+
+GitHub keeps release assets and Actions artifacts (history for 30 days, ingest
+outputs for 90), and the Mac archive above keeps a second copy on one machine.
+[`offsite-backup.yml`](../.github/workflows/offsite-backup.yml) keeps a third
+copy in a Cloudflare R2 bucket, outside both. Every 6 hours (`23 */6 * * *`;
+the operator's stand-in scheduler also dispatches it while the GitHub
+schedule is unreliable) [`offsite/backup.mjs`](../offsite/backup.mjs) copies
+everything new since the last run, byte for byte as GitHub stores it:
+
+| What | Key | Encrypted |
+|---|---|---|
+| State snapshots the `state-snapshots` manifest lists | `snapshots/<day>/state-<time>-<sha8>.sqlite.age` | yes (state key) |
+| Each version of that manifest | `snapshot-manifests/<day>/manifest-<updated>-<sha8>.json` | no (public metadata) |
+| `ingest-*` artifacts | `ingest/<day>/<artifact>/<artifact>.zip` (or the artifact's one file, for `archive: false`) | yes: the zip holds only `*.tar.age` files |
+| `history-*`, `registry-*` artifacts | `history/<day>/<artifact>/<artifact>.zip` | no (public registry and package data) |
+| What each run copied | `manifest/<day>/<run time>-<run id>.ndjson` | no |
+| Where the next run starts | `_state/cursor/<run time>-<run id>.json` | no |
+
+`<day>` is the UTC day the item was made. It never decrypts anything and holds
+no age key. Artifacts pass the archive pull's origin check (`SOURCES` in
+`scripts/archive-pull.mjs`: this repository, not a fork, branch `main`, the
+expected workflow): one from a fork or another branch is skipped and listed in
+the run's summary; one of ours from a workflow `SOURCES` does not list fails
+the run until `SOURCES` lists it. A download is checked against GitHub's
+sha256 digest, and a snapshot against its manifest entry, before upload.
+
+Each line of a run manifest names the key, its size, sha256 and MD5, the
+source (artifact id and name, run id, head commit, workflow path, or the
+release asset), and for artifacts the files inside with their sizes and
+sha256s. The bucket's lock rule keeps every object for 30 days, so nothing is
+rewritten: each run writes its own manifest part and its own cursor (the
+newest cursor wins). A run that died before writing its manifest part leaves
+objects without a line; the next run that meets one of them (written after the
+last cursor) writes its line then, marked `"recovered": true`.
+
+**Integrity.** Every upload is a new object only (`If-None-Match: *`) with
+`Content-MD5` (R2 refuses a body that does not match),
+`x-amz-checksum-sha256` and the sha256 again as metadata (`x-amz-meta-sha256`).
+A HEAD after each upload must show the same size, an ETag equal to the MD5,
+and the same sha256; anything else is a verification failure (the run fails,
+the health item is red). A key that already holds the same sha256 is skipped.
+A key that holds other bytes is never overwritten: the copy goes beside it as
+`<key>.sha256-<12 hex>` and that run reports a verification failure. Should R2
+ever refuse the `x-amz-checksum-sha256` header, set the variable
+`OFFSITE_SHA256_HEADER` to `off`: Content-MD5, the signed payload hash and the
+metadata check remain.
+
+**Client.** The official AWS SDK v3 S3 client, exact version in
+[`offsite/package.json`](../offsite/package.json), installed with
+`npm ci --prefix offsite --ignore-scripts` from
+[`offsite/package-lock.json`](../offsite/package-lock.json), which holds every
+package's integrity hash. The rest of tool-qa stays free of dependencies.
+
+### Setup
+
+1. In the Cloudflare dashboard, R2 → Manage API tokens → Create API token:
+   permission **Object Read & Write**, applied to the bucket
+   `isokron-loop-backup` only. Copy the Access Key ID and the Secret Access Key
+   (the S3 credentials, not the token value).
+2. Add them as repository secrets, the account ID as a secret too, and the
+   bucket as a repository variable. The account ID is read only from the
+   secret: GitHub prints each step's environment in the run log, which is
+   public here, and masks only secrets. Delete any repository variable
+   `R2_ACCOUNT_ID` (`gh variable delete R2_ACCOUNT_ID --repo isokron-ai/tool-qa`);
+   the workflow does not read it:
+
+   ```sh
+   gh secret set R2_ACCESS_KEY_ID --repo isokron-ai/tool-qa       # paste the Access Key ID
+   gh secret set R2_SECRET_ACCESS_KEY --repo isokron-ai/tool-qa   # paste the Secret Access Key
+   gh secret set R2_ACCOUNT_ID --repo isokron-ai/tool-qa          # paste the 32-hex account ID
+   gh variable set R2_BUCKET --repo isokron-ai/tool-qa --body isokron-loop-backup
+   ```
+
+3. Run it once and read the summary: `gh workflow run offsite-backup.yml --repo isokron-ai/tool-qa`.
+
+Until all four are set, each run exits 0 with a notice ("not configured
+yet") and the health item is amber. Only the `Back up` step (and the opt-in
+`Prune` step) gets the secrets, and both jobs run only on `main`: a dispatch
+from another branch skips them. Optional variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LANE_OFFSITE_ENABLED` | on | `false` stops the backup (and shows `off` on the health issue). `LOOP_ENABLED` and `LOOP_PAUSE_UNTIL` stop it too. |
+| `OFFSITE_MAX_BYTES` | 8000000000 (8 GB) | The cost cap; at most 10000000000, the free tier. |
+| `OFFSITE_MAX_RUN_BYTES` | 2000000000 | Bytes one phase of a run (snapshots, then artifacts) uploads; past it, the rest of that kind waits for the next run and the other kinds go on. A run also stops taking new items after 30 minutes. |
+| `OFFSITE_MAX_CLASS_A` | 2000 | LIST and PUT operations one run may use. |
+| `OFFSITE_MAX_CLASS_B` | 20000 | HEAD and GET operations one run may use. |
+| `OFFSITE_SHA256_HEADER` | on | `off` stops sending `x-amz-checksum-sha256`. |
+| `OFFSITE_PRUNE_ENABLED` | off | `true` lets the prune job delete (below). |
+| `OFFSITE_PRUNE_AT_BYTES`, `OFFSITE_PRUNE_TO_BYTES`, `OFFSITE_PRUNE_KEEP_SNAPSHOTS` | 85% and 70% of the cap; 48 | Prune thresholds. |
+
+### The cost cap
+
+R2's free tier is 10 GB-month of storage, 1 million Class A operations (LIST,
+PUT) and 10 million Class B operations (HEAD, GET) a month, with free egress,
+and there is no spending cap on Cloudflare's side. So the run enforces one:
+
+- before uploading it lists the whole bucket and sums its size; it uploads
+  nothing that would take the bucket past `OFFSITE_MAX_BYTES` (1 MB is kept
+  for the run's own manifest and cursor). A run that hits the cap fails, its
+  heartbeat says `over_cap`, and the health item is red until room is made;
+- from 85% of the cap the health item is amber ("near the cap");
+- each run counts its operations, retries included (the S3 client does not
+  retry on its own; the run retries a network error, 429 or 5xx up to three
+  times and counts each attempt), refuses any past its per-run caps, and
+  reports them in the run summary and the heartbeat;
+- a PUT whose every attempt failed may still have been stored, so its bytes
+  count against the cap (`possibly_stored_bytes` in the heartbeat);
+- a bucket listing marked truncated with no continuation token is an error:
+  the run copies nothing on a short sum.
+
+**Operations per month.** At four runs a day the per-run caps bound a month
+at 2,000 × 4 × 30 = 240,000 Class A operations (24% of the free tier) and
+20,000 × 4 × 30 = 2.4 million Class B (24%), even if every run used its full
+caps. The stand-in scheduler does not add runs: it dispatches only when no run
+started in the last 330 minutes. Typical use is far below that (next
+paragraph).
+
+At the rate measured on 24 Nov 2026 (about 590 MB a day of ingest outputs, 45
+MB of state snapshots, 6 MB of history; about 240 objects a day), a month is
+about 7,000 PUTs plus about 1,000 LIST pages (0.8% of the Class A tier) and
+about 11,000 HEADs (0.1% of the Class B tier). Storage is the limit: about 19
+GB a month, so with the 30-day lock the 8 GB cap is reached after about 12
+days, and the prune cannot make room before objects are 30 days old. Keeping
+30 days off-site at that rate needs one of: a shorter lock with the prune on,
+a cap above the free tier, or copying less (the ingest outputs are most of
+it). Until then the item turns red when the cap is reached, and nothing is
+lost on GitHub or the Mac archive.
+
+### Prune (opt-in, off by default)
+
+The `prune` job ([`offsite/prune.mjs`](../offsite/prune.mjs)) frees room when
+the bucket nears the cap. It does nothing unless the bucket holds more than
+`OFFSITE_PRUNE_AT_BYTES`; then it deletes, until the bucket is down to
+`OFFSITE_PRUNE_TO_BYTES`, only objects last written more than 31 days ago (the
+lock refuses younger ones; a day of margin), in this order, oldest first in
+each: `history/`, old cursors (the newest 10 kept), old snapshot manifests (the
+newest 10 kept), `ingest/`, then `snapshots/`, never the newest
+`OFFSITE_PRUNE_KEEP_SNAPSHOTS` (48). The run manifests under `manifest/` are
+never deleted. It fails when it cannot reach the target because the rest is
+still locked. In apply mode it deletes nothing, and fails, when the listing
+looks cut short: a page marked truncated with no continuation token, or the
+newest cursor or newest run manifest (each listed on its own) missing from
+the full listing; it also refuses when there is no cursor yet. Its run summary
+is scrubbed of the credentials and the account ID.
+
+- Dry run, any time: `gh workflow run offsite-backup.yml --repo isokron-ai/tool-qa -f prune=dry-run` (lists what it would delete in the run summary).
+- To let it delete: `gh variable set OFFSITE_PRUNE_ENABLED --repo isokron-ai/tool-qa --body true`. It then runs after every scheduled backup (not after a cancelled one), and on a dispatch with `-f prune=apply`; the stand-in scheduler dispatches with `-f prune=apply` while the variable is `true`.
+
+An R2 lifecycle rule ("delete objects older than N days" on a prefix) would
+do the same for one prefix without code, but it cannot keep the newest
+snapshots by count or wait for the bucket to fill, so the job is used instead.
+
+### Health
+
+Each run uploads a heartbeat artifact, `offsite-heartbeat-<run id>-<attempt>.json`
+(kept 7 days): status (`ok`, `unconfigured`, `over_cap`, `verify_failed`,
+`error`), the last good run, bucket size and cap, counts and operations. The
+job's `GITHUB_TOKEN` cannot write a repository variable such as
+`OFFSITE_LAST_OK`, and handing the job the loop App's key or a second R2 token
+only for a heartbeat would widen what it holds; an artifact needs no
+permission. The watchdog reads the newest heartbeat of a finished
+`offsite-backup.yml` run on `main` ([`watchdog/offsite.mjs`](../watchdog/offsite.mjs));
+when that run failed before it could read the bucket, it takes the last good
+time from an older heartbeat, so one failed run is amber, not red:
+
+| Check | Amber or red means | What to do |
+|---|---|---|
+| `offsite-backup` | Amber: the last good run is 12 to 24 hours old, the backup is not configured yet, no run has reported yet, the bucket is near the cap, or a run stopped early on its per-run caps. Red: no good run for 24 hours, over the cost cap, a verification failure, or no good run ever and the last one failed. Off: `LANE_OFFSITE_ENABLED` is not `true`. | Open the newest `offsite-backup` run's summary. Over the cap: see "The cost cap" and the prune. A verification failure: the summary names the key; compare it with its manifest line (restore steps below). |
+
+### Restore
+
+On the operator's machine, with the AWS CLI (or any S3 client), a token that
+can read the bucket, and age with the right identity. Use a separate
+read-only R2 token for this (Object Read only, this bucket), not the backup's.
+
+```sh
+export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_DEFAULT_REGION=auto
+R2=https://<account id>.r2.cloudflarestorage.com
+B=s3://isokron-loop-backup
+
+# 1. Find it: the run manifests list every object with its sha256.
+aws s3 ls --endpoint-url "$R2" "$B/manifest/2026-11-24/"
+aws s3 cp --endpoint-url "$R2" "$B/manifest/2026-11-24/<part>.ndjson" - | grep ingest-45312591667-1
+
+# 2. Download it and check it against the manifest line and its own metadata.
+aws s3 cp --endpoint-url "$R2" "$B/ingest/2026-11-24/ingest-45312591667-1/ingest-45312591667-1.zip" .
+shasum -a 256 ingest-45312591667-1.zip            # must equal "sha256" in the manifest line
+aws s3api head-object --endpoint-url "$R2" --bucket isokron-loop-backup \
+  --key ingest/2026-11-24/ingest-45312591667-1/ingest-45312591667-1.zip --query Metadata.sha256
+
+# 3. Decrypt locally (never on a runner).
+unzip ingest-45312591667-1.zip -d ingest-45312591667-1   # each file's sha256 is in the line's contents.files
+age --decrypt -i ingest-identity.txt -o item.tar ingest-45312591667-1/<file>.tar.age   # "Reading ingest outputs"
+
+# A state snapshot: download, check the sha256 (it starts with the sha8 in the name), then
+age --decrypt -i ~/.isokron/loop-age-identity.key -o state.sqlite state-<time>-<sha8>.sqlite.age
+```
+
+To put a snapshot back as the live state, follow "State snapshots" (the
+restore drill and `restore --apply`, with the loop stopped); the off-site copy
+is the same bytes as the release asset of that name.
 
 ## Result encryption keys
 

@@ -19,12 +19,18 @@
 // Schema v4 numbers the items of a dispatch (item_index, their 0-based position
 // in the dispatched list). The worker names each item's result bundle by that
 // position and ingest judges every item on its own.
+//
+// Schema v8 keys subject identity by GitHub's numeric repository id
+// (repo_id) while subjects.id stays the frozen subject key that run_keys name:
+// see state/schema-v8.sql and pump/identity.mjs.
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 export const MAX_SLOTS = 15;
+/** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
+export const ACCEPT_TTL_MS = 48 * 3_600_000;
 /** How far apart one tick's dispatches may be created and still count as one burst (R-ING-26). */
 export const SHA_BURST_MS = 30_000;
 
@@ -36,6 +42,7 @@ const MIGRATIONS = [
   { version: 5, sql: () => readFileSync(new URL('./schema-v5.sql', import.meta.url), 'utf8') },
   { version: 6, sql: () => readFileSync(new URL('./schema-v6.sql', import.meta.url), 'utf8') },
   { version: 7, sql: () => readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8') },
+  { version: 8, sql: () => readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -77,10 +84,34 @@ function checkTtl(ttlMs) {
 // because the worker branch moved between the pump reading it and GitHub
 // starting the run, or because someone else's run took the shard's run name.
 // Neither says anything about the run_key's own work.
-const NOT_COUNTED = ["'unknown_attempt'", "'unknown_run_key'", "'fence_mismatch'", "'duplicate_result'", "'stale_fence'", "'retry_later'", "'retry_throttled'", "'run_sha_mismatch'"].join(', ');
+export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch']);
+const NOT_COUNTED = NOT_COUNTED_REASONS.map((r) => `'${r}'`).join(', ');
 
 function plain(row) {
   return row ? { ...row } : undefined;
+}
+
+const REPO_NAME_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+
+/**
+ * A GitHub GraphQL repository answer as {repoId, nodeId, name, createdAt}, or
+ * null when it is not usable (a missing or malformed field).
+ */
+function checkNode(node) {
+  if (!node || typeof node !== 'object') return null;
+  const repoId = node.databaseId;
+  if (!Number.isSafeInteger(repoId) || repoId <= 0) return null;
+  if (typeof node.id !== 'string' || !/^[A-Za-z0-9_=-]{1,200}$/.test(node.id)) return null;
+  if (typeof node.nameWithOwner !== 'string' || !REPO_NAME_RE.test(node.nameWithOwner)) return null;
+  const createdAt = typeof node.createdAt === 'string' && Number.isFinite(Date.parse(node.createdAt)) ? node.createdAt : null;
+  if (createdAt === null) return null;
+  return { repoId, nodeId: node.id, name: node.nameWithOwner, createdAt };
+}
+
+/** transferred when the owner changed (case aside), else renamed. */
+function renameKind(from, to) {
+  const owner = (n) => String(n ?? '').split('/')[0].toLowerCase();
+  return owner(from) !== owner(to) ? 'transferred' : 'renamed';
 }
 
 export class StateDb {
@@ -268,12 +299,18 @@ export class StateDb {
 
   // ---- subjects and runs ----
 
-  upsertSubject({ id, kind, source, now }) {
+  /**
+   * Insert a subject (its display name defaults to the key) or move its
+   * last_seen. An existing subject's name is never changed here: only an
+   * identity lookup moves it (applyIdentityLookup), since a seed may still
+   * spell an old name.
+   */
+  upsertSubject({ id, kind, source, name = null, now }) {
     const t = iso(now);
     this.raw.prepare(`
-      INSERT INTO subjects (id, kind, source, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)
+      INSERT INTO subjects (id, kind, source, first_seen, last_seen, name) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT (id) DO UPDATE SET last_seen = MAX(subjects.last_seen, excluded.last_seen)
-    `).run(id, kind, source, t, t);
+    `).run(id, kind, source, t, t, name ?? id);
   }
 
   getSubject(id) {
@@ -361,11 +398,11 @@ export class StateDb {
    * artifact digest counts as a change event and moves `changed_at`. A retired
    * subject is active again.
    */
-  setSubjectVersion({ id, kind, source, tier, sha = null, artifactDigest = null, now }) {
+  setSubjectVersion({ id, kind, source, tier, sha = null, artifactDigest = null, name = null, now }) {
     if (!Number.isInteger(tier) || tier < 0 || tier > 4) throw new TypeError(`tier must be 0..4, got ${tier}`);
     const t = iso(now);
     this.tx(() => {
-      this.upsertSubject({ id, kind, source, now });
+      this.upsertSubject({ id, kind, source, name, now });
       const cur = this.getSubject(id);
       const changed = cur.sha !== sha || cur.artifact_digest !== artifactDigest;
       this.raw.prepare(`
@@ -408,6 +445,249 @@ export class StateDb {
     return this.raw.prepare('SELECT * FROM subjects ORDER BY id').all().map(plain);
   }
 
+  // ---- subject identity (schema v8, loop upgrade #15) ----
+  //
+  // subjects.id is the subject key: frozen at first sight, named by run_keys,
+  // leases, dispatch items, attempts and results. repo_id (GitHub's numeric
+  // repository id) is the identity: one subject per repository, whatever it
+  // is called now (subjects.name). pump/identity.mjs looks the ids up and
+  // hands each answer to applyIdentityLookup().
+
+  /** The subject bound to a repository id, or undefined. */
+  getSubjectByRepoId(repoId) {
+    return plain(this.raw.prepare('SELECT * FROM subjects WHERE repo_id = ?').get(repoId));
+  }
+
+  static acceptKey(key) {
+    return `subjects.identity.accept:${key}`;
+  }
+
+  /**
+   * A person accepts the binding for a subject in id conflict (run with the
+   * pump paused; scripts/subject-accept.mjs): the repository its last
+   * id_conflict event found (id and creation time) is bound by the next
+   * lookup if that lookup answers exactly it, the reuse and squatter guards
+   * aside, and the conflict clears. The acceptance is used up by that next
+   * lookup whatever it answers, and lapses after ACCEPT_TTL_MS. An id another
+   * subject holds is still refused.
+   * @returns {{ok: boolean, why?: string}}
+   */
+  acceptIdentityConflict(key, { now } = {}) {
+    return this.tx(() => {
+      const s = this.getSubject(key);
+      if (!s) return { ok: false, why: `no subject ${key}` };
+      if (s.id_status !== 'conflict') return { ok: false, why: `${key} is not in conflict (id_status ${s.id_status ?? 'none'})` };
+      // Exactly the repository the conflict found: its id and creation time.
+      const last = this.listSubjectEvents(key).filter((e) => e.kind === 'id_conflict').at(-1);
+      const got = last?.detail?.got;
+      if (!Number.isSafeInteger(got?.repo_id) || typeof got?.created_at !== 'string') return { ok: false, why: `${key}: its last id_conflict event names no repository to accept` };
+      const at = iso(now);
+      this.setKv(StateDb.acceptKey(key), { at, expires: iso(toMs(now) + ACCEPT_TTL_MS), repo_id: got.repo_id, created_at: got.created_at }, { now });
+      this.raw.prepare('UPDATE subjects SET id_status = NULL, id_checked_at = NULL WHERE id = ?').run(key);
+      return { ok: true, repo_id: got.repo_id, created_at: got.created_at, expires: iso(toMs(now) + ACCEPT_TTL_MS) };
+    });
+  }
+
+  /** Whether any result or attempt names this subject key. */
+  hasSubjectHistory(key) {
+    return Boolean(this.raw.prepare(`
+      SELECT EXISTS (SELECT 1 FROM results WHERE subject = ?) OR EXISTS (SELECT 1 FROM attempts WHERE subject = ?) AS h
+    `).get(key, key).h);
+  }
+
+  /** Append an identity event (never rewritten). */
+  recordSubjectEvent({ subject, repoId = null, kind, oldName = null, newName = null, detail = null, now }) {
+    this.raw.prepare(`
+      INSERT INTO subject_events (subject, repo_id, kind, old_name, new_name, detail, at) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(subject, repoId, kind, oldName, newName, detail === null ? null : JSON.stringify(detail), iso(now));
+  }
+
+  /** Identity events, oldest first; all of them, or one subject's. detail is parsed. */
+  listSubjectEvents(subject) {
+    const rows = subject === undefined
+      ? this.raw.prepare('SELECT * FROM subject_events ORDER BY id').all()
+      : this.raw.prepare('SELECT * FROM subject_events WHERE subject = ? ORDER BY id').all(subject);
+    return rows.map((r) => ({ ...r, detail: r.detail === null ? null : JSON.parse(r.detail) }));
+  }
+
+  /**
+   * Subjects due an identity lookup now, at most `limit` of each kind:
+   *   byName  not bound to an id yet (never looked up first, then by tier and
+   *           key); looked up by their current name
+   *   byId    bound, looked up again by node id to follow renames, transfers
+   *           and deletions (oldest check first)
+   * Only active GitHub subjects whose name is owner/name (not retired, not
+   * merged into another). How long to wait after a lookup depends on how it
+   * went: `retryMs` maps id_status (ok, error, not_found, conflict) to ms.
+   */
+  identityCandidates({ now, retryMs, limit = 100 } = {}) {
+    const t = toMs(now);
+    const wait = (status) => Number(retryMs?.[status ?? 'none'] ?? 0);
+    const rows = this.raw.prepare(`
+      SELECT * FROM subjects WHERE kind = 'github' AND retired_at IS NULL AND alias_of IS NULL
+        AND (id_status IS NULL OR id_status <> 'duplicate')
+      ORDER BY (id_checked_at IS NOT NULL), id_checked_at, tier, id
+    `).all().map(plain);
+    const ready = (s) => s.id_checked_at === null || Date.parse(s.id_checked_at) + wait(s.id_status) <= t;
+    const byName = rows.filter((s) => s.repo_id === null && REPO_NAME_RE.test(String(s.name)) && ready(s)).slice(0, limit);
+    const byId = rows.filter((s) => s.repo_id !== null && typeof s.node_id === 'string' && s.node_id !== '' && ready(s)).slice(0, limit);
+    return { byName, byId };
+  }
+
+  /**
+   * Apply one identity lookup of subject `key`, in one transaction.
+   *   lookup.status  ok | not_found | error
+   *   lookup.node    for ok: {databaseId, id, nameWithOwner, createdAt}
+   *   lookup.via     name | id
+   * Never moves the subject key, so no run_key changes. Returns the events it
+   * recorded. What it does:
+   *   error      id_status error (a bound subject keeps its id; one not found
+   *              or in conflict keeps that status); tried again soon
+   *   not_found  the repository was deleted or turned private, or the name is
+   *              gone: id_status not_found and gone_at, a subject-fault skip
+   *              (the due list leaves it out); event not_found, once
+   *   ok         binds the id (event id_bound) if it is not bound yet; a new
+   *              owner/name is recorded (renamed, or transferred when the
+   *              owner changed) and becomes the name workers are sent; a
+   *              subject that was not found is back (found_again).
+   *              Guards: an id already bound to another subject with the same
+   *              creation time is the same repository listed twice: the two
+   *              are merged. The survivor is the one with history (results or
+   *              attempts), else the one first seen earlier, whichever was
+   *              bound first; the binding moves to it in this transaction if
+   *              needed, the other becomes its alias (alias_of, retired; event
+   *              merged), and the survivor is active if either was. With
+   *              another creation time, or when a bound subject's lookup
+   *              answers another id or creation time, the id would have been
+   *              reused, which GitHub never does; and a first binding to a
+   *              repository created after the subject was first seen would be
+   *              a newcomer squatting on the old name. Neither binds, renames
+   *              or merges anything (id_status conflict, event id_conflict
+   *              once).
+   */
+  applyIdentityLookup(key, lookup, { now } = {}) {
+    const t = iso(now);
+    const events = [];
+    const event = (e) => {
+      const row = { subject: key, repoId: null, oldName: null, newName: null, detail: null, ...e };
+      events.push(row);
+      this.recordSubjectEvent({ ...row, now });
+    };
+    return this.tx(() => {
+      const s = this.getSubject(key);
+      if (!s) return events;
+      const set = (fields) => {
+        const cols = Object.keys(fields);
+        this.raw.prepare(`UPDATE subjects SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...cols.map((c) => fields[c]), key);
+      };
+      const via = lookup?.via === 'id' ? 'id' : 'name';
+      // A person's acceptance of this subject's conflict (acceptIdentityConflict)
+      // is used up by this lookup, whatever it answers (R-SUBJ-17). It binds
+      // only the exact repository accepted (id and creation time), and only
+      // within ACCEPT_TTL_MS.
+      const acceptKey = StateDb.acceptKey(key);
+      const marker = this.getKv(acceptKey);
+      if (marker !== undefined) this.deleteKv(acceptKey);
+      const live = marker && typeof marker === 'object' && Date.parse(marker.expires) > toMs(now) ? marker : null;
+      if (lookup?.status === 'not_found') {
+        if (s.id_status !== 'not_found') {
+          event({
+            kind: 'not_found', repoId: s.repo_id, oldName: s.name,
+            detail: { via, skip: { reason: 'repo_not_visible', fault: 'subject' } },
+          });
+        }
+        set({ id_status: 'not_found', id_checked_at: t, gone_at: s.gone_at ?? t });
+        return events;
+      }
+      const n = lookup?.status === 'ok' ? checkNode(lookup.node) : null;
+      if (!n) {
+        // No usable answer counts as an error: try again soon, change nothing
+        // else. An acceptance used up here leaves the conflict as it was.
+        let status = 'error';
+        if (s.id_status === 'not_found' || s.id_status === 'conflict') status = s.id_status;
+        else if (marker !== undefined && s.id_status === null) status = 'conflict'; // the accepted conflict stands
+        set({ id_status: status, id_checked_at: t });
+        return events;
+      }
+      const accepted = live !== null && n.repoId === live.repo_id && n.createdAt === live.created_at;
+      const acceptance = accepted ? { at: live.at, repo_id: live.repo_id, created_at: live.created_at } : null;
+      const conflict = (detail) => {
+        if (s.id_status !== 'conflict') event({ kind: 'id_conflict', repoId: s.repo_id ?? n.repoId, oldName: s.name, newName: n.name, detail: { via, ...detail } });
+        set({ id_status: 'conflict', id_checked_at: t });
+        return events;
+      };
+      const heldElsewhere = () => { const o = this.getSubjectByRepoId(n.repoId); return o !== undefined && o.id !== key; };
+      if (s.repo_id !== null) {
+        if (s.repo_id !== n.repoId || (s.repo_created_at !== null && s.repo_created_at !== n.createdAt)) {
+          if (!accepted || heldElsewhere()) {
+            return conflict({ expected: { repo_id: s.repo_id, created_at: s.repo_created_at }, got: { repo_id: n.repoId, created_at: n.createdAt } });
+          }
+          event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, accepted: acceptance, replaced: { repo_id: s.repo_id, created_at: s.repo_created_at } } });
+          set({ repo_id: n.repoId, repo_created_at: n.createdAt });
+        }
+      } else if (accepted && !heldElsewhere()) {
+        event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, created_at: n.createdAt, accepted: acceptance } });
+        set({ repo_id: n.repoId, repo_created_at: n.createdAt });
+      } else {
+        // A repository created after the subject was first seen cannot be the
+        // one the subject meant: its old name now belongs to a newcomer, which
+        // GitHub answers ahead of the redirect (R-SUBJ-12).
+        const squat = (x) => Date.parse(n.createdAt) > Date.parse(x.first_seen);
+        const squatConflict = () => conflict({ reason: 'created_after_first_seen', first_seen: s.first_seen, got: { repo_id: n.repoId, created_at: n.createdAt } });
+        const other = this.getSubjectByRepoId(n.repoId);
+        if (other && other.id !== key) {
+          if (other.repo_created_at !== n.createdAt) {
+            return conflict({ bound_to: other.id, expected: { created_at: other.repo_created_at }, got: { repo_id: n.repoId, created_at: n.createdAt } });
+          }
+          // The same repository as `other`. The survivor is the one with
+          // history (results or attempts), else the one first seen earlier;
+          // whichever was bound first does not matter (R-SUBJ-07).
+          const sHist = this.hasSubjectHistory(key);
+          const oHist = this.hasSubjectHistory(other.id);
+          const sSurvives = sHist !== oHist ? sHist : s.first_seen < other.first_seen;
+          if (!sSurvives) {
+            const wasActive = s.retired_at === null;
+            event({ kind: 'merged', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, into: other.id } });
+            set({ alias_of: other.id, id_status: 'duplicate', id_checked_at: t, retired_at: s.retired_at ?? t });
+            this.raw.prepare('UPDATE subjects SET alias_of = ? WHERE alias_of = ?').run(other.id, key);
+            if (wasActive) {
+              this.raw.prepare('UPDATE subjects SET retired_at = NULL, tier = MIN(tier, ?) WHERE id = ?').run(s.tier, other.id);
+            }
+            if (other.name !== n.name) {
+              event({ subject: other.id, kind: renameKind(other.name, n.name), repoId: n.repoId, oldName: other.name, newName: n.name, detail: { via, seen_through: key } });
+              this.raw.prepare('UPDATE subjects SET name = ? WHERE id = ?').run(n.name, other.id);
+            }
+            return events;
+          }
+          if (squat(s)) return squatConflict();
+          // This subject has the history: the binding moves here, in this
+          // transaction, and the one bound first becomes its alias.
+          const otherActive = other.retired_at === null;
+          this.raw.prepare(`
+            UPDATE subjects SET repo_id = NULL, node_id = NULL, repo_created_at = NULL, alias_of = ?, id_status = 'duplicate',
+              id_checked_at = ?, retired_at = COALESCE(retired_at, ?) WHERE id = ?
+          `).run(key, t, t, other.id);
+          this.raw.prepare('UPDATE subjects SET alias_of = ? WHERE alias_of = ?').run(key, other.id);
+          event({ subject: other.id, kind: 'merged', repoId: n.repoId, oldName: other.name, newName: n.name, detail: { via, into: key, binding_moved: true } });
+          event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, created_at: n.createdAt, moved_from: other.id } });
+          set({ repo_id: n.repoId, repo_created_at: n.createdAt, ...(otherActive ? { retired_at: null, tier: Math.min(s.tier, other.tier) } : {}) });
+        } else {
+          if (squat(s)) return squatConflict();
+          event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, created_at: n.createdAt } });
+          set({ repo_id: n.repoId, repo_created_at: n.createdAt });
+        }
+      }
+      if (s.name !== n.name) {
+        event({ kind: renameKind(s.name, n.name), repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via } });
+      }
+      if (s.gone_at !== null || s.id_status === 'not_found') {
+        event({ kind: 'found_again', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, gone_since: s.gone_at } });
+      }
+      set({ name: n.name, node_id: n.nodeId, id_status: 'ok', id_checked_at: t, gone_at: null });
+      return events;
+    });
+  }
+
   // ---- run keys, dispatches and results (schema v3) ----
 
   /** Remember the fields a run_key was computed from. First write wins. */
@@ -439,8 +719,10 @@ export class StateDb {
         INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status, workflow_sha)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       `).run(attemptId, shardId, workflow, repo, workflowFile, ref, t, iso(expires), workflowSha);
-      const ins = this.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence, item_index) VALUES (?, ?, ?, ?, ?, ?)');
-      items.forEach((it, index) => ins.run(attemptId, it.run_key, it.subject, workflow, it.fence, index));
+      // subject_name: the owner/name the worker is sent (schema v8); the
+      // result is recorded under the subject key whatever it is called later.
+      const ins = this.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence, item_index, subject_name) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      items.forEach((it, index) => ins.run(attemptId, it.run_key, it.subject, workflow, it.fence, index, it.subject_name ?? it.name ?? null));
     });
   }
 
@@ -558,7 +840,8 @@ export class StateDb {
    *
    *   {attempt_id, workflow, repo, workflow_file, run_id, workflow_sha,
    *    canaries, status, shard_id, created, expires,
-   *    items: [{index, run_key, fence, subject, current_fence, outcome, resolved, retries}]}
+   *    items: [{index, run_key, fence, subject, subject_name, repo_id, name,
+   *             current_fence, outcome, resolved, retries}]}
    *
    * workflow_file is a path under .github/workflows/. items are in dispatch
    * order; index is the item's 0-based position, which names its result bundle
@@ -570,6 +853,10 @@ export class StateDb {
    * and throttled_since are the count and first time of its retry_throttled
    * decisions since then
    * (retryThrottled; R-SUB-04).
+   * subject is the subject key the result is recorded under; subject_name the
+   * owner/name the worker was sent (null for dispatches from before schema
+   * v8); repo_id and name the subject's repository id (null until looked up)
+   * and current name, which may differ from subject_name after a rename.
    * canaries is always empty for now (none are injected yet). When they are,
    * they live only here, in the state database, which is stored encrypted
    * (scripts/state-asset.mjs); they must never go into dispatch inputs (shown
@@ -581,14 +868,19 @@ export class StateDb {
     const recorded = this.raw.prepare(`
       SELECT accepted, outcome FROM attempts WHERE attempt_id = ? AND run_key = ? AND fence = ? ORDER BY id LIMIT 1
     `);
+    const subj = this.raw.prepare('SELECT repo_id, name FROM subjects WHERE id = ?');
     const items = d.items.map((it) => {
       const lease = this.getLease(it.run_key);
       const rec = recorded.get(attemptId, it.run_key, it.fence);
+      const s = subj.get(it.subject);
       return {
         index: it.item_index,
         run_key: it.run_key,
         fence: it.fence,
         subject: it.subject,
+        subject_name: it.subject_name ?? null,
+        repo_id: s?.repo_id ?? null,
+        name: s?.name ?? null,
         current_fence: lease ? lease.fence : null,
         outcome: rec ? rec.outcome ?? (rec.accepted === 1 ? 'accepted' : 'rejected') : null,
         resolved: it.resolved,

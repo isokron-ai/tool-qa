@@ -169,9 +169,9 @@ export function createHttp({
 
   /**
    * One request with retries. Returns { status, headers, text() , json() }.
-   * `redirect` is passed to fetch ('follow' by default; release-diff uses 'manual'
-   * so it never leaves the hosts it allows), `timeoutMs` overrides the
-   * per-request time limit (it covers reading the body too).
+   * `redirect` is passed to fetch ('follow' by default). 'manual' returns a 3xx as it is,
+   * so a request never leaves its host (the OCI reads, release-diff's allowed hosts).
+   * `timeoutMs` overrides the per-request time limit (it covers reading the body too).
    * Throws FetchProblem for a rate limit or an outage that outlasts the retries.
    */
   async function request(url, { method = 'GET', headers = {}, body, rateLimitCheck, redirect = 'follow', timeoutMs: callTimeoutMs } = {}) {
