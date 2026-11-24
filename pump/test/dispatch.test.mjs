@@ -132,3 +132,14 @@ test('R-ING-19: the branch is read with the actions-only dispatch token; a priva
     (err) => err.status === 404 && /cannot read branch main \(HTTP 404\).*Contents: read/.test(err.message),
   );
 });
+
+test('R-ING-23: a branch that cannot be read names both causes: a missing branch, or a private repository', async () => {
+  const c = fakeClock();
+  const api = fakeApi([['GET', '/repos/isokron-ai/mcp-check/branches/mian', () => ({ status: 404, body: { message: 'Branch not found' } })]]);
+  const d = createDispatcher({ mintToken: async () => ({ token: 'ghs_synthetic', expiresAt: c.t + 3_600_000 }), fetch: api.fetch, apiUrl: API, now: c.now, sleep: c.sleep });
+  await assert.rejects(d.resolveRef({ repo: 'isokron-ai/mcp-check', ref: 'mian' }), (err) => {
+    assert.match(err.message, /branch does not exist \(check `ref` in pump\/workflows\.json for a typo or a deleted branch\)/);
+    assert.match(err.message, /or the repository is private/);
+    return true;
+  });
+});

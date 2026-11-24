@@ -93,7 +93,7 @@ export async function resolveRef(client, { repo, ref }) {
     res = await client.request('GET', `/repos/${repo}/branches/${encodeURIComponent(ref)}`, { family: 'contents' });
   } catch (err) {
     if (err?.status === 404 || (err?.status === 403 && !/rate limit/i.test(String(err?.message)))) {
-      const e = new Error(`${repo}: cannot read branch ${ref} (HTTP ${err.status}). The dispatch token has actions: write only, which reads a public repository's branches; a private worker repository needs the App's Contents: read permission and the dispatcher to ask for it (pump/dispatch.mjs resolveRef)`);
+      const e = new Error(`${repo}: cannot read branch ${ref} (HTTP ${err.status}). Either the branch does not exist (check \`ref\` in pump/workflows.json for a typo or a deleted branch), or the repository is private: the dispatch token has actions: write only, which reads a public repository's branches, so a private worker repository needs the App's Contents: read permission and the dispatcher to ask for it (pump/dispatch.mjs resolveRef)`);
       e.status = err.status;
       throw e;
     }
