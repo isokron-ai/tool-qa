@@ -28,6 +28,7 @@ test('R-WD-01: the breaker is closed only on a well-formed, passing status check
     [{ status: at(36.01) }, 'stale'],
     [{ status: greenStatus(NOW + 11 * 60_000) }, 'stale'],
     [{ status: { ...at(1), ok: false } }, 'red'],
+    [{ status: { ...at(1), ok: false, result: 'main_moved' } }, 'red'], // a green for a commit main had moved past: not ok, so open
     [{ status: { ...at(1), selftest: 'fail' } }, 'red'],
     [{ status: { ...at(1), mutations: 'skipped' } }, 'red'],
     [{ status: { ...at(1), mutations: 'fail', ok: true } }, 'red'],
