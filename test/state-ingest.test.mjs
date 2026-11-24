@@ -361,3 +361,46 @@ test('R-ING-18: run_sha_mismatch does not count towards parking the run_key', ()
   assert.deepEqual(db.rejectedRunKeys(2), []);
   db.close();
 });
+
+test('R-COV-02: recordResult stores the fault side and coverage of an accepted result; a later skip keeps assessed_at', () => {
+  const db = openState(':memory:');
+  const [a] = dispatch(db, { attemptId: 'att-1' });
+  db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: a.fence, verdict: 'accepted', outcome: 'accepted', fault: null, coverage: 'assessed', now: T0 + MIN });
+  let r = db.getResult(KEY_A);
+  assert.deepEqual([r.fault, r.coverage, r.assessed_at], [null, 'assessed', new Date(T0 + MIN).toISOString()]);
+  // Re-run of the same run_key (a subject with no SHA): our reader now fails on it.
+  const [b] = dispatch(db, { attemptId: 'att-2', now: T0 + 2 * MIN });
+  db.recordResult({ run_key: KEY_A, attempt_id: 'att-2', fence: b.fence, verdict: 'accepted', outcome: 'accepted', fault: 'tool', coverage: 'unassessed_tool', now: T0 + 3 * MIN });
+  r = db.getResult(KEY_A);
+  assert.deepEqual([r.fault, r.coverage, r.assessed_at], ['tool', 'unassessed_tool', new Date(T0 + MIN).toISOString()]);
+  // Not given (an older caller): stored as NULL, never guessed.
+  const [c] = dispatch(db, { attemptId: 'att-3', items: [{ runKey: KEY_B, subject: 'repo:2' }], now: T0 + 4 * MIN });
+  db.recordResult({ run_key: KEY_B, attempt_id: 'att-3', fence: c.fence, verdict: 'accepted', outcome: 'accepted', now: T0 + 5 * MIN });
+  r = db.getResult(KEY_B);
+  assert.deepEqual([r.fault, r.coverage, r.assessed_at], [null, null, null]);
+  // The store refuses a value outside the contract's states.
+  const [d] = dispatch(db, { attemptId: 'att-4', items: [{ runKey: 'c'.repeat(64), subject: 'repo:3' }], now: T0 + 6 * MIN });
+  assert.throws(() => db.recordResult({ run_key: 'c'.repeat(64), attempt_id: 'att-4', fence: d.fence, verdict: 'accepted', outcome: 'accepted', fault: 'server', coverage: 'excluded', now: T0 + 7 * MIN }), /CHECK constraint/);
+  db.close();
+});
+
+test('R-COV-02: ingest over the real store records a tool-fault skip as unassessed_tool', async () => {
+  const { makeBundle, fakeEncrypt, fakeDecrypt, REGISTRY_TEXT, RUN_ID } = await import('../ingest/testkit.mjs');
+  const { parseRegistry } = await import('../ingest/registry.mjs');
+  const db = openState(':memory:');
+  const [item] = dispatch(db, { file: 'qa-worker.yml' });
+  db.setDispatchRun('att-1', { runId: RUN_ID, workflowSha: SHA, now: T0 });
+  const bundle = makeBundle({
+    identity: { attempt_id: 'att-1', run_key: KEY_A, fence: item.fence },
+    workflow: { sha: SHA },
+    meta: { skips: [{ stage: 'static', reason: 'unsupported_layout', fault: 'tool' }] },
+  });
+  const github = fakeGithub({ blob: fakeEncrypt(bundle.tar), run: undefined });
+  const r = await ingestAttempt({ repo: WORKER_REPO, runId: RUN_ID, attemptId: 'att-1' }, {
+    ledger: dbLedger(db, { now: () => T0 + MIN }), github, decrypt: fakeDecrypt, registry: { ...parseRegistry(REGISTRY_TEXT), source: 'test' }, now: () => new Date(T0 + MIN),
+  });
+  assert.equal(r.outcome, 'accepted', JSON.stringify(r.report?.problems ?? r.reason));
+  const row = db.getResult(KEY_A);
+  assert.deepEqual([row.fault, row.coverage, row.assessed_at], ['tool', 'unassessed_tool', null]);
+  db.close();
+});

@@ -87,6 +87,17 @@ that item only.
    recorded with result outcome `skips_only`, which the pump looks at again
    after 1, 2, 4 ... days; one with any permanent skip is an ordinary result.
 
+10. **Fault side (R-COV-02).** Every accepted result is recorded with its
+   fault side and coverage state (`resultFault()` in
+   [`worker-kit/contract.mjs`](../worker-kit/contract.mjs)): each skip's
+   declared `fault`, or its reason's fixed default (`unknown` for an
+   ambiguous reason from an older worker kit), and the first of tool,
+   unknown, infra, subject, policy among them. A tool-fault skip is stored as
+   `unassessed_tool`, never as `excluded` or as the server's failure. The
+   report's `bundle` section shows `fault`, `coverage`, `skip_faults` (skips
+   per fault) and `declared_faults`. A declared fault that its reason does
+   not allow is `manifest_invalid`.
+
 Steps 5 to 8 read untrusted bytes, so they run in a worker thread
 ([`analyze.mjs`](analyze.mjs)) with no environment, a 1 GiB heap limit and a
 60 second wall-clock limit. A judge that runs past the limit is stopped and

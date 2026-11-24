@@ -165,3 +165,20 @@ test('JSON ledger: each item of a multi-item attempt has its own fence check and
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('R-COV-02: the JSON ledger keeps an accepted result\'s fault side and coverage, and drops them from a refused one', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-'));
+  try {
+    const p = join(dir, 'ledger.json');
+    writeFileSync(p, JSON.stringify({ attempts: [{ ...ROW, current_fence: 8 }, { ...ROW, attempt_id: 'att-2' }] }));
+    const l = await openLedger({ ledgerJson: p, now: () => new Date('2026-01-01T00:00:00Z') });
+    const rec = { run_key: ROW.run_key, fence: 7, outcome: 'accepted', accepted: true, reason: null, fault: 'tool', coverage: 'unassessed_tool' };
+    assert.equal(l.recordResult({ ...rec, attempt_id: 'att-1' }).accepted, false);
+    assert.equal(l.recordResult({ ...rec, attempt_id: 'att-2' }).accepted, true);
+    const saved = JSON.parse(readFileSync(p, 'utf8')).results;
+    assert.equal(saved[0].coverage, undefined, 'a refused result carries no coverage');
+    assert.deepEqual([saved[1].fault, saved[1].coverage], ['tool', 'unassessed_tool']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
