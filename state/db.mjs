@@ -456,6 +456,28 @@ export class StateDb {
     return plain(this.raw.prepare('SELECT * FROM subjects WHERE repo_id = ?').get(repoId));
   }
 
+  static acceptKey(key) {
+    return `subjects.identity.accept:${key}`;
+  }
+
+  /**
+   * A person accepts the binding for a subject in id conflict (run with the
+   * pump paused; scripts/subject-accept.mjs): the next lookup's answer is
+   * taken as its binding, the reuse and squatter guards aside, and the
+   * conflict clears. Only an id another subject holds still refuses.
+   * @returns {{ok: boolean, why?: string}}
+   */
+  acceptIdentityConflict(key, { now } = {}) {
+    return this.tx(() => {
+      const s = this.getSubject(key);
+      if (!s) return { ok: false, why: `no subject ${key}` };
+      if (s.id_status !== 'conflict') return { ok: false, why: `${key} is not in conflict (id_status ${s.id_status ?? 'none'})` };
+      this.setKv(StateDb.acceptKey(key), { at: iso(now) }, { now });
+      this.raw.prepare('UPDATE subjects SET id_status = NULL, id_checked_at = NULL WHERE id = ?').run(key);
+      return { ok: true };
+    });
+  }
+
   /** Whether any result or attempt names this subject key. */
   hasSubjectHistory(key) {
     return Boolean(this.raw.prepare(`
@@ -565,15 +587,29 @@ export class StateDb {
         set({ id_status: s.id_status === 'not_found' || s.id_status === 'conflict' ? s.id_status : 'error', id_checked_at: t });
         return events;
       }
+      // A person accepted this subject's conflict (acceptIdentityConflict):
+      // this one answer is taken as the binding, the guards aside, unless
+      // another subject holds the id (R-SUBJ-16).
+      const acceptKey = StateDb.acceptKey(key);
+      const accepted = this.getKv(acceptKey) !== undefined;
+      if (accepted) this.deleteKv(acceptKey);
       const conflict = (detail) => {
         if (s.id_status !== 'conflict') event({ kind: 'id_conflict', repoId: s.repo_id ?? n.repoId, oldName: s.name, newName: n.name, detail: { via, ...detail } });
         set({ id_status: 'conflict', id_checked_at: t });
         return events;
       };
+      const heldElsewhere = () => { const o = this.getSubjectByRepoId(n.repoId); return o !== undefined && o.id !== key; };
       if (s.repo_id !== null) {
         if (s.repo_id !== n.repoId || (s.repo_created_at !== null && s.repo_created_at !== n.createdAt)) {
-          return conflict({ expected: { repo_id: s.repo_id, created_at: s.repo_created_at }, got: { repo_id: n.repoId, created_at: n.createdAt } });
+          if (!accepted || heldElsewhere()) {
+            return conflict({ expected: { repo_id: s.repo_id, created_at: s.repo_created_at }, got: { repo_id: n.repoId, created_at: n.createdAt } });
+          }
+          event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, accepted: true, replaced: { repo_id: s.repo_id, created_at: s.repo_created_at } } });
+          set({ repo_id: n.repoId, repo_created_at: n.createdAt });
         }
+      } else if (accepted && !heldElsewhere()) {
+        event({ kind: 'id_bound', repoId: n.repoId, oldName: s.name, newName: n.name, detail: { via, created_at: n.createdAt, accepted: true } });
+        set({ repo_id: n.repoId, repo_created_at: n.createdAt });
       } else {
         // A repository created after the subject was first seen cannot be the
         // one the subject meant: its old name now belongs to a newcomer, which

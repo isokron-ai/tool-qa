@@ -351,3 +351,72 @@ test('R-SUBJ-13: the watchdog item: red on a mass NOT_FOUND pass or many gone, a
   assert.match(amber.summary, /0 not found, 1 in conflict, 2 merged of 997 active/);
   assert.equal(identityCheck({ gone: 1, active: 997, conflicts: 0, merged: 0 }).id, 'subject-ids');
 });
+
+test('R-SUBJ-14: the mass NOT_FOUND red survives a run with nothing to look up, and clears only when a batch is believed again', async () => {
+  const db = openState(':memory:');
+  const all = names(30);
+  seedSubjects(db, all);
+  const g = fakeGraph(Object.fromEntries(all.map((n, i) => [n, { databaseId: 100 + i }])));
+  await refreshIdentities(db, { client: g.client, now: () => T });
+  for (const r of g.list) r.visible = false;
+  await refreshIdentities(db, { client: g.client, now: () => T + DAY + 1 });
+  assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'red');
+  // Ten minutes later: every subject waits an hour, so no query at all.
+  const idle = await refreshIdentities(db, { client: g.client, now: () => T + DAY + 10 * 60_000 });
+  assert.equal(idle.queries, 0);
+  assert.equal(idle.stopped, null);
+  assert.ok(idle.mass_not_found_at, 'carried forward');
+  assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'red', 'still red after a run with no query');
+  // Still unseen an hour later: still red.
+  await refreshIdentities(db, { client: g.client, now: () => T + DAY + 2 * 3_600_000 });
+  assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'red');
+  // Seen again: a believed batch clears it.
+  for (const r of g.list) r.visible = true;
+  const back = await refreshIdentities(db, { client: g.client, now: () => T + DAY + 4 * 3_600_000 });
+  assert.equal(back.mass_not_found_at, null);
+  assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'green');
+  db.close();
+});
+
+test('R-SUBJ-16: scripts/subject-accept.mjs accepts a conflict: the next pass binds the answer, the amber clears; an id another subject holds is still refused', async () => {
+  const { acceptConflict, main } = await import('../../scripts/subject-accept.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'accept-'));
+  try {
+    const file = join(dir, 'state.sqlite');
+    let db = openState(file);
+    seedSubjects(db, ['acme/server', 'acme/other']);
+    db.close();
+    // acme/server's name now answers a repository created after it was first seen.
+    const g = fakeGraph({ 'acme/server': { databaseId: 51, createdAt: new Date(T + DAY).toISOString() }, 'acme/other': { databaseId: 52 } });
+    db = openState(file);
+    await refreshIdentities(db, { client: g.client, now: () => T + 2 * DAY });
+    assert.equal(db.getSubject('acme/server').id_status, 'conflict');
+    assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'amber');
+    db.close();
+
+    assert.deepEqual(acceptConflict({ file, key: 'acme/other' }), { ok: false, why: 'acme/other is not in conflict (id_status ok)' });
+    const lines = [];
+    assert.equal(main(['acme/server', '--state', file], (l) => lines.push(l)), 0);
+    assert.match(lines[0], /^accepted: acme\/server/);
+    assert.equal(main([], () => {}), 2);
+
+    db = openState(file);
+    const out = await refreshIdentities(db, { client: g.client, now: () => T + 2 * DAY + 60_000 });
+    assert.equal(out.conflicts, 0);
+    const s = db.getSubject('acme/server');
+    assert.deepEqual([s.repo_id, s.id_status], [51, 'ok']);
+    assert.equal(db.listSubjectEvents('acme/server').at(-1).detail.accepted, true);
+    assert.equal(db.getKv('subjects.identity.accept:acme/server'), undefined, 'used once');
+    assert.equal(identityCheck(db.getKv(IDENTITY_KV_KEY)).status, 'green');
+
+    // An id another subject holds is refused even when accepted.
+    db.raw.prepare("UPDATE subjects SET id_status = 'conflict' WHERE id = 'acme/other'").run();
+    db.acceptIdentityConflict('acme/other', { now: T + 3 * DAY });
+    db.applyIdentityLookup('acme/other', { status: 'ok', via: 'id', node: { databaseId: 51, id: 'R_51', nameWithOwner: 'acme/server', createdAt: new Date(T + DAY).toISOString() } }, { now: T + 3 * DAY + 1 });
+    assert.deepEqual([db.getSubject('acme/other').repo_id, db.getSubject('acme/other').id_status], [52, 'conflict']);
+    assert.equal(db.getSubjectByRepoId(51).id, 'acme/server');
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

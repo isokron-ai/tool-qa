@@ -667,9 +667,26 @@ found are still used.
 and `SELECT * FROM subject_events ORDER BY id`.
 
 **Health.** The `subject-ids` item on the health issue (watchdog/identity.mjs)
-shows the last pass's not-found, conflict and merged counts: red when the last
-pass stopped on a mass of NOT_FOUND, or when more than 5 and more than 20% of
-the active subjects are marked gone; amber on any id conflict.
+shows the last pass's not-found, conflict and merged counts: red when a pass
+stopped on a mass of NOT_FOUND and no batch has been believed since (kv
+`pump.identity` carries `mass_not_found_at` forward through runs with nothing
+to look up), or when more than 5 and more than 20% of the active subjects are
+marked gone; amber on any id conflict.
+
+**Accepting a conflict.** A conflict is sticky: the subject keeps its last
+good name and the amber stays until a person decides. Read its `id_conflict`
+event (`SELECT * FROM subject_events WHERE subject = '<key>' ORDER BY id`) and
+check on GitHub that the repository it found is the one the subject means.
+If it is: switch the pump off (`LANE_PUMP_ENABLED=false`) and wait until no
+pump run is going, pull the state, run
+`node scripts/subject-accept.mjs <key> --state state/state.sqlite`, push it,
+and switch the pump back on. The next pump run looks the subject up again
+and takes that answer as its binding (event `id_bound` with `accepted: true`),
+whatever the reuse and squatter guards say; the amber clears with that run.
+Only an id that another subject holds is still refused: merge or retire one
+of the two by hand first. If the repository is not the right one, leave the
+conflict (the subject keeps being dispatched under its last good name) or
+retire the subject.
 
 **The v8 migration** runs in the first pump run with this code, in one
 transaction: it adds the columns and `subject_events`, sets every subject's
