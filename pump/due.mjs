@@ -25,17 +25,31 @@
 //
 // Priority: the tier weight, plus each reason's weight, plus the age of the
 // last result (age_per_day, at most age_max), plus the coverage-gap boost
-// (R-COV-03). A due pair is a coverage gap when it has no accepted result
-// yet, when its last result is unassessed by our own limit (coverage
-// unassessed_tool or unassessed_unknown, or a fault of tool or unknown), or
-// when none of its results was ever assessed and the last is a passing
-// condition (unassessed_infra). The boost is priority.coverage_gap_share x
-// the tier weight, so it follows the tier (which follows popularity) and
-// never lifts a pair over a whole tier. It orders due pairs; it never makes a
-// pair due. Results from before state schema 7 have no coverage and get no
-// boost. A new tool version moves every run_key, so a release makes every
-// tool-fault skip due again (tool_version), boosted ahead of the rest of its
-// tier.
+// (R-COV-03, R-COV-05..07). A due pair is a coverage gap a run can close
+// (gapKind) when:
+//   never_assessed  it has no accepted result yet, or none of its results was
+//                   ever assessed and the last is a passing condition
+//                   (unassessed_infra);
+//   our_limit       its last result is unassessed by our own limit (coverage
+//                   unassessed_tool or unassessed_unknown, or a fault of tool
+//                   or unknown) and something moved since: the reasons
+//                   include tool_version, new_version or change_event. The
+//                   same tool on the same version cannot change a tool-limit
+//                   skip, so a merely stale one is not boosted (R-COV-06).
+// The boost is priority.coverage_gap_share x the tier weight, capped strictly
+// below the gap to the next tier up (by weight, from tiers.json, minus one
+// point): so it follows the tier (which follows popularity), and with equal
+// reasons and age a boosted pair never reaches a bare pair of the tier above
+// (R-COV-05). It orders due pairs; it never makes a pair due. A result from
+// before state schema 7 has no coverage: it gets no our_limit boost, and one
+// that was not skips_only counts as assessed (R-COV-07), since the state does
+// not say whether it held a permanent skip. A new tool version moves every
+// run_key, so a release makes every tool-fault skip due again
+// (tool_version), boosted ahead of the rest of its tier with equal age.
+// A first-sight pair has no reason weight and no age, so its boost puts it
+// above a stale pair of its tier only while the boost beats stale's weight
+// plus the stale result's age: with the shipped tiers.json, always in T0,
+// in T1 while the stale result is under 20 days old, never in T2 to T4.
 //
 // Retired subjects (no longer in their source list, pump/subjects.mjs), pairs
 // whose tier says `never`, pairs already in flight, pairs on a disabled
@@ -57,33 +71,56 @@ const SEP = '\u0000';
 const OUR_LIMIT = new Set(['unassessed_tool', 'unassessed_unknown']);
 const OUR_FAULTS = new Set(['tool', 'unknown']);
 
+/** Due reasons that say something moved since the last result: our tool, the subject, or a change event. */
+export const MOVED_REASONS = Object.freeze(['tool_version', 'new_version', 'change_event']);
+
 /**
- * What coverage gap a pair's last result leaves (R-COV-03):
+ * What coverage gap a due pair leaves that this run can close (R-COV-03, R-COV-06):
  *   never_assessed  no accepted result yet, or none of its results was ever
  *                   assessed and the last is unassessed_infra
- *   our_limit       the last result is unassessed by our own limit (tool or unknown fault)
- * null otherwise: assessed, the subject's side, excluded by policy, or a
- * result recorded before coverage was (state schema < 7).
+ *   our_limit       the last result is unassessed by our own limit (tool or
+ *                   unknown fault), and `reasons` include one of MOVED_REASONS
+ * null otherwise: assessed, the subject's side, excluded by policy, a result
+ * recorded before coverage was (state schema < 7), or our limit with nothing
+ * moved since.
  * @param {{coverage?: string|null, fault?: string|null, ever_assessed?: boolean}|undefined} last
+ * @param {string[]} [reasons]  the pair's due reasons
  */
-export function gapKind(last) {
+export function gapKind(last, reasons = []) {
   if (!last) return 'never_assessed';
-  if (OUR_LIMIT.has(last.coverage) || OUR_FAULTS.has(last.fault)) return 'our_limit';
+  if (OUR_LIMIT.has(last.coverage) || OUR_FAULTS.has(last.fault)) {
+    return reasons.some((r) => MOVED_REASONS.includes(r)) ? 'our_limit' : null;
+  }
   if (last.coverage === 'unassessed_infra' && last.ever_assessed !== true) return 'never_assessed';
   return null;
 }
 
 /**
+ * The largest coverage-gap boost a tier may get: one point under the gap to
+ * the next tier up by weight, so with equal reasons and age a boosted pair
+ * stays strictly below a bare pair of that tier (R-COV-05). Infinity for the
+ * top tier; 0 when the gap is one point or less.
+ */
+export function gapBoostCap(tiers, tierName) {
+  const weights = tiers?.weights ?? {};
+  const w = Number(weights[tierName]);
+  const above = Object.values(weights).map(Number).filter((x) => Number.isFinite(x) && x > w);
+  if (above.length === 0) return Infinity;
+  return Math.max(0, Math.min(...above) - w - 1);
+}
+
+/**
  * The coverage-gap boost of a due pair: priority.coverage_gap_share x the
- * subject's tier weight when gapKind() names a gap, else 0. ctx is what
- * computeDue() passes to every hook ({tier, last, tiers, ...}).
+ * subject's tier weight, at most gapBoostCap(), when gapKind() names a gap,
+ * else 0. ctx is what computeDue() passes to every hook ({tier, last, tiers,
+ * reasons, ...}).
  */
 export function coverageGapBoost(subject, workflowName, ctx) {
-  if (!ctx?.tiers || gapKind(ctx.last) === null) return 0;
+  if (!ctx?.tiers || gapKind(ctx.last, ctx.reasons ?? []) === null) return 0;
   const share = Number(ctx.tiers.priority?.coverage_gap_share);
   const weight = Number(ctx.tiers.weights?.[ctx.tier]);
   if (!Number.isFinite(share) || share <= 0 || !Number.isFinite(weight) || weight <= 0) return 0;
-  return share * weight;
+  return Math.min(share * weight, gapBoostCap(ctx.tiers, ctx.tier));
 }
 
 /**
@@ -243,8 +280,8 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       let priority = Number(weights[tierName] || 0);
       for (const r of reasons) priority += Number(prio[r] || 0);
       priority += Math.min(Number(prio.age_max ?? 30), ageDays * Number(prio.age_per_day ?? 1));
-      priority += Number(h.coverageGap(s, name, ctx) || 0);
-      out.push({ subject: s.id, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority, gap: gapKind(last) });
+      priority += Number(h.coverageGap(s, name, { ...ctx, reasons }) || 0);
+      out.push({ subject: s.id, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority, gap: gapKind(last, reasons) });
     }
   }
   out.sort((a, b) => b.priority - a.priority || a.tier - b.tier
@@ -260,11 +297,16 @@ export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
   }));
   const lastResults = new Map();
   const resultKeys = new Set();
-  const everAssessed = new Set(); // pairs with an assessed result under any run_key (R-COV-03)
+  // Pairs with an assessed result under any run_key (R-COV-03). A result from
+  // before state schema 7 (no coverage) that was not skips_only counts as
+  // assessed: the state does not say whether it held a permanent skip, and
+  // erring this way never boosts a pair that was graded (R-COV-07).
+  const everAssessed = new Set();
   for (const r of db.listResults()) {
     resultKeys.add(r.run_key);
     const pk = pairKey(r.subject, r.workflow);
-    if (r.coverage === 'assessed' || r.assessed_at != null) everAssessed.add(pk);
+    const preCoverage = r.coverage == null && r.outcome != null && r.outcome !== 'skips_only';
+    if (r.coverage === 'assessed' || r.assessed_at != null || preCoverage) everAssessed.add(pk);
     const prev = lastResults.get(pk);
     if (prev && prev.accepted_at >= r.accepted_at) continue;
     const rk = db.getRunKey(r.run_key);

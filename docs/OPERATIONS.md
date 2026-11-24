@@ -313,21 +313,35 @@ run_key's last result that measured something (`results.measured_at`), so a
 subject that never works gets one window and then a few backed-off looks,
 not a new window every day.
 
-**Coverage gaps (R-COV-02, R-COV-03).** Ingest stores each result's fault
-side and coverage state (`results.fault`, `results.coverage`; see
-`worker-kit/README.md`). A skip caused by our own tools (an unsupported
+**Coverage gaps (R-COV-02, R-COV-03, R-COV-05..07).** Ingest stores each
+result's fault side and coverage state (`results.fault`, `results.coverage`;
+see `worker-kit/README.md`). A skip caused by our own tools (an unsupported
 language or layout, a reader limit, no tool found, a size cap of ours, a
 tool error) is `unassessed_tool`: our limit, never excluded and never the
 server's failure. The due list adds a coverage-gap boost of
-`priority.coverage_gap_share` (0.5) x the tier weight to a due pair that has
-no result yet, whose last result is unassessed by our own limit (tool or
-unknown fault), or that was never assessed and last hit a rate limit or
-outage. So within a tier, gaps go first: for a T3 subject (weight 20) whose
-last scan-static result was a reader limit, the boost is +10. The boost only
-orders due pairs. A tool release moves every run_key (`versions` in
-`pump/workflows.json`), so after one every tool-fault skip is due again with
-reason `tool_version`, ahead of the rest of its tier. Results recorded before
-state schema 7 have no coverage and get no boost until they run again.
+`priority.coverage_gap_share` (0.5) x the tier weight, capped one point under
+the weight gap to the next tier up, to a due pair that:
+
+- has no result yet, or was never assessed and last hit a rate limit or
+  outage (`never_assessed`); or
+- last ended in our own limit (tool or unknown fault) and something moved
+  since: a new tool version, a new subject version or a change event
+  (`our_limit`). A tool-limit skip that is merely stale is not boosted: the
+  same tool on the same version would give the same skip.
+
+With the shipped `tiers.json` the boosts are T0 +50, T1 +30, T2 +19 (0.5 x
+40 = 20 would tie the 20-point gap to T1), T3 +10, T4 +5. With equal reasons
+and age, a boosted pair stays below a bare pair of the tier above; an older
+result or a heavier reason can still lift it over. Example: after an
+mcp-check release, a T3 subject (weight 20) whose last scan-static result was
+a reader limit is due with `tool_version` (+20) and gets +10, ahead of the
+T3 subjects whose results were graded. The boost only orders due pairs. A
+first-sight pair has no reason weight and no age, so it goes ahead of a stale
+pair of its tier only while its boost beats stale's 10 points plus the stale
+result's age: always in T0, in T1 while the stale result is under 20 days
+old, never in T2 to T4. Results recorded before state schema 7 have no
+coverage: they get no `our_limit` boost, and one that was not `skips_only`
+counts as assessed.
 
 **Throttling (R-SUB-04, R-SUB-09).** A result whose every skip is a
 retryable `rate_limited` or `upstream_unavailable` from a third-party stage
