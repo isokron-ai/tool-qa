@@ -223,7 +223,7 @@ test('R-CHECKIN-09: the archive is read sealed, in memory, and nothing decrypted
   }
 });
 
-test('R-RET-21: the archive reads sealed files made before and after zstd, and an item that is in a full bundle and in its keep-forever file counts once', { skip: !haveAge && 'age is not installed' }, () => {
+test('R-RET-20: the archive reads sealed files made before and after zstd, and an item that is in a full bundle and in its keep-forever file counts once', { skip: !haveAge && 'age is not installed' }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'checkin-zstd-'));
   try {
     const key = spawnSync(KEYGEN, [], { encoding: 'utf8' });

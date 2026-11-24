@@ -399,7 +399,7 @@ test('R-SNAP-17: a snapshot manifest with null entries, one that throws, or a ti
 });
 
 
-test('R-RET-20: the health issue carries the keep-forever copy and the seal record: a stalled copy and a failed compression are amber and red', async () => {
+test('R-RET-19: the health issue carries the keep-forever copy and the seal record: a stalled copy and a failed compression are amber and red', async () => {
   const w = world({
     seed: (db, c) => {
       db.setKv('retention.seal', { at: new Date(c.t).toISOString(), sealed: 5, bytes_in: 500, bytes_out: 50, failures: { compress: 3, keep: 0 }, streak: 3, last_failure: { kind: 'compress', what: 'x', error: 'zstd exploded' } }, { now: c.t });

@@ -473,7 +473,7 @@ test('R-OFF-13: the account ID only from a secret, both jobs only on main; retri
   assert.equal(t.s3.ops('put').length, 0);
 });
 
-test('R-RET-24: the keep-forever part of the pump outputs gets its own key prefix, so the prune can never mistake it for full data; the Mac archive names its kind', async () => {
+test('R-RET-22: the keep-forever part of the pump outputs gets its own key prefix, so the prune can never mistake it for full data; the Mac archive names its kind', async () => {
   const { isKeepArtifact } = await import('../backup.mjs');
   const { ingestKind, ingestRun } = await import('../../scripts/archive-pull.mjs');
   const keep = { name: 'ingest-keep-111-2', created_at: '2026-03-02T01:00:00Z' };

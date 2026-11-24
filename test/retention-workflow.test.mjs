@@ -14,7 +14,7 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 const wf = parseYaml(read('.github/workflows/keep-forever.yml'));
 
-test('R-RET-23: keep-forever.yml has the guard first, a lane switch, least-privilege permissions, pinned actions and a schedule that dispatches serialised', () => {
+test('R-RET-21: keep-forever.yml has the guard first, a lane switch, least-privilege permissions, pinned actions and a schedule that dispatches serialised', () => {
   assert.deepEqual(wf.permissions, {});
   assert.equal(String(wf.concurrency['cancel-in-progress']), 'false');
   assert.ok(wf.on.schedule && wf.on.workflow_dispatch !== undefined);
@@ -31,7 +31,7 @@ test('R-RET-23: keep-forever.yml has the guard first, a lane switch, least-privi
   assert.match(rest.at(-1).run, /node keep\/copy\.mjs/);
 });
 
-test('R-RET-23: the lane switch really stops it, and the watchdog expects the workflow and reads the lane', () => {
+test('R-RET-21: the lane switch really stops it, and the watchdog expects the workflow and reads the lane', () => {
   const run = (env) => {
     const dir = mkdtempSync(join(tmpdir(), 'keep-guard-'));
     try {
@@ -49,7 +49,7 @@ test('R-RET-23: the lane switch really stops it, and the watchdog expects the wo
   assert.match(read('.github/workflows/watchdog.yml'), /LANE_KEEP_FOREVER_ENABLED: \$\{\{ vars\.LANE_KEEP_FOREVER_ENABLED \}\}/);
 });
 
-test('R-RET-23: the pump uploads the keep-forever outputs as ingest-keep-<run>-<attempt> from the directory it writes them to', () => {
+test('R-RET-21: the pump uploads the keep-forever outputs as ingest-keep-<run>-<attempt> from the directory it writes them to', () => {
   const pump = read('.github/workflows/pump.yml');
   assert.match(pump, /--keep-out "\$RUNNER_TEMP\/keep-out"/);
   assert.match(pump, /name: ingest-keep-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}\n\s+path: \$\{\{ runner\.temp \}\}\/keep-out\//);
