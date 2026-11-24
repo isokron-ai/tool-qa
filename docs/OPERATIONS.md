@@ -686,8 +686,6 @@ the paths) and load it with `launchctl bootstrap gui/$(id -u)` on that file:
   </dict>
   <key>StartInterval</key>
   <integer>21600</integer>
-  <key>RunAtLoad</key>
-  <true/>
   <key>LowPriorityIO</key>
   <true/>
   <key>StandardOutPath</key>
@@ -699,7 +697,10 @@ the paths) and load it with `launchctl bootstrap gui/$(id -u)` on that file:
 ```
 
 `PATH` is set so the job can find the GitHub CLI for its token. A Mac that is
-asleep runs a missed interval when it wakes. Check the log after the first
+asleep runs a missed interval when it wakes. To run it at once, `launchctl
+kickstart gui/$(id -u)/ai.isokron.tool-qa.archive-pull`. Two pulls into one
+folder at the same time are not guarded against, so start one by hand only
+when the agent is not running. Check the log after the first
 run; a full first pull takes a while, because it paces itself under the API
 limits. To update the code it runs, `git -C ~/isokron-archive/tool-qa-code
 pull --ff-only` after a change to the script is merged.
