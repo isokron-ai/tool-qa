@@ -61,9 +61,9 @@ const FOUND_BY_MARK = /\s*Found by:?\s+([A-Za-z][A-Za-z -]*?)\.(?=\s|$)/i;
 
 /**
  * Commit SHAs in a Fix cell. A cell that is only a list of hex words ("70d658a", "20a0fa4, 5426adf") is a list of
- * SHAs, all-digit short SHAs such as 0866426 included. In any other text a SHA must be in backticks, in a commit
- * link, or a bare word with a letter a-f and a digit, so a date (20261123), a pull request number (#1234567) or a
- * hex-looking word (defaced) is not taken for one.
+ * SHAs, all-digit short SHAs such as 0866426 included. In any other text a SHA must be in backticks or in a
+ * commit link (any hex, all digits included), or be a bare word with a letter a-f and a digit, so a date
+ * (20261123), a pull request number (#1234567) or a hex-looking word (defaced) is not taken for one.
  */
 export function fixCommits(text) {
   const t = String(text).trim();
@@ -73,7 +73,8 @@ export function fixCommits(text) {
   const re = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/commit\/([0-9a-f]{7,40})\b|`([0-9a-f]{7,40})`|(?<![\w#/.:-])([0-9a-f]{7,40})(?![\w/.-])/g;
   for (const m of t.matchAll(re)) {
     const sha = m[1] ?? m[2] ?? m[3];
-    if (!/[a-f]/.test(sha) || (m[3] && !/\d/.test(sha))) continue;
+    // Only a bare word must look like a SHA (a letter a-f and a digit); backticks and commit links say so already.
+    if (m[3] && !(/[a-f]/.test(sha) && /\d/.test(sha))) continue;
     if (!out.includes(sha)) out.push(sha);
   }
   return out;

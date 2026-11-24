@@ -416,7 +416,7 @@ test('R-LED-03: a Fix cell yields commit SHAs only, not dates, pull request numb
   assert.deepEqual(fixCommits('70d658a, 20a0fa4'), ['70d658a', '20a0fa4']);
   assert.deepEqual(fixCommits('merged 20261123 in #1234567 (defaced)'), []);
   assert.deepEqual(fixCommits('`deadbee` and https://github.com/isokron-ai/tool-qa/commit/0123abc'), ['deadbee', '0123abc']);
-  assert.deepEqual(fixCommits('`1234567` in prose'), [], 'in prose, all digits is not taken for a SHA');
+  assert.deepEqual(fixCommits('fixed by 1234567 in prose'), [], 'in prose, a bare all-digit word is not taken for a SHA');
   assert.deepEqual(fixCommits('0866426'), ['0866426'], 'a cell that is only SHAs may hold an all-digit one');
   assert.deepEqual(fixCommits('1411417, 6d10237, 0f0f83c'), ['1411417', '6d10237', '0f0f83c']);
   assert.deepEqual(fixCommits('a8305a847eb48019fa454736699fded8032cb6dc'), ['a8305a847eb48019fa454736699fded8032cb6dc']);
@@ -480,4 +480,11 @@ test('R-LED-06: a test is found only under exactly its name, not as part of a lo
   assert.equal(sourceHasTest("t.test('sub', () => {});", 'sub'), true);
   assert.equal(sourceHasTest("latest('x');", 'x'), false, 'latest() is not a test helper');
   assert.deepEqual([...testNamesIn(src).exact], ['X-01: the whole name, and more', "X-02: it's here"]);
+});
+
+test('R-LED-07: a SHA in backticks or in a commit link counts even when it is all digits', () => {
+  assert.deepEqual(fixCommits('fixed in `0866426`, see the review'), ['0866426']);
+  assert.deepEqual(fixCommits('fixed in [0866426](https://github.com/isokron-ai/mcp-check/commit/0866426) after review'), ['0866426']);
+  assert.deepEqual(fixCommits('`0866426` and `cd85233`, then 20261124'), ['0866426', 'cd85233']);
+  assert.deepEqual(fixCommits('`defaced` is a word'), ['defaced'], 'backticks say it is a SHA, whatever it looks like');
 });
