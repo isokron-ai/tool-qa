@@ -187,3 +187,19 @@ test('validateObservations caps the error list', () => {
   assert.equal(r.errors.length, 10);
   assert.equal(r.truncated, true);
 });
+
+test('R-COV-04: the pinned registry declares fault_side and coverage_state, and active fields are accepted like planned ones', async () => {
+  const { readFileSync } = await import('node:fs');
+  const text = readFileSync(new URL('../../meta/test/fixtures/registry-pinned.yaml', import.meta.url), 'utf8');
+  const reg = parseRegistry(text);
+  assert.equal(reg.sha256, REGISTRY_SHA256, 'the test copy is the file ingest pins');
+  for (const id of ['fault_side', 'coverage_state']) {
+    const f = reg.fields.get(id);
+    assert.ok(f, id);
+    assert.deepEqual([f.type, f.status], ['enum', 'active'], id);
+  }
+  // The fields scan-static writes today are active, and still accepted as observations.
+  for (const id of ['commit_sha', 'commit_date', 'registration_provenance']) assert.equal(reg.fields.get(id).status, 'active', id);
+  const obs = new Map([['observations/static.ndjson', Buffer.from(`${JSON.stringify({ field: 'commit_sha', value: 'a'.repeat(40), stage: 'static' })}\n`)]]);
+  assert.equal(validateObservations(obs, { ...reg, source: 'test' }).ok, true);
+});
