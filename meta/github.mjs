@@ -439,12 +439,12 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt }) {
 
   stages.scorecard = !scorecard ? 'not_run' : scorecard.status === 404 ? 'not_in_dataset' : stageOf(scorecard);
   if (scorecard?.problem) {
-    records.push(record('scorecard_result', null, `not read: ${scorecard.problem}`));
+    records.push(record('scorecard_api_result', null, `not read: ${scorecard.problem}`));
     skips.push({ stage: 'scorecard', reason: scorecard.problem, retryable: true });
   } else if (scorecard && (scorecard.status === 200 || scorecard.status === 304)) {
-    records.push(record('scorecard_result', { available: true, source: 'api.scorecard.dev', ...scorecard.value }));
+    records.push(record('scorecard_api_result', { available: true, source: 'api.scorecard.dev', ...scorecard.value }));
   } else if (scorecard) {
-    records.push(record('scorecard_result', { available: false, source: 'api.scorecard.dev' }));
+    records.push(record('scorecard_api_result', { available: false, source: 'api.scorecard.dev' }));
   }
   const sha = graph.status === 'ok' ? graphFacts(graph.node, observedAt).head_sha : null;
   return { records, skips, stages, sha };

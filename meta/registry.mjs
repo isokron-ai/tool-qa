@@ -515,19 +515,12 @@ export function subjectOutput(c, observedAt) {
 
   if (c.registry.problem) {
     skip('mcp_registry', c.registry.problem);
-    records.push(record('metadata_observation', null, `the official MCP registry was not read: ${c.registry.problem}`));
-  } else if (c.registry.servers.size === 0) {
-    records.push(record('metadata_observation', {
-      entity: `github:${c.repo}`, metric: 'registry_entry_count', value: 0, observed_at: observedAt,
-      source: 'mcp-registry-official', source_licence: 'CC0-1.0', search_truncated: c.registry.truncated,
-    }));
+    records.push(record('registry_entry_history', null, `the official MCP registry was not read: ${c.registry.problem}`));
   } else {
-    for (const [name, versions] of c.registry.servers) {
-      records.push(record('metadata_observation', {
-        entity: `mcp-registry:${name}`, metric: 'registry_entry_history', value: versions, observed_at: observedAt,
-        source: 'mcp-registry-official', source_licence: 'CC0-1.0', search_truncated: c.registry.truncated,
-      }));
-    }
+    // One element per registry entry whose repository is the subject; an empty list means none.
+    records.push(record('registry_entry_history', [...c.registry.servers].map(([name, versions]) => ({
+      server_name: name, source: 'mcp-registry-official', source_licence: 'CC0-1.0', search_truncated: c.registry.truncated, versions,
+    }))));
   }
 
   for (const n of c.npm) {
@@ -538,7 +531,8 @@ export function subjectOutput(c, observedAt) {
       records.push(record('npm_version_doc', null, `npm package ${n.name}: ${n.status}`));
     } else {
       records.push(record('npm_version_doc', n.value.doc));
-      records.push(record('npm_maintainer_count_and_change', { ...n.value.maintainers, change: null, change_basis: 'compared across scans after ingest; the worker keeps no names' }));
+      // The count only: the change is derived later from successive counts, and no name is kept.
+      records.push(record('npm_maintainer_count_and_change', n.value.maintainers));
       records.push(record('npm_attestations', n.value.attestations));
     }
   }

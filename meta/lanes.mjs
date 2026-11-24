@@ -59,8 +59,8 @@ const REGISTRY = {
   },
   facts(output) {
     const recs = output.records;
-    const history = recs.filter((r) => r.field === 'metadata_observation' && r.value?.metric === 'registry_entry_history');
-    const first = history.map((r) => ({ entity: r.value.entity, first: r.value.value[0] ?? null }));
+    const entries = recs.find((r) => r.field === 'registry_entry_history')?.value ?? [];
+    const first = entries.map((e) => ({ entity: `mcp-registry:${e.server_name}`, first: e.versions[0] ?? null }));
     const npm = recs.filter((r) => r.field === 'npm_version_doc' && r.value).map((r) => r.value);
     return {
       registry_first: first.map((f) => ({ entity: f.entity, version: f.first?.version ?? null, published_at: f.first?.published_at ?? null }))

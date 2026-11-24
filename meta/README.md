@@ -31,7 +31,9 @@ One bundle per item, sealed by the worker kit as
 `repo_core`, `repo_owner_type`, `repo_popularity`, `owner_org_facts`,
 `releases_summary`, `issues_prs_summary`, `contributors_counts`,
 `security_posture`, `branch_rules_public`, `community_profile`,
-`workflow_health`, `scorecard_result`.
+`workflow_health`, `scorecard_api_result` (the published result from
+api.scorecard.dev; `scorecard_result` is left for scan-deep's own Scorecard
+run).
 
 Per shard: one GraphQL query per 10 repositories, then three conditional REST
 calls per repository (contributor count from the `Link` header, the rules for
@@ -44,11 +46,17 @@ query below 50 points (`META_GRAPHQL_RESERVE`). A 304 answer does not count.
 
 ### meta-registry fields
 
-`metadata_observation` (the official MCP registry entry history, long format:
-`entity`, `metric`, `value`, `observed_at`, `source`, `source_licence`),
+`registry_entry_history` (every version of every official MCP registry entry
+whose repository is the subject, with publish and status dates and the
+packages each version declares; an empty list when there is none),
 `npm_version_doc`, `npm_maintainer_count_and_change`, `npm_attestations`,
 `pypi_info`, `pypi_project_status`, `pypi_provenance`, `crates_crate_facts`,
 `go_module_facts`, `depsdev_facts`.
+
+`npm_maintainer_count_and_change` holds the maintainer count only. The change
+is derived later, by ingest's longitudinal layer, from the counts of
+successive scans: the worker keeps no maintainer names, not even hashed, so it
+cannot compare sets itself.
 
 The packages read are those the newest registry versions declare, plus the
 seed list's (`history/seed-v1.json`), at most five per ecosystem. The Go

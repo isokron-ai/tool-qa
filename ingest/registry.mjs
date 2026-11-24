@@ -19,11 +19,11 @@ import { parseYaml } from '../scripts/lib/yaml-lite.mjs';
 import { isDateTime } from '../worker-kit/contract.mjs';
 
 export const REGISTRY_REPO = 'isokron-ai/mcp-results';
-export const REGISTRY_COMMIT = 'd995bf6e235701503e58b7ee8b8b9736d3817bd5';
+export const REGISTRY_COMMIT = 'edfc392b0c31636da319cde53f457c891cd04e2f';
 export const REGISTRY_PATH = 'fields/registry.yaml';
 export const REGISTRY_URL = `https://raw.githubusercontent.com/${REGISTRY_REPO}/${REGISTRY_COMMIT}/${REGISTRY_PATH}`;
 /** sha256 of fields/registry.yaml at REGISTRY_COMMIT. Move both together. */
-export const REGISTRY_SHA256 = '2efd164ccd6f98c908199e5961ed62039e66e14035c53712197cc3974d7aaeb5';
+export const REGISTRY_SHA256 = '1e3e9643a160007f67d0931a9b217961ea8b17049b9b5094f875a46b9e66417a';
 
 export const FIELD_TYPES = Object.freeze(['string', 'integer', 'number', 'boolean', 'enum', 'array', 'object', 'timestamp', 'hash']);
 export const FIELD_STATUSES = Object.freeze(['planned', 'active', 'deprecated']);

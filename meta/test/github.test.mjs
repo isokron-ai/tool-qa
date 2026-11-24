@@ -37,7 +37,7 @@ test('subjectOutput: the facts land in registry fields with their types; no skip
   const o = subjectOutput({ ...out.get('isokron-ai/mcp-check'), observedAt: '2026-11-24T00:00:00Z' });
   const by = Object.fromEntries(o.records.map((r) => [r.field, r.value]));
   assert.deepEqual(Object.keys(by).sort(), ['branch_rules_public', 'community_profile', 'contributors_counts', 'issues_prs_summary', 'owner_org_facts',
-    'releases_summary', 'repo_core', 'repo_owner_type', 'repo_popularity', 'scorecard_result', 'security_posture', 'workflow_health']);
+    'releases_summary', 'repo_core', 'repo_owner_type', 'repo_popularity', 'scorecard_api_result', 'security_posture', 'workflow_health']);
   assert.equal(by.repo_core.github_id, 1463720077);
   assert.equal(by.repo_core.description.length, 'Grades a tool list.'.length);
   assert.equal(by.repo_owner_type, 'Organization');
@@ -50,7 +50,7 @@ test('subjectOutput: the facts land in registry fields with their types; no skip
   assert.deepEqual(by.workflow_health.files, ['ci.yml', 'release.yml']);
   assert.equal(by.releases_summary.total, 6);
   assert.equal(by.releases_summary.latest.tag, 'v1.3.1');
-  assert.deepEqual(by.scorecard_result, { available: false, source: 'api.scorecard.dev' });
+  assert.deepEqual(by.scorecard_api_result, { available: false, source: 'api.scorecard.dev' });
   assert.equal(o.sha, 'a'.repeat(40));
   assert.deepEqual(o.skips, []);
 });

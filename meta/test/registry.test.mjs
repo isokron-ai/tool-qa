@@ -53,7 +53,7 @@ test('npm: versions, publish dates, deprecations and provenance are kept; mainta
   assert.equal(doc.deprecated_versions_count, 1);
   assert.equal(doc.latest.version, '1.3.1');
   assert.deepEqual(doc.latest.engines, [{ name: 'node', range: '>=20' }]);
-  assert.deepEqual(by('npm_maintainer_count_and_change')[0].count, 1);
+  assert.deepEqual(by('npm_maintainer_count_and_change')[0], { package: '@isokron/mcp-check', count: 1 }, 'the count only: no change flag, no names');
   assert.equal(by('npm_attestations')[0].provenance_present, true);
   assert.equal(by('npm_attestations')[0].recent_with_provenance, 2);
   const text = JSON.stringify(sanitize(o.records));
@@ -129,7 +129,7 @@ test('an upstream outage is a retryable skip for that stage only', async () => {
   const c = await collectSubject(httpFor(registryFetch(routes)), 'isokron-ai/mcp-check');
   const o = subjectOutput(c, OBS);
   assert.deepEqual(o.skips, [{ stage: 'npm', reason: 'upstream_unavailable', retryable: true }]);
-  assert.ok(o.records.find((r) => r.field === 'metadata_observation').value);
+  assert.equal(o.records.find((r) => r.field === 'registry_entry_history').value.length, 1);
   const npm = o.records.find((r) => r.field === 'npm_version_doc');
   assert.equal(npm.value, null);
   assert.match(npm.why, /upstream_unavailable/);
@@ -142,8 +142,8 @@ test('the MCP registry rate-limiting us is a retryable rate_limited skip', async
   assert.deepEqual(o.skips, [{ stage: 'mcp_registry', reason: 'rate_limited', retryable: true }]);
 });
 
-test('a subject with no registry entry reports a count of zero', async () => {
+test('a subject with no registry entry reports an empty history', async () => {
   const c = await collectSubject(httpFor(registryFetch({})), 'a/b');
-  const m = subjectOutput(c, OBS).records.find((r) => r.field === 'metadata_observation').value;
-  assert.deepEqual([m.metric, m.value], ['registry_entry_count', 0]);
+  const h = subjectOutput(c, OBS).records.find((r) => r.field === 'registry_entry_history');
+  assert.deepEqual(h.value, []);
 });

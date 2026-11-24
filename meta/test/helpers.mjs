@@ -9,7 +9,7 @@ import { writeTar } from '../../worker-kit/tar.mjs';
 import { analyzeBundle } from '../../ingest/analyze.mjs';
 import { parseRegistry, REGISTRY_SHA256 } from '../../ingest/registry.mjs';
 
-export const REGISTRY_FILE = new URL('./fixtures/registry-d995bf6.yaml', import.meta.url);
+export const REGISTRY_FILE = new URL('./fixtures/registry-pinned.yaml', import.meta.url);
 export function pinnedRegistry() {
   const reg = parseRegistry(readFileSync(REGISTRY_FILE, 'utf8'));
   if (reg.sha256 !== REGISTRY_SHA256) throw new Error('the test copy of the field registry is not the one ingest pins');
