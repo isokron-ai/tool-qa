@@ -6,7 +6,7 @@
       "ref": "main",
       "path": "REGRESSIONS.md",
       "status": "ok",
-      "sha256": "b16222256142fc6902bc4fb6242d417796bbd41b6987f5b8f71606e1f9b7a658",
+      "sha256": "5464b047364bd62c2c1c6cc0c20607694f92efac40a59ea91119b31204327e9a",
       "header": [
         "ID",
         "What it was",
@@ -23,7 +23,7 @@
       "ref": "main",
       "path": "REGRESSIONS.md",
       "status": "ok",
-      "sha256": "1a58d5a9fde4ffffd78d45cd6e2479f5a82afa2550af68bf73b5b99a699c9ec6",
+      "sha256": "d584d7f707735cfa97ea9fcb8fda39624066ca5142440c25e9ad34e94fc82139",
       "header": [
         "ID",
         "What it was",
@@ -40,7 +40,7 @@
       "ref": "main",
       "path": "REGRESSIONS.md",
       "status": "ok",
-      "sha256": "40878afe5f811af1321bcd77ec998f83107110492c79b6a17cc5172cfc04a304",
+      "sha256": "3b6548274c8ce9504977c0e3229255de31a5c021419b266d580d2c777ac1af05",
       "header": [
         "ID",
         "What it was",
@@ -59,30 +59,24 @@
       "ref": "main",
       "path": "REGRESSIONS.md",
       "status": "ok",
-      "sha256": "8774c1449f49f4a97cadc275a702ca0230ec1f4db498dbb8db6d543415732a64",
+      "sha256": "189b2bd3066bea45bf1fca916e64cad458f0ba0265004a177681e67eb23146b1",
       "header": [
         "ID",
-        "What went wrong",
-        "Test",
+        "What it was",
+        "Pinned by",
         "Fix"
       ],
       "test_forms": [
-        "`file`: \"name\"",
-        "unrecognised"
+        "`file` › `name`"
       ],
-      "normalised": [
-        "column \"What went wrong\" read as \"What it was\"",
-        "column \"Test\" read as \"Pinned by\"",
-        "test references written `file`: \"name\" read as `file` › `name`",
-        "some test references are in no known form (kept as text)"
-      ]
+      "normalised": []
     },
     {
       "repo": "isokron-ai/mcp-write-safety",
       "ref": "main",
       "path": "REGRESSIONS.md",
       "status": "ok",
-      "sha256": "1a8b92f7442e5752df463451e6e2c2487d8e349f631cf38b7542ad4626c4dbb3",
+      "sha256": "4e78c90720c61815254bdd8ece81d8f923e30aa3839e815f4cd2ac8534af4804",
       "header": [
         "ID",
         "What it was",
@@ -96,33 +90,14 @@
     }
   ],
   "counts": {
-    "total": 140,
-    "isokron-ai/tool-qa": 62,
-    "isokron-ai/mcp-check": 28,
-    "isokron-ai/mcp-surface-corpus": 41,
-    "isokron-ai/mcp-writecheck-action": 8,
+    "total": 163,
+    "isokron-ai/tool-qa": 69,
+    "isokron-ai/mcp-check": 34,
+    "isokron-ai/mcp-surface-corpus": 50,
+    "isokron-ai/mcp-writecheck-action": 9,
     "isokron-ai/mcp-write-safety": 1
   },
-  "unresolved": [
-    {
-      "repo": "isokron-ai/mcp-writecheck-action",
-      "id": "R-WC-01",
-      "what": "test",
-      "detail": "test/loop.test.mjs › R-WC-01: the tools volume carries what its code imports: no test of exactly that name on main"
-    },
-    {
-      "repo": "isokron-ai/mcp-writecheck-action",
-      "id": "R-WC-05",
-      "what": "test",
-      "detail": "test/loop.test.mjs › R-WC-05: the forgery control fails when the verdict was tampered with, not only when text leaked\", \"R-WC-05: bridge and relay carry a stdio server over TCP, both ways, and the server answers after stdin ends\", \"R-WC-05: every subject and the forgery control run split; only our locked fixtures share the CLI's container: no test of exactly that name on main"
-    },
-    {
-      "repo": "isokron-ai/mcp-writecheck-action",
-      "id": "R-WC-06",
-      "what": "test",
-      "detail": "not a file › name reference: `test/loop-workflow.test.mjs`: \"corpus.yml: permissions {} on top, timeouts, pinned actions, no secrets, no expressions in run\" (and the same for loop-fixture.yml)"
-    }
-  ],
+  "unresolved": [],
   "records": [
     {
       "repo": "isokron-ai/tool-qa",
@@ -2122,6 +2097,205 @@
       "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
     },
     {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-ING-27",
+      "title": "The ingest artifact budget was 200 calls an hour.",
+      "description": "The ingest artifact budget was 200 calls an hour. Once the budget carried across pump runs (R-ING-11), ingest could judge only about 8 shards of 25 an hour, and the live first pass stalled with every tick reporting `stopped (budget)`. Raised to 1,200 an hour (total 2,500, under the App installation's 5,000).",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "live run",
+      "test": [
+        {
+          "file": "pump/test/budgets.test.mjs",
+          "name": "R-ING-27: default families cover dispatch, artifacts, contents, issues, graphql and search within 2,500/h, with 1,200 artifact calls an hour",
+          "found": true
+        }
+      ],
+      "fix_commit": "d67fc29",
+      "fix_commits": [
+        "d67fc29"
+      ],
+      "fix_pr": 15,
+      "fix_prs": [
+        15
+      ],
+      "merged_at": "2026-11-24T02:09:05Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-LED-01",
+      "title": "One REGRESSIONS.md the ledger could not fetch or read (no table, a missing column) threw out of `parseLedger`, nothing caught it, and no ledger was written for any repository.",
+      "description": "One REGRESSIONS.md the ledger could not fetch or read (no table, a missing column) threw out of `parseLedger`, nothing caught it, and no ledger was written for any repository. Such a source is now recorded as `unreadable` with the error in the unresolved list, the others are built and written, and the run exits 1. The ledger table is the first whose header has an ID column, not the first table on the page.",
+      "severity": "medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/ledger.test.mjs",
+          "name": "R-LED-01: one unreadable ledger is recorded as such; the others are built and written, and the run fails",
+          "found": true
+        },
+        {
+          "file": "test/ledger.test.mjs",
+          "name": "R-LED-01: the ledger table is the one whose header has an ID column, not the first table on the page",
+          "found": true
+        }
+      ],
+      "fix_commit": "67407ef",
+      "fix_commits": [
+        "67407ef"
+      ],
+      "fix_pr": 11,
+      "fix_prs": [
+        11
+      ],
+      "merged_at": "2026-11-24T02:23:40Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-LED-02",
+      "title": "`gh pr list --head ledger/refresh` also lists a fork's pull request from a branch of that name, so the ledger workflow could have reported it as its own, or closed it.",
+      "description": "`gh pr list --head ledger/refresh` also lists a fork's pull request from a branch of that name, so the ledger workflow could have reported it as its own, or closed it. Only a pull request that is not cross-repository and whose head owner is the repository owner now counts (`scripts/ledger-own-pr.mjs`).",
+      "severity": "low-medium",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/ledger.test.mjs",
+          "name": "R-LED-02: only an open pull request from this repository counts as the workflow's own, never a fork's",
+          "found": true
+        },
+        {
+          "file": "test/ledger.test.mjs",
+          "name": "R-LED-02: with only a fork's pull request on ledger/refresh, the workflow neither closes it nor counts it as its own",
+          "found": true
+        }
+      ],
+      "fix_commit": "67407ef",
+      "fix_commits": [
+        "67407ef"
+      ],
+      "fix_pr": 11,
+      "fix_prs": [
+        11
+      ],
+      "merged_at": "2026-11-24T02:23:40Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-LED-03",
+      "title": "Fix cells were read with `/\\b[0-9a-f]{7,40}\\b/`, which also takes dates and pull request numbers for SHAs.",
+      "description": "Fix cells were read with `/\\b[0-9a-f]{7,40}\\b/`, which also takes dates and pull request numbers for SHAs. A cell that is only a list of hex words is still read as SHAs (all-digit short SHAs such as 0866426 exist); in other text a SHA needs backticks, a commit link, or a letter a-f and a digit.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/ledger.test.mjs",
+          "name": "R-LED-03: a Fix cell yields commit SHAs only, not dates, pull request numbers or hex-looking words",
+          "found": true
+        }
+      ],
+      "fix_commit": "67407ef",
+      "fix_commits": [
+        "67407ef"
+      ],
+      "fix_pr": 11,
+      "fix_prs": [
+        11
+      ],
+      "merged_at": "2026-11-24T02:23:40Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-LED-04",
+      "title": "Test paths named in a row were fetched as written: `..`, a leading `/`, `?` or `#` could point the raw URL somewhere else.",
+      "description": "Test paths named in a row were fetched as written: `..`, a leading `/`, `?` or `#` could point the raw URL somewhere else. Such paths are now rejected (listed as unresolved, never fetched), and each path segment is URL-encoded.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/ledger.test.mjs",
+          "name": "R-LED-04: a test path with .., a leading /, ? or # is rejected and never fetched",
+          "found": true
+        }
+      ],
+      "fix_commit": "67407ef",
+      "fix_commits": [
+        "67407ef"
+      ],
+      "fix_pr": 11,
+      "fix_prs": [
+        11
+      ],
+      "merged_at": "2026-11-24T02:23:40Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-LED-05",
+      "title": "One job held `contents: write` and `pull-requests: write` while it ran the ledger script on text fetched from five repositories.",
+      "description": "One job held `contents: write` and `pull-requests: write` while it ran the ledger script on text fetched from five repositories. Generating now runs with a read-only token and uploads the files; a separate job that runs no ledger code copies them into place and opens the pull request, and only when generating succeeded.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/ledger.test.mjs",
+          "name": "R-LED-05: generate holds a read-only token; only publish can write, and it runs no ledger code",
+          "found": true
+        }
+      ],
+      "fix_commit": "67407ef",
+      "fix_commits": [
+        "67407ef"
+      ],
+      "fix_pr": 11,
+      "fix_prs": [
+        11
+      ],
+      "merged_at": "2026-11-24T02:23:40Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/tool-qa",
+      "id": "R-LED-06",
+      "title": "A test counted as found when its name appeared anywhere in the file, so a row naming a shortened test name passed (R-WC-01 in mcp-writecheck-action did).",
+      "description": "A test counted as found when its name appeared anywhere in the file, so a row naming a shortened test name passed (R-WC-01 in mcp-writecheck-action did). A test is now found only under exactly its name, as the first argument of `test()`, `it()`, `describe()`, `suite()` or a `...Test()` helper; template-literal names match as patterns.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/ledger.test.mjs",
+          "name": "R-LED-06: a test is found only under exactly its name, not as part of a longer one",
+          "found": true
+        }
+      ],
+      "fix_commit": "67407ef",
+      "fix_commits": [
+        "67407ef"
+      ],
+      "fix_pr": 11,
+      "fix_prs": [
+        11
+      ],
+      "merged_at": "2026-11-24T02:23:40Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/tool-qa/blob/main/REGRESSIONS.md"
+    },
+    {
       "repo": "isokron-ai/mcp-check",
       "id": "R-SS-01",
       "title": "raw/ had no size cap: a constant shared by every tool turned about 70 KB of source into a 23 MB `raw/subject/tools.json`, over tool-qa's 8 MiB per file, and enough tools threw `RangeError: Invalid st…",
@@ -2930,6 +3104,168 @@
         17
       ],
       "merged_at": "2026-11-24T01:50:13Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-LP-17",
+      "title": "live-probe: the version whose provenance was checked could differ from the one installed: with no version in the registry entry, `latest` could move between the check and the install.",
+      "description": "live-probe: the version whose provenance was checked could differ from the one installed: with no version in the registry entry, `latest` could move between the check and the install. Now the install is pinned to the attested document's own version.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "unknown",
+      "test": [
+        {
+          "file": "test/live-probe.test.mjs",
+          "name": "R-LP-17: the install is pinned to the version whose provenance was checked, so a moving latest cannot swap it",
+          "found": true
+        }
+      ],
+      "fix_commit": "c0e7220",
+      "fix_commits": [
+        "c0e7220"
+      ],
+      "fix_pr": 21,
+      "fix_prs": [
+        21
+      ],
+      "merged_at": "2026-11-24T02:14:50Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-LP-18",
+      "title": "live-probe: Fulcio extensions were found by a byte search for their OID, so the bytes could come from another field, and an extension present twice was not noticed.",
+      "description": "live-probe: Fulcio extensions were found by a byte search for their OID, so the bytes could come from another field, and an extension present twice was not noticed. Now they are parsed from `tbsCertificate.extensions`, each required at most once.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "unknown",
+      "test": [
+        {
+          "file": "test/live-probe.test.mjs",
+          "name": "R-LP-18: Fulcio extensions are read from tbsCertificate.extensions, each exactly once",
+          "found": true
+        }
+      ],
+      "fix_commit": "c0e7220",
+      "fix_commits": [
+        "c0e7220"
+      ],
+      "fix_pr": 21,
+      "fix_prs": [
+        21
+      ],
+      "merged_at": "2026-11-24T02:14:50Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-LP-19",
+      "title": "live-probe: packages signed by a shared reusable workflow failed the SAN check though their provenance names the subject.",
+      "description": "live-probe: packages signed by a shared reusable workflow failed the SAN check though their provenance names the subject. Now accepted only for an allowlisted signer (slsa-github-generator) at a release tag, when it is the SAN.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "unknown",
+      "test": [
+        {
+          "file": "test/live-probe.test.mjs",
+          "name": "R-LP-19: a shared reusable workflow signs for the subject only when it is on the allowlist and is the SAN",
+          "found": true
+        }
+      ],
+      "fix_commit": "c0e7220",
+      "fix_commits": [
+        "c0e7220"
+      ],
+      "fix_pr": 21,
+      "fix_prs": [
+        21
+      ],
+      "merged_at": "2026-11-24T02:14:50Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-LP-20",
+      "title": "live-probe: `tool_count` and `tool_list_sha256` travelled only inside `catalog_per_config_state`.",
+      "description": "live-probe: `tool_count` and `tool_list_sha256` travelled only inside `catalog_per_config_state`. Now written as fields of their own, ingest pinning a registry that declares them.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "unknown",
+      "test": [
+        {
+          "file": "test/live-probe.test.mjs",
+          "name": "R-LP-20: tool_count and tool_list_sha256 are written as fields of their own, declared in the pinned registry",
+          "found": true
+        }
+      ],
+      "fix_commit": "c0e7220",
+      "fix_commits": [
+        "c0e7220"
+      ],
+      "fix_pr": 21,
+      "fix_prs": [
+        21
+      ],
+      "merged_at": "2026-11-24T02:14:50Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-LP-21",
+      "title": "live-probe: a server needing a native module (kronicle-lite) could not be installed in the sandbox.",
+      "description": "live-probe: a server needing a native module (kronicle-lite) could not be installed in the sandbox. Now pinned to mcp-surface-corpus 73a2669, which builds such modules in the full Node image.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "unknown",
+      "test": [
+        {
+          "file": "test/live-probe.test.mjs",
+          "name": "R-LP-21: the sandbox at mcp-surface-corpus 73a2669 builds native modules, so kronicle-lite is expected to start in the self test",
+          "found": true
+        }
+      ],
+      "fix_commit": "c0e7220",
+      "fix_commits": [
+        "c0e7220"
+      ],
+      "fix_pr": 21,
+      "fix_prs": [
+        21
+      ],
+      "merged_at": "2026-11-24T02:14:50Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-check",
+      "id": "R-LP-22",
+      "title": "live-probe: the self test judged bundles with ingest at the worker kit's commit, whose registry pin predated the fields the lane writes, so it refused `tool_count` and `tool_list_sha256` (seen only o…",
+      "description": "live-probe: the self test judged bundles with ingest at the worker kit's commit, whose registry pin predated the fields the lane writes, so it refused `tool_count` and `tool_list_sha256` (seen only on GitHub). Now ingest's checks come from tool-qa at `INGEST_REF`, the commit that judges for real.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "unknown",
+      "test": [
+        {
+          "file": "test/live-probe.test.mjs",
+          "name": "R-LP-22: the self test judges the bundles with the ingest tool-qa runs, whose registry declares every field the lane writes",
+          "found": true
+        }
+      ],
+      "fix_commit": "848955f",
+      "fix_commits": [
+        "848955f"
+      ],
+      "fix_pr": 21,
+      "fix_prs": [
+        21
+      ],
+      "merged_at": "2026-11-24T02:14:50Z",
       "released_in": null,
       "url": "https://github.com/isokron-ai/mcp-check/blob/main/REGRESSIONS.md"
     },
@@ -3944,6 +4280,200 @@
     },
     {
       "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-12",
+      "title": "install-proxy-host: a CONNECT through the egress proxy to a host not on its allowlist, and plain HTTP through it.",
+      "description": "install-proxy-host: a CONNECT through the egress proxy to a host not on its allowlist, and plain HTTP through it.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-12 install-proxy-host: the proxy refuses a CONNECT to a host not on its allowlist, and plain HTTP, and logs each",
+          "found": true
+        },
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-12 R-CASE-13 R-CASE-14 the proxy cases need the proxy's own log: a dead proxy, or one that logged nothing, is no pass",
+          "found": true
+        }
+      ],
+      "fix_commit": "28529e8",
+      "fix_commits": [
+        "28529e8"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T02:01:19Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-13",
+      "title": "install-proxy-ip: a CONNECT through the egress proxy to an IP literal.",
+      "description": "install-proxy-ip: a CONNECT through the egress proxy to an IP literal.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-13 install-proxy-ip: the proxy refuses a CONNECT to an IP literal and logs it",
+          "found": true
+        }
+      ],
+      "fix_commit": "28529e8",
+      "fix_commits": [
+        "28529e8"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T02:01:19Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-14",
+      "title": "install-proxy-port: a CONNECT through the egress proxy to the registry on a port other than 443.",
+      "description": "install-proxy-port: a CONNECT through the egress proxy to the registry on a port other than 443.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-14 install-proxy-port: the proxy refuses a CONNECT to a port other than 443, even to the registry, and logs it",
+          "found": true
+        }
+      ],
+      "fix_commit": "28529e8",
+      "fix_commits": [
+        "28529e8"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T02:01:19Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-15",
+      "title": "install-direct: direct egress from the install network around the proxy, by address and by name.",
+      "description": "install-direct: direct egress from the install network around the proxy, by address and by name.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-15 install-direct: nothing on the install network gets out around the proxy, by address or by name",
+          "found": true
+        }
+      ],
+      "fix_commit": "28529e8",
+      "fix_commits": [
+        "28529e8"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T02:01:19Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-16",
+      "title": "install-metadata: cloud metadata and the host agent from the install network, directly and through the proxy.",
+      "description": "install-metadata: cloud metadata and the host agent from the install network, directly and through the proxy.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-16 install-metadata: no metadata or host agent address answers on the install network, directly or through the proxy",
+          "found": true
+        }
+      ],
+      "fix_commit": "28529e8",
+      "fix_commits": [
+        "28529e8"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T02:01:19Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-17",
+      "title": "install-host: the host, its Docker API and its sockets from the install network.",
+      "description": "install-host: the host, its Docker API and its sockets from the install network.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-17 install-host: the host, its Docker API and its sockets are out of reach from the install network",
+          "found": true
+        }
+      ],
+      "fix_commit": "28529e8",
+      "fix_commits": [
+        "28529e8"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T02:01:19Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-CASE-18",
+      "title": "install-proxy-host's positive control: the case could pass against a proxy that refused everything.",
+      "description": "install-proxy-host's positive control: the case could pass against a proxy that refused everything. It now also tunnels to the registry, and passes only when the proxy's own log has an allowed tunnel to registry.npmjs.org:443 that carried bytes back.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "self-test",
+      "test": [
+        {
+          "file": "test/selftest.test.mjs",
+          "name": "R-CASE-18 install-proxy-host has a positive control: the proxy must be shown to tunnel to the registry, from its own log, or the refusals prove nothing",
+          "found": true
+        }
+      ],
+      "fix_commit": "11c81a8",
+      "fix_commits": [
+        "11c81a8"
+      ],
+      "fix_pr": 10,
+      "fix_prs": [
+        10
+      ],
+      "merged_at": "2026-11-24T02:15:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
       "id": "R-CI-01",
       "title": "Every case failed at \"work volume failed (exit 1)\": the helper ran chown and then chmod, and root without CAP_FOWNER may not chmod what 65534 now owns.",
       "description": "Every case failed at \"work volume failed (exit 1)\": the helper ran chown and then chmod, and root without CAP_FOWNER may not chmod what 65534 now owns.",
@@ -4165,6 +4695,60 @@
       "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
     },
     {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-MUT-01",
+      "title": "The egress proxy's allowlist was never shown to matter: a proxy that allowed everything would have passed every check.",
+      "description": "The egress proxy's allowlist was never shown to matter: a proxy that allowed everything would have passed every check. The `proxy-allowlist` mutation puts the hosts the install cases must be refused on its allowlist, and `install-proxy-host` must fail on the proxy's own log.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "mutation",
+      "test": [
+        {
+          "file": "test/mutation.test.mjs",
+          "name": "R-MUT-01 proxy-allowlist: a proxy that lets the denied hosts through is caught by install-proxy-host from its own log",
+          "found": true
+        }
+      ],
+      "fix_commit": "28529e8",
+      "fix_commits": [
+        "28529e8"
+      ],
+      "fix_pr": 9,
+      "fix_prs": [
+        9
+      ],
+      "merged_at": "2026-11-24T02:01:19Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-surface-corpus",
+      "id": "R-MUT-02",
+      "title": "A proxy that refused everything was never shown to fail the self test.",
+      "description": "A proxy that refused everything was never shown to fail the self test. The `proxy-allowlist-empty` mutation gives the proxy an allowlist that matches nothing; `install-proxy-host` must fail for the missing allowed line.",
+      "severity": null,
+      "severity_note": null,
+      "found_by": "mutation",
+      "test": [
+        {
+          "file": "test/mutation.test.mjs",
+          "name": "R-MUT-02 proxy-allowlist-empty: a proxy that refuses everything is caught by the positive control, not passed on its refusals",
+          "found": true
+        }
+      ],
+      "fix_commit": "11c81a8",
+      "fix_commits": [
+        "11c81a8"
+      ],
+      "fix_pr": 10,
+      "fix_prs": [
+        10
+      ],
+      "merged_at": "2026-11-24T02:15:02Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-surface-corpus/blob/main/REGRESSIONS.md"
+    },
+    {
       "repo": "isokron-ai/mcp-writecheck-action",
       "id": "R-WC-01",
       "title": "The tools volume held mcp-surface-corpus's `sandbox/` only; its network logger imports `../src/dns.mjs`, so the logger did not start and every unit (the controls first) failed on the first fixture ru…",
@@ -4175,8 +4759,8 @@
       "test": [
         {
           "file": "test/loop.test.mjs",
-          "name": "R-WC-01: the tools volume carries what its code imports",
-          "found": false
+          "name": "R-WC-01: the tools volume carries what its code imports (the network logger needs src/)",
+          "found": true
         }
       ],
       "fix_commit": "b5fbec1",
@@ -4275,16 +4859,26 @@
     {
       "repo": "isokron-ai/mcp-writecheck-action",
       "id": "R-WC-05",
-      "title": "Security review: the CLI started the server in the same sandbox container, as the same user, with the same `/work`, so a hostile subject could rewrite `/work/out`, write into the CLI's stdout through…",
-      "description": "Security review: the CLI started the server in the same sandbox container, as the same user, with the same `/work`, so a hostile subject could rewrite `/work/out`, write into the CLI's stdout through `/proc/<pid>/fd`, or trace the CLI, and change its own published verdict. Every subject and the forgery control now run split: the server in a sandbox container of its own behind our TCP bridge, with the install volume read-only and no output volume; the CLI in another sandbox container, our helper at the probe address, through our relay. The forgery server now also tries all three, and the control fails as `tampered` unless the CLI's verdict on it is the one its real tool list gives. Only IsoKron's locked fixture servers (full runs need a loopback backend gate and restarts) still share the CLI's container.",
+      "title": "The CLI started the server in the same sandbox container, as the same user, with the same `/work`, so a hostile subject could rewrite `/work/out`, write into the CLI's stdout through `/proc/<pid>/fd`…",
+      "description": "The CLI started the server in the same sandbox container, as the same user, with the same `/work`, so a hostile subject could rewrite `/work/out`, write into the CLI's stdout through `/proc/<pid>/fd`, or trace the CLI, and change its own published verdict. Every subject and the forgery control now run split: the server in a sandbox container of its own behind our TCP bridge, with the install volume read-only and no output volume; the CLI in another sandbox container, our helper at the probe address, through our relay. The forgery server now also tries all three, and the control fails as `tampered` unless the CLI's verdict on it is the one its real tool list gives. Only IsoKron's locked fixture servers (full runs need a loopback backend gate and restarts) still share the CLI's container.",
       "severity": null,
       "severity_note": null,
-      "found_by": "CI",
+      "found_by": "review",
       "test": [
         {
           "file": "test/loop.test.mjs",
-          "name": "R-WC-05: the forgery control fails when the verdict was tampered with, not only when text leaked\", \"R-WC-05: bridge and relay carry a stdio server over TCP, both ways, and the server answers after stdin ends\", \"R-WC-05: every subject and the forgery control run split; only our locked fixtures share the CLI's container",
-          "found": false
+          "name": "R-WC-05: the forgery control fails when the verdict was tampered with, not only when text leaked",
+          "found": true
+        },
+        {
+          "file": "test/loop.test.mjs",
+          "name": "R-WC-05: bridge and relay carry a stdio server over TCP, both ways, and the server answers after stdin ends",
+          "found": true
+        },
+        {
+          "file": "test/loop.test.mjs",
+          "name": "R-WC-05: every subject and the forgery control run split; only our locked fixtures share the CLI's container",
+          "found": true
         }
       ],
       "fix_commit": "99085e0",
@@ -4302,16 +4896,21 @@
     {
       "repo": "isokron-ai/mcp-writecheck-action",
       "id": "R-WC-06",
-      "title": "Security review: the sandbox pin (3b43c19) predated R-SBX-12 (a goto above the firewall jumps).",
-      "description": "Security review: the sandbox pin (3b43c19) predated R-SBX-12 (a goto above the firewall jumps). `SANDBOX_REF` is now 97bd96c, and the self test runs through mcp-surface-corpus's reusable `sandbox-conformance.yml` and its `sandbox-guard` action, both at that commit, instead of inline.",
+      "title": "The sandbox pin (3b43c19) predated R-SBX-12 (a goto above the firewall jumps).",
+      "description": "The sandbox pin (3b43c19) predated R-SBX-12 (a goto above the firewall jumps). `SANDBOX_REF` is now 97bd96c, and the self test runs through mcp-surface-corpus's reusable `sandbox-conformance.yml` and its `sandbox-guard` action, both at that commit, instead of inline.",
       "severity": null,
       "severity_note": null,
-      "found_by": "CI",
+      "found_by": "review",
       "test": [
         {
-          "file": null,
-          "name": "`test/loop-workflow.test.mjs`: \"corpus.yml: permissions {} on top, timeouts, pinned actions, no secrets, no expressions in run\" (and the same for loop-fixture.yml)",
-          "found": null
+          "file": "test/loop-workflow.test.mjs",
+          "name": "corpus.yml: permissions {} on top, timeouts, pinned actions, no secrets, no expressions in run",
+          "found": true
+        },
+        {
+          "file": "test/loop-workflow.test.mjs",
+          "name": "loop-fixture.yml: permissions {} on top, timeouts, pinned actions, no secrets, no expressions in run",
+          "found": true
         }
       ],
       "fix_commit": "99085e0",
@@ -4329,11 +4928,11 @@
     {
       "repo": "isokron-ai/mcp-writecheck-action",
       "id": "R-WC-07",
-      "title": "Security review: kronicle-lite installed unlocked (`npm install` at a version, with install scripts), with three extra install hosts.",
-      "description": "Security review: kronicle-lite installed unlocked (`npm install` at a version, with install scripts), with three extra install hosts. Both fixtures now install with `npm ci` from a committed lockfile whose entry for the package carries the sha512 integrity pinned in `loop/fixtures.json` (every package from registry.npmjs.org with an integrity), and kronicle-lite's extra hosts are the two its prebuilt binary download uses (github.com, release-assets.githubusercontent.com). Both packages are published by the isokron-ai npm account.",
+      "title": "Kronicle-lite installed unlocked (`npm install` at a version, with install scripts), with three extra install hosts.",
+      "description": "Kronicle-lite installed unlocked (`npm install` at a version, with install scripts), with three extra install hosts. Both fixtures now install with `npm ci` from a committed lockfile whose entry for the package carries the sha512 integrity pinned in `loop/fixtures.json` (every package from registry.npmjs.org with an integrity), and kronicle-lite's extra hosts are the two its prebuilt binary download uses (github.com, release-assets.githubusercontent.com). Both packages are published by the isokron-ai npm account.",
       "severity": null,
       "severity_note": null,
-      "found_by": "CI",
+      "found_by": "review",
       "test": [
         {
           "file": "test/loop.test.mjs",
@@ -4356,11 +4955,11 @@
     {
       "repo": "isokron-ai/mcp-writecheck-action",
       "id": "R-WC-08",
-      "title": "Security review: teardown checked only for gVisor processes.",
-      "description": "Security review: teardown checked only for gVisor processes. It now also fails while any host process of the sandbox user (UID 65534) is left.",
+      "title": "Teardown checked only for gVisor processes.",
+      "description": "Teardown checked only for gVisor processes. It now also fails while any host process of the sandbox user (UID 65534) is left.",
       "severity": null,
       "severity_note": null,
-      "found_by": "CI",
+      "found_by": "review",
       "test": [
         {
           "file": "test/loop.test.mjs",
@@ -4377,6 +4976,38 @@
         61
       ],
       "merged_at": "2026-11-24T01:48:45Z",
+      "released_in": null,
+      "url": "https://github.com/isokron-ai/mcp-writecheck-action/blob/main/REGRESSIONS.md"
+    },
+    {
+      "repo": "isokron-ai/mcp-writecheck-action",
+      "id": "R-INP-01",
+      "title": "The T0 workers checked each dispatch input with `printf '%s' \"$v\" | grep -Eq`, which matches line by line: a value with a newline passed when one of its lines did, and its second line then went into …",
+      "description": "The T0 workers checked each dispatch input with `printf '%s' \"$v\" | grep -Eq`, which matches line by line: a value with a newline passed when one of its lines did, and its second line then went into `$GITHUB_OUTPUT` as an output of its own (for example a forged `run_key`). Only someone who can dispatch the workflows could send one. The check is now a whole-string `[[ \"$v\" =~ $pattern ]]` match, in all eight workflows.",
+      "severity": "low",
+      "severity_note": null,
+      "found_by": "review",
+      "test": [
+        {
+          "file": "test/workflow-inputs.test.mjs",
+          "name": "R-INP-01: every T0 worker refuses a dispatch input with a newline in it",
+          "found": true
+        },
+        {
+          "file": "test/workflow-inputs.test.mjs",
+          "name": "R-INP-01: the old grep check let a newline through, so the test above can fail",
+          "found": true
+        }
+      ],
+      "fix_commit": "3a7042c",
+      "fix_commits": [
+        "3a7042c"
+      ],
+      "fix_pr": 60,
+      "fix_prs": [
+        60
+      ],
+      "merged_at": "2026-11-23T20:32:19Z",
       "released_in": null,
       "url": "https://github.com/isokron-ai/mcp-writecheck-action/blob/main/REGRESSIONS.md"
     },
