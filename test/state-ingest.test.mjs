@@ -18,7 +18,7 @@ const KEY_B = 'b'.repeat(64);
 const SHA = '1'.repeat(40);
 
 /** A dispatch the way the pump makes it: a slot, a lease per run_key, then the ledger row. */
-function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 'repo:1' }], ttlMs = 30 * MIN, now = T0, file = 'qa-worker.yml' } = {}) {
+function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 'repo:1' }], ttlMs = 30 * MIN, now = T0, file = 'qa-worker.yml', workflow = 'live-probe' } = {}) {
   db.acquireSlot(attemptId, { budget: 5, ttlMs, now });
   const leased = items.map((it) => {
     const l = db.acquireLease(it.runKey, attemptId, { ttlMs, now });
@@ -26,7 +26,7 @@ function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 
     return { run_key: it.runKey, subject: it.subject, fence: l.fence };
   });
   db.createDispatch({
-    attemptId, shardId: `shard-${attemptId}`, workflow: 'live-probe', repo: WORKER_REPO,
+    attemptId, shardId: `shard-${attemptId}`, workflow, repo: WORKER_REPO,
     workflowFile: file, ref: 'main', expires: now + ttlMs, items: leased, now,
   });
   return leased;
@@ -411,8 +411,8 @@ test('R-ORD-07: ingest over the real store keeps the oracle facts of a live-prob
   const { parseRegistry } = await import('../ingest/registry.mjs');
   const db = openState(':memory:');
   const H = 'd'.repeat(64);
-  // The reader (scan-static) said the server has other tools than the live list.
-  db.noteOracle('repo:1', 'scan-static', 'f'.repeat(64), { lane: 'scan-static', tool_list_sha256: 'e'.repeat(64), tool_count: 3 }, { now: T0 });
+  // The reader (scan-static) counted fewer tools than the live list will.
+  db.noteOracle('repo:1', 'scan-static', 'f'.repeat(64), { lane: 'scan-static', tool_list_sha256: 'e'.repeat(64), tool_count: 2, complete: true }, { now: T0 });
   const [item] = dispatch(db);
   db.setDispatchRun('att-1', { runId: RUN_ID, workflowSha: SHA, now: T0 });
   const files = defaultFiles();
@@ -424,9 +424,32 @@ test('R-ORD-07: ingest over the real store keeps the oracle facts of a live-prob
   });
   assert.equal(r.outcome, 'accepted', JSON.stringify(r.report?.problems ?? r.reason));
   const [row] = db.listOracleDisagreements();
-  assert.deepEqual([row.subject, row.status, row.kinds.map((k) => k.kind)], ['repo:1', 'open', ['tool_set']]);
+  assert.deepEqual([row.subject, row.status, row.kinds.map((k) => k.kind)], ['repo:1', 'open', ['tool_count']]);
   assert.deepEqual([db.getResult(KEY_A).fault, db.getResult(KEY_A).coverage], [null, 'assessed']);
   db.close();
+});
+
+test('R-ORD-15: with the real store the lane is known to ingest, so a scan-static rate limit is throttled (retry_throttled), not one of the three retries; another lane is not', async () => {
+  const { makeBundle, fakeEncrypt, fakeDecrypt, REGISTRY_TEXT, RUN_ID } = await import('../ingest/testkit.mjs');
+  const { parseRegistry } = await import('../ingest/registry.mjs');
+  const reasonFor = async (workflow, stage) => {
+    const db = openState(':memory:');
+    const [item] = dispatch(db, { workflow });
+    db.setDispatchRun('att-1', { runId: RUN_ID, workflowSha: SHA, now: T0 });
+    const bundle = makeBundle({
+      identity: { attempt_id: 'att-1', run_key: KEY_A, fence: item.fence }, workflow: { sha: SHA },
+      meta: { skips: [{ stage, reason: 'rate_limited', retryable: true }] },
+    });
+    const r = await ingestAttempt({ repo: WORKER_REPO, runId: RUN_ID, attemptId: 'att-1' }, {
+      ledger: dbLedger(db, { now: () => T0 + MIN }), github: fakeGithub({ blob: fakeEncrypt(bundle.tar), run: undefined }), decrypt: fakeDecrypt,
+      registry: { ...parseRegistry(REGISTRY_TEXT), source: 'test' }, now: () => new Date(T0 + MIN),
+    });
+    db.close();
+    return r.reason;
+  };
+  assert.equal(await reasonFor('scan-static', 'static'), 'retry_throttled', 'the lane declares static:rate_limited in pump/workflows.json');
+  assert.equal(await reasonFor('scan-static', 'meta'), 'retry_later', 'a stage the lane does not declare is an ordinary retry');
+  assert.equal(await reasonFor('live-probe', 'static'), 'retry_later', 'a lane that declares nothing');
 });
 
 test('R-CHAOS-02: a result whose run completed before the lease ran out is on time, even recorded after it; a later one is not; a newer lease always wins', () => {

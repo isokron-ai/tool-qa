@@ -56,19 +56,25 @@
 // suite disagree (state oracle_disagreements, status open) is where our tools
 // are weakest. Its pairs of an oracle lane (priority.oracle_lanes: scan-static
 // and live-probe) get two things:
-//   oracle_recheck  a due reason (weight priority.oracle_recheck) once the last
+//   oracle_recheck  a due reason (weight priority.oracle_recheck, charged to
+//                   the same cap as the boosts, see below) once the last
 //                   result is older than priority.oracle_recheck_days, which
-//                   is shorter than the tier's max age. Each result counts
-//                   towards the settle rule: the same disagreement
-//                   ORACLE_MAX_UNCHANGED (5) results in a row is settled and
-//                   the boost and re-checks stop until it changes; agreement
-//                   clears it.
+//                   is shorter than the tier's max age. Each check cycle (a
+//                   result from every lane with current facts) counts towards
+//                   the settle rule: the same disagreement ORACLE_MAX_UNCHANGED
+//                   (5) cycles in a row is settled and the boost and re-checks
+//                   stop until it changes; agreement clears it. A rolling
+//                   budget of ORACLE_BUDGET_MAX (6) cycles per 30 days settles
+//                   a server that keeps flapping (R-ORD-13).
 //   a priority boost  priority.oracle_disagreement_share x the tier weight,
 //                   added AFTER the coverage-gap boost and limited to what is
-//                   left of the same cap: coverage-gap boost + oracle boost
-//                   never exceed gapBoostCap() of the tier, so a boosted pair
+//                   left of the same cap: coverage-gap boost + oracle_recheck
+//                   reason + oracle boost never exceed gapBoostCap() of the
+//                   tier, so with equal other reasons and age a boosted pair
 //                   still never reaches a bare pair of the tier above
-//                   (R-COV-05, R-ORD-02). The coverage gap has the first claim.
+//                   (R-COV-05, R-ORD-02, R-ORD-14). The coverage gap has the
+//                   first claim, then the reason (cut to what is left), then
+//                   the boost.
 // A disagreement is evidence about our tool, never the subject's: it changes
 // no result's fault or coverage (R-ORD-04).
 //
@@ -163,7 +169,7 @@ export function oracleBoost(subject, workflowName, ctx) {
   const share = Number(ctx.tiers.priority?.oracle_disagreement_share);
   const weight = Number(ctx.tiers.weights?.[ctx.tier]);
   if (!Number.isFinite(share) || share <= 0 || !Number.isFinite(weight) || weight <= 0) return 0;
-  const room = gapBoostCap(ctx.tiers, ctx.tier) - Number(ctx.gapBoost || 0);
+  const room = gapBoostCap(ctx.tiers, ctx.tier) - Number(ctx.gapBoost || 0) - Number(ctx.recheckPts || 0);
   return Math.max(0, Math.min(share * weight, room));
 }
 
@@ -339,11 +345,14 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
 
       const ageDays = last ? Math.max(0, (now - toMs(last.accepted_at)) / DAY_MS) : 0;
       let priority = Number(weights[tierName] || 0);
-      for (const r of reasons) priority += Number(prio[r] || 0);
+      for (const r of reasons) if (r !== 'oracle_recheck') priority += Number(prio[r] || 0);
       priority += Math.min(Number(prio.age_max ?? 30), ageDays * Number(prio.age_per_day ?? 1));
       const gapBoost = Number(h.coverageGap(s, name, { ...ctx, reasons }) || 0);
       priority += gapBoost;
-      priority += Number(h.oracleDisagreement(s, name, { ...ctx, reasons, gapBoost }) || 0);
+      // The oracle_recheck reason's weight is charged to the same cap (R-ORD-14).
+      const recheckPts = reasons.includes('oracle_recheck') ? Math.max(0, Math.min(Number(prio.oracle_recheck || 0), gapBoostCap(tiers, tierName) - gapBoost)) : 0;
+      priority += recheckPts;
+      priority += Number(h.oracleDisagreement(s, name, { ...ctx, reasons, gapBoost, recheckPts }) || 0);
       out.push({
         subject: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority, gap: gapKind(last, reasons),
         ...(oracle?.status === 'open' ? { oracle: oracle.kinds.map((k) => k.kind) } : {}),

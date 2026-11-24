@@ -16,6 +16,14 @@
 //                clients), conformance_checks, oracle_disagreements (the
 //                worker's own comparisons, each a lead, never a verdict)
 //
+// Hashes are not compared across lanes (R-ORD-11): scan-static and live-probe
+// both use the checker engine's catalog hash, but the reader's tool list comes
+// from source (derived, approximate, names only), so equal hashes are not
+// expected even when nothing is wrong. Across lanes only the tool count is
+// compared, and only when the reader's list is complete and from the same
+// subject version (R-ORD-12). tool_set therefore comes from the worker's own
+// comparisons, which are made within one lane, on the wire list.
+//
 // A disagreement has a kind: tool_set (same count, different tools), tool_count,
 // schema (same tools, different definitions), protocol (an official client
 // could not initialise or list where our probe did) or conformance (our lint
@@ -29,6 +37,14 @@ import { createHash } from 'node:crypto';
 
 /** Re-checks with the same disagreement before the due boost stops (foldDisagreement). */
 export const ORACLE_MAX_UNCHANGED = 5;
+/**
+ * At most this many re-check cycles with a disagreement present per subject in
+ * ORACLE_BUDGET_DAYS, however often it clears and comes back: more than that
+ * settles it (R-ORD-13). A server that flaps cannot hold the 1-day re-checks
+ * and the weight for ever.
+ */
+export const ORACLE_BUDGET_MAX = 6;
+export const ORACLE_BUDGET_DAYS = 30;
 export const KINDS = Object.freeze(['tool_set', 'tool_count', 'schema', 'protocol', 'conformance']);
 /** The design classes of the worker's oracle_disagreements (DESIGN-v3 D4, D6, D7, D12) and the kind each stands for. */
 const CLASS_KIND = Object.freeze({
@@ -57,7 +73,11 @@ export function oracleFacts(lane, get, result = null) {
     if (!result || result.status !== 'graded') return null;
     const h = hash(result.catalog_hash);
     if (!h) return null;
-    return { lane, tool_list_sha256: h, tool_count: int(result.tool_count) };
+    const l = result.list ?? {};
+    // Complete: the reader saw every tool by name from a source it trusts.
+    const complete = Boolean(result.list) && l.approximate !== true && l.fidelity !== 'names' && !(l.tools_left_out > 0) && !(l.unresolved_names > 0)
+      && !(l.registration_not_seen > 0) && l.listing_truncated !== true && result.listing?.truncated !== true && result.listing?.budget_hit !== true;
+    return { lane, tool_list_sha256: h, tool_count: int(result.tool_count), complete };
   }
   if (lane !== 'live-probe') return null;
   const h = hash(get('tool_list_sha256'));
@@ -77,18 +97,24 @@ export function oracleFacts(lane, get, result = null) {
 
 /**
  * The disagreements of one subject from its latest facts per lane.
- * @param {{static?: object|null, live?: object|null}} facts
+ * @param {{static?: object|null, live?: object|null, version?: string|null}} facts  version: the subject version of the newest result; lanes of another version are left out. Without it, the lanes are compared only when they share a version.
  * @returns {{kinds: {kind: string, oracles: string[]}[], server_side: string[], signature: string|null}}
  *   kinds: sorted, one entry per (kind, oracle pair); signature: sha256 of kinds, null when none
  */
-export function deriveDisagreements({ static: st = null, live = null } = {}) {
+export function deriveDisagreements({ static: st = null, live = null, version = undefined } = {}) {
   const found = new Map();
   const server = new Set();
   const add = (kind, oracles) => { const o = [...oracles].sort(); found.set(`${kind}\u0000${o.join(',')}`, { kind, oracles: o }); };
 
-  if (st?.tool_list_sha256 && live?.tool_list_sha256 && st.tool_list_sha256 !== live.tool_list_sha256) {
-    const differ = st.tool_count !== null && live.tool_count !== null && st.tool_count !== live.tool_count;
-    add(differ ? 'tool_count' : 'tool_set', ['reader', 'live']);
+  // A lane whose facts are of another subject version than `version` (the newest result's) is stale: left out (R-ORD-12).
+  if (version !== undefined) {
+    if (st && st.version !== version) st = null;
+    if (live && live.version !== version) live = null;
+  } else if (st && live && st.version !== live.version) {
+    st = null;
+  }
+  if (st?.complete === true && st.tool_count !== null && live?.tool_count !== null && live?.tool_count !== undefined && st.tool_count !== live.tool_count) {
+    add('tool_count', ['reader', 'live']);
   }
   if (live) {
     for (const c of live.sdk ?? []) {
@@ -114,18 +140,19 @@ export function deriveDisagreements({ static: st = null, live = null } = {}) {
  * Fold one subject's derived disagreement into its stored record.
  * @param {{status: string, signature: string, unchanged_rechecks: number}|null} prior  the stored row, or null
  * @param {{kinds: object[], signature: string|null}} now
- * @param {{maxUnchanged: number}} cfg  re-checks without a change before the boost stops
+ * @param {{maxUnchanged: number, cycle: boolean}} cfg  maxUnchanged: re-check cycles without a change before the boost stops;
+ *   cycle: this result completes a check cycle (every lane with facts has reported), so it counts as one re-check (R-ORD-13)
  * @returns {{status: 'open'|'cleared'|'settled'|null, unchanged_rechecks: number, reason: string|null}}
  *   null status: nothing to store (no disagreement and none stored)
  */
-export function foldDisagreement(prior, now, { maxUnchanged = ORACLE_MAX_UNCHANGED } = {}) {
+export function foldDisagreement(prior, now, { maxUnchanged = ORACLE_MAX_UNCHANGED, cycle = true } = {}) {
   if (!now.signature) {
     if (!prior || prior.status === 'cleared') return { status: prior ? 'cleared' : null, unchanged_rechecks: 0, reason: prior ? prior.reason ?? null : null };
     return { status: 'cleared', unchanged_rechecks: 0, reason: 'oracles_agree' };
   }
   if (!prior || prior.status === 'cleared' || prior.signature !== now.signature) return { status: 'open', unchanged_rechecks: 0, reason: null };
   if (prior.status === 'settled') return { status: 'settled', unchanged_rechecks: prior.unchanged_rechecks, reason: 'unchanged_rechecks' };
-  const n = prior.unchanged_rechecks + 1;
+  const n = prior.unchanged_rechecks + (cycle ? 1 : 0);
   return n >= maxUnchanged ? { status: 'settled', unchanged_rechecks: n, reason: 'unchanged_rechecks' } : { status: 'open', unchanged_rechecks: n, reason: null };
 }
 

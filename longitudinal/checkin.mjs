@@ -116,6 +116,8 @@ export function itemsFromEntries(entries, stats = { unreadable: 0 }) {
       // The subject key ingest recorded it under, which a rename does not
       // move (derive.mjs subjectKeyOf); the name the worker was sent is kept.
       subject: subjectKeyOf(g.files.get('ingest.json'), man),
+      // The subject version the lane read (state oracle facts are compared on one version only, R-ORD-12).
+      version: man.subject.sha ?? man.subject.artifact_digest ?? null,
       sent_as: man.subject.id,
       lane,
       observed_at: man.finished_at,
@@ -322,15 +324,19 @@ export function subjectWeight(info, tierWeights, config) {
  */
 export function oracleDisagreements(items) {
   const latest = new Map();
+  const newest = new Map(); // subject -> the version of its newest item with facts
   for (const it of items) {
     if (!ORACLE_LANES.includes(it.lane)) continue;
     const facts = oracleFacts(it.lane, (k) => it.fields?.get(k) ?? null, it.results.get(it.lane) ?? null);
-    if (facts) latest.set(`${it.subject}\u0000${it.lane}`, facts);
+    if (facts) {
+      latest.set(`${it.subject}\u0000${it.lane}`, { ...facts, version: it.version ?? null });
+      newest.set(it.subject, it.version ?? null);
+    }
   }
   const subjects = new Set([...latest.keys()].map((k) => k.split('\u0000')[0]));
   const out = new Map();
   for (const subject of subjects) {
-    const d = deriveDisagreements({ static: latest.get(`${subject}\u0000scan-static`) ?? null, live: latest.get(`${subject}\u0000live-probe`) ?? null });
+    const d = deriveDisagreements({ static: latest.get(`${subject}\u0000scan-static`) ?? null, live: latest.get(`${subject}\u0000live-probe`) ?? null, version: newest.get(subject) });
     if (d.kinds.length) out.set(subject, d.kinds);
   }
   return out;

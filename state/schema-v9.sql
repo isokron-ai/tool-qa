@@ -3,8 +3,11 @@
 -- oracle_facts: what the latest accepted result of each oracle lane (scan-static,
 -- live-probe) said that the oracles can disagree on: tool count and tool list
 -- hash, the official SDK clients' results, failed conformance checks and the
--- worker's own disagreement leads (state/oracle.mjs oracleFacts). One row per
--- (subject, lane), replaced by each accepted result. JSON, a few hundred bytes.
+-- worker's own disagreement leads (state/oracle.mjs oracleFacts), with the subject
+-- version (sha, else artifact digest) they were read at. One row per (subject,
+-- lane), replaced by each accepted result, and dropped when a result of a newer
+-- version of an oracle lane has no facts. Lanes are compared only on the same
+-- version. JSON, a few hundred bytes.
 --
 -- oracle_disagreements: the derived record per subject (state/oracle.mjs).
 --   status   open     the oracles disagree: the due list boosts the subject's
@@ -35,6 +38,8 @@ CREATE TABLE oracle_disagreements (
   signature          TEXT NOT NULL,
   server_side        TEXT,            -- JSON
   unchanged_rechecks INTEGER NOT NULL DEFAULT 0,
+  lanes_seen         TEXT NOT NULL DEFAULT '[]',  -- JSON: lanes that reported since the last counted check cycle
+  recheck_log        TEXT NOT NULL DEFAULT '[]',  -- JSON: times of the check cycles with a disagreement, last 30 days (the budget)
   opened_at          TEXT NOT NULL,
   updated_at         TEXT NOT NULL,
   cleared_at         TEXT,
