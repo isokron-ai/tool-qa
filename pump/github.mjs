@@ -60,6 +60,7 @@ export function createClient({
   retryUntil = null,
   requestTimeoutMs = 60_000,
   log = () => {},
+  onRetry = null,
   userAgent = 'isokron-tool-qa',
 } = {}) {
   if (!token) throw new TypeError('createClient: a token is required');
@@ -76,7 +77,7 @@ export function createClient({
     const url = buildUrl(apiUrl, path, query);
     const where = `${m} ${url.pathname}`;
     const retrier = createRetrier({
-      attempts: maxAttempts, totalMs: retryTotalMs, until: retryUntil, sleep, random, now, log,
+      attempts: maxAttempts, totalMs: retryTotalMs, until: retryUntil, sleep, random, now, log, onRetry,
     });
     return retrier.run(where, async () => {
       await bud.take(fam, { essential });

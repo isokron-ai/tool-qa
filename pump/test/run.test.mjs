@@ -594,3 +594,134 @@ test('R-CHAOS-12: cancelling the successor says so only when GitHub cancelled it
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- the live loop view snapshot (live/publish.mjs) ----
+
+const LIVE_ENV = { LANE_LIVE_SNAPSHOT_ENABLED: 'true', LIVE_R2_ACCESS_KEY_ID: 'AKIA_SYN_RUN', LIVE_R2_SECRET_ACCESS_KEY: 'syn-run-secret-abc', R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef' };
+function liveHarness(over = {}) {
+  const h = harness({ slots: '3', subjects: 4 });
+  const builds = [];
+  const puts = [];
+  const live = {
+    deadlineMs: 80,
+    build: async (db, a) => {
+      builds.push({ retry: a.retry, now: a.now });
+      return { snapshot: { schema: 'isokron-loop-live/1', seq: builds.length, generated_at: new Date(a.now).toISOString(), recent: [] }, hourEvents: [], problems: [] };
+    },
+    put: async (key) => { puts.push(key); return { status: 200 }; },
+    ...over,
+  };
+  h.opts.env = { ...h.opts.env, ...LIVE_ENV, ...(over.env ?? {}) };
+  delete live.env;
+  h.opts.live = live;
+  return { h, builds, puts };
+}
+
+test('live: each tick and the end of the run publish, after pump.last_tick and before the push; nothing when the switch is off', async () => {
+  const { h, builds, puts } = liveHarness();
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true);
+  assert.equal(builds.length, 6, 'five ticks and the end of the run');
+  assert.equal(puts.filter((k) => k === 'v1/latest.json').length, 6);
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('live.last_upload').ok, true);
+  db.close();
+  h.cleanup();
+
+  const off = liveHarness({ env: { LANE_LIVE_SNAPSHOT_ENABLED: 'TRUE' } });
+  await runPump(off.h.opts);
+  assert.equal(off.builds.length, 0);
+  assert.equal(off.puts.length, 0);
+  off.h.cleanup();
+});
+
+test('live: an upload that throws does not fail the run', async () => {
+  const { h } = liveHarness({ put: async () => { throw new Error('r2 exploded'); } });
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true);
+  assert.equal(out.ticks, 5);
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('live.last_upload').ok, false);
+  db.close();
+  h.cleanup();
+  const b = liveHarness({ build: async () => { throw new Error('builder exploded'); } });
+  assert.equal((await runPump(b.h.opts)).ok, true);
+  b.h.cleanup();
+});
+
+test('live: an upload that hangs is cut at its deadline and does not delay or fail the run', async () => {
+  const { h } = liveHarness({ put: () => new Promise(() => {}), deadlineMs: 40 });
+  const t0 = Date.now();
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true);
+  assert.equal(out.ticks, 5);
+  assert.ok(Date.now() - t0 < 5000, 'six publishes of at most 40 ms each');
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('live.last_upload').error, 'deadline');
+  db.close();
+  h.cleanup();
+});
+
+test('live: a scan-blocked snapshot uploads nothing and the run goes on', async () => {
+  const { h, puts } = liveHarness({ build: async () => ({ snapshot: { seq: 1 }, hourEvents: [], problems: [{ rule: 'secret', path: 'a.b' }] }) });
+  assert.equal((await runPump(h.opts)).ok, true);
+  assert.deepEqual(puts, []);
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('live.last_upload').blocked, 'scan');
+  db.close();
+  h.cleanup();
+});
+
+test('live: the retry hook fires on a 5xx, the open retry shows in the next upload, and the tick records a retry event', async () => {
+  const { h, builds } = liveHarness();
+  let first = true;
+  const push = h.opts.push;
+  h.opts.push = async (args) => {
+    if (first) {
+      first = false;
+      assert.equal(typeof args.onRetry, 'function', 'the state asset client gets the hook');
+      args.onRetry({ label: 'GET /repos/o/r/releases', attempt: 1, status: 503, delayMs: 2000, gaveUp: false });
+      args.onRetry({ label: 'GET /repos/o/r/releases', attempt: 2, status: 503, delayMs: 4000, gaveUp: false });
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return push(args);
+  };
+  await runPump(h.opts);
+  const open = builds.filter((b) => b.retry);
+  assert.equal(open.length, 1, 'one upload at once while the retry is open (at most one per 20 s)');
+  assert.equal(open[0].retry.call, 'state_asset');
+  assert.equal(open[0].retry.status, 503);
+  assert.equal(open[0].retry.attempt, 1, 'the state when the hook triggered the upload');
+  assert.equal(open[0].retry.of, 6);
+  assert.equal(builds.at(-1).retry, null, 'the retry is closed once the tick ended');
+  const db = openState(h.stateFile);
+  const events = db.listEvents().filter((e) => e.type === 'retry');
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0].data, { label: 'state_asset', status: 503, attempts: 2, gave_up: false });
+  db.close();
+  h.cleanup();
+});
+
+test('live: retry-triggered uploads are at most one per 20 s', async () => {
+  const { h, builds } = liveHarness();
+  let calls = 0;
+  const push = h.opts.push;
+  h.opts.push = async (args) => {
+    if (calls++ === 0) {
+      for (let i = 1; i <= 5; i++) { args.onRetry({ label: 'x', attempt: i, status: 502, delayMs: 10, gaveUp: false }); await new Promise((r) => setTimeout(r, 5)); }
+    }
+    return push(args);
+  };
+  await runPump(h.opts);
+  assert.equal(builds.filter((b) => b.retry).length, 1);
+  h.cleanup();
+});
+
+test('live: the R2 credentials and account id are scrubbed from the log', async () => {
+  const { h } = liveHarness({ build: async () => { throw new Error(`failed with ${LIVE_ENV.LIVE_R2_SECRET_ACCESS_KEY} for ${LIVE_ENV.R2_ACCOUNT_ID}`); } });
+  await runPump(h.opts);
+  const log = h.lines.join('\n');
+  assert.ok(log.includes('builder') || log.includes('live:'), 'something was logged');
+  for (const v of Object.values(LIVE_ENV).slice(1)) assert.ok(!log.includes(v), `log contains ${v}`);
+  h.cleanup();
+});

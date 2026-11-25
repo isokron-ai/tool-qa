@@ -153,7 +153,7 @@ function transient(err) {
   return err;
 }
 
-function makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now, retryUntil, retryTotalMs = 180_000, requestTimeoutMs = 120_000 }) {
+function makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now, retryUntil, retryTotalMs = 180_000, requestTimeoutMs = 120_000, onRetry }) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repo || ''))) {
     throw new Error(`repository must be "owner/name", got ${JSON.stringify(repo)}`);
   }
@@ -163,7 +163,7 @@ function makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now, retry
   // One retrier for the whole pull or push: its sleeping is capped as a whole
   // (retryTotalMs) and stops at retryUntil, so a push can neither outlast the
   // job nor hold the run past its deadline (R-CHAOS-13).
-  const retrier = createRetrier({ totalMs: retryTotalMs, until: retryUntil ?? null, sleep: doSleep, random, now, log });
+  const retrier = createRetrier({ totalMs: retryTotalMs, until: retryUntil ?? null, sleep: doSleep, random, now, log, onRetry });
 
   function headers(extra = {}, withAuth = true) {
     const h = { 'User-Agent': USER_AGENT, 'X-GitHub-Api-Version': '2022-11-28', Accept: 'application/vnd.github+json', ...extra };
@@ -356,11 +356,11 @@ function assertUnchanged(release, expected, ignoreId = null) {
  * `crypto` defaults to stateCrypto({ identity, ageBin, keygenBin, tmpDir }).
  */
 export async function pullState({
-  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, requestTimeoutMs,
+  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, requestTimeoutMs, onRetry,
   identity, ageBin, keygenBin, tmpDir, crypto, allowPlaintext = false,
 } = {}) {
   const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
-  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs, ...(requestTimeoutMs ? { requestTimeoutMs } : {}) });
+  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs, onRetry, ...(requestTimeoutMs ? { requestTimeoutMs } : {}) });
   const release = await gh.getRelease();
   const asset = release && pickAsset(release);
   if (!asset) {
@@ -407,12 +407,12 @@ export async function pullState({
  * Never uploads anything that is not age ciphertext.
  */
 export async function pushState({
-  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, requestTimeoutMs, now = Date.now(), expected, force = false,
+  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, requestTimeoutMs, onRetry, now = Date.now(), expected, force = false,
   identity, ageBin, keygenBin, tmpDir, crypto, compress = true,
 } = {}) {
   if (!token) throw new Error('GITHUB_TOKEN is required to push the state asset');
   const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
-  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs, ...(requestTimeoutMs ? { requestTimeoutMs } : {}) });
+  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs, onRetry, ...(requestTimeoutMs ? { requestTimeoutMs } : {}) });
   expected = expected ?? readRecord(file);
   if (!expected && !force) {
     throw new Error(`no pull record for ${file}; pull first, or pass --force to overwrite whatever is on the release`);

@@ -68,6 +68,8 @@ export const THRESHOLDS = Object.freeze({
   pumpRedMs: 40 * MIN,
   stuckGraceMs: 15 * MIN,
   budgetHeldMs: 30 * MIN,
+  liveAmberMs: 20 * MIN,
+  liveRedMs: 40 * MIN,
   history: Object.freeze([
     { id: 'history-registry-delta', lane: 'history-registry', prefix: 'registry-delta-', label: 'registry-delta', greenMs: 45 * MIN, redMs: 90 * MIN },
     { id: 'history-registry-full', lane: 'history-registry', prefix: 'registry-full-', label: 'registry-full', greenMs: 26 * HOUR, redMs: 50 * HOUR },
@@ -108,6 +110,24 @@ function minutes(ms) {
   return `${(ms / HOUR).toFixed(1)} hours ago`;
 }
 
+/**
+ * The live loop view snapshot (live/publish.mjs, kv live.last_upload). Off
+ * while the switch is not exactly "true"; red when the last upload was blocked
+ * by the scan or the last good one is over 40 minutes old; amber over 20.
+ */
+export function liveSnapshotCheck({ now, on, last }) {
+  const id = 'live-snapshot';
+  if (!on) return { id, status: 'off', summary: 'the live snapshot is switched off (LANE_LIVE_SNAPSHOT_ENABLED is not "true")' };
+  if (last?.blocked === 'scan') return { id, status: 'red', summary: 'the last live snapshot was held back by the pre-upload scan: nothing is published until it passes (see the pump log for the rule and path)', at: last.at };
+  const okAt = last && typeof last === 'object' ? (last.ok ? last.at : last.last_ok_at) : null;
+  const a = age(now, okAt);
+  if (!Number.isFinite(a)) return { id, status: 'amber', summary: 'no live snapshot has been uploaded yet' };
+  const why = last.ok ? '' : `; the latest attempt failed (${String(last.error ?? 'unknown').slice(0, 40)})`;
+  if (a > THRESHOLDS.liveRedMs) return { id, status: 'red', summary: `last good live snapshot upload ${minutes(a)}${why}`, at: okAt };
+  if (a > THRESHOLDS.liveAmberMs) return { id, status: 'amber', summary: `last good live snapshot upload ${minutes(a)}${why}`, at: okAt };
+  return { id, status: 'green', summary: `last live snapshot upload ${minutes(a)}${why}`, at: okAt };
+}
+
 const laneOn = (lanes, lane) => lanes?.[lane] !== false;
 const baseName = (path) => String(path).split('/').pop();
 
@@ -119,7 +139,7 @@ const baseName = (path) => String(path).split('/').pop();
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
+export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -216,6 +236,7 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
         ? { id: 'subjects', status: 'green', summary: String(subj.summary ?? 'seed subjects loaded').slice(0, 200), at: subj.at }
         : { id: 'subjects', status: 'red', summary: `the pump could not load the seed subjects (it keeps dispatching the ones it has): ${String(subj.summary ?? 'unknown error').slice(0, 200)}`, at: subj.at });
     }
+    checks.push(liveSnapshotCheck({ now, on: liveSwitch === 'true', last: state.kv?.['live.last_upload'] ?? null }));
     const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
   }
 

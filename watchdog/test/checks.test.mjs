@@ -229,3 +229,18 @@ test('R-WD-14: the health issue shows a failed keep-forever file whose gap marke
   assert.equal(byId(evaluate(base({ state: null })))['keep-markers'], undefined, 'no state asset, no item: it is judged with the state');
   assert.equal(byId(evaluate(base({ state: { openSlots: [], openDispatches: [], kv: {} } })))['keep-markers'].status, 'green');
 });
+
+test('live-snapshot: off unless the switch is exactly true; green, amber over 20 minutes, red over 40 or when the scan blocked', () => {
+  const kv = (v) => ({ openSlots: [], openDispatches: [], kv: { 'live.last_upload': v } });
+  const item = (liveSwitch, v) => byId(evaluate(base({ liveSwitch, state: kv(v) })))['live-snapshot'];
+  const okAgo = (ms) => ({ ok: true, at: ago(ms), last_ok_at: ago(ms), seq: 5, bytes: 100 });
+  for (const sw of [undefined, '', 'false', 'TRUE', '1']) assert.equal(item(sw, okAgo(5 * MIN)).status, 'off', String(sw));
+  assert.equal(item('true', okAgo(5 * MIN)).status, 'green');
+  assert.equal(item('true', okAgo(25 * MIN)).status, 'amber');
+  assert.equal(item('true', okAgo(45 * MIN)).status, 'red');
+  assert.equal(item('true', { ok: false, blocked: 'scan', at: ago(MIN), last_ok_at: ago(2 * MIN) }).status, 'red', 'blocked by the scan is red at once');
+  assert.equal(item('true', { ok: false, error: 'put', at: ago(MIN), last_ok_at: ago(5 * MIN) }).status, 'green', 'a failed attempt after a recent good one is not yet a problem');
+  assert.equal(item('true', { ok: false, error: 'put', at: ago(MIN), last_ok_at: ago(30 * MIN) }).status, 'amber');
+  assert.equal(item('true', null).status, 'amber', 'on, nothing uploaded yet');
+  assert.match(item('true', { ok: false, blocked: 'scan', at: ago(MIN) }).summary, /scan/);
+});

@@ -91,3 +91,46 @@ test('R-CHAOS-16: the REST client retries a 500 on a repeatable call, never a 4x
   await assert.rejects(gh.request('POST', '/dispatch', { body: {} }), (e) => e.status === 500);
   assert.equal(api.calls.filter((r) => r.path === '/dispatch').length, 1);
 });
+
+test('onRetry fires for each repeated attempt and once when the retrier gives up', async () => {
+  const c = fakeClock(0);
+  const seen = [];
+  const r = createRetrier({ attempts: 3, sleep: c.sleep, now: c.now, random: () => 0.999999, onRetry: (i) => seen.push(i) });
+  const failing = () => Object.assign(new Error('HTTP 503'), { retryable: true, reason: 'HTTP 503' });
+  await assert.rejects(r.run('GET /x', async () => { throw failing(); }));
+  assert.deepEqual(seen, [
+    { label: 'GET /x', attempt: 1, status: 503, delayMs: 1999, gaveUp: false },
+    { label: 'GET /x', attempt: 2, status: 503, delayMs: 3999, gaveUp: false },
+    { label: 'GET /x', attempt: 3, status: 503, delayMs: 0, gaveUp: true },
+  ]);
+});
+
+test('onRetry: a network error reports status 0, a throwing hook never changes the retry, success calls nothing', async () => {
+  const c = fakeClock(0);
+  const seen = [];
+  let n = 0;
+  const r = createRetrier({ sleep: c.sleep, now: c.now, random: () => 0, onRetry: (i) => { seen.push(i); throw new Error('observer bug'); } });
+  const out = await r.run('PUT y', async () => {
+    n += 1;
+    if (n < 3) throw Object.assign(new Error('x'), { retryable: true, reason: 'network error' });
+    return 'done';
+  });
+  assert.equal(out, 'done');
+  assert.deepEqual(seen.map((s) => s.status), [0, 0]);
+  const quiet = [];
+  await createRetrier({ onRetry: (i) => quiet.push(i) }).run('z', async () => 1);
+  assert.deepEqual(quiet, []);
+});
+
+test('onRetry reaches the GitHub client: a 503 then a 200 reports one retry with status 503', async () => {
+  const c = fakeClock(0);
+  let hits = 0;
+  const api = fakeApi([['GET', '/x', () => (++hits === 1 ? { status: 503, body: { message: 'down' } } : { status: 200, body: {} })]]);
+  const seen = [];
+  const client = createClient({ token: TOKEN, fetch: api.fetch, apiUrl: API, sleep: c.sleep, now: c.now, random: () => 0, onRetry: (i) => seen.push(i) });
+  await client.request('GET', '/x');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].status, 503);
+  assert.equal(seen[0].gaveUp, false);
+  assert.match(seen[0].label, /GET \/x/);
+});
