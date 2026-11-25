@@ -88,6 +88,31 @@ test('due work is cut into shards, leased, recorded, then dispatched', async () 
   db.close();
 });
 
+test('a dispatch_sent event that cannot be written changes nothing the tick does: leases and slot held, nothing sent again', async () => {
+  const { c, db, config, newId } = setup({ subjects: 4 });
+  db.raw.exec("CREATE TEMP TRIGGER sent_fail BEFORE INSERT ON events WHEN NEW.type = 'dispatch_sent' BEGIN SELECT RAISE(ABORT, 'events insert refused'); END");
+  const lines = [];
+  db.log = (l) => lines.push(l);
+  const d = recorder();
+  const s = await runTick({ db, now: c.now, config, workerSlots: 2, dispatcher: d, newId });
+  assert.equal(s.dispatched, 2);
+  assert.equal(s.failed, 0);
+  for (const id of ['att-001', 'att-002']) {
+    const row = db.getDispatch(id);
+    assert.equal(row.status, 'dispatched', id);
+    for (const it of row.items) assert.equal(db.getLease(it.run_key).holder, id);
+  }
+  assert.equal(db.openSlots().length, 2);
+  assert.equal(db.getKv('events.insert_failures').count, 2);
+  assert.equal(lines.length, 2);
+  assert.equal(db.listEvents().filter((e) => e.type === 'dispatch_sent').length, 0);
+  c.t += 2 * MIN;
+  const again = await runTick({ db, now: c.now, config, workerSlots: 2, dispatcher: d, newId });
+  assert.equal(again.dispatched, 0, 'nothing is sent again');
+  assert.equal(d.calls.length, 2);
+  db.close();
+});
+
 test('a second tick does not send in-flight work again, and fills a freed slot', async () => {
   const { c, db, config, newId } = setup({ subjects: 5 });
   const d = recorder();
@@ -143,6 +168,10 @@ test('a refused dispatch frees its leases and slot and skips that workflow for t
   assert.match(failed[1].error, /^not sent: an earlier live-probe dispatch failed this tick$/);
   for (const f of failed) for (const it of db.getDispatch(f.attempt_id).items) assert.equal(db.getLease(it.run_key).holder, null);
   assert.equal(db.openSlots().length, 2);
+  // The events: the refusal with its status, the withdrawn one, and the two sent.
+  const ev = db.listEvents().filter((e) => e.type === 'dispatch_failed' || e.type === 'dispatch_sent');
+  assert.deepEqual(ev.filter((e) => e.type === 'dispatch_failed').map((e) => [e.lane, e.data]), [['live-probe', { status: 422, withdrawn: false }], ['live-probe', { status: null, withdrawn: true }]]);
+  assert.equal(ev.filter((e) => e.type === 'dispatch_sent').length, 2);
   db.close();
 });
 
@@ -300,6 +329,8 @@ test('R-CHAOS-05: a dispatch that fails with a server or network error stays pen
     assert.equal(db.openSlots().length, kept ? 1 : 0, 'the slot is held only while the run may exist');
     assert.equal(db.getLease(row.items[0].run_key).holder, kept ? 'att-001' : null);
     if (kept) assert.equal(s.unconfirmed, 1);
+    // dispatch_unconfirmed while it may have started a run; dispatch_failed once refused.
+    assert.deepEqual(db.listEvents().filter((e) => e.type !== 'dispatch_created').map((e) => [e.type, e.data.status]), [[kept ? 'dispatch_unconfirmed' : 'dispatch_failed', err.status || null]], err.message);
     db.close();
   }
 });

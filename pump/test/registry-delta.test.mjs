@@ -129,6 +129,7 @@ test('R-HIST-04: each pump run checks the registry delta capture, records the an
   assert.equal(w.registry[0].lastDispatchAt, null);
   const db = openState(w.stateFile);
   const kv = db.getKv('pump.registry_delta');
+  assert.deepEqual(db.listEvents().filter((e) => e.type === 'registry_delta').map((e) => e.data), [{ action: 'dispatched' }]);
   db.close();
   assert.equal(kv.action, 'dispatched');
   assert.equal(kv.dispatchedAt, new Date(NOW).toISOString());

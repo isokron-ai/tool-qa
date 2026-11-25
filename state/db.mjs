@@ -23,13 +23,16 @@
 // Schema v8 keys subject identity by GitHub's numeric repository id
 // (repo_id) while subjects.id stays the frozen subject key that run_keys name:
 // see state/schema-v8.sql and pump/identity.mjs.
+//
+// Schema v10 adds the append-only events table (state/schema-v10.sql): each
+// event is written in the same transaction as the fact it describes.
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { deriveDisagreements, foldDisagreement, ORACLE_BUDGET_DAYS, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_LANES } from './oracle.mjs';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -46,6 +49,7 @@ const MIGRATIONS = [
   { version: 7, sql: () => readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8') },
   { version: 8, sql: () => readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8') },
   { version: 9, sql: () => readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8') },
+  { version: 10, sql: () => readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -90,6 +94,11 @@ function checkTtl(ttlMs) {
 export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch']);
 const NOT_COUNTED = NOT_COUNTED_REASONS.map((r) => `'${r}'`).join(', ');
 
+/** Event data strings are bounded (reasons, URLs, lane names). */
+function cap(v, max = 200) {
+  return typeof v === 'string' ? v.slice(0, max) : v;
+}
+
 function plain(row) {
   return row ? { ...row } : undefined;
 }
@@ -121,6 +130,8 @@ export class StateDb {
   constructor(path) {
     this.raw = new DatabaseSync(path);
     this.inTx = false;
+    /** Where a failed event insert is reported (one line); the pump sets its own log. */
+    this.log = (line) => process.stderr.write(`${line}\n`);
     this.raw.exec('PRAGMA journal_mode = DELETE; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
   }
 
@@ -726,6 +737,7 @@ export class StateDb {
       // result is recorded under the subject key whatever it is called later.
       const ins = this.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence, item_index, subject_name) VALUES (?, ?, ?, ?, ?, ?, ?)');
       items.forEach((it, index) => ins.run(attemptId, it.run_key, it.subject, workflow, it.fence, index, it.subject_name ?? it.name ?? null));
+      this.recordEvent({ type: 'dispatch_created', lane: workflow, n: items.length, data: { shard_id: shardId, items: items.length } }, now);
     });
   }
 
@@ -733,14 +745,29 @@ export class StateDb {
    * The worker run was created. runId may be null when it could not be
    * correlated yet. workflowSha only fills in a dispatch created without the
    * expected commit; the one recorded at creation (the ref's commit before
-   * sending) is never replaced.
+   * sending) is never replaced. Records a dispatch_sent event with it.
    */
-  markDispatched(attemptId, { runId = null, runUrl = null, workflowSha = null, correlatedBy = null } = {}) {
-    const r = this.raw.prepare(`
-      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = COALESCE(workflow_sha, ?), correlated_by = ?
-      WHERE attempt_id = ? AND status = 'pending'
-    `).run(runId === null ? null : String(runId), runUrl, workflowSha, correlatedBy, attemptId);
-    return r.changes > 0;
+  markDispatched(attemptId, { runId = null, runUrl = null, workflowSha = null, correlatedBy = null, now } = {}) {
+    return this.tx(() => {
+      const r = this.raw.prepare(`
+        UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = COALESCE(workflow_sha, ?), correlated_by = ?
+        WHERE attempt_id = ? AND status = 'pending'
+      `).run(runId === null ? null : String(runId), runUrl, workflowSha, correlatedBy, attemptId);
+      if (r.changes === 0) return false;
+      this.dispatchEvent('dispatch_sent', attemptId, { run_id: runId === null ? null : String(runId), run_url: cap(runUrl) }, now);
+      return true;
+    });
+  }
+
+  /** An event about one dispatch: lane its workflow, n its item count. */
+  dispatchEvent(type, attemptId, data, now) {
+    return this.recordEvent(() => {
+      const d = this.raw.prepare(`
+        SELECT d.workflow, (SELECT COUNT(*) FROM dispatch_items i WHERE i.attempt_id = d.attempt_id) AS n
+        FROM dispatches d WHERE d.attempt_id = ?
+      `).get(attemptId);
+      return { type, lane: d?.workflow ?? null, n: d?.n ?? 0, data };
+    }, now);
   }
 
   /**
@@ -753,17 +780,27 @@ export class StateDb {
    * against (R-ING-12). Ingest compares the run with the commit recorded when
    * the dispatch was created.
    */
-  setDispatchRun(attemptId, { runId, runUrl = null, correlatedBy = null } = {}) {
+  setDispatchRun(attemptId, { runId, runUrl = null, correlatedBy = null, now } = {}) {
     if (runId === undefined || runId === null) throw new TypeError('setDispatchRun needs a runId');
-    const r = this.raw.prepare(`
-      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, correlated_by = ?
-      WHERE attempt_id = ? AND run_id IS NULL AND status IN ('pending', 'dispatched')
-    `).run(String(runId), runUrl, correlatedBy, attemptId);
-    return r.changes > 0;
+    return this.tx(() => {
+      // A pending one was never marked sent, so this is its dispatch_sent; a
+      // dispatched one had its event from markDispatched already.
+      const wasPending = this.raw.prepare("SELECT 1 FROM dispatches WHERE attempt_id = ? AND status = 'pending' AND run_id IS NULL").get(attemptId);
+      const r = this.raw.prepare(`
+        UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, correlated_by = ?
+        WHERE attempt_id = ? AND run_id IS NULL AND status IN ('pending', 'dispatched')
+      `).run(String(runId), runUrl, correlatedBy, attemptId);
+      if (r.changes === 0) return false;
+      if (wasPending) this.dispatchEvent('dispatch_sent', attemptId, { run_id: String(runId), run_url: cap(runUrl), correlated_by: 'run-name' }, now);
+      return true;
+    });
   }
 
-  /** The dispatch call failed: close it and free its leases and slot so the work is due again. */
-  failDispatch(attemptId, { error, now } = {}) {
+  /**
+   * The dispatch call failed: close it and free its leases and slot so the work is due again.
+   * status: the HTTP status of the failed call, if any; withdrawn: it was never sent.
+   */
+  failDispatch(attemptId, { error, status = null, withdrawn = false, now } = {}) {
     const t = iso(now);
     return this.tx(() => {
       const r = this.raw.prepare(`
@@ -775,6 +812,21 @@ export class StateDb {
         this.releaseLease(it.run_key, attemptId, it.fence, { now });
       }
       this.releaseSlotForAttempt(attemptId, 'failed', { now });
+      this.dispatchEvent('dispatch_failed', attemptId, { status: Number.isSafeInteger(status) ? status : null, withdrawn: withdrawn === true }, now);
+      return true;
+    });
+  }
+
+  /**
+   * The dispatch call ended so that GitHub may or may not have started the run
+   * (R-CHAOS-05): the dispatch stays pending. Only records a
+   * dispatch_unconfirmed event; false if the dispatch is not pending.
+   */
+  noteUnconfirmedDispatch(attemptId, { status = null, now } = {}) {
+    return this.tx(() => {
+      const d = this.raw.prepare("SELECT 1 FROM dispatches WHERE attempt_id = ? AND status = 'pending'").get(attemptId);
+      if (!d) return false;
+      this.dispatchEvent('dispatch_unconfirmed', attemptId, { status: Number.isSafeInteger(status) ? status : null }, now);
       return true;
     });
   }
@@ -798,6 +850,7 @@ export class StateDb {
         this.releaseLease(it.run_key, attemptId, it.fence, { now });
       }
       this.releaseSlotForAttempt(attemptId, why, { now });
+      this.dispatchEvent('dispatch_closed', attemptId, { close_reason: cap(why) }, now);
       return true;
     });
   }
@@ -929,6 +982,7 @@ export class StateDb {
       for (const d of rows) {
         this.raw.prepare("UPDATE dispatches SET status = 'expired', closed = ?, close_reason = 'lease_expired' WHERE attempt_id = ?").run(t, d.attempt_id);
         this.releaseSlotForAttempt(d.attempt_id, 'expired', { now });
+        this.dispatchEvent('dispatch_expired', d.attempt_id, {}, now);
       }
       this.reapExpired({ now });
       return rows;
@@ -1012,6 +1066,10 @@ export class StateDb {
         INSERT INTO attempts (subject, holder, fence, run_id, run_key, digest, received, accepted, reason, attempt_id, outcome)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(subject, attemptId, Number.isSafeInteger(fence) ? fence : -1, d?.run_id ?? null, runKey, digest, t, ok ? 1 : 0, why, attemptId, stored);
+      this.recordEvent({
+        type: 'result_recorded', lane: item?.workflow ?? d?.workflow ?? this.getRunKey(runKey)?.workflow ?? null, subject: subject === 'unknown' ? null : subject,
+        data: { verdict: ok ? 'accepted' : 'rejected', reason: cap(why), outcome: ok ? resultOutcome ?? outcome : stored, fault: ok ? fault : null, coverage: ok ? coverage : null },
+      }, now);
       if (current) {
         this.raw.prepare('UPDATE dispatch_items SET resolved = ? WHERE attempt_id = ? AND run_key = ?').run(t, attemptId, runKey);
         this.releaseLease(runKey, attemptId, fence, { now });
@@ -1038,11 +1096,12 @@ export class StateDb {
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {
-          this.raw.prepare(`
+          const closed = this.raw.prepare(`
             UPDATE dispatches SET status = 'done', closed = ?, close_reason = 'results_in'
             WHERE attempt_id = ? AND status IN ('pending', 'dispatched')
           `).run(t, attemptId);
           this.releaseSlotForAttempt(attemptId, 'result', { now });
+          if (closed.changes > 0) this.dispatchEvent('dispatch_closed', attemptId, { close_reason: 'results_in' }, now);
         }
       }
       return { accepted: ok, reason: why, id: Number(r.lastInsertRowid) };
@@ -1259,10 +1318,12 @@ export class StateDb {
       }, { now });
       return { count, paused: false };
     }
-    this.setKv(`pump.paused:${workflow}`, {
-      reason: 'run_sha_mismatch', count, since: iso(now), until: iso(toMs(now) + pauseMs),
-    }, { now });
-    this.deleteKv(key);
+    const until = iso(toMs(now) + pauseMs);
+    this.tx(() => {
+      this.setKv(`pump.paused:${workflow}`, { reason: 'run_sha_mismatch', count, since: iso(now), until }, { now });
+      this.deleteKv(key);
+      this.recordEvent({ type: 'workflow_paused', lane: workflow, data: { until } }, now);
+    });
     return { count, paused: true };
   }
 
@@ -1316,6 +1377,114 @@ export class StateDb {
 
   clearIngestFailures(attemptId, index) {
     this.deleteKv(StateDb.ingestFailureKey(attemptId, index));
+  }
+
+  // ---- events (schema v10) ----
+
+  /**
+   * Append one event. Call it inside the transaction that writes the fact it
+   * describes: an event commits only with its fact. `event` is the event or a
+   * function that returns it (run inside the guard below). occurredAt
+   * defaults to now; data is stored as JSON. Returns the new id.
+   *
+   * A failed event never undoes or blocks its fact: the insert runs in its
+   * own savepoint, and if anything about it throws, only that savepoint is
+   * rolled back, the failure is counted in kv `events.insert_failures`
+   * ({count, last_at, last_type}, in the same transaction), one line is
+   * logged, and null is returned.
+   */
+  recordEvent(event = {}, now) {
+    return this.tx(() => {
+      this.raw.exec('SAVEPOINT event_insert');
+      let type = typeof event === 'function' ? null : event?.type ?? null;
+      try {
+        const ev = typeof event === 'function' ? event() : event;
+        type = ev?.type ?? null;
+        const { occurredAt, lane = null, n = 1, subject = null, data = {} } = ev ?? {};
+        if (typeof type !== 'string' || type === '') throw new TypeError('recordEvent needs a type');
+        if (!Number.isSafeInteger(n) || n < 0) throw new TypeError(`recordEvent n must be a whole number >= 0, got ${n}`);
+        const recorded = iso(now);
+        const r = this.raw.prepare(`
+          INSERT INTO events (type, occurred_at, recorded_at, lane, n, subject, data) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(type, occurredAt === undefined || occurredAt === null ? recorded : iso(occurredAt), recorded, lane ?? null, n, subject ?? null, JSON.stringify(data ?? {}));
+        this.raw.exec('RELEASE event_insert');
+        return Number(r.lastInsertRowid);
+      } catch (err) {
+        try {
+          this.raw.exec('ROLLBACK TO event_insert');
+          this.raw.exec('RELEASE event_insert');
+        } catch {
+          throw err; // SQLite gave up the whole transaction: the fact is gone too
+        }
+        this.noteEventFailure(type, err, now);
+        return null;
+      }
+    });
+  }
+
+  /** Count and log an event that could not be recorded (never throws). */
+  noteEventFailure(type, err, now) {
+    const t = Number.isFinite(toMs(now)) ? iso(now) : new Date().toISOString();
+    try {
+      const prev = this.getKv('events.insert_failures');
+      this.setKv('events.insert_failures', { count: (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1, last_at: t, last_type: cap(type) }, { now: t });
+    } catch { /* the count is best effort */ }
+    try {
+      this.log(`state: event ${cap(type) ?? '(no type)'} not recorded (${cap(String(err?.message ?? err))}); its fact is kept`);
+    } catch { /* a log that throws changes nothing */ }
+  }
+
+  /** Events with id > sinceId, oldest first, at most `limit`; data parsed. */
+  listEvents({ sinceId = 0, limit = 1000 } = {}) {
+    return this.raw.prepare('SELECT * FROM events WHERE id > ? ORDER BY id LIMIT ?').all(sinceId, limit)
+      .map((row) => ({ ...row, data: JSON.parse(row.data) }));
+  }
+
+  // ---- pump notes: a kv record and its event in one transaction ----
+
+  /**
+   * pump_run_started / pump_run_finished. With lastRun, also writes kv
+   * pump.last_run (as run.mjs did on its own before).
+   */
+  notePumpRun(phase, { ticks = 0, dispatched = 0, lastRun, occurredAt } = {}, { now } = {}) {
+    if (phase !== 'started' && phase !== 'finished') throw new TypeError(`notePumpRun phase must be started or finished, got ${phase}`);
+    return this.tx(() => {
+      if (lastRun !== undefined) this.setKv('pump.last_run', lastRun, { now });
+      return this.recordEvent({ type: `pump_run_${phase}`, occurredAt, data: { ticks, dispatched } }, now);
+    });
+  }
+
+  /** kv pump.successor (what pump/successor.mjs wrote) and a successor event. */
+  noteSuccessor(result, { now } = {}) {
+    return this.tx(() => {
+      this.setKv('pump.successor', result, { now });
+      const status = /\bHTTP (\d{3})\b/.exec(String(result?.error ?? ''));
+      return this.recordEvent({
+        type: 'successor',
+        data: { ok: result?.ok === true, run_id: Number.isSafeInteger(result?.runId) ? result.runId : null, status: status ? Number(status[1]) : null },
+      }, now);
+    });
+  }
+
+  /** kv `key` (the registry delta record); a registry_delta event when it dispatched or failed. */
+  noteRegistryDelta(key, value, { now } = {}) {
+    return this.tx(() => {
+      this.setKv(key, value, { now });
+      if (value?.action === 'dispatched' || value?.action === 'failed') {
+        this.recordEvent({ type: 'registry_delta', data: { action: value.action } }, now);
+      }
+    });
+  }
+
+  /** kv `key` (the sandbox breaker record) and a breaker_changed event. */
+  noteBreaker(key, value, { now } = {}) {
+    return this.tx(() => {
+      this.setKv(key, value, { now });
+      return this.recordEvent({
+        type: 'breaker_changed',
+        data: { tripped: value?.tripped === true, reason: cap(value?.reason ?? null), held: Array.isArray(value?.held) ? value.held.map((h) => cap(h)) : [] },
+      }, now);
+    });
   }
 
   // ---- kv ----

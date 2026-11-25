@@ -275,6 +275,7 @@ it any more:
 | `slot_ledger` | open rows always; released rows for 7 days | |
 | `run_keys` | the run_key(s) of each (subject, workflow)'s newest result, any run_key a kept item names, and while it has a lease | the due list reads the newest result's fields; a run_key's fields are a function of the key, so one due again is recorded again unchanged |
 | `kv` | everything but `ingest.failures:<attempt>:<index>` of a pruned dispatch | the API budget and rate-limit blocks, pauses, the breaker memory, the successor and the seed state are never touched |
+| `events` | for 8 days (the cutoff plus a day); the newest row always | the live loop view's 7-day windows read them, and nothing the loop decides does. Keeping the newest row means the events' max id (the live snapshot's `seq`) never goes back. About 3,000 rows (~150 bytes each) a day at `LOOP_SLOTS=2`: ~4 MB at the cutoff, ~25 MB at 15 slots |
 
 The prune age is 7 days and can never be set below the late-result window plus
 an hour. A test builds weeks of history with every kind of result and checks
@@ -337,6 +338,16 @@ going, then with this code `pull` and `push --no-compress` the state, then
 merge the revert, then turn the pump back on. Pruned rows stay in their
 archives; nothing needs them back. To stop pruning without going back, set
 `LANE_STATE_PRUNE_ENABLED=false`.
+
+**Going back past schema v10 (the events table).** The first pump run with
+v10 code migrates the state, and code from before it (the pump and the
+watchdog) refuses a v10 state ("newer than this code"). To roll back, either
+restore the last v9 snapshot with `snapshot/restore.mjs` ("State snapshots";
+the runs since then are lost), or merge a revert that keeps
+`state/schema-v10.sql` and `SCHEMA_VERSION = 10` so the state stays readable
+and only the event writes go. A failed event insert never blocks its fact: it
+is counted in kv `events.insert_failures` (`{ count, last_at, last_type }`)
+and logged as one line, `state: event <type> not recorded`.
 
 ## State snapshots
 

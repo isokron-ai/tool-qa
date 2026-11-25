@@ -340,6 +340,57 @@ the leases of the items that did not report, so they are due again at once
 instead of after the lease expires. It wraps `db.closeDispatch()` and returns
 `false` if the dispatch was not open.
 
+## Events (schema v10)
+
+`events` is append-only: one row per thing the loop did, written by the pump
+in the same transaction as the fact it describes, so an event commits only
+with its fact (`state/schema-v10.sql`). A failed event never undoes or blocks
+its fact: each insert runs in its own savepoint, and a failure rolls back only
+that savepoint, is counted in kv `events.insert_failures`
+(`{ count, last_at, last_type }`) and is logged as one line. Columns: `id` (the sequence;
+AUTOINCREMENT, never reused), `type`, `occurred_at`, `recorded_at`, `lane`
+(workflow, `NULL` for loop-wide events), `n` (how many things it counts),
+`subject` (`subjects.id`, `NULL` unless the event is about one server) and
+`data` (JSON; internal, never published as is). State pruning removes rows
+after 8 days and always keeps the newest.
+
+| type | Written by | lane, n | `data` |
+|---|---|---|---|
+| `dispatch_created` | `createDispatch` | workflow, items | `{ shard_id, items }` |
+| `dispatch_sent` | `markDispatched` (now one transaction); `setDispatchRun` for a pending dispatch whose run was found by its run name | workflow, items | `{ run_id, run_url }`, plus `correlated_by: 'run-name'` from `setDispatchRun` |
+| `dispatch_failed` | `failDispatch` | workflow, items | `{ status, withdrawn }`: the HTTP status of a refused call; `withdrawn` when it was never sent |
+| `dispatch_unconfirmed` | `noteUnconfirmedDispatch` (the call may have started a run; the dispatch stays pending) | workflow, items | `{ status }` |
+| `dispatch_expired` | `reapExpiredDispatches`, one per dispatch | workflow, items | `{}` |
+| `result_recorded` | `recordResult`, fresh rows only (never a duplicate) | workflow, 1; `subject` | `{ verdict, reason, outcome, fault, coverage }` |
+| `dispatch_closed` | `closeDispatch`, and `recordResult` when the last item reports | workflow, items | `{ close_reason }` |
+| `pump_run_started`, `pump_run_finished` | `notePumpRun` at the start of a run and before its final push | | `{ ticks, dispatched }` |
+| `successor` | `noteSuccessor` | | `{ ok, run_id, status }` |
+| `registry_delta` | `noteRegistryDelta`, only when `action` is `dispatched` or `failed` | | `{ action }` |
+| `breaker_changed` | `noteBreaker` | | `{ tripped, reason, held }` |
+| `workflow_paused` | `noteShaMismatch` when it pauses (now one transaction) | workflow, 1 | `{ until }` |
+
+State calls:
+
+- `db.recordEvent({ type, occurredAt, lane, n, subject, data }, now)` appends
+  one row (`occurredAt` defaults to `now`) and returns its id, or `null` when
+  the insert failed (counted and logged, never thrown). Call it inside the
+  transaction that writes the fact. Reasons, run URLs and lane names in
+  `data` are cut to 200 characters.
+- `db.listEvents({ sinceId = 0, limit = 1000 })`: rows with `id > sinceId`,
+  oldest first, `data` parsed.
+- `db.noteUnconfirmedDispatch(attemptId, { status, now })`: the event only;
+  `false` unless the dispatch is pending.
+- `db.notePumpRun('started' | 'finished', { ticks, dispatched, lastRun, occurredAt }, { now })`:
+  with `lastRun` it also writes `pump.last_run`.
+- `db.noteSuccessor(result, { now })`, `db.noteRegistryDelta(key, value, { now })`
+  and `db.noteBreaker(key, value, { now })` write the kv record exactly as
+  before (`pump.successor`, `pump.registry_delta`, `pump.breaker`) and the
+  event, in one transaction.
+- `db.failDispatch` takes `status` and `withdrawn`, and `db.markDispatched`
+  and `db.setDispatchRun` take `now`, for their events.
+- `db.log`: where a failed event insert is reported (stderr by default; the
+  pump sets its own log).
+
 ## Keys the pump keeps in `kv`
 
 | Key | Value |

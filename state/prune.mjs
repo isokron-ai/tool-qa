@@ -51,6 +51,11 @@
 //   kv              only `ingest.failures:<attempt>:<index>` rows of a pruned
 //                   dispatch go; the throttle and API budget state, pauses,
 //                   breaker memory and every other key are never touched.
+//   events          (schema v10) kept a day longer than the cutoff (8 days at
+//                   the default 7), so the live view's 7-day windows stay
+//                   whole; nothing the loop decides reads them. The newest
+//                   row always stays, so the events' max id (the live
+//                   snapshot's seq) never goes back.
 //
 // Every rule is one SQL predicate over the row (`eligibleSql`). The same
 // predicates select the rows to archive (a dry run inside a savepoint that is
@@ -86,8 +91,12 @@ export function pruneFloorMs(lateMs) {
   return Math.max(0, Number(lateMs) || 0) + HOUR;
 }
 
-/** Tables in the order rows are deleted (children before parents, leases before run_keys). */
-export const DELETE_ORDER = Object.freeze(['dispatch_items', 'dispatches', 'kv', 'attempts', 'slot_ledger', 'leases', 'run_keys']);
+/**
+ * Tables in the order rows are deleted (children before parents, leases before
+ * run_keys). events is last, so when a pass hits its row or time budget it is
+ * the first table left for the next pass.
+ */
+export const DELETE_ORDER = Object.freeze(['dispatch_items', 'dispatches', 'kv', 'attempts', 'slot_ledger', 'leases', 'run_keys', 'events']);
 
 /** The columns that identify a row of each table. */
 export const KEYS = Object.freeze({
@@ -98,6 +107,7 @@ export const KEYS = Object.freeze({
   slot_ledger: ['id'],
   leases: ['subject'],
   run_keys: ['run_key'],
+  events: ['id'],
 });
 
 const quote = (s) => `'${String(s).replace(/'/g, "''")}'`;
@@ -137,6 +147,7 @@ const RULES = Object.freeze({
     AND NOT EXISTS (SELECT 1 FROM leases l WHERE l.subject = x.run_key)
     AND NOT EXISTS (SELECT 1 FROM results r WHERE r.run_key = x.run_key
       AND r.accepted_at >= (SELECT MAX(r2.accepted_at) FROM results r2 WHERE r2.subject = r.subject AND r2.workflow = r.workflow))`,
+  events: `x.occurred_at < strftime('%Y-%m-%dT%H:%M:%fZ', $cutoff, '-1 day') AND x.id < (SELECT MAX(id) FROM events)`,
 });
 
 /** The rule a row of `table` (aliased x) must meet to be pruned, with $cutoff. */
@@ -212,7 +223,7 @@ export function selectPrunable(db, { cutoff, maxRows = PRUNE_MAX_ROWS, deadline 
       if (stopped) break;
       if (clock() > deadline) { stopped = 'time'; break; }
       if (room() <= 0) { stopped = 'rows'; break; }
-      const order = table === 'attempts' || table === 'slot_ledger' ? 'x.rowid' : KEYS[table].map((k) => `x.${k}`).join(', ');
+      const order = table === 'attempts' || table === 'slot_ledger' || table === 'events' ? 'x.rowid' : KEYS[table].map((k) => `x.${k}`).join(', ');
       const found = raw.prepare(`SELECT x.rowid AS rid, x.* FROM ${table} x WHERE ${eligibleSql(table)} ORDER BY ${order} LIMIT $limit`)
         .all({ cutoff: at, limit: room() + 1 });
       if (found.length > room()) {
