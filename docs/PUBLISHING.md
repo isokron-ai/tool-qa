@@ -106,8 +106,10 @@ written to disk: the output folder holds only the redacted plain files.
 
 ### The `publish` environment (owner, one time)
 
-The owner creates the environment `publish` with himself as the required reviewer, and
-nothing else: no secret, no variable. No secret is moved: `AGE_IDENTITY` stays in `loop`
+The owner creates the environment `publish` with himself as the required reviewer and
+**deployment branches restricted to `main`** (protected branches only, or a custom rule
+with only `main`), and nothing else: no secret, no variable. Without the branch
+restriction a dispatch from any branch would reach the approval. No secret is moved: `AGE_IDENTITY` stays in `loop`
 (the pump needs it every tick) and so do the App settings; the deliver job uses `loop`, and
 only starts after `approve` has passed.
 
@@ -115,10 +117,12 @@ GitHub creates an environment that a workflow names when it does not exist, with
 protection, and runs the job at once. So the `approve` job asks the API
 (`GET /repos/isokron-ai/tool-qa/environments/publish`, which any reader of the repository may
 call, so the job's own token with `contents: read` is enough) and fails unless the
-environment has a required-reviewers rule (`publish/env-check.mjs`). That check replaces a
+environment has a required-reviewers rule that lists a reviewer and a deployment branch
+policy (`publish/env-check.mjs`). That check replaces a
 marker variable: a variable can be set by anyone with write access without any reviewer
-existing, the rule cannot. If it fails, `deliver` never runs and nothing is delivered. A
-reader may not see who the reviewers are; a rule of that type cannot exist without one.
+existing, the rule cannot. If it fails, `deliver` never runs and nothing is delivered. If
+the API does not list the reviewers to the job's token, the check fails closed too, and
+the first dispatch will say so.
 
 Also one time: the App needs `contents: write` and `pull_requests: write` on `mcp-results`
 and an installation that includes it (below). `RESULTS_PUBLISH_ENABLED`, `LOOP_ENABLED`,
@@ -234,7 +238,7 @@ the worker run (`provenance.workflow`), a public Actions run.
 1. Merge the mcp-results pull request (the data format and `verify.mjs`), then make sure
    `publish/verify-pin.json` matches the merged checker (`node publish/pin-check.mjs
    <checkout>`); the build fails otherwise.
-2. Create the `publish` environment with yourself as required reviewer ("The `publish`
+2. Create the `publish` environment with yourself as required reviewer and deployment branches restricted to main ("The `publish`
    environment"), and give the App `contents: write` and `pull_requests: write` on
    `mcp-results` with an installation that includes it (today: Actions, Issues, Metadata).
    Same App and key, a wider grant. No secret is moved. Until then delivery fails with a

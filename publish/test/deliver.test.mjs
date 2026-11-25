@@ -90,22 +90,29 @@ test('R-PUB-22: nothing is delivered unreviewed: the schedule only builds; deliv
   assert.ok(!/PUBLISH_REVIEW_GATE/.test(readFileSync(join(ROOT, '.github/workflows/publish-results.yml'), 'utf8').replace(/#.*$/gm, '')));
 });
 
-test('R-PUB-22: a missing, unprotected or reviewer-less publish environment fails closed', async () => {
+test('R-PUB-22: a missing, unprotected, reviewer-less or any-branch publish environment fails closed', async () => {
   const { checkEnvironment } = await import('../env-check.mjs');
-  assert.deepEqual(checkEnvironment({ name: 'publish', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: { login: 'owner' } }] }] }), []);
-  assert.deepEqual(checkEnvironment({ name: 'publish', protection_rules: [{ type: 'wait_timer' }, { type: 'required_reviewers' }] }), [], 'a rule that does not list its reviewers to this reader still counts');
-  // made on the fly by a workflow that named it: no rules
-  assert.match(checkEnvironment({ name: 'publish', protection_rules: [] })[0], /no required-reviewers rule/);
+  const good = { name: 'publish', deployment_branch_policy: { protected_branches: false, custom_branch_policies: true }, protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: { login: 'owner' } }] }] };
+  assert.deepEqual(checkEnvironment(good), []);
+  assert.deepEqual(checkEnvironment({ ...good, deployment_branch_policy: { protected_branches: true, custom_branch_policies: false } }), []);
+  // made on the fly by a workflow that named it: no rules, no branch policy
+  assert.match(checkEnvironment({ name: 'publish', protection_rules: [], deployment_branch_policy: null }).join('\n'), /no required-reviewers rule/);
   assert.match(checkEnvironment({ name: 'publish' })[0], /no required-reviewers rule/);
-  assert.match(checkEnvironment({ name: 'publish', protection_rules: [{ type: 'wait_timer', wait_timer: 5 }] })[0], /no required-reviewers rule/);
-  assert.match(checkEnvironment({ name: 'publish', protection_rules: [{ type: 'required_reviewers', reviewers: [] }] })[0], /no reviewer/);
+  assert.match(checkEnvironment({ ...good, protection_rules: [{ type: 'wait_timer', wait_timer: 5 }] })[0], /no required-reviewers rule/);
+  // a rule without a reviewer list, or with an empty one, fails
+  assert.match(checkEnvironment({ ...good, protection_rules: [{ type: 'required_reviewers' }] })[0], /does not list a reviewer/);
+  assert.match(checkEnvironment({ ...good, protection_rules: [{ type: 'required_reviewers', reviewers: [] }] })[0], /does not list a reviewer/);
+  // any branch may run it: a dispatch from any branch would reach the approval
+  assert.match(checkEnvironment({ ...good, deployment_branch_policy: null })[0], /deployment branches are not restricted/);
+  const { deployment_branch_policy: _drop, ...noPolicy } = good;
+  assert.match(checkEnvironment(noPolicy)[0], /deployment branches are not restricted/);
   for (const bad of [null, undefined, [], 'x', 404]) assert.equal(checkEnvironment(bad).length, 1);
-  // the command line: a 404 body or no input is a failure, the protected answer a pass
   const run = (input) => spawnSync(process.execPath, ['publish/env-check.mjs'], { cwd: ROOT, input, encoding: 'utf8' }).status;
   assert.equal(run('{"message":"Not Found","status":"404"}'), 1);
   assert.equal(run(''), 1);
   assert.equal(run('not json'), 1);
-  assert.equal(run(JSON.stringify({ name: 'publish', protection_rules: [{ type: 'required_reviewers', reviewers: [{}] }] })), 0);
+  assert.equal(run(JSON.stringify(good)), 0);
+  assert.equal(run(JSON.stringify({ ...good, deployment_branch_policy: null })), 1);
 });
 
 test('R-PUB-17: the checker from mcp-results runs only if its files are the reviewed ones', async () => {
