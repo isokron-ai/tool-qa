@@ -184,3 +184,58 @@ test('R-DRIFT-21: a GraphQL error on the tag refs is a failed read (null with wh
   assert.equal(o.stages.tag_refs, 'error');
   assert.equal(o.records.find((r) => r.field === 'repo_core').value.github_id, 1463720077, 'the rest of the repository is kept');
 });
+
+test('R-META-12: a GitHub 403 on a REST read is classified: secondary throttling (no rate-limit header) is a retryable infra rate_limited skip, a DMCA or disabled repository is the subject\'s settled skip, and a size refusal stays a note', async () => {
+  const withContributors = (resp) => githubFetch({ repos: { 'a/b': ghNode({ nameWithOwner: 'a/b' }) }, rest: (url) => (url.includes('/contributors?') ? resp() : undefined) });
+  const run = async (resp) => {
+    const f = withContributors(resp);
+    const out = await collect({ http: httpFor(f), repos: ['a/b'], token: 't', budget: createBudget() });
+    return subjectOutput({ ...out.get('a/b'), observedAt: '2026-11-24T00:00:00Z' });
+  };
+  const status = (o) => o.skips.find((s) => s.stage === 'contributors');
+  const field = (o) => o.records.find((r) => r.field === 'contributors_counts');
+  const json = (obj, status, headers = {}) => () => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json', ...headers } });
+
+  // Throttling: GitHub's secondary-limit answer carries no rate-limit header, only the message.
+  for (const [label, resp] of [
+    ['secondary limit message', json({ message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.', documentation_url: 'https://docs.github.com/rest/overview/resources-in-the-rest-api#secondary-rate-limits' }, 403)],
+    ['abuse detection message', json({ message: 'You have triggered an abuse detection mechanism. Please wait a few minutes before you try again.' }, 403)],
+    ['primary limit message', json({ message: 'API rate limit exceeded for user ID 1.', documentation_url: 'https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting' }, 403, { 'x-ratelimit-remaining': '900' })],
+  ]) {
+    const o = await run(resp);
+    assert.deepEqual(status(o), { stage: 'contributors', reason: 'rate_limited', fault: 'infra', retryable: true }, label);
+    assert.equal(o.stages.contributors, 'rate_limited', label);
+    assert.match(field(o).why, /not read: rate_limited/, label);
+  }
+
+  // A repository GitHub took down: the subject's, settled, never retried; recorded as state, not as "too large".
+  for (const [resp, why] of [
+    [json({ message: 'Repository access blocked', block: { reason: 'dmca', created_at: '2026-11-01T10:00:00Z', html_url: 'https://github.com/github/dmca/blob/master/2026/11/x.md' } }, 451), /DMCA/],
+    [json({ message: 'Repository access blocked', block: { reason: 'dmca' } }, 403), /DMCA/],
+    [json({ message: 'Access to this repository has been disabled by GitHub Staff due to a violation of GitHub\'s terms of service.' }, 403), /disabled/],
+  ]) {
+    const o = await run(resp);
+    assert.deepEqual(status(o), { stage: 'contributors', reason: 'upstream_unavailable', fault: 'subject' });
+    assert.equal(o.stages.contributors, 'repository_gone');
+    assert.equal(field(o).value, null);
+    assert.match(field(o).why, why);
+    assert.doesNotMatch(field(o).why, /large/);
+  }
+
+  // The size refusal GitHub documents is neither: no skip, a note.
+  const big = await run(json({ message: 'The history or contributor list is too large to list contributors for this repository via the API.', documentation_url: 'https://docs.github.com/rest/repos/repos#list-repository-contributors' }, 403, { 'x-ratelimit-remaining': '800' }));
+  assert.deepEqual(big.skips, []);
+  assert.match(field(big).why, /large/);
+
+  // Release-note-like text that merely contains the words does not make the repository gone.
+  const note = await run(json({ message: 'Forbidden', note: 'v2.3.0: access blocked for anonymous callers; the legacy endpoint has been disabled' }, 403));
+  assert.deepEqual(note.skips, []);
+  assert.notEqual(note.stages.contributors, 'repository_gone');
+
+  // The other two REST reads classify the same way.
+  const f = githubFetch({ repos: { 'a/b': ghNode({ nameWithOwner: 'a/b' }) }, rest: (url) => (url.includes('/private-vulnerability-reporting') ? json({ message: 'Repository access blocked', block: { reason: 'tos' } }, 403)() : url.includes('/rules/branches/') ? json({ message: 'You have exceeded a secondary rate limit.' }, 403)() : undefined) });
+  const out = await collect({ http: httpFor(f), repos: ['a/b'], token: 't', budget: createBudget() });
+  const o = subjectOutput({ ...out.get('a/b'), observedAt: '2026-11-24T00:00:00Z' });
+  assert.deepEqual(o.skips.find((s) => s.stage === 'private_vulnerability_reporting'), { stage: 'private_vulnerability_reporting', reason: 'upstream_unavailable', fault: 'subject' });
+  assert.deepEqual(o.skips.find((s) => s.stage === 'branch_rules'), { stage: 'branch_rules', reason: 'rate_limited', fault: 'infra', retryable: true });
+});

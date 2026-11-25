@@ -112,17 +112,32 @@ export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
   return (await readBytesCapped(res, max, where)).toString('utf8');
 }
 
+// GitHub's own repository-level refusals, as they are worded in its response bodies
+// (REST: {"message":"Repository access blocked","block":{"reason":"dmca",...}} with 451
+// or 403; "Access to this repository has been disabled by GitHub Staff ..." with 403; git
+// over HTTP: "remote: Repository access blocked", "remote: This repository has been
+// disabled ..."). Each is anchored to the start of the body, of a line (an optional
+// "remote: " first) or of a JSON "message" value, so a sentence that merely contains
+// the words, such as a release note or a package text, is not read as one (R-RD-20).
+const GONE_MESSAGE = '(?:Repository access blocked|This repository has been disabled|Access to this repository has been disabled)\\b';
+const GONE_AT_LINE = new RegExp(`^[ \\t]*(?:remote:[ \\t]*)?${GONE_MESSAGE}`, 'im');
+const GONE_AT_JSON = new RegExp(`"message"[ \\t\\r\\n]*:[ \\t\\r\\n]*"${GONE_MESSAGE}`, 'i');
+const BLOCK_REASON_DMCA = /"block"\s*:\s*\{[^}]*"reason"\s*:\s*"dmca"/i;
+
 /**
  * What a GitHub 403 (or 451) means, told apart from its headers and its body
  * (R-RD-18). Throttling says so: a rate-limit header (`x-ratelimit-remaining: 0`,
  * `retry-after`) or a primary or secondary limit message. A repository GitHub
- * took down says so in the body: a DMCA notice, "access to this repository has
- * been disabled", "repository access blocked"; 451 is a legal block by its
- * status. An answer that says neither is read as throttling, as before: it is
- * retried, never blamed on the subject.
- * @returns {Promise<{kind: 'throttled'} | {kind: 'gone', why: 'dmca'|'disabled'}>}
+ * took down says so in the body, in GitHub's own wording at the start of a line
+ * or of the JSON message (see GONE_MESSAGE); 451 is a legal block by its
+ * status. An answer that says neither is `unknown` when the caller asks for it
+ * (`unknown: 'unknown'`: a permission or size refusal, not blamed on either side);
+ * otherwise it is read as throttling, as before: retried, never blamed on the subject.
+ * @param {Response} res
+ * @param {{unknown?: 'throttled'|'unknown'}} [o]
+ * @returns {Promise<{kind: 'throttled'|'unknown', text: string} | {kind: 'gone', why: 'dmca'|'disabled', text: string}>}
  */
-export async function forbiddenKind(res) {
+export async function forbiddenKind(res, { unknown = 'throttled' } = {}) {
   let text = '';
   try {
     if (res.body) {
@@ -138,13 +153,13 @@ export async function forbiddenKind(res) {
       }
       text = Buffer.concat(chunks).subarray(0, 4096).toString('utf8');
     }
-  } catch { /* a body that cannot be read says nothing: throttling */ }
+  } catch { /* a body that cannot be read says nothing */ }
   const throttled = res.headers.get('x-ratelimit-remaining') === '0' || res.headers.get('retry-after') !== null
     || /rate limit|abuse|too many requests|temporarily blocked|try again/i.test(text);
-  if (throttled) return { kind: 'throttled' };
-  if (/dmca|takedown/i.test(text) || res.status === 451) return { kind: 'gone', why: 'dmca' };
-  if (/has been disabled|repository access blocked|access blocked|disabled by github/i.test(text)) return { kind: 'gone', why: 'disabled' };
-  return { kind: 'throttled' };
+  if (throttled) return { kind: 'throttled', text };
+  const named = GONE_AT_LINE.test(text) || GONE_AT_JSON.test(text);
+  if (named || res.status === 451) return { kind: 'gone', why: res.status === 451 || BLOCK_REASON_DMCA.test(text) || (named && /dmca|takedown/i.test(text)) ? 'dmca' : 'disabled', text };
+  return { kind: unknown, text };
 }
 
 /** readCapped, parsed as JSON; a body that is not JSON is upstream_unavailable. */
@@ -259,7 +274,7 @@ export function createHttp({
     return memo.get(key);
   }
 
-  async function fetchSummary(url, { extract, version, headers = {}, rateLimitCheck, parse = 'json', cacheKey = url, onResponse, redirect = 'follow' } = {}) {
+  async function fetchSummary(url, { extract, version, headers = {}, rateLimitCheck, parse = 'json', cacheKey = url, onResponse, redirect = 'follow', classifyForbidden = false } = {}) {
     const hit = cache.get(cacheKey);
     const usable = hit && hit.v === version;
     const h = { ...headers };
@@ -273,8 +288,10 @@ export function createHttp({
       return { status: 304, value: hit.value, cached: true, res };
     }
     if (res.status !== 200) {
+      // A 403 or 451 is told apart (throttling, a repository taken down, or neither) before its body is dropped.
+      const forbidden = classifyForbidden && (res.status === 403 || res.status === 451) ? await forbiddenKind(res, { unknown: 'unknown' }) : null;
       await res.body?.cancel?.().catch(() => {});
-      return { status: res.status, value: null, cached: false, res };
+      return { status: res.status, value: null, cached: false, res, ...(forbidden ? { forbidden } : {}) };
     }
     const doc = parse === 'text' ? await readCapped(res, maxBodyBytes, hostOf(url)) : await readJsonCapped(res, maxBodyBytes, hostOf(url));
     const value = await extract(doc, res);

@@ -209,10 +209,17 @@ async function rest(http, url, { token, budget, extract, version }) {
   if (stop) throw new FetchProblem('rate_limited', stop);
   budget.rest.in_flight++;
   try {
-    return await http.getSummary(url, {
+    const r = await http.getSummary(url, {
       extract, version, headers: { ...GH_HEADERS, ...authHeaders(token) }, rateLimitCheck: githubRateLimited,
-      onResponse: (res) => budget.noteRest(res),
+      onResponse: (res) => budget.noteRest(res), classifyForbidden: true,
     });
+    // A 403 is read by its headers and body (R-META-12): throttling that carried no rate-limit
+    // header (a secondary limit) is ours, a retryable rate_limited problem for the pump to back off
+    // on; a repository GitHub took down is the subject's, settled; any other 403 (a size or
+    // permission refusal) keeps its status.
+    if (r.forbidden?.kind === 'throttled') throw new FetchProblem('rate_limited', `api.github.com: HTTP ${r.status}`, { status: r.status });
+    if (r.forbidden?.kind === 'gone') return { status: r.status, value: null, cached: false, gone: r.forbidden.why };
+    return r;
   } finally {
     budget.rest.in_flight--;
   }
@@ -456,10 +463,15 @@ export function graphFacts(node, observedAt) {
   };
 }
 
+/** A repository GitHub took down (DMCA, disabled) is the subject's state: a settled skip, never retried (as in release-diff, R-RD-18). */
+const goneSkip = (stage) => ({ stage, reason: 'upstream_unavailable', fault: 'subject' });
+const goneWhy = (why) => `GitHub answered 403 for this repository: ${why === 'dmca' ? 'taken down (DMCA)' : 'disabled by GitHub'}`;
+
 /** What one REST read gave, for the results file: ok, not_visible, or the problem. */
 function stageOf(r) {
   if (!r) return 'not_run';
   if (r.problem) return r.problem;
+  if (r.gone) return 'repository_gone';
   if (r.status === 200 || r.status === 304) return 'ok';
   if (r.status === 404 || r.status === 403) return 'not_visible';
   return `http_${r.status}`;
@@ -520,6 +532,9 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }
     if (c?.problem) {
       records.push(record('contributors_counts', null, `not read: ${c.problem}`));
       skips.push(skipFor('contributors', c.problem));
+    } else if (c?.gone) {
+      records.push(record('contributors_counts', null, goneWhy(c.gone)));
+      skips.push(goneSkip('contributors'));
     } else if (c && (c.status === 200 || c.status === 304)) {
       records.push(record('contributors_counts', { accounts: c.value.accounts, anonymous_included: false, basis: 'rest_contributors_link_header' }));
     } else if (c?.status === 204) {
@@ -531,6 +546,7 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }
     const p = rest.pvr;
     stages.private_vulnerability_reporting = stageOf(p);
     if (p?.problem) skips.push(skipFor('private_vulnerability_reporting', p.problem));
+    else if (p?.gone) skips.push(goneSkip('private_vulnerability_reporting'));
     records.push(record('security_posture', {
       ...g.security_posture,
       private_vulnerability_reporting: p && (p.status === 200 || p.status === 304) ? p.value.enabled : null,
@@ -539,6 +555,7 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }
     const r = rest.rules;
     stages.branch_rules = stageOf(r);
     if (r?.problem) skips.push(skipFor('branch_rules', r.problem));
+    else if (r?.gone) skips.push(goneSkip('branch_rules'));
     records.push(record('branch_rules_public', {
       branch: g.default_branch,
       rulesets: r && (r.status === 200 || r.status === 304) ? r.value : null,
