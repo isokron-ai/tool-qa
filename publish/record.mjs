@@ -132,14 +132,13 @@ export function buildRecord(item, registry) {
 
   const record = {
     schema: RECORD_SCHEMA,
-    record_id: recordId({ attempt_id: item.attempt_id, item_index: item.item_index, run_key: manifest.run_key }),
+    record_id: recordId({ attempt_id: item.attempt_id, run_key: manifest.run_key }),
     lane: laneOf(manifest.workflow?.file),
     subject: { id: manifest.subject.id, repo: manifest.subject.repo ?? null, sha: manifest.subject.sha ?? null },
     measured: { started_at: manifest.started_at, finished_at: manifest.finished_at },
     provenance: {
       run_key: manifest.run_key,
       attempt_id: item.attempt_id,
-      item_index: item.item_index,
       fence: manifest.fence,
       workflow: {
         repo: manifest.workflow.repo,
@@ -156,6 +155,15 @@ export function buildRecord(item, registry) {
     observations,
   };
   if (!textOk(record.lane)) return { held: true, reason: 'no_lane' };
+  // A result whose every field was left out must not read as a clean assessment.
+  if (observations.length === 0 && coverage.state === 'assessed') return { held: true, reason: 'empty_assessed' };
+  // The whole record, not only the observations: one bad item is held, it does not stop the run.
+  try {
+    if (scanValue(record).length > 0) return { held: true, reason: 'redaction_hit' };
+  } catch (err) {
+    if (err instanceof JsonDepthError) return { held: true, reason: 'too_deep' };
+    throw err;
+  }
   record.content_sha256 = contentDigest(record);
   return { record, withheld };
 }

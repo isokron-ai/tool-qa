@@ -58,7 +58,7 @@ export function item({
     identity: { attempt_id: attempt, fence: 7, run_key: RUN_KEY(n) },
     workflow: { repo: 'isokron-ai/mcp-check', file: `.github/workflows/${lane}.yml`, sha: '1'.repeat(40), run_id: 4242, run_attempt: 1 },
     meta: {
-      subject: SUBJECTS[subject], tools: [{ name: 'mcp-check', version: '0.1.0' }], oracles: [], settings_manifest_digest: 'e'.repeat(64),
+      subject: { ...SUBJECTS[subject] }, tools: [{ name: 'mcp-check', version: '0.1.0' }], oracles: [], settings_manifest_digest: 'e'.repeat(64),
       started_at: '2026-11-24T10:00:00Z', finished_at: finishedAt, skips,
       controls: [{ kind: 'known_good', expected: 'ok', observed: 'ok' }],
     },

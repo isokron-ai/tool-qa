@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseYaml } from '../../scripts/lib/yaml-lite.mjs';
 import { evaluateGate } from '../gate.mjs';
-import { BRANCH, deliver, prBody } from '../deliver.mjs';
+import { BRANCH, TRAILER, deliver, prBody } from '../deliver.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const BASE = 'a'.repeat(40);
@@ -24,34 +24,76 @@ test('R-PUB-09: publishing is off unless RESULTS_PUBLISH_ENABLED is exactly "tru
   assert.equal(evaluateGate(ON).proceed, true);
 });
 
-test('R-PUB-09: the workflow keeps the key and the App apart, uploads no artifact, and asks for no write permission of its own', () => {
-  const wf = parseYaml(readFileSync(join(ROOT, '.github/workflows/publish-results.yml'), 'utf8'));
-  const job = wf.jobs.publish;
-  assert.equal(job.environment, 'loop');
+test('R-PUB-09: three jobs: the key, the checker and the App never share a job; only redacted output and a sealed report are uploaded; every later job waits for the gate', () => {
+  const file = readFileSync(join(ROOT, '.github/workflows/publish-results.yml'), 'utf8');
+  const wf = parseYaml(file);
   assert.deepEqual(wf.permissions, {});
-  assert.deepEqual(job.permissions, { contents: 'read', actions: 'read' });
-  const text = readFileSync(join(ROOT, '.github/workflows/publish-results.yml'), 'utf8');
-  assert.ok(!/upload-artifact/.test(text), 'nothing decrypted is uploaded: a public repository\'s artifacts are public');
-  const steps = job.steps;
-  assert.equal(steps.find((s) => s.id === 'gate').env.RESULTS_PUBLISH_ENABLED, '${{ vars.RESULTS_PUBLISH_ENABLED }}');
-  const holders = (name) => steps.filter((s) => JSON.stringify(s.env ?? {}).includes(name)).map((s) => s.name);
-  assert.deepEqual(holders('AGE_IDENTITY'), ['Build the files to publish']);
-  assert.deepEqual(holders('APP_PRIVATE_KEY'), ['Open or update the pull request on mcp-results']);
-  // every step after the gate waits for it
-  for (const s of steps.filter((x) => x.id !== 'gate' && !/Check out/.test(x.name))) assert.match(s.if, /steps\.gate\.outputs\.proceed == 'true'/, s.name);
-  assert.match(steps.at(-1).if, /schedule|inputs\.dry_run == false/);
-  assert.equal(wf.on.workflow_dispatch.inputs.dry_run.default, 'true');
   assert.ok(!('pull_request' in wf.on) && !('push' in wf.on));
+  assert.equal(wf.on.workflow_dispatch.inputs.dry_run.default, 'true');
+  const { build, verify, deliver: del } = wf.jobs;
+  assert.equal(build.environment, 'loop');
+  assert.equal(del.environment, 'loop');
+  assert.equal(verify.environment, undefined, 'the checker job has no environment, so no secret');
+  assert.deepEqual(build.permissions, { contents: 'read', actions: 'read' });
+  assert.ok(!/secrets\./.test(JSON.stringify(verify)), 'no secret in the checker job');
+  const holders = (job, name) => job.steps.filter((s) => JSON.stringify(s.env ?? {}).includes(name)).map((s) => s.name);
+  assert.deepEqual(holders(build, 'AGE_IDENTITY'), ['Build the files to publish']);
+  assert.deepEqual(holders(build, 'APP_PRIVATE_KEY'), []);
+  assert.deepEqual(holders(del, 'APP_PRIVATE_KEY'), ['Open or update the pull request on mcp-results']);
+  assert.deepEqual(holders(del, 'AGE_IDENTITY'), []);
+  assert.deepEqual(holders(verify, 'APP_PRIVATE_KEY').concat(holders(verify, 'AGE_IDENTITY')), []);
+  assert.deepEqual([].concat(del.needs).sort(), ['build', 'verify']);
+  assert.match(del.if, /dry_run == false/);
+  assert.match(build.steps.find((s) => s.id === 'gate').env.RESULTS_PUBLISH_ENABLED, /vars\.RESULTS_PUBLISH_ENABLED/);
+  assert.equal(del.steps.find((s) => s.id === 'gate').env.RESULTS_PUBLISH_ENABLED, '${{ vars.RESULTS_PUBLISH_ENABLED }}', 'the deliver job checks the switch again');
+  for (const s of build.steps.filter((x) => x.id !== 'gate' && !/Check out/.test(x.name))) assert.match(s.if, /steps\.gate\.outputs\.proceed == 'true'/, s.name);
+  // uploads: the redacted output for one day, and a report that is age ciphertext
+  const ups = build.steps.filter((s) => /upload-artifact/.test(s.uses ?? ''));
+  assert.deepEqual(ups.map((u) => [u.with.name.split('-').slice(0, 2).join('-'), u.with['retention-days']]), [['publish-out', '1'], ['publish-private', '30']]);
+  assert.ok(!/upload-artifact/.test(JSON.stringify([verify, del])));
+  assert.match(build.steps.find((s) => s.id === 'build').run, /--seal-to worker-kit\/ingest\.pub/);
+  // the checker is the reviewed version before it runs, and runs against the base commit
+  const names = verify.steps.map((s) => s.name);
+  assert.ok(names.indexOf('The checker is the reviewed version') < names.findIndex((n) => /Verify with/.test(n)));
+  assert.match(verify.steps.find((s) => /Verify with/.test(s.name)).run, /--base "\$BASE"/);
+  // an unclean build ends the run red
+  assert.match(wf.jobs['not-clean'].if, /outputs\.clean == 'false'/);
 });
 
-function fakeApi({ main = BASE, verified = true, refExists = false, open = [], mintError = null } = {}) {
+test('R-PUB-17: the checker from mcp-results runs only if its files are the reviewed ones', async () => {
+  const { checkPin } = await import('../pin-check.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'pin-'));
+  try {
+    mkdirSync(join(dir, 'scripts'));
+    writeFileSync(join(dir, 'scripts/verify.mjs'), 'ok');
+    const pin = { files: { 'scripts/verify.mjs': (await import('node:crypto')).createHash('sha256').update('ok').digest('hex') } };
+    assert.deepEqual(checkPin(dir, pin), []);
+    writeFileSync(join(dir, 'scripts/verify.mjs'), 'changed');
+    assert.match(checkPin(dir, pin).join('\n'), /not the reviewed version/);
+    assert.match(checkPin(dir, { files: { 'scripts/gone.mjs': 'a'.repeat(64) } }).join('\n'), /missing/);
+    assert.deepEqual(checkPin(dir, { files: {} }), ['the pin lists no files']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('R-PUB-18: delivery leaves a branch alone that holds a commit this publisher did not make', async () => {
+  const dir = outDir();
+  try {
+    const api = fakeApi({ refExists: true, refMessage: 'a manual fix' });
+    await assert.rejects(deliver({ out: dir, baseSha: BASE, ...api }), /did not make/);
+    assert.ok(!api.calls.some((c) => c.method !== 'GET'), 'nothing was written');
+    const own = fakeApi({ refExists: true });
+    assert.equal((await deliver({ out: dir, baseSha: BASE, ...own })).status, 'opened');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+function fakeApi({ main = BASE, verified = true, refExists = false, open = [], mintError = null, refMessage = `Results: 1 new record(s)\n\n${TRAILER}` } = {}) {
   const calls = [];
   const client = {
     async request(method, path, { body, query, allow = [] } = {}) {
       calls.push({ method, path, body, query });
       const r = (data, status = 200) => ({ status, data, headers: new Headers() });
       if (method === 'GET' && path.endsWith('/git/ref/heads/main')) return r({ object: { sha: main } });
-      if (method === 'GET' && path.includes('/git/commits/')) return r({ tree: { sha: 't0' }, verification: { verified } });
+      if (method === 'GET' && path.includes('/git/commits/')) return r({ tree: { sha: 't0' }, message: refMessage, verification: { verified } });
       if (method === 'POST' && path.endsWith('/git/trees')) return r({ sha: 't1' }, 201);
       if (method === 'POST' && path.endsWith('/git/commits')) return r({ sha: 'c'.repeat(40), verification: { verified } }, 201);
       if (method === 'GET' && path.includes(`/git/ref/heads/${BRANCH}`)) return refExists ? r({ object: { sha: 'old' } }) : r({}, 404);
@@ -71,7 +113,7 @@ function fakeApi({ main = BASE, verified = true, refExists = false, open = [], m
 function outDir(files = ['results/live-probe/2026-11-24.jsonl', 'manifest.json']) {
   const dir = mkdtempSync(join(tmpdir(), 'deliver-test-'));
   for (const p of files) { mkdirSync(join(dir, 'data', p, '..'), { recursive: true }); writeFileSync(join(dir, 'data', p), '{"x":1}\n'); }
-  writeFileSync(join(dir, 'report.json'), JSON.stringify({ records_added: 1, records_unchanged: 0, files_changed: files, registry: { version: 0, sha256: 'a'.repeat(64) }, held_other: {}, unreadable_sealed_files: 0 }));
+  writeFileSync(join(dir, 'report.json'), JSON.stringify({ records_added: 1, records_unchanged: 0, files_changed: files, registry: { version: 0, sha256: 'a'.repeat(64) } }));
   return dir;
 }
 
@@ -140,7 +182,7 @@ test('R-PUB-10: a dry run builds the call plan and makes none; a path outside th
   try {
     await assert.rejects(deliver({ out: odd, baseSha: BASE, ...fakeApi() }), /outside the data layout/);
   } finally { rmSync(odd, { recursive: true, force: true }); }
-  assert.match(prBody({ records_added: 2, records_unchanged: 1, files_changed: ['manifest.json'], registry: { version: 0, sha256: 'a'.repeat(64) }, held_other: { oversize: 1 }, unreadable_sealed_files: 0 }), /held back from this batch/);
+  assert.doesNotMatch(prBody({ records_added: 2, records_unchanged: 1, files_changed: ['manifest.json'], registry: { version: 0, sha256: 'a'.repeat(64) }, held_other: { oversize: 1 }, unreadable_sealed_files: 3 }), /held|oversize|unreadable|sealed/i, 'the pull request says nothing about what was held');
 });
 
 test('R-PUB-10: the command line refuses to run without the switch inputs it needs', () => {

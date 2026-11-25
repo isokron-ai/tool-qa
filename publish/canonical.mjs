@@ -19,8 +19,12 @@ export function canonical(value) {
 
 export const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 
-/** Identity of one accepted result: the attempt, the item's position in it and its run key. */
-export const recordId = ({ attempt_id: a, item_index: i, run_key: k }) => sha256(`${a}\n${i}\n${k}`);
+/**
+ * Identity of one accepted result: the attempt and its run key (a run key is one item's). The
+ * item's position in the attempt is not part of it and not published: a gap in positions would
+ * show that a result was held.
+ */
+export const recordId = ({ attempt_id: a, run_key: k }) => sha256(`${a}\n${k}`);
 
 /** sha256 of the canonical record without its own `content_sha256`. */
 export function contentDigest(record) {

@@ -84,14 +84,18 @@ export const removedIds = (corrections) => new Set(corrections.filter((c) => c.k
  * Merge new records into a loaded store (in memory).
  * @returns {{added: object[], unchanged: number, removed: number, conflicts: {record_id: string, path: string}[], touched: Set<string>}}
  */
-export function merge(store, incoming) {
-  const out = { added: [], unchanged: 0, removed: 0, conflicts: [], touched: new Set() };
+export function merge(store, incoming, { windowStartMs = null } = {}) {
+  const out = { added: [], unchanged: 0, removed: 0, conflicts: [], skipped_conflicts: 0, touched: new Set() };
   const gone = removedIds(store.corrections);
   for (const record of [...incoming].sort(order)) {
     if (gone.has(record.record_id)) { out.removed += 1; continue; }
     const have = store.records.get(record.record_id);
     if (have) {
       if (have.record.content_sha256 === record.content_sha256) out.unchanged += 1;
+      // A registry or redaction change makes a result read again differ from what was published.
+      // Within the window (results still being read again) it is skipped and counted privately;
+      // older than that nothing should be read again, so it stops the run.
+      else if (windowStartMs !== null && Date.parse(have.record.measured.finished_at) >= windowStartMs) out.skipped_conflicts += 1;
       else out.conflicts.push({ record_id: record.record_id, path: have.path });
       continue;
     }

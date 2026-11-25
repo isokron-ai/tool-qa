@@ -193,7 +193,7 @@ test('R-PUB-05: every record carries what traces it to a run key and an attempt,
   const r = records[0];
   assert.match(r.provenance.run_key, /^[0-9a-f]{64}$/);
   assert.equal(r.provenance.attempt_id, 'att-1');
-  assert.equal(r.provenance.item_index, 0);
+  assert.ok(!('item_index' in r.provenance), 'the position in the attempt is not published');
   assert.equal(r.provenance.workflow.repo, 'isokron-ai/mcp-check');
   assert.equal(r.content_sha256, contentDigest(r));
   assert.deepEqual(auditStore(loadStore('/nonexistent'), registry()), []);
@@ -244,11 +244,22 @@ test('R-PUB-07: end to end with real age: sealed results are read with the key, 
     const enc = spawnSync('age', ['-r', pub], { input: packBundle(tar) });
     writeFileSync(join(sealedDir, 'keep-att-1.tar.age'), enc.stdout);
     writeFileSync(join(sealedDir, 'keep-broken.tar.age'), Buffer.from('not age'));
-    const code = await runMain(['--results', t.results, '--out', t.out, '--source-dir', join(t.dir, 'sealed')], { AGE_IDENTITY: identity });
-    assert.equal(code, 0);
+    const priv = join(t.dir, 'private');
+    const seal = join(t.dir, 'recipients.pub');
+    writeFileSync(seal, `${pub}\n`);
+    const code = await runMain(['--results', t.results, '--out', t.out, '--private-out', priv, '--seal-to', seal, '--source-dir', join(t.dir, 'sealed')], { AGE_IDENTITY: identity });
+    assert.equal(code, 4, 'an unreadable sealed file is not clean');
     const report = JSON.parse(readFileSync(join(t.out, 'report.json'), 'utf8'));
-    assert.equal(report.records_added, 1);
-    assert.equal(report.unreadable_sealed_files, 1);
+    assert.equal(report.records_added, 1, 'the output is still written');
+    assert.ok(!('unreadable_sealed_files' in report), 'and the public report does not carry the count');
+    assert.deepEqual(readdirSync(priv), ['report.json.age'], 'the private report is sealed, never plain');
+    const dec = spawnSync('age', ['-d', '-i', '-'], { input: Buffer.concat([Buffer.from(`${identity}\n`)]) });
+    assert.ok(dec.status !== 0);
+    const idf = join(t.dir, 'id.txt');
+    writeFileSync(idf, `${identity}\n`);
+    const priv2 = JSON.parse(spawnSync('age', ['-d', '-i', idf, join(priv, 'report.json.age')], { encoding: 'utf8' }).stdout);
+    assert.equal(priv2.unreadable_sealed_files, 1);
+    assert.equal(priv2.clean, false);
     const written = readdirSync(t.out, { recursive: true });
     assert.ok(written.every((p) => !/\.age$/.test(p)));
     assert.ok(!JSON.stringify(report).includes(identity));
@@ -268,4 +279,100 @@ test('R-PUB-08: nothing in the publisher, its documents or its output names an A
   }
   const { store } = build(flat(item({ n: 1 })));
   assert.ok(!re.test(allBytes(store)));
+});
+
+test('R-PUB-11: no position in the attempt is published, so a held result leaves no gap; the id does not depend on it', () => {
+  const entries = flat(
+    item({ attempt: 'shard-1', index: 0, n: 1, subject: 'demo' }),
+    item({ attempt: 'shard-1', index: 1, n: 2, subject: 'other', observations: [{ field: 'tool_count', value: 5 }, { field: 'ci_exploitable_trigger', value: {} }] }),
+    item({ attempt: 'shard-1', index: 2, n: 3, subject: 'third' }),
+  );
+  const { records, store } = build(entries);
+  assert.equal(records.length, 2);
+  const text = allBytes(store);
+  assert.ok(!/item_index/.test(text));
+  assert.ok(records.every((r) => !('item_index' in r.provenance)));
+  const again = build(item({ attempt: 'shard-1', index: 7, n: 1, subject: 'demo' }));
+  assert.equal(again.records[0].record_id, records.find((r) => r.subject.id === 'io.example/demo').record_id, 'the same result is the same record wherever it sat in its shard');
+});
+
+test('R-PUB-12: nothing about what was held or left out is public: not in the report, the log, the step summary; the private report is sealed', async () => {
+  const t = scratch();
+  try {
+    const entries = flat(
+      item({ attempt: 'a-1', n: 1 }),
+      item({ attempt: 'a-2', n: 2, subject: 'other', observations: [{ field: 'tool_count', value: 5 }, { field: 'ci_exploitable_trigger', value: {} }] }),
+      item({ attempt: 'a-3', n: 3, subject: 'third', observations: [{ field: 'stderr_counts', value: { s: FAKE_TOKEN } }] }),
+      item({ attempt: 'a-4', n: 4, subject: 'other', observations: [{ field: 'write_tool_confirmed', value: true }] }),
+      item({ attempt: 'a-5', n: 5, dir: 'rejected' }),
+    );
+    const plain = join(t.dir, 'plain');
+    for (const e of entries) { mkdirSync(join(plain, e.path, '..'), { recursive: true }); writeFileSync(join(plain, e.path), e.data); }
+    const summary = join(t.dir, 'summary.md');
+    writeFileSync(summary, '');
+    const logs = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (c) => { logs.push(String(c)); return true; };
+    let code;
+    try { code = await runMain(['--results', t.results, '--out', t.out, '--private-out', join(t.dir, 'priv'), '--plain-dir', plain], { GITHUB_STEP_SUMMARY: summary }); } finally { process.stderr.write = orig; }
+    assert.equal(code, 0);
+    const pub = JSON.parse(readFileSync(join(t.out, 'report.json'), 'utf8'));
+    assert.deepEqual(Object.keys(pub).sort(), ['files_changed', 'records_added', 'records_unchanged', 'registry', 'version']);
+    const everything = [JSON.stringify(pub), logs.join(''), readFileSync(summary, 'utf8')].join('\n');
+    for (const word of ['held', 'withheld', 'redaction', 'security', 'items_not_accepted', 'records_built', 'unreadable', 'oversize']) assert.ok(!everything.includes(word), word);
+    // the private report has them, and only where asked for
+    const priv = JSON.parse(readFileSync(join(t.dir, 'priv/report.json'), 'utf8'));
+    assert.deepEqual(priv.held_other, { redaction_hit: 1, empty_assessed: 1 });
+    assert.equal(priv.records_built, 1);
+    assert.ok(!existsSync(join(t.out, 'private')) && !readdirSync(t.out, { recursive: true }).some((p) => /priv/.test(p)));
+  } finally { t.done(); }
+});
+
+test('R-PUB-13: one bad item is held, it does not stop the run: the whole record is scanned, not only the observations', () => {
+  const entries = flat(
+    item({ attempt: 'a-1', n: 1 }),
+    item({ attempt: 'a-2', n: 2, subject: 'other', mutateManifest: (m) => { m.subject.id = `io.example/${FAKE_TOKEN}`; } }),
+    item({ attempt: 'a-3', n: 3, subject: 'third', mutateManifest: (m) => { m.tools[0].name = 'mcp-check'; m.workflow.file = '.github/workflows/live-probe.yml'; } }),
+  );
+  const { records, stats } = build(entries);
+  assert.deepEqual(records.map((r) => r.provenance.attempt_id).sort(), ['a-1', 'a-3']);
+  assert.deepEqual(stats.held_other, { redaction_hit: 1 });
+});
+
+test('R-PUB-14: a result whose every field was left out is not published as a clean assessment; one with a skip of ours still is', () => {
+  const { records, stats } = build(flat(
+    item({ attempt: 'a-1', n: 1, observations: [{ field: 'write_tool_confirmed', value: true }] }),
+    item({ attempt: 'a-2', n: 2, subject: 'other', observations: [], extraFiles: { 'logs/x.log': 'x' }, skips: [{ stage: 'read', reason: 'too_large', fault: 'tool', evidence: 'logs/x.log' }] }),
+  ));
+  assert.deepEqual(records.map((r) => r.provenance.attempt_id), ['a-2']);
+  assert.deepEqual(stats.held_other, { empty_assessed: 1 });
+});
+
+test('R-PUB-15: a re-read record that differs from its published one is skipped inside the re-read window and stops the run outside it', () => {
+  const published = build(item({ attempt: 'a-1', n: 1, finishedAt: '2026-11-24T10:05:00Z' }));
+  const store = published.store;
+  const stricter = parseRegistry(REGISTRY_TEXT.replace('{id: tool_count, layer: protocol, type: integer, unit: count, source: scan-live, class: P,', '{id: tool_count, layer: protocol, type: integer, unit: count, source: scan-live, class: PA,'));
+  const again = (windowStartMs) => publishEntries([item({ attempt: 'a-1', n: 1, finishedAt: '2026-11-24T10:05:00Z' })], { registry: stricter, store, windowStartMs });
+  const inside = again(Date.parse('2026-11-20T00:00:00Z'));
+  assert.equal(inside.merged.skipped_conflicts, 1);
+  assert.equal(inside.merged.conflicts.length, 0);
+  const outside = again(Date.parse('2026-11-26T00:00:00Z'));
+  assert.equal(outside.merged.conflicts.length, 1);
+  assert.equal(again(null).merged.conflicts.length, 1, 'with no window (a backfill) it is always a stop');
+});
+
+test('R-PUB-16: our own failures end the run not clean (exit 4) after the output is written: an unreadable sealed file, a coverage mismatch, a skipped conflict', async () => {
+  const t = scratch();
+  try {
+    const plain = join(t.dir, 'plain');
+    const entries = flat(item({ attempt: 'a-1', n: 1 }), item({ attempt: 'a-2', n: 2, subject: 'other', mutateIngest: (i) => { i.bundle = { coverage: 'unassessed_tool' }; } }));
+    for (const e of entries) { mkdirSync(join(plain, e.path, '..'), { recursive: true }); writeFileSync(join(plain, e.path), e.data); }
+    const priv = join(t.dir, 'priv');
+    const code = await runMain(['--results', t.results, '--out', t.out, '--private-out', priv, '--plain-dir', plain], {});
+    assert.equal(code, 4);
+    assert.equal(JSON.parse(readFileSync(join(t.out, 'report.json'), 'utf8')).records_added, 1, 'the good result is still delivered');
+    const p = JSON.parse(readFileSync(join(priv, 'report.json'), 'utf8'));
+    assert.deepEqual(p.held_other, { coverage_mismatch: 1 });
+    assert.equal(p.clean, false);
+  } finally { t.done(); }
 });

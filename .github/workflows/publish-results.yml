@@ -1,29 +1,28 @@
 name: publish-results
 
-# Publishes the loop's accepted results to isokron-ai/mcp-results as redacted plain
-# files, as one pull request that a person merges. OFF by default: it does nothing
-# unless the variable RESULTS_PUBLISH_ENABLED is exactly "true" (and the loop is on:
-# LOOP_ENABLED, LOOP_PAUSE_UNTIL, LANE_PUBLISH_RESULTS_ENABLED, as for every loop job).
-# Design, redaction and the security hold: docs/PUBLISHING.md.
+# Publishes the loop's accepted results to isokron-ai/mcp-results as redacted plain files, as one
+# pull request that a person merges. OFF by default: it does nothing unless the variable
+# RESULTS_PUBLISH_ENABLED is exactly "true" (and the loop is on: LOOP_ENABLED, LOOP_PAUSE_UNTIL,
+# LANE_PUBLISH_RESULTS_ENABLED, as for every loop job). Design, redaction and the security hold:
+# docs/PUBLISHING.md.
 #
-# It runs in the `loop` environment because the key that opens the sealed results
-# (AGE_IDENTITY) lives only there. The key is given to the build step alone. The
-# deliver step gets the GitHub App settings and no key, and the files it sends are
-# the redacted plain output of the build step; nothing decrypted is uploaded as an
-# artifact (a public repository's artifacts are public).
+# Three jobs, so that no job holds two kinds of secret or runs code it did not get from here:
 #
-#   gate     the switch
-#   build    reads the sealed `ingest-keep-*` artifacts of the last
-#            RESULTS_PUBLISH_LOOKBACK_DAYS days (default 7), keeps only what ingest
-#            accepted, applies the publish policy and the redaction rules, and
-#            writes the files that would change (publish/run.mjs)
-#   verify   runs mcp-results' own scripts/verify.mjs on the result
-#   deliver  one pull request on isokron-ai/mcp-results, through the existing GitHub
-#            App (publish/deliver.mjs). Never merges. Needs the App to have
-#            contents: write and pull_requests: write on mcp-results.
+#   build    (environment loop, AGE_IDENTITY) reads the sealed `ingest-keep-*` artifacts of the last
+#            RESULTS_PUBLISH_LOOKBACK_DAYS days (default 7), keeps only what ingest accepted, applies
+#            the publish policy and the redaction rules, and writes the files that would change. The
+#            only things it uploads are those files (redacted, exactly what the pull request would
+#            hold; one day) and a report about what was held, sealed with age so that only the loop
+#            key opens it. It fails, after delivering, when something of ours went wrong (unreadable
+#            sealed file, coverage mismatch, a re-read record that differs from its published one).
+#   verify   (no secret, no environment) runs mcp-results' scripts/verify.mjs on the output, only
+#            after publish/pin-check.mjs has shown that checker is the reviewed version.
+#   deliver  (environment loop, the GitHub App, no age key) checks the files against the digest the
+#            build job gave, and opens or updates one pull request on isokron-ai/mcp-results
+#            (publish/deliver.mjs). Never merges. Needs the App to have contents: write and
+#            pull_requests: write on mcp-results.
 #
-# workflow_dispatch has dry_run (default true): it builds and verifies, prints the
-# counts to the run summary, and delivers nothing.
+# workflow_dispatch has dry_run (default true): build and verify, deliver nothing.
 
 on:
   schedule:
@@ -42,14 +41,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: publish
+  build:
+    name: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: loop
     permissions:
       contents: read # check out this repository
       actions: read # list and download the ingest-keep artifacts of this repository
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+      base: ${{ steps.results.outputs.base }}
+      clean: ${{ steps.build.outputs.clean }}
+      sums: ${{ steps.sums.outputs.sums }}
+      changed: ${{ steps.sums.outputs.changed }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +86,9 @@ jobs:
           git clone --quiet --depth 1 --branch main https://github.com/isokron-ai/mcp-results.git "$RUNNER_TEMP/mcp-results"
           echo "base=$(git -C "$RUNNER_TEMP/mcp-results" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       # AGE_IDENTITY goes to this step only. The script drops it from its environment at start.
+      # Exit 4 (not clean) is passed on after the output is kept; any other failure stops here.
       - name: Build the files to publish
+        id: build
         if: steps.gate.outputs.proceed == 'true'
         env:
           AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
@@ -89,33 +96,173 @@ jobs:
           AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
           GITHUB_TOKEN: ${{ github.token }}
           LOOKBACK_DAYS: ${{ vars.RESULTS_PUBLISH_LOOKBACK_DAYS }}
-        run: >-
-          node publish/run.mjs
-          --results "$RUNNER_TEMP/mcp-results"
-          --out "$RUNNER_TEMP/publish-out"
-          --source-artifacts
-          --since-days "${LOOKBACK_DAYS:-7}"
-      - name: Verify with mcp-results' own checker
+        run: |
+          set +e
+          node publish/run.mjs \
+            --results "$RUNNER_TEMP/mcp-results" \
+            --out "$RUNNER_TEMP/publish-out" \
+            --private-out "$RUNNER_TEMP/publish-private" \
+            --seal-to worker-kit/ingest.pub \
+            --source-artifacts \
+            --since-days "${LOOKBACK_DAYS:-7}"
+          code=$?
+          if [ "$code" -eq 0 ]; then echo "clean=true" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -eq 4 ]; then echo "clean=false" >> "$GITHUB_OUTPUT"
+          else exit "$code"; fi
+      # One digest of every file that leaves this job; the later jobs check it.
+      - name: Digest of the output
+        id: sums
         if: steps.gate.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/publish-out"
+          find . -type f | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          echo "sums=$(sha256sum SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "changed=$(node -e "const r=require('./report.json');console.log(r.files_changed.length)")" >> "$GITHUB_OUTPUT"
+      # Plain, redacted, exactly what the pull request would hold. Held results are not in it.
+      - name: Keep the output for the next jobs (1 day)
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: publish-out-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish-out
+          retention-days: 1
+          if-no-files-found: error
+      # age ciphertext only: what was held and why, readable with the loop key.
+      - name: Keep the private report (sealed, 30 days)
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: publish-private-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish-private
+          retention-days: 30
+          if-no-files-found: ignore
+
+  verify:
+    name: verify
+    needs: build
+    if: needs.build.outputs.proceed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # download the build job's output
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Download the output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: publish-out-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish-out
+      - name: Check the output against the build job's digest
+        env:
+          SUMS: ${{ needs.build.outputs.sums }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/publish-out"
+          [ "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = "$SUMS" ]
+          sha256sum --check --quiet SHA256SUMS
+      # Public repository, at the commit the build job read, so the same history is checked.
+      - name: Read isokron-ai/mcp-results at that commit
+        env:
+          BASE: ${{ needs.build.outputs.base }}
+        run: |
+          set -euo pipefail
+          git clone --quiet --branch main https://github.com/isokron-ai/mcp-results.git "$RUNNER_TEMP/mcp-results"
+          git -C "$RUNNER_TEMP/mcp-results" checkout --quiet --detach "$BASE"
+      - name: The checker is the reviewed version
+        run: node publish/pin-check.mjs "$RUNNER_TEMP/mcp-results" publish/verify-pin.json
+      - name: Verify with mcp-results' own checker (append-only against the base commit)
+        env:
+          BASE: ${{ needs.build.outputs.base }}
         run: |
           set -euo pipefail
           if [ -d "$RUNNER_TEMP/publish-out/data" ]; then
             mkdir -p "$RUNNER_TEMP/mcp-results/data"
             cp -R "$RUNNER_TEMP/publish-out/data/." "$RUNNER_TEMP/mcp-results/data/"
           fi
-          node "$RUNNER_TEMP/mcp-results/scripts/verify.mjs" "$RUNNER_TEMP/mcp-results"
+          node "$RUNNER_TEMP/mcp-results/scripts/verify.mjs" "$RUNNER_TEMP/mcp-results" --base "$BASE"
           {
             echo '## Publish results'
             echo '```json'
             cat "$RUNNER_TEMP/publish-out/report.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deliver:
+    name: deliver
+    needs: [build, verify]
+    if: needs.build.outputs.proceed == 'true' && needs.build.outputs.changed != '0' && (github.event_name == 'schedule' || inputs.dry_run == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: loop
+    permissions:
+      contents: read
+      actions: read # download the build job's output
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish gate (again)
+        id: gate
+        env:
+          RESULTS_PUBLISH_ENABLED: ${{ vars.RESULTS_PUBLISH_ENABLED }}
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_PUBLISH_RESULTS_ENABLED: ${{ vars.LANE_PUBLISH_RESULTS_ENABLED }}
+        run: node publish/gate.mjs
+      - name: Set up Node
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Download the verified output
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: publish-out-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish-out
+      - name: Check the output against the build job's digest
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          SUMS: ${{ needs.build.outputs.sums }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/publish-out"
+          [ "$(sha256sum SHA256SUMS | cut -d' ' -f1)" = "$SUMS" ]
+          sha256sum --check --quiet SHA256SUMS
+          rm SHA256SUMS
       - name: Open or update the pull request on mcp-results
-        if: steps.gate.outputs.proceed == 'true' && (github.event_name == 'schedule' || inputs.dry_run == false)
+        if: steps.gate.outputs.proceed == 'true'
         env:
           APP_ID: ${{ vars.APP_ID }}
           APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          BASE_SHA: ${{ steps.results.outputs.base }}
+          BASE_SHA: ${{ needs.build.outputs.base }}
         run: node publish/deliver.mjs --out "$RUNNER_TEMP/publish-out" --base-sha "$BASE_SHA"
+
+  # Our own failures are not left in a pull request: the run ends red.
+  not-clean:
+    name: not clean
+    needs: [build, deliver]
+    if: always() && needs.build.outputs.clean == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Fail the run
+        run: |
+          echo "::error title=publish-results::The build was not clean (a sealed file could not be read, a result was held for a coverage mismatch, or a re-read record differs from its published one). The details are in the sealed private report artifact."
+          exit 1

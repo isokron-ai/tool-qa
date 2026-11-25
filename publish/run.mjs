@@ -17,20 +17,29 @@
 // The age identity is read from AGE_IDENTITY (or --identity-file) into memory and
 // removed from the environment at start. Decrypted data is never written to disk.
 //
-// Output in --out:
+// Output in --out (this is all that is ever public):
 //   data/...      the files that would change in mcp-results/data (day files, manifest)
-//   report.json   counts only. It never says how many results were held as security
-//                 class, and has no total of accepted results, so that number cannot be
-//                 worked out from it.
+//   report.json   what is published: records added, records already published, files changed,
+//                 the registry used. Nothing about what was held or left out.
 //
-// Exit codes: 0 done (with or without changes), 1 error, 2 usage, 3 stopped without
-// writing: a record already published would change (conflict), or something already
-// published is no longer publishable under the registry (audit).
+// Everything about what was held or left out (held by reason, fields left out by class, items
+// that failed a check, sealed files that could not be read, conflicts skipped) goes to
+// --private-out only: report.json there, age-sealed to --seal-to's recipients as report.json.age
+// when --seal-to is given (the workflow does). Without --private-out it is not written at all.
+// Counts of held results are never printed, put in the step summary or in a pull request: next
+// to the public counts of accepted results they would show how many were held as security class.
+//
+// Exit codes: 0 done (with or without changes), 1 error, 2 usage, 3 stopped without writing: a
+// published record outside the re-read window would change (conflict), or something already
+// published is no longer publishable under the registry (audit). 4 done, but not clean: a sealed
+// file could not be read, a result was held for a coverage mismatch, or a re-read record differed
+// from its published one. The output is written, and the workflow ends red after delivering it.
 
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ageEncrypt, readSealRecipients } from '../ingest/age.mjs';
 import { parseRegistry } from '../ingest/registry.mjs';
 import { ApiBudget } from '../pump/budgets.mjs';
 import { createClient, scrub } from '../pump/github.mjs';
@@ -48,7 +57,7 @@ const KEEP_ARTIFACT = /^ingest-keep-\d+-\d+$/;
  * Turn entries of accepted results into records and merge them. Pure apart from `store`.
  * @returns the counts of the run (no secret-class count) and the new records
  */
-export function publishEntries(entryLists, { registry, store }) {
+export function publishEntries(entryLists, { registry, store, windowStartMs = null }) {
   const stats = { items_not_accepted: 0, held_other: {}, withheld_fields: {}, records_built: 0 };
   const built = [];
   for (const entries of entryLists) {
@@ -66,7 +75,7 @@ export function publishEntries(entryLists, { registry, store }) {
     }
   }
   stats.records_built = built.length;
-  const merged = merge(store, built);
+  const merged = merge(store, built, { windowStartMs });
   return { stats, merged };
 }
 
@@ -83,6 +92,8 @@ function parseArgs(argv) {
     else if (a === '--since-days') o.sinceDays = Number(need(i++));
     else if (a === '--registry') o.registry = need(i++);
     else if (a === '--identity-file') o.identityFile = need(i++);
+    else if (a === '--private-out') o.privateOut = need(i++);
+    else if (a === '--seal-to') o.sealTo = need(i++);
     else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }
   if (!o.results || !o.out) throw new Error('--results and --out are required');
@@ -164,7 +175,10 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       }
     }
 
-    const { stats, merged } = publishEntries(lists, { registry, store });
+    // Results read again from artifacts (the last N days) may differ from what was published if the
+    // registry or the redaction rules changed since: those are skipped and counted privately.
+    const windowStartMs = o.artifacts ? (deps.now?.() ?? Date.now()) - (o.sinceDays + 2) * 86_400_000 : null;
+    const { stats, merged } = publishEntries(lists, { registry, store, windowStartMs });
     if (merged.conflicts.length) {
       for (const c of merged.conflicts.slice(0, 20)) say(`publish: conflict: record ${c.record_id} is published in ${c.path} with other content; published records are never changed. Nothing written`);
       return 3;
@@ -183,11 +197,26 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       mkdirSync(dirname(f), { recursive: true });
       writeFileSync(f, bytes);
     }
-    Object.assign(report, stats, { records_added: merged.added.length, records_unchanged: merged.unchanged, records_removed_by_correction_skipped: merged.removed, files_changed: [...files.keys()].sort() });
+    const priv = { ...report, ...stats, records_added: merged.added.length, records_unchanged: merged.unchanged, records_skipped_by_correction: merged.removed, conflicts_skipped: merged.skipped_conflicts };
+    const clean = priv.unreadable_sealed_files === 0 && !(priv.held_other.coverage_mismatch > 0) && priv.conflicts_skipped === 0;
+    const pub = {
+      version: 1, registry: report.registry,
+      records_added: merged.added.length, records_unchanged: merged.unchanged,
+      files_changed: [...files.keys()].sort(),
+    };
     mkdirSync(o.out, { recursive: true });
-    writeFileSync(join(o.out, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
-    say(`publish: ${merged.added.length} new record(s), ${merged.unchanged} already published, ${files.size} file(s) change${report.unreadable_sealed_files ? `, ${report.unreadable_sealed_files} sealed file(s) could not be read` : ''}`);
-    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `## Publish results\n\n- new records: ${merged.added.length}\n- already published: ${merged.unchanged}\n- files that change: ${files.size}\n- not accepted by ingest: ${stats.items_not_accepted}\n${Object.keys(stats.held_other).length ? `- held (not security): ${JSON.stringify(stats.held_other)}\n` : ''}`);
+    writeFileSync(join(o.out, 'report.json'), `${JSON.stringify(pub, null, 2)}\n`);
+    if (o.privateOut) {
+      mkdirSync(o.privateOut, { recursive: true });
+      const text = `${JSON.stringify({ ...priv, clean }, null, 2)}\n`;
+      if (o.sealTo) {
+        const box = ageEncrypt({ plaintext: Buffer.from(text), recipients: readSealRecipients(resolve(o.sealTo)), ageBin: env.AGE_BIN || 'age' });
+        writeFileSync(join(o.privateOut, 'report.json.age'), box, { mode: 0o600 });
+      } else writeFileSync(join(o.privateOut, 'report.json'), text, { mode: 0o600 });
+    }
+    say(`publish: ${pub.records_added} new record(s), ${pub.records_unchanged} already published, ${files.size} file(s) change${clean ? '' : '; not clean: see the private report'}`);
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `## Publish results\n\n- new records: ${pub.records_added}\n- already published: ${pub.records_unchanged}\n- files that change: ${files.size}\n`);
+    if (!clean) return 4;
     return 0;
   } catch (err) {
     say(`publish: ${err?.message ?? err}`);

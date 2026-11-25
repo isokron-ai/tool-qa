@@ -41,6 +41,9 @@ function listData(dir, base = dir, out = []) {
   return out.sort();
 }
 
+/** Every commit this publisher makes ends with this line; a branch head without it was not made by us. */
+export const TRAILER = 'Published-by: tool-qa publish-results';
+
 export function prBody(report) {
   const lines = [
     'New results from the tool-qa loop, built by the publish-results workflow in isokron-ai/tool-qa from the results its ingest accepted.',
@@ -50,8 +53,6 @@ export function prBody(report) {
     `- Files that change: ${report.files_changed.length}`,
     `- Field registry: version ${report.registry.version}, sha256 ${report.registry.sha256}`,
   ];
-  if (Object.keys(report.held_other ?? {}).length) lines.push(`- Results held back from this batch (redaction or size): ${JSON.stringify(report.held_other)}`);
-  if (report.unreadable_sealed_files) lines.push(`- Sealed files that could not be read: ${report.unreadable_sealed_files}`);
   lines.push('',
     'Check the files with `node scripts/verify.mjs` (the validate workflow runs it on this branch). Merge by hand. The commit was made through the API, so GitHub signed it.');
   return lines.join('\n');
@@ -91,19 +92,24 @@ export async function deliver({ out, baseSha, owner = 'isokron-ai', env = proces
 
   const main = (await get(`/repos/${repo}/git/ref/heads/main`)).data.object.sha;
   if (main !== baseSha) throw new Error(`main of ${repo} moved (${baseSha.slice(0, 12)} to ${main.slice(0, 12)}) since the files were built; nothing written, the next run starts from the new main`);
+  // The branch is ours to replace, but not over someone's own push to it.
+  const existing = await get(`/repos/${repo}/git/ref/heads/${BRANCH}`, { allow: [404] });
+  if (existing.status !== 404) {
+    const head = (await get(`/repos/${repo}/git/commits/${existing.data.object.sha}`)).data;
+    if (!String(head.message ?? '').includes(TRAILER)) throw new Error(`${BRANCH} holds a commit this publisher did not make (${String(existing.data.object.sha).slice(0, 12)}); it is left alone. Delete or merge the branch, then run again`);
+  }
   const baseTree = (await get(`/repos/${repo}/git/commits/${main}`)).data.tree.sha;
   const tree = (await gh.request('POST', `/repos/${repo}/git/trees`, {
     body: { base_tree: baseTree, tree: files.map((f) => ({ path: f.path, mode: '100644', type: 'blob', content: f.content })) },
   })).data.sha;
   const made = (await gh.request('POST', `/repos/${repo}/git/commits`, {
-    body: { message: `Results: ${report.records_added} new record(s)`, tree, parents: [main] },
+    body: { message: `Results: ${report.records_added} new record(s)\n\n${TRAILER}`, tree, parents: [main] },
   })).data;
   let verified = made.verification?.verified === true;
   if (!verified) verified = (await get(`/repos/${repo}/git/commits/${made.sha}`)).data.verification?.verified === true;
   if (!verified) throw new Error(`commit ${made.sha} is not verified; ${BRANCH} was not moved`);
 
-  const ref = await get(`/repos/${repo}/git/ref/heads/${BRANCH}`, { allow: [404] });
-  if (ref.status === 404) await gh.request('POST', `/repos/${repo}/git/refs`, { body: { ref: `refs/heads/${BRANCH}`, sha: made.sha } });
+  if (existing.status === 404) await gh.request('POST', `/repos/${repo}/git/refs`, { body: { ref: `refs/heads/${BRANCH}`, sha: made.sha } });
   else await gh.request('PATCH', `/repos/${repo}/git/refs/heads/${BRANCH}`, { body: { sha: made.sha, force: true } });
 
   const open = (await get(`/repos/${repo}/pulls`, { query: { head: `${owner}:${BRANCH}`, state: 'open' } })).data;
