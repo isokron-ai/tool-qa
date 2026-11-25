@@ -10,7 +10,9 @@
 // if no pump run started for 20 minutes.
 //
 // The token is minted for this repository only, with actions: write. A server
-// error is retried: a duplicate dispatch only replaces the pending pump run.
+// error or lost connection is retried with backoff and jitter (pump/retry.mjs,
+// up to 6 tries within 90 s): a duplicate dispatch only replaces the pending
+// pump run.
 //
 // The result is written to --out as JSON { ok, at, ref, runId?, runUrl?, error? }.
 // The pump run stores it in the state (kv pump.successor), where the watchdog
@@ -31,6 +33,10 @@ import { ApiBudget } from './budgets.mjs';
 import { createClient, scrub } from './github.mjs';
 
 export const PUMP_WORKFLOW = 'pump.yml';
+// All the retrying the successor does (minting its token and the dispatch) ends
+// within this long, so a GitHub outage cannot eat the pump job's time: the
+// pump job has 20 minutes, the pump itself stops at 11 (R-CHAOS-13).
+export const SUCCESSOR_RETRY_MS = 90_000;
 
 /**
  * @returns {Promise<{ ok: boolean, at: string, ref: string, runId?: number,
@@ -52,17 +58,19 @@ export async function dispatchSuccessor({
   const at = new Date(now()).toISOString();
   const secrets = [env.APP_PRIVATE_KEY, env.GITHUB_TOKEN];
   const budget = new ApiBudget({ now, sleep });
-  const mint = async (permissions) => {
-    const minter = mintToken ?? appTokenMinter({ env, fetch, apiUrl, now, sleep, budget });
+  // Each phase (dispatch, then the health report) gets its own window.
+  const window = () => ({ random, retryUntil: now() + SUCCESSOR_RETRY_MS, retryTotalMs: SUCCESSOR_RETRY_MS, log });
+  const mint = async (permissions, retry) => {
+    const minter = mintToken ?? appTokenMinter({ env, fetch, apiUrl, now, sleep, budget, ...retry });
     const { token } = await minter({ repositories: [name], permissions });
     secrets.push(token);
     if (env.GITHUB_ACTIONS === 'true') process.stdout.write(`::add-mask::${token}\n`);
-    return createClient({ token, fetch, apiUrl, budget, sleep, now, random });
+    return createClient({ token, fetch, apiUrl, budget, sleep, now, ...retry });
   };
 
   let result;
   try {
-    const client = await mint({ actions: 'write' });
+    const client = await mint({ actions: 'write' }, window());
     const res = await client.request('POST', `/repos/${repo}/actions/workflows/${PUMP_WORKFLOW}/dispatches`, {
       family: 'dispatch',
       essential: true,
@@ -82,7 +90,7 @@ export async function dispatchSuccessor({
   }
 
   try {
-    const client = await mint({ issues: 'write' });
+    const client = await mint({ issues: 'write' }, window());
     await applyHealth({
       client,
       repo,

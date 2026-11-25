@@ -112,3 +112,31 @@ test('the CLI needs --out and the repository', async () => {
   assert.equal(await main([], ENV, {}), 2);
   assert.equal(await main(['--out', 'x.json'], {}, {}), 2);
 });
+
+test('R-CHAOS-15: the successor dispatch survives five server errors in a row, within 90 seconds of waiting', async () => {
+  const w = world([
+    ...Array.from({ length: 5 }, () => ({ status: 500, body: { message: 'Server Error' } })),
+    { status: 204 },
+  ]);
+  w.opts.random = () => 0.999999;
+  const lines = [];
+  w.opts.log = (l) => lines.push(l);
+  const out = await dispatchSuccessor(w.opts);
+  assert.equal(out.ok, true);
+  assert.equal(dispatches(w.api).length, 6);
+  assert.ok(w.c.sleeps.reduce((s, x) => s + x, 0) <= 90_000);
+  assert.ok(lines.some((l) => /attempt 5\/6 failed/.test(l)), 'each retry is logged');
+  assert.ok(lines.every((l) => !l.includes('ghs_synthetic')), 'no token in the log');
+  assert.equal(w.issues.length, 0, 'a dispatch that got through leaves the health issue alone');
+});
+
+test('R-CHAOS-15: when GitHub stays down the successor fails closed after six tries inside its window, reports it, and does not throw', async () => {
+  const w = world(Array.from({ length: 40 }, () => ({ status: 500, body: { message: 'Server Error' } })));
+  w.opts.random = () => 0.999999;
+  const t0 = w.c.t;
+  const out = await dispatchSuccessor(w.opts);
+  assert.equal(out.ok, false);
+  assert.match(out.error, /500/);
+  assert.equal(dispatches(w.api).length, 6, 'six attempts, no more');
+  assert.ok(w.c.t - t0 <= 90_000 + 1000, 'bounded by the 90 s window');
+});

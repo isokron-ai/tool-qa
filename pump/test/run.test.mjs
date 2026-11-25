@@ -75,6 +75,7 @@ function harness({ slots = '3', subjects = 4, successor, ingest = null } = {}) {
     newId: () => `att-${++id}`,
     successorFile: successor ? join(dir, 'successor.json') : undefined,
     ingest,
+    registryDelta: null, // pump/test/registry-delta.test.mjs covers the capture check
     // The sandbox breaker: a green nightly status from an hour ago (no network).
     readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
     verifyConformanceRun: backed,

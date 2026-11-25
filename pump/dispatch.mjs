@@ -124,6 +124,7 @@ export function createDispatcher({
   pollAttempts,
   pollIntervalMs,
   onToken = () => {},
+  log,
 }) {
   if (typeof mintToken !== 'function') throw new TypeError('createDispatcher: mintToken is required');
   const bud = budget ?? new ApiBudget({ now, sleep });
@@ -135,7 +136,7 @@ export function createDispatcher({
     const { name } = splitRepo(repo);
     const minted = await mintToken({ repositories: [name], permissions: { actions: 'write' } });
     onToken(minted.token);
-    const client = createClient({ token: minted.token, fetch, apiUrl, budget: bud, now, sleep });
+    const client = createClient({ token: minted.token, fetch, apiUrl, budget: bud, now, sleep, ...(log ? { log } : {}) });
     cache.set(repo, { token: minted.token, expiresAt: minted.expiresAt, client });
     return client;
   }

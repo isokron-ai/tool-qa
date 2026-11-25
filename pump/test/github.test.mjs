@@ -33,7 +33,7 @@ test('server errors are retried with backoff', async () => {
   const c = fakeClock();
   let n = 0;
   const api = fakeApi([['GET', '/x', () => (++n < 3 ? { status: 502, body: 'bad gateway' } : { body: { ok: true } })]]);
-  const gh = createClient({ token: TOKEN, fetch: api.fetch, apiUrl: API, sleep: c.sleep, random: () => 0 });
+  const gh = createClient({ token: TOKEN, fetch: api.fetch, apiUrl: API, sleep: c.sleep, random: () => 0.5 });
   const res = await gh.request('GET', '/x');
   assert.deepEqual(res.data, { ok: true });
   assert.equal(api.calls.length, 3);
@@ -59,7 +59,7 @@ test('a POST is not repeated after a server error or network failure (it may hav
   // Unless the caller says repeating is harmless.
   n = 0;
   await assert.rejects(flaky.request('POST', '/app/installations/1/access_tokens', { body: {}, retryUnsafe: true }));
-  assert.equal(n, 4);
+  assert.equal(n, 6, 'six attempts');
 });
 
 test('a secondary rate limit waits for retry-after through the budget, then retries', async () => {

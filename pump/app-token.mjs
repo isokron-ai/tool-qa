@@ -65,6 +65,10 @@ export async function mintInstallationToken({
   now = Date.now,
   sleep,
   budget,
+  random,
+  retryUntil,
+  retryTotalMs,
+  log,
 }) {
   if (!installationId || !/^\d+$/.test(String(installationId).trim())) throw new TypeError('mintInstallationToken: a numeric installation id is required');
   if (!Array.isArray(repositories) || repositories.length === 0) throw new TypeError('mintInstallationToken: name at least one repository');
@@ -76,7 +80,7 @@ export async function mintInstallationToken({
     if (!LEVELS[v] || v === 'admin') throw new TypeError(`mintInstallationToken: permission ${k} must be read or write`);
   }
   const jwt = createAppJwt({ appId, privateKey, now: now() });
-  const client = createClient({ token: jwt, fetch, apiUrl, now, sleep, budget, maxAttempts: 3 });
+  const client = createClient({ token: jwt, fetch, apiUrl, now, sleep, budget, random, retryUntil, ...(retryTotalMs ? { retryTotalMs } : {}), ...(log ? { log } : {}) });
   const res = await client.request('POST', `/app/installations/${String(installationId).trim()}/access_tokens`, {
     family: 'auth',
     essential: true,
@@ -94,12 +98,12 @@ export async function mintInstallationToken({
  * A minter bound to the app's settings, for pump and watchdog. Reads APP_ID,
  * APP_INSTALLATION_ID and APP_PRIVATE_KEY from `env` unless given.
  */
-export function appTokenMinter({ env = process.env, fetch, apiUrl, now, sleep, budget } = {}) {
+export function appTokenMinter({ env = process.env, fetch, apiUrl, now, sleep, budget, random, retryUntil, retryTotalMs, log } = {}) {
   const appId = env.APP_ID;
   const installationId = env.APP_INSTALLATION_ID;
   const privateKey = env.APP_PRIVATE_KEY;
   const missing = [!appId && 'APP_ID', !installationId && 'APP_INSTALLATION_ID', !privateKey && 'APP_PRIVATE_KEY'].filter(Boolean);
   if (missing.length) throw new Error(`GitHub App settings missing: ${missing.join(', ')}`);
   return ({ repositories, permissions }) =>
-    mintInstallationToken({ appId, privateKey, installationId, repositories, permissions, fetch, apiUrl, now, sleep, budget });
+    mintInstallationToken({ appId, privateKey, installationId, repositories, permissions, fetch, apiUrl, now, sleep, budget, random, retryUntil, retryTotalMs, log });
 }

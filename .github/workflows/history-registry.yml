@@ -1,5 +1,10 @@
 name: history-registry
 
+# The run name carries the mode, so the pump (pump/registry-delta.mjs), which
+# dispatches a delta capture when the schedule has not fired, can tell a delta
+# run that is queued or running from a full one.
+run-name: history-registry ${{ github.event_name == 'schedule' && (github.event.schedule == '17 3 * * *' && 'full' || 'delta') || inputs.mode }}
+
 on:
   schedule:
     - cron: '17 3 * * *'     # daily full capture

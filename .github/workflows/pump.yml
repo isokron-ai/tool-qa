@@ -12,7 +12,10 @@ name: pump
 # run the pump prunes closed history out of the state: it stages the rows as
 # one sealed archive (age-encrypted to state/state.pub), which is uploaded as
 # its own artifact, and deletes them in a later run once that artifact reads
-# back (pump/prune.mjs). See docs/OPERATIONS.md.
+# back (pump/prune.mjs). It also dispatches the registry delta capture when
+# the newest one is over 15 minutes old and none is queued or running
+# (pump/registry-delta.mjs), because GitHub's */15 cron for it fires hours late.
+# See docs/OPERATIONS.md.
 
 on:
   schedule:
@@ -29,7 +32,9 @@ jobs:
   pump:
     name: pump
     runs-on: ubuntu-slim
-    timeout-minutes: 15
+    # The pump stops its ticks at 11 minutes; the rest covers set-up, the
+    # successor's retries (90 s at most) and the final state push's retries.
+    timeout-minutes: 20
     environment: loop
     permissions:
       contents: write # the state asset on the "state" release
@@ -76,6 +81,7 @@ jobs:
           AGE_BIN: ${{ runner.temp }}/age/age
           AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
           LANE_STATE_PRUNE_ENABLED: ${{ vars.LANE_STATE_PRUNE_ENABLED }}
+          LANE_HISTORY_REGISTRY_ENABLED: ${{ vars.LANE_HISTORY_REGISTRY_ENABLED }}
           LANE_SUBJECT_IDS_ENABLED: ${{ vars.LANE_SUBJECT_IDS_ENABLED }}
         run: >-
           node pump/run.mjs --state "$RUNNER_TEMP/state/state.sqlite"
