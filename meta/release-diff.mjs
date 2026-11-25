@@ -29,7 +29,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { FetchProblem, readBytesCapped } from './lib/http.mjs';
+import { FetchProblem, forbiddenKind, readBytesCapped } from './lib/http.mjs';
 import { readGitRefs } from './lib/gitrefs.mjs';
 import { npmProvenance, pypiProvenance } from './lib/provenance.mjs';
 import { compareArtifact, ComputeBudget, indexByBase, MAX_HELD } from './lib/diff.mjs';
@@ -377,7 +377,7 @@ async function download(http, url, { prefix, cap, digest }) {
     throw new FetchProblem('upstream_unavailable', `${new URL(url).hostname}: HTTP ${res.status}`);
   }
   const buf = await readBytesCapped(res, cap, new URL(url).hostname);
-  if (!digest(buf)) return { status: 'integrity_mismatch' };
+  if (!digest(buf)) return { status: 'integrity_mismatch', bytes: buf.length, sha256: sha256(buf) };
   return { status: 'ok', buf };
 }
 
@@ -448,10 +448,16 @@ export async function readSourceTree(http, repo, commit, wantNames, { clock = ()
   const t0 = clock();
   const res = await http.request(`https://codeload.github.com/${repo}/tar.gz/${commit}`, { redirect: 'manual', timeoutMs: LIMITS.downloadTimeoutMs, retries: 0 });
   if (res.status !== 200) {
+    // A 403 for a repository GitHub took down (DMCA, disabled) is the repository's: gone, settled. Throttling is not.
+    if (res.status === 403 || res.status === 451) {
+      const k = await forbiddenKind(res);
+      if (k.kind === 'gone') return { status: 'gone', why: k.why };
+      throw new FetchProblem('rate_limited', `codeload.github.com: HTTP ${res.status}`, { status: res.status });
+    }
     await res.body?.cancel?.().catch(() => {});
     if (res.status === 404 || res.status === 422) return { status: 'not_found' };
     if (res.status >= 300 && res.status < 400) return { status: 'redirected' };
-    if (res.status === 403 || res.status === 429) throw new FetchProblem('rate_limited', `codeload.github.com: HTTP ${res.status}`, { status: res.status });
+    if (res.status === 429) throw new FetchProblem('rate_limited', `codeload.github.com: HTTP ${res.status}`, { status: res.status });
     throw new FetchProblem('upstream_unavailable', `codeload.github.com: HTTP ${res.status}`);
   }
   const index = createSourceIndex();
@@ -502,13 +508,16 @@ function problemOf(err) {
 
 /**
  * The skip for a problem. Every skip says its fault side. Passing ones are
- * retried (rate limit, outage: infra); our own caps are ours (fault tool, not
+ * retried (rate limit, outage: infra); a repository GitHub took down is the
+ * subject's and settled; our own caps are ours (fault tool, not
  * retried); a redirect we do not follow is a tool-side retryable skip.
  */
 export function skipOf(stage, code) {
   if (code === 'too_large') return { stage, reason: 'too_large', fault: 'tool' };
   if (code === 'reader_limit' || code === 'subject_budget') return { stage, reason: 'reader_limit', fault: 'tool' };
   if (code === 'compute_budget') return { stage: 'compute_budget', reason: 'reader_limit', fault: 'tool' };
+  // GitHub took the repository down (DMCA, disabled): the subject's, settled, never retried (R-RD-18).
+  if (code === 'gone') return { stage, reason: 'upstream_unavailable', fault: 'subject' };
   if (code === 'redirected' || code === 'redirect_refused') return { stage, reason: 'upstream_unavailable', fault: 'tool', retryable: true };
   return { stage, reason: code === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', fault: 'infra', retryable: true };
 }
@@ -541,8 +550,10 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   // A package linked to the subject only by what its own author wrote (the repository field, project URLs)
   // can say anything: its findings are attention items (low), never medium or high in public.
   const trustedLink = (linkedBy) => linkedBy === 'provenance' || linkedBy === 'depsdev_attestation';
+  // A changed executable file stays at medium even then: most npm packages have no provenance, so the repository
+  // field is often the only link there is, and a real tamper must not drop to low (R-RD-17).
   const capFinding = (f, j) => (trustedLink(j.linkedBy) || !['high', 'medium'].includes(f.level)
-    ? f : { ...f, level: 'low', level_capped_from: f.level, linked_by: j.linkedBy });
+    ? f : { ...f, level: f.kind === 'content_differs' && f.executable ? 'medium' : 'low', level_capped_from: f.level, linked_by: j.linkedBy });
 
   // Packages.
   let servers = new Map();
@@ -573,6 +584,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   }
   // A renamed repository is read where it went (and its source from there); one we could not follow is a retryable skip.
   if (refs?.status === 'moved') skips.push(skipOf('git_refs', 'redirected'));
+  if (refs?.status === 'gone') skips.push(skipOf('git_refs', 'gone'));
   const tags = refs?.status === 'ok' ? refs.tags : null;
   const sourceRepo = refs?.status === 'ok' && refs.moved_to ? refs.moved_to : repo;
   if (refs?.status === 'ok' && refs.moved_to) stages.git_moved = 'followed';
@@ -647,6 +659,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
     if (!j.linkedBy) j.outcome = 'not_linked_to_subject';
     else if (refs?.status === 'not_found') j.outcome = 'source_repository_not_found';
     else if (refs?.status === 'moved') j.outcome = 'source_repository_moved';
+    else if (refs?.status === 'gone') j.outcome = 'source_repository_gone';
     else if (!j.basis) j.outcome = 'no_source_basis';
     else if (commits.indexOf(j.basis.commit) >= LIMITS.commitsPerSubject) j.outcome = 'commit_limit';
   }
@@ -661,10 +674,18 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
       try {
         const d = await download(http, j.url, j.download);
         if (d.status !== 'ok') {
-          j.outcome = d.status === 'integrity_mismatch' ? 'integrity_mismatch' : `artifact_${d.status}`;
-          // A digest that does not match and a redirect we do not follow are not the package's doing: retried.
-          if (d.status === 'integrity_mismatch') skips.push(skipOf(j.p.ecosystem, 'upstream_unavailable'));
-          else if (d.status === 'redirected') skips.push(skipOf(j.p.ecosystem, 'redirected'));
+          // Bytes that do not match the registry's own digest can be a real tamper (a mirror, a swapped file): the
+          // artifact is held, not skipped as an outage, and the public record says only that it was not read (R-RD-19).
+          if (d.status === 'integrity_mismatch') {
+            // The same outcome, with no skip and no finding, as an artifact the registry no longer serves (404 or 410):
+            // the public data cannot tell the two apart.
+            j.outcome = 'artifact_not_found';
+            held.push({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, path: null, sha256: d.sha256, size: d.bytes, placement: 'artifact', indicators: ['integrity_mismatch'] });
+            continue;
+          }
+          j.outcome = `artifact_${d.status}`;
+          // A redirect we do not follow is not the package's doing: retried.
+          if (d.status === 'redirected') skips.push(skipOf(j.p.ecosystem, 'redirected'));
           continue;
         }
         j.bytes = d.buf.length;
@@ -701,6 +722,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
       t = { status: code === 'subject_budget' ? 'time_budget' : code };
     }
     if (t.status === 'redirected') skips.push(skipOf('source', 'redirected'));
+    if (t.status === 'gone' && !skips.some((x) => x.stage === 'source' && x.fault === 'subject')) skips.push(skipOf('source', 'gone'));
     for (const j of ready) {
       if (t.status !== 'ok') {
         j.outcome = t.status === 'not_found' ? 'source_commit_not_found' : t.status === 'too_large' ? 'source_too_large' : t.status === 'reader_limit' ? 'source_time_limit' : t.status === 'time_budget' ? 'subject_time_budget' : `source_${t.status}`;

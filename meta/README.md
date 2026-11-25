@@ -318,7 +318,9 @@ each with a level:
 A package that reaches the subject only through its own `repository` field or
 PyPI project URLs (`linked_by` `repository_field` or `project_urls`) can name
 any repository. Its public findings are capped at `low`, with `level_capped_from`
-and `linked_by` on the finding. Verified provenance and an attested deps.dev link
+and `linked_by` on the finding; a changed executable file (`content_differs`
+with `executable`) is capped at `medium`, because for most npm packages, which
+have no provenance, that field is the only link there is. Verified provenance and an attested deps.dev link
 keep their levels.
 
 ### Security-class items are held
@@ -332,19 +334,26 @@ script or the file it runs, setup.py, a `.pth` file, or build output whose
 matched text appears nowhere in the source tree. A held item goes to
 `release_diff_held` (class S) with its path, digest and rule ids, never the
 matched text, and is left out of every public field and count. The held list is capped at 500 entries like the findings; a last
-`held_truncated` entry counts what it left out. The fixture
+`held_truncated` entry counts what it left out. An artifact whose bytes do
+not match the registry's own digest is held too (rule id `integrity_mismatch`,
+with the sha256 of what was read), with no skip; the public artifact record
+says only `artifact_not_found`, the outcome of an artifact the registry no longer serves, with no skip and no finding, so public data cannot tell the two apart. The fixture
 run's log prints nothing about it.
 
 ### Skips
 
 Every skip says its fault side. Passing problems (a rate limit or a 403 from
-GitHub or a registry, an outage, a cut stream, a digest mismatch) are
+GitHub or a registry, an outage, a cut stream) are
 `rate_limited` or `upstream_unavailable` with `fault: infra`, retryable. A
 redirect we do not follow (a download, a codeload archive, a registry answer
 that leaves the allowed hosts, a renamed repository that moved off github.com)
 is `upstream_unavailable` with `fault: tool`, retryable; a renamed repository
-on github.com is read at its new name. Only a 404 (or GitHub's 401 for a
-repository that is gone) is the subject's, and it is data, not a skip. Our own limits say
+on github.com is read at its new name. A 403 from GitHub is told apart by
+its headers and body: a rate-limit header or a limit message is throttling; a
+DMCA or disabled body (or a 451) means the repository is gone, a settled
+`upstream_unavailable` with `fault: subject`, not retried. Only a 404 (or
+GitHub's 401 for a repository that is gone) is the subject's, and it is data,
+not a skip. Our own limits say
 `fault: tool` and are not retried: `too_large` (a cap above),
 `reader_limit` (the time limit, the subject's budget, the commit limit, the
 compute budget of 90 seconds for all comparisons of a subject, a zip feature or
