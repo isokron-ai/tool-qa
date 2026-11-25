@@ -19,6 +19,8 @@ const SPLIT = [
   // more vendors, models and clients
   [['mis', 'tral']], [['lla', 'ma']], [['deep', 'seek']], [['qw', 'en']], [['co', 'pilot']],
   [['co', 'here'], true], [['perplex', 'ity'], true], [['bar', 'd'], true], [['co', 'dex'], true],
+  [['gem', 'ma']], [['wind', 'surf']], [['ki', 'mi'], true], [['gl', 'm'], true], [['fa', 'ble'], true],
+  [['ai', 'der'], true], [['cl', 'ine'], true], [['dev', 'in'], true],
 ];
 
 /** The words, joined (lower case). Exported for reuse by other scanners and tests. */

@@ -16,7 +16,7 @@ export const SCENARIOS = {
   live: () => {
     const s = realisticState({ now: NOW });
     // The live-probe re-sweep note, as the config picks it while one runs.
-    s.cfg.lane_notes = { 'live-probe': 're_sweep' };
+    s.cfg.lane_notes = { 'live-probe': 're_sweep', writecheck: 'npm_pypi_only' };
     return { ...s, retry: null };
   },
   // LOOP_SLOTS=0 for the last six hours: the pump runs housekeeping ticks, nothing is out.
@@ -31,6 +31,7 @@ export const SCENARIOS = {
       { at: NOW - 40_000, label: 'state_asset', status: 502, attempts: 2 },
     ];
     const s = realisticState({ now: NOW, retries });
+    s.cfg.lane_notes = { writecheck: 'npm_pypi_only' };
     return { ...s, retry: { call: 'state_asset', status: 502, attempt: 3, of: 6, next_at: NOW + 7_400, since: NOW - 95_000 } };
   },
 };

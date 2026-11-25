@@ -80,14 +80,14 @@
         "unknown": 21
       },
       "ring": {
-        "accepted": 572,
-        "not_used": 94
+        "accepted": 572
       },
       "ring_daily": {
-        "lease": 21,
-        "integrity": 14,
+        "not_used": 61,
+        "lease": null,
+        "integrity": null,
         "worker_output": null,
-        "infra": 22
+        "infra": null
       },
       "t0_w24h": 20
     },
@@ -133,10 +133,10 @@
         "unknown": 18
       },
       "ring": {
-        "accepted": 359,
-        "not_used": 61
+        "accepted": 359
       },
       "ring_daily": {
+        "not_used": 35,
         "lease": 7,
         "integrity": 6,
         "worker_output": 6,
@@ -177,7 +177,7 @@
       "state": "on",
       "tool": "mcp-writecheck-action",
       "pin": "54d4541",
-      "note": "most servers skipped: npm and PyPI only for now",
+      "note": null,
       "w1h": 0,
       "w24h": 83,
       "spark24": [
@@ -214,10 +214,10 @@
         "unknown": 57
       },
       "ring": {
-        "accepted": 83,
-        "not_used": 7
+        "accepted": 83
       },
       "ring_daily": {
+        "not_used": 9,
         "lease": null,
         "integrity": null,
         "worker_output": null,
@@ -230,7 +230,7 @@
       "state": "off",
       "tool": "meta-github",
       "pin": "1.2.0",
-      "note": "built, switching on next",
+      "note": "off",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -267,10 +267,10 @@
         "unknown": 0
       },
       "ring": {
-        "accepted": 0,
-        "not_used": 0
+        "accepted": 0
       },
       "ring_daily": {
+        "not_used": null,
         "lease": null,
         "integrity": null,
         "worker_output": null,
@@ -283,7 +283,7 @@
       "state": "off",
       "tool": "meta-registry",
       "pin": "1.2.0",
-      "note": "built, switching on next",
+      "note": "off",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -320,10 +320,10 @@
         "unknown": 0
       },
       "ring": {
-        "accepted": 0,
-        "not_used": 0
+        "accepted": 0
       },
       "ring_daily": {
+        "not_used": null,
         "lease": null,
         "integrity": null,
         "worker_output": null,
@@ -336,7 +336,7 @@
       "state": "off",
       "tool": "release-diff",
       "pin": "1.1.0",
-      "note": "built, switching on next",
+      "note": "off",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -373,10 +373,10 @@
         "unknown": 0
       },
       "ring": {
-        "accepted": 0,
-        "not_used": 0
+        "accepted": 0
       },
       "ring_daily": {
+        "not_used": null,
         "lease": null,
         "integrity": null,
         "worker_output": null,
@@ -519,6 +519,10 @@
     }
   },
   "now_checking": [],
+  "just_checked": {
+    "hour": "2026-11-25T20:00:00.000Z",
+    "results": []
+  },
   "recent": [
     {
       "seq": 49878900005,

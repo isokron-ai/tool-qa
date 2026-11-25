@@ -4,7 +4,7 @@
   "generated_at": "2026-11-25T21:40:00.000Z",
   "version": "0f1e2d3",
   "mode": "retrying",
-  "mode_reason": "retrying a GitHub call",
+  "mode_reason": "retrying: saving the loop state",
   "pump": {
     "run_started_at": "2026-11-25T21:37:00.000Z",
     "tick_at": "2026-11-25T21:39:30.000Z",
@@ -36,7 +36,7 @@
     "status": 502,
     "attempt": 3,
     "of": 6,
-    "next_at": "2026-11-25T21:40:07.400Z",
+    "next_at": "2026-11-25T21:40:07.000Z",
     "since": "2026-11-25T21:38:25.000Z"
   },
   "breaker": {
@@ -87,14 +87,14 @@
         "unknown": 38
       },
       "ring": {
-        "accepted": 783,
-        "not_used": 108
+        "accepted": 783
       },
       "ring_daily": {
-        "lease": 21,
-        "integrity": 14,
+        "not_used": 61,
+        "lease": null,
+        "integrity": null,
         "worker_output": null,
-        "infra": 22
+        "infra": null
       },
       "t0_w24h": 25
     },
@@ -140,14 +140,14 @@
         "unknown": 27
       },
       "ring": {
-        "accepted": 465,
-        "not_used": 95
+        "accepted": 465
       },
       "ring_daily": {
-        "lease": 15,
-        "integrity": 5,
+        "not_used": 43,
+        "lease": null,
+        "integrity": null,
         "worker_output": null,
-        "infra": 20
+        "infra": null
       },
       "t0_w24h": 23
     },
@@ -221,10 +221,10 @@
         "unknown": 72
       },
       "ring": {
-        "accepted": 112,
-        "not_used": 8
+        "accepted": 112
       },
       "ring_daily": {
+        "not_used": 5,
         "lease": null,
         "integrity": null,
         "worker_output": null,
@@ -237,7 +237,7 @@
       "state": "off",
       "tool": "meta-github",
       "pin": "1.2.0",
-      "note": "built, switching on next",
+      "note": "off",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -274,10 +274,10 @@
         "unknown": 0
       },
       "ring": {
-        "accepted": 0,
-        "not_used": 0
+        "accepted": 0
       },
       "ring_daily": {
+        "not_used": null,
         "lease": null,
         "integrity": null,
         "worker_output": null,
@@ -290,7 +290,7 @@
       "state": "off",
       "tool": "meta-registry",
       "pin": "1.2.0",
-      "note": "built, switching on next",
+      "note": "off",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -327,10 +327,10 @@
         "unknown": 0
       },
       "ring": {
-        "accepted": 0,
-        "not_used": 0
+        "accepted": 0
       },
       "ring_daily": {
+        "not_used": null,
         "lease": null,
         "integrity": null,
         "worker_output": null,
@@ -343,7 +343,7 @@
       "state": "off",
       "tool": "release-diff",
       "pin": "1.1.0",
-      "note": "built, switching on next",
+      "note": "off",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -380,10 +380,10 @@
         "unknown": 0
       },
       "ring": {
-        "accepted": 0,
-        "not_used": 0
+        "accepted": 0
       },
       "ring_daily": {
+        "not_used": null,
         "lease": null,
         "integrity": null,
         "worker_output": null,
@@ -527,109 +527,126 @@
   },
   "now_checking": [
     {
-      "subject": "acme-labs/kanban-mcp",
       "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
+      "batches_out": 1,
+      "items_out": 25,
+      "since_oldest": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "acme-labs/mcp-search-lite",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "contoso-dev/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "contoso-dev/mcp-search-lite",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "fabrikam/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "fabrikam/mcp-redis-bridge",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "fabrikam/mcp-search-lite",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "globex-oss/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "globex-oss/mcp-redis-bridge",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "hooli-xyz/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "hooli-xyz/mcp-redis-bridge",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "initech/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "initech/mcp-redis-bridge",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "northwind-io/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "northwind-io/mcp-search-lite",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "piedpiper-net/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "piedpiper-net/mcp-redis-bridge",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "tailspin-tools/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "tailspin-tools/mcp-redis-bridge",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
-    },
-    {
-      "subject": "umbrella-data/kanban-mcp",
-      "lane": "scan-static",
-      "since": "2026-11-25T21:36:00.000Z"
+      "lane": "live-probe",
+      "batches_out": 1,
+      "items_out": 10,
+      "since_oldest": "2026-11-25T21:31:00.000Z"
     }
   ],
+  "just_checked": {
+    "hour": "2026-11-25T20:00:00.000Z",
+    "results": [
+      {
+        "subject": "acme-labs/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      },
+      {
+        "subject": "acme-labs/mcp-git-tools",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "acme-labs/mcp-redis-bridge",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "contoso-dev/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      },
+      {
+        "subject": "contoso-dev/mcp-redis-bridge",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "contoso-dev/notes-mcp",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "contoso-dev/notes-mcp",
+        "lane": "writecheck",
+        "side": "assessed"
+      },
+      {
+        "subject": "fabrikam/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      },
+      {
+        "subject": "fabrikam/mcp-git-tools",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "fabrikam/mcp-redis-bridge",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "fabrikam/mcp-search-lite",
+        "lane": "live-probe",
+        "side": "subject"
+      },
+      {
+        "subject": "fabrikam/notes-mcp",
+        "lane": "scan-static",
+        "side": "subject"
+      },
+      {
+        "subject": "globex-oss/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      },
+      {
+        "subject": "globex-oss/mcp-git-tools",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "globex-oss/mcp-redis-bridge",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "globex-oss/mcp-search-lite",
+        "lane": "live-probe",
+        "side": "subject"
+      },
+      {
+        "subject": "hooli-xyz/mcp-git-tools",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "hooli-xyz/mcp-git-tools",
+        "lane": "writecheck",
+        "side": "assessed"
+      },
+      {
+        "subject": "hooli-xyz/notes-mcp",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "initech/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      }
+    ]
+  },
   "recent": [
     {
-      "seq": 49878900034,
+      "seq": 49878900060,
       "type": "retry",
       "occurred_at": "2026-11-25T21:39:20.000Z",
       "recorded_at": "2026-11-25T21:39:20.000Z",
@@ -640,7 +657,7 @@
       "state": "retrying"
     },
     {
-      "seq": 49878900033,
+      "seq": 49878900059,
       "type": "retry",
       "occurred_at": "2026-11-25T21:38:25.000Z",
       "recorded_at": "2026-11-25T21:38:25.000Z",
@@ -651,7 +668,7 @@
       "state": "retrying"
     },
     {
-      "seq": 49878900032,
+      "seq": 49878900058,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:37:04.000Z",
       "recorded_at": "2026-11-25T21:37:04.000Z",
@@ -661,7 +678,7 @@
       "state": "ok"
     },
     {
-      "seq": 49878900031,
+      "seq": 49878900057,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:37:00.000Z",
       "recorded_at": "2026-11-25T21:37:00.000Z",
@@ -670,7 +687,7 @@
       "label": "started"
     },
     {
-      "seq": 49878900030,
+      "seq": 49878900056,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:36:50.000Z",
       "recorded_at": "2026-11-25T21:36:50.000Z",
@@ -679,7 +696,7 @@
       "label": "finished"
     },
     {
-      "seq": 49878900029,
+      "seq": 49878900055,
       "type": "batch_sent",
       "occurred_at": "2026-11-25T21:36:02.000Z",
       "recorded_at": "2026-11-25T21:36:02.000Z",
@@ -687,7 +704,7 @@
       "n": 25
     },
     {
-      "seq": 49878900028,
+      "seq": 49878900054,
       "type": "batch_sent",
       "occurred_at": "2026-11-25T21:31:02.000Z",
       "recorded_at": "2026-11-25T21:31:02.000Z",
@@ -695,7 +712,7 @@
       "n": 10
     },
     {
-      "seq": 49878900027,
+      "seq": 49878900053,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:26:34.000Z",
       "recorded_at": "2026-11-25T21:26:34.000Z",
@@ -705,7 +722,7 @@
       "state": "ok"
     },
     {
-      "seq": 49878900026,
+      "seq": 49878900052,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:26:30.000Z",
       "recorded_at": "2026-11-25T21:26:30.000Z",
@@ -714,7 +731,7 @@
       "label": "started"
     },
     {
-      "seq": 49878900025,
+      "seq": 49878900051,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:26:20.000Z",
       "recorded_at": "2026-11-25T21:26:20.000Z",
@@ -723,7 +740,7 @@
       "label": "finished"
     },
     {
-      "seq": 49878900024,
+      "seq": 49878900050,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:16:04.000Z",
       "recorded_at": "2026-11-25T21:16:04.000Z",
@@ -733,27 +750,15 @@
       "state": "ok"
     },
     {
-      "seq": 49878900023,
+      "seq": 49878900049,
       "type": "batch_closed",
       "occurred_at": "2026-11-25T21:16:00.000Z",
       "recorded_at": "2026-11-25T21:16:00.000Z",
       "lane": "scan-static",
-      "n": 25,
-      "accepted": 23,
-      "not_used": 2
+      "n": 25
     },
     {
-      "seq": 49878900022,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:16:00.000Z",
-      "recorded_at": "2026-11-25T21:16:00.000Z",
-      "lane": "scan-static",
-      "n": 1,
-      "subject": "vandelay-ind/kanban-mcp",
-      "side": "assessed"
-    },
-    {
-      "seq": 49878900021,
+      "seq": 49878900048,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:16:00.000Z",
       "recorded_at": "2026-11-25T21:16:00.000Z",
@@ -762,7 +767,7 @@
       "label": "started"
     },
     {
-      "seq": 49878900020,
+      "seq": 49878900047,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:15:50.000Z",
       "recorded_at": "2026-11-25T21:15:50.000Z",
@@ -771,54 +776,59 @@
       "label": "finished"
     },
     {
-      "seq": 49878900019,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:15:00.000Z",
-      "recorded_at": "2026-11-25T21:15:00.000Z",
-      "lane": "scan-static",
+      "seq": 49878900046,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:05:34.000Z",
+      "recorded_at": "2026-11-25T21:05:34.000Z",
+      "lane": null,
       "n": 1,
-      "subject": "piedpiper-net/kanban-mcp",
-      "side": "assessed"
+      "label": "successor",
+      "state": "ok"
     },
     {
-      "seq": 49878900018,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:14:00.000Z",
-      "recorded_at": "2026-11-25T21:14:00.000Z",
-      "lane": "scan-static",
+      "seq": 49878900045,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:05:30.000Z",
+      "recorded_at": "2026-11-25T21:05:30.000Z",
+      "lane": null,
       "n": 1,
-      "subject": "hooli-xyz/kanban-mcp",
-      "side": "assessed"
+      "label": "started"
     },
     {
-      "seq": 49878900017,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:13:00.000Z",
-      "recorded_at": "2026-11-25T21:13:00.000Z",
-      "lane": "scan-static",
+      "seq": 49878900044,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:05:20.000Z",
+      "recorded_at": "2026-11-25T21:05:20.000Z",
+      "lane": null,
       "n": 1,
-      "subject": "umbrella-data/kanban-mcp",
-      "side": "assessed"
+      "label": "finished"
     },
     {
-      "seq": 49878900016,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:12:00.000Z",
-      "recorded_at": "2026-11-25T21:12:00.000Z",
-      "lane": "scan-static",
+      "seq": 49878900043,
+      "type": "history_triggered",
+      "occurred_at": "2026-11-25T21:00:00.000Z",
+      "recorded_at": "2026-11-25T21:00:00.000Z",
+      "lane": null,
       "n": 1,
-      "subject": "initech/kanban-mcp",
-      "side": "assessed"
+      "state": "dispatched"
     },
     {
-      "seq": 49878900015,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:11:00.000Z",
-      "recorded_at": "2026-11-25T21:11:00.000Z",
-      "lane": "scan-static",
+      "seq": 49878800081,
+      "type": "batch_closed",
+      "occurred_at": "2026-11-25T20:59:30.000Z",
+      "recorded_at": "2026-11-25T20:59:30.000Z",
+      "lane": "writecheck",
+      "n": 10
+    },
+    {
+      "seq": 49878800080,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T20:55:04.000Z",
+      "recorded_at": "2026-11-25T20:55:04.000Z",
+      "lane": null,
       "n": 1,
-      "subject": "globex-oss/kanban-mcp",
-      "side": "assessed"
+      "label": "successor",
+      "state": "ok"
     }
   ]
 }

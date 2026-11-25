@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 
 import { openState } from '../../state/db.mjs';
 
-export const WORKFLOWS = JSON.parse(readFileSync(new URL('../../pump/workflows.json', import.meta.url), 'utf8'));
+// A frozen copy of pump/workflows.json, so a pin bump does not change the fixtures.
+export const WORKFLOWS = JSON.parse(readFileSync(new URL('./fixtures/workflows.json', import.meta.url), 'utf8'));
 
 /** A small deterministic random source (mulberry32). */
 export function rng(seed) {
