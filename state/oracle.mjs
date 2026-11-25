@@ -45,6 +45,19 @@ export const ORACLE_MAX_UNCHANGED = 5;
  */
 export const ORACLE_BUDGET_MAX = 6;
 export const ORACLE_BUDGET_DAYS = 30;
+/**
+ * Facts of a subject with no version (neither sha nor artifact digest) are
+ * compared across lanes only when they were observed this close together
+ * (R-ORD-16). Without a version, "the same version" cannot be told from the
+ * facts, so time stands in for it: a months-old scan against a fresh live list
+ * is two different servers, not a disagreement. 12 hours: a due re-check sends
+ * both lanes of a subject in the same pump pass or two (minutes to a few hours
+ * apart), while a server with no pinned version can change at any deploy, so a
+ * longer window would compare lists that may belong to different releases. A
+ * pair that falls outside the window is simply not compared (nothing opens);
+ * it is compared again when the lanes next report close together.
+ */
+export const ORACLE_UNVERSIONED_WINDOW_MS = 12 * 3_600_000;
 export const KINDS = Object.freeze(['tool_set', 'tool_count', 'schema', 'protocol', 'conformance']);
 /** The design classes of the worker's oracle_disagreements (DESIGN-v3 D4, D6, D7, D12) and the kind each stands for. */
 const CLASS_KIND = Object.freeze({
@@ -113,7 +126,13 @@ export function deriveDisagreements({ static: st = null, live = null, version = 
   } else if (st && live && st.version !== live.version) {
     st = null;
   }
-  if (st?.complete === true && st.tool_count !== null && live?.tool_count !== null && live?.tool_count !== undefined && st.tool_count !== live.tool_count) {
+  // No version on both sides: they count as one version only when observed within the window (R-ORD-16).
+  // Facts without a time (`at`) cannot be shown to be close, so they are not compared across lanes.
+  let sameTime = true;
+  if (st && live && st.version == null && live.version == null) {
+    sameTime = Number.isFinite(st.at) && Number.isFinite(live.at) && Math.abs(st.at - live.at) <= ORACLE_UNVERSIONED_WINDOW_MS;
+  }
+  if (sameTime && st?.complete === true && st.tool_count !== null && live?.tool_count !== null && live?.tool_count !== undefined && st.tool_count !== live.tool_count) {
     add('tool_count', ['reader', 'live']);
   }
   if (live) {
@@ -151,7 +170,8 @@ export function foldDisagreement(prior, now, { maxUnchanged = ORACLE_MAX_UNCHANG
     return { status: 'cleared', unchanged_rechecks: 0, reason: 'oracles_agree' };
   }
   if (!prior || prior.status === 'cleared' || prior.signature !== now.signature) return { status: 'open', unchanged_rechecks: 0, reason: null };
-  if (prior.status === 'settled') return { status: 'settled', unchanged_rechecks: prior.unchanged_rechecks, reason: 'unchanged_rechecks' };
+  // A settled record keeps the reason it settled for (recheck_budget or unchanged_rechecks) (R-ORD-18).
+  if (prior.status === 'settled') return { status: 'settled', unchanged_rechecks: prior.unchanged_rechecks, reason: prior.reason ?? 'unchanged_rechecks' };
   const n = prior.unchanged_rechecks + (cycle ? 1 : 0);
   return n >= maxUnchanged ? { status: 'settled', unchanged_rechecks: n, reason: 'unchanged_rechecks' } : { status: 'open', unchanged_rechecks: n, reason: null };
 }

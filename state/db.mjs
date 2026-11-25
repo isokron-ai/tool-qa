@@ -1034,7 +1034,7 @@ export class StateDb {
               assessed_at = COALESCE(excluded.assessed_at, results.assessed_at)
           `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0,
             fault, coverage, assessed);
-          if (oracle || ORACLE_LANES.includes(item.workflow)) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t });
+          if (oracle || ORACLE_LANES.includes(item.workflow)) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now });
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {
@@ -1068,25 +1068,34 @@ export class StateDb {
    * Server-side evidence is stored beside it and never opens or keeps one.
    * @returns {{status: string|null, kinds: object[]}}
    */
-  noteOracle(subject, workflow, runKey, facts, { now, maxUnchanged = ORACLE_MAX_UNCHANGED } = {}) {
+  noteOracle(subject, workflow, runKey, facts, { now, observedAt = now, maxUnchanged = ORACLE_MAX_UNCHANGED } = {}) {
     const t = iso(now);
+    const at = toMs(observedAt);
     const rk = this.getRunKey(runKey);
     let fields = {};
     try { fields = rk ? JSON.parse(rk.fields) : {}; } catch { /* no version */ }
     const version = fields.sha ?? fields.artifact_digest ?? null;
+    // A result that was observed before the lane's stored facts is late: it may be of an older version, and must not
+    // overwrite or drop the newer facts (R-ORD-17). Versions are hashes with no order, so the observation time decides.
+    const stored = this.raw.prepare('SELECT facts, updated_at FROM oracle_facts WHERE subject = ? AND workflow = ?').get(subject, workflow);
+    if (stored) {
+      const sf = JSON.parse(stored.facts);
+      const storedAt = Number.isFinite(sf.at) ? sf.at : toMs(stored.updated_at);
+      if (at < storedAt) return { status: null, kinds: [], refused: 'older' };
+    }
     if (facts) {
       this.raw.prepare(`
         INSERT INTO oracle_facts (subject, workflow, run_key, facts, updated_at) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (subject, workflow) DO UPDATE SET run_key = excluded.run_key, facts = excluded.facts, updated_at = excluded.updated_at
-      `).run(subject, workflow, runKey, JSON.stringify({ ...facts, version }), t);
+      `).run(subject, workflow, runKey, JSON.stringify({ ...facts, version, at }), t);
     } else {
       // No facts from this result: its lane's older facts are dropped when they are of another version.
       const old = this.raw.prepare('SELECT facts FROM oracle_facts WHERE subject = ? AND workflow = ?').get(subject, workflow);
       if (!old || (JSON.parse(old.facts).version ?? null) === version) return { status: null, kinds: [] };
       this.raw.prepare('DELETE FROM oracle_facts WHERE subject = ? AND workflow = ?').run(subject, workflow);
     }
-    const rows = this.raw.prepare('SELECT workflow, facts FROM oracle_facts WHERE subject = ?').all(subject)
-      .map((r) => [r.workflow, JSON.parse(r.facts)]).filter(([, f]) => (f.version ?? null) === version);
+    const rows = this.raw.prepare('SELECT workflow, facts, updated_at FROM oracle_facts WHERE subject = ?').all(subject)
+      .map((r) => { const f = JSON.parse(r.facts); return [r.workflow, { ...f, at: Number.isFinite(f.at) ? f.at : toMs(r.updated_at) }]; }).filter(([, f]) => (f.version ?? null) === version);
     const byLane = Object.fromEntries(rows);
     const derived = deriveDisagreements({ static: byLane['scan-static'] ?? null, live: byLane['live-probe'] ?? null, version });
     const prior = plain(this.raw.prepare('SELECT * FROM oracle_disagreements WHERE subject = ?').get(subject));

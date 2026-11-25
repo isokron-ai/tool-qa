@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import { openState, SCHEMA_VERSION } from '../state/db.mjs';
-import { deriveDisagreements, foldDisagreement, oracleFacts, oracleFactsFromFiles, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED } from '../state/oracle.mjs';
+import { deriveDisagreements, foldDisagreement, oracleFacts, oracleFactsFromFiles, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_UNVERSIONED_WINDOW_MS } from '../state/oracle.mjs';
 import { computeDue, dueFromState, gapBoostCap, NO_HOOKS, oracleBoost, runKey, runKeyFields } from '../pump/due.mjs';
 
 const T0 = Date.parse('2026-11-24T12:00:00Z');
@@ -18,12 +18,14 @@ export const H2 = sha('tools-2');
 
 export const staticFacts = (hash = H1, count = 3, over = {}) => ({ lane: 'scan-static', tool_list_sha256: hash, tool_count: count, complete: true, ...over });
 export const liveFacts = (over = {}) => ({ lane: 'live-probe', tool_list_sha256: H1, tool_count: 3, sdk: [], conformance_failed: 0, worker: [], ...over });
+/** deriveDisagreements over facts read at the same time (the unversioned window, R-ORD-16, needs an observation time). */
+const dd = (a) => deriveDisagreements(Object.fromEntries(Object.entries(a).map(([k, v]) => [k, v && typeof v === 'object' ? { at: T0, ...v } : v])));
 const sdk = (client, over = {}) => ({ client, outcome: 'listed', tool_count: 3, catalog_vs_reader: 'same', ...over });
 
 test('R-ORD-01: the kinds: a different count is tool_count, an SDK client with other definitions schema, a failed client protocol, a worker class its kind', () => {
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H1, 3), live: liveFacts() }).kinds, []);
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H2, 2), live: liveFacts() }).kinds, [{ kind: 'tool_count', oracles: ['live', 'reader'] }]);
-  const d = deriveDisagreements({
+  assert.deepEqual(dd({ static: staticFacts(H1, 3), live: liveFacts() }).kinds, []);
+  assert.deepEqual(dd({ static: staticFacts(H2, 2), live: liveFacts() }).kinds, [{ kind: 'tool_count', oracles: ['live', 'reader'] }]);
+  const d = dd({
     live: liveFacts({
       sdk: [sdk('ts1'), sdk('py', { catalog_vs_reader: 'different' }), sdk('go', { tool_count: 4 }), sdk('ts2', { outcome: 'list_failed', tool_count: null }),
         sdk('old', { catalog_vs_reader: 'same_but_annotation_defaults' }), sdk('slow', { outcome: 'timeout', tool_count: null })],
@@ -35,10 +37,10 @@ test('R-ORD-01: the kinds: a different count is tool_count, an SDK client with o
   ]);
   assert.match(d.signature, /^[0-9a-f]{64}$/);
   // Only one lane, or no hash on a side: nothing to compare.
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H2) }).kinds, []);
+  assert.deepEqual(dd({ static: staticFacts(H2) }).kinds, []);
   // Counts moving does not change the signature; the kinds and oracles do.
-  const a = deriveDisagreements({ static: staticFacts(H2, 2), live: liveFacts() });
-  const b = deriveDisagreements({ static: staticFacts(H2, 5), live: liveFacts({ tool_count: 9 }) });
+  const a = dd({ static: staticFacts(H2, 2), live: liveFacts() });
+  const b = dd({ static: staticFacts(H2, 5), live: liveFacts({ tool_count: 9 }) });
   assert.equal(a.signature, b.signature);
 });
 
@@ -292,14 +294,14 @@ test('R-ORD-09: a cleared record keeps its cleared_at and kinds while results go
 
 test('R-ORD-11: hashes are not compared across lanes: the reader derives its list from source, so a different hash alone says nothing; across lanes only a complete reader count is compared', () => {
   // Same count, different hash (derived or approximate source reading): nothing.
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H2, 3), live: liveFacts() }).kinds, []);
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H2, 3, { complete: false }), live: liveFacts() }).kinds, []);
+  assert.deepEqual(dd({ static: staticFacts(H2, 3), live: liveFacts() }).kinds, []);
+  assert.deepEqual(dd({ static: staticFacts(H2, 3, { complete: false }), live: liveFacts() }).kinds, []);
   // A different count from a reader that did not see every tool (names only, left out, approximate) says nothing either.
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H1, 2, { complete: false }), live: liveFacts() }).kinds, []);
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H1, 2), live: liveFacts() }).kinds, [{ kind: 'tool_count', oracles: ['live', 'reader'] }]);
+  assert.deepEqual(dd({ static: staticFacts(H1, 2, { complete: false }), live: liveFacts() }).kinds, []);
+  assert.deepEqual(dd({ static: staticFacts(H1, 2), live: liveFacts() }).kinds, [{ kind: 'tool_count', oracles: ['live', 'reader'] }]);
   // A lane without a hash or count is no reason for a kind.
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H1, null), live: liveFacts() }).kinds, []);
-  assert.deepEqual(deriveDisagreements({ static: staticFacts(H1, 2), live: liveFacts({ tool_count: null }) }).kinds, []);
+  assert.deepEqual(dd({ static: staticFacts(H1, null), live: liveFacts() }).kinds, []);
+  assert.deepEqual(dd({ static: staticFacts(H1, 2), live: liveFacts({ tool_count: null }) }).kinds, []);
 });
 
 test('R-ORD-12: lanes are compared only on one subject version; a lane of an older version is stale, and dropped when a newer result of it has no facts', () => {
@@ -386,4 +388,78 @@ test('R-ORD-14: the oracle_recheck reason is charged to the same cap as the boos
   }
   // T3: 20 + 15 (reason) + 5 (boost) would be 40 and tie the T2 weight; with the reason charged to the cap it is 20 + 19.
   assert.equal(priorityOf(3, { oracle: true }) - age, 20 + 19);
+});
+
+const HOUR = 3_600_000;
+
+test('R-ORD-16: facts of a subject with no sha and no digest are compared across lanes only when observed within the window; a months-old scan against a fresh live list is no disagreement', () => {
+  assert.equal(ORACLE_UNVERSIONED_WINDOW_MS, 12 * HOUR);
+  const at = (o, ms) => ({ ...o, version: null, at: ms });
+  const near = deriveDisagreements({ static: at(staticFacts(H1, 2), T0), live: at(liveFacts(), T0 + ORACLE_UNVERSIONED_WINDOW_MS) });
+  assert.deepEqual(near.kinds, [{ kind: 'tool_count', oracles: ['live', 'reader'] }], 'at the edge of the window they are compared');
+  const far = deriveDisagreements({ static: at(staticFacts(H1, 2), T0 - 90 * DAY), live: at(liveFacts(), T0) });
+  assert.deepEqual(far.kinds, [], 'a 90-day-old scan is not compared with a fresh live list');
+  assert.deepEqual(deriveDisagreements({ static: at(staticFacts(H1, 2), T0 + ORACLE_UNVERSIONED_WINDOW_MS + 1), live: at(liveFacts(), T0) }).kinds, [], 'either lane may be the older one');
+  assert.deepEqual(deriveDisagreements({ static: { ...staticFacts(H1, 2), version: null }, live: { ...liveFacts(), version: null } }).kinds, [], 'no observation time: not shown to be close');
+  // A pinned version is unchanged by the window: the same sha is the same version however far apart.
+  const pinned = (o, ms) => ({ ...o, version: 'a'.repeat(40), at: ms });
+  assert.equal(deriveDisagreements({ static: pinned(staticFacts(H1, 2), T0 - 90 * DAY), live: pinned(liveFacts(), T0) }).kinds.length, 1);
+  // The live lane's own comparisons (SDK clients) do not need the reader and still count when the scan is old.
+  const own = deriveDisagreements({ static: at(staticFacts(H1, 3), T0 - 90 * DAY), live: at(liveFacts({ sdk: [sdk('ts', { tool_count: 5 })] }), T0) });
+  assert.deepEqual(own.kinds, [{ kind: 'tool_count', oracles: ['live', 'sdk:ts'] }]);
+  // The store: the lanes' observation times decide, for a subject with no version.
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'repo:u', kind: 'repo', source: 'test', tier: 1, sha: null, now: T0 - 10 * DAY });
+  accept(db, 'repo:u', 'scan-static', staticFacts(H1, 2), T0 - 90 * DAY);
+  accept(db, 'repo:u', 'live-probe', liveFacts(), T0);
+  assert.deepEqual(db.listOracleDisagreements(), [], 'old scan, fresh live: nothing opens');
+  accept(db, 'repo:u', 'scan-static', staticFacts(H1, 2), T0 + HOUR);
+  assert.deepEqual(db.listOracleDisagreements().map((r) => r.status), ['open'], 'a fresh scan within the window is compared');
+  db.close();
+});
+
+test('R-ORD-17: a late result of an older version does not overwrite or drop the lane\'s newer facts', () => {
+  const db = openState(':memory:');
+  seed(db, ['repo:a']);
+  const A = { sha: 'a'.repeat(40) };
+  const B = { sha: 'b'.repeat(40) };
+  let t = T0;
+  const facts = (lane) => JSON.parse(db.raw.prepare('SELECT facts FROM oracle_facts WHERE subject = ? AND workflow = ?').get('repo:a', lane).facts);
+  accept(db, 'repo:a', 'scan-static', staticFacts(H1, 3), t += 1000, {}, B);
+  accept(db, 'repo:a', 'live-probe', liveFacts({ tool_count: 5 }), t += 1000, {}, B);
+  assert.deepEqual(db.listOracleDisagreements().map((r) => r.status), ['open']);
+  const before = JSON.stringify(db.listOracleDisagreements());
+  // A result of version A that finished before the stored ones, judged late.
+  const late = (lane, f) => accept(db, 'repo:a', lane, f, t += 1000, { completedAt: T0 - HOUR }, A);
+  late('live-probe', liveFacts({ tool_count: 3 }));
+  assert.deepEqual([facts('live-probe').version, facts('live-probe').tool_count], ['b'.repeat(40), 5], 'the newer live facts stay');
+  late('scan-static', null);
+  assert.equal(facts('scan-static').version, 'b'.repeat(40), 'a late result with no facts does not drop the newer lane facts');
+  late('live-probe', null);
+  assert.equal(facts('live-probe').version, 'b'.repeat(40));
+  assert.equal(JSON.stringify(db.listOracleDisagreements()), before, 'the record is not touched either');
+  // An in-order result of a newer version still replaces them.
+  accept(db, 'repo:a', 'live-probe', liveFacts({ tool_count: 3 }), t += 1000, {}, { sha: 'c'.repeat(40) });
+  assert.equal(facts('live-probe').version, 'c'.repeat(40));
+  db.close();
+});
+
+test('R-ORD-18: a settled record keeps the reason it settled for; recheck_budget is not rewritten to unchanged_rechecks', () => {
+  assert.deepEqual(foldDisagreement({ status: 'settled', signature: 'x', unchanged_rechecks: 2, reason: 'recheck_budget' }, { kinds: [{}], signature: 'x' }),
+    { status: 'settled', unchanged_rechecks: 2, reason: 'recheck_budget' });
+  assert.equal(foldDisagreement({ status: 'settled', signature: 'x', unchanged_rechecks: 5, reason: 'unchanged_rechecks' }, { kinds: [{}], signature: 'x' }).reason, 'unchanged_rechecks');
+  assert.equal(foldDisagreement({ status: 'settled', signature: 'x', unchanged_rechecks: 5, reason: null }, { kinds: [{}], signature: 'x' }).reason, 'unchanged_rechecks', 'an old row with no reason gets the default');
+  // Through the store: settle by the budget, then go on with unchanged results.
+  const db = openState(':memory:');
+  seed(db, ['repo:f']);
+  let t = T0;
+  for (let i = 0; i < 16 && !db.listOracleDisagreements().some((r) => r.reason === 'recheck_budget'); i++) cycle(db, 'repo:f', t += 1000, staticFacts(H1, i % 2 === 0 ? 2 : 3));
+  // Land on a disagreement that is settled by the budget.
+  cycle(db, 'repo:f', t += 1000, staticFacts(H1, 2));
+  cycle(db, 'repo:f', t += 1000, staticFacts(H1, 2));
+  const row = () => db.listOracleDisagreements()[0];
+  assert.deepEqual([row().status, row().reason], ['settled', 'recheck_budget']);
+  for (let i = 0; i < 3; i++) cycle(db, 'repo:f', t += 1000, staticFacts(H1, 2));
+  assert.deepEqual([row().status, row().reason], ['settled', 'recheck_budget'], 'unchanged results do not overwrite the reason');
+  db.close();
 });

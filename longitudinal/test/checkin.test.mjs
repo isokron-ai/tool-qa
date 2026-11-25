@@ -298,11 +298,11 @@ test('R-CHECKIN-12: the Markdown says how many evidence refs are left to the JSO
 
 const HA = 'a'.repeat(64);
 const HB = 'b'.repeat(64);
-/** Oracle facts for acme/py-two: an older graded scan-static result, and a live-probe result that lists other tools. */
+/** Oracle facts for acme/py-two: a graded scan-static result, and a live-probe result an hour later that lists other tools. */
 const oracleItems = (liveCount, { staticSha = null, liveSha = null } = {}) => [
   { subject: 'acme/py-two', lane: 'scan-static', at: '2026-11-19T10:00:00Z', attempt: 'att-o1', index: 0, run_id: 2001, tools: [{ name: 'mcp-check', version: '1.3.1' }], skips: [], server_json: 0,
     sha: staticSha, result: { status: 'graded', detail: null, catalog_hash: HA, tool_count: 3, list: { fidelity: 'exact', approximate: false, tools_left_out: 0, unresolved_names: 0, registration_not_seen: 0 } } },
-  { subject: 'acme/py-two', lane: 'live-probe', at: '2026-11-22T10:00:00Z', attempt: 'att-o2', index: 0, run_id: 2002, tools: [{ name: 'mcp-check', version: '1.3.1' }], skips: [], server_json: 0, sha: liveSha,
+  { subject: 'acme/py-two', lane: 'live-probe', at: '2026-11-19T11:00:00Z', attempt: 'att-o2', index: 0, run_id: 2002, tools: [{ name: 'mcp-check', version: '1.3.1' }], skips: [], server_json: 0, sha: liveSha,
     observations: [{ field: 'tool_count', value: liveCount }, { field: 'tool_list_sha256', value: HB }] },
 ];
 
@@ -352,4 +352,14 @@ test('R-ORD-12: the check-in compares the lanes only on one subject version', ()
   const moved = run([...fixture.items, ...oracleItems(5, { staticSha: 'a'.repeat(40), liveSha: 'b'.repeat(40) })]);
   assert.equal(same.summary.oracle_disagreements.subjects, 1);
   assert.equal(moved.summary.oracle_disagreements.subjects, 0, 'a new release seen by live-probe against the reader\'s old result is no disagreement');
+});
+
+test('R-ORD-16: the check-in compares unversioned lanes only when observed within the window: an old scan against a fresh live list is no disagreement', () => {
+  assert.equal(run([...fixture.items, ...oracleItems(5)]).summary.oracle_disagreements.subjects, 1, 'an hour apart is compared');
+  const far = oracleItems(5);
+  far[1] = { ...far[1], at: '2026-11-22T10:00:00Z' };
+  assert.equal(run([...fixture.items, ...far]).summary.oracle_disagreements.subjects, 0, 'three days apart, no version: not compared');
+  const pinned = oracleItems(5, { staticSha: 'a'.repeat(40), liveSha: 'a'.repeat(40) });
+  pinned[1] = { ...pinned[1], at: '2026-11-22T10:00:00Z' };
+  assert.equal(run([...fixture.items, ...pinned]).summary.oracle_disagreements.subjects, 1, 'a pinned version is compared however far apart');
 });
