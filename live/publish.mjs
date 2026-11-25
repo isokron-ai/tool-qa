@@ -1,8 +1,14 @@
 // publishLive(): build the public live snapshot and put it in R2.
 //
-//   build -> scan problems? -> PUT v1/snap/<seq>.json
+//   build -> scan problems? -> PUT v1/snap/<16 hex of sha256(body)>.json
 //                              PUT v1/events/<YYYY-MM-DD>/<HH>.ndjson
+//                              (once, after the UTC hour changed: the hour of
+//                               the last good upload again, now final/immutable)
 //                              PUT v1/latest.json            (LAST)
+//
+// The snapshot key is its content hash, so "immutable" is true: the same key
+// never holds two bodies. A body equal to the last uploaded one is not sent
+// again, but the pointer is still rewritten (its generated_at shows liveness).
 //
 // The pointer is written only after both bodies are stored, so it never names a
 // missing object. Any scan hit (problems from live/build.mjs) uploads nothing:
@@ -18,6 +24,8 @@
 // The builder is injected (`build`, from live/build.mjs): build(db, { now,
 // config, retry, version }) -> { snapshot, hourEvents, problems }. `now` is
 // epoch milliseconds. `put` is injected too (live/r2.mjs by default).
+
+import { createHash } from 'node:crypto';
 
 import { createR2Putter } from './r2.mjs';
 
@@ -72,7 +80,8 @@ export async function publishLive({
     try {
       const prior = db.getKv(LAST_UPLOAD_KEY);
       const lastOk = value.ok ? iso() : prior?.last_ok_at ?? (prior?.ok ? prior.at : null);
-      db.setKv(LAST_UPLOAD_KEY, { ...value, at: iso(), last_ok_at: lastOk }, { now: now() });
+      const lastSnap = value.ok ? value.snap : prior?.last_snap ?? (prior?.ok ? prior.snap : null);
+      db.setKv(LAST_UPLOAD_KEY, { ...value, at: iso(), last_ok_at: lastOk, last_snap: lastSnap }, { now: now() });
     } catch (err) {
       log(`live: could not record the upload result: ${String(err?.message ?? err).slice(0, 200)}`);
     }
@@ -106,8 +115,8 @@ export async function publishLive({
 
     const publishedAt = new Date(started).toISOString();
     const snap = { ...snapshot, ...(Array.isArray(snapshot.recent) ? { recent: snapshot.recent.map((e) => ({ ...e, published_at: e.published_at ?? publishedAt })) } : {}) };
-    const snapKey = `v1/snap/${snap.seq}.json`;
     const snapBody = JSON.stringify(snap);
+    const snapKey = `v1/snap/${createHash('sha256').update(snapBody).digest('hex').slice(0, 16)}.json`;
     const pointer = JSON.stringify({ schema: LATEST_SCHEMA, seq: snap.seq, generated_at: snap.generated_at ?? publishedAt, snap: snapKey });
     const putter = put ?? createR2Putter({
       accountId: env.R2_ACCOUNT_ID, bucket: env.LIVE_R2_BUCKET || DEFAULT_BUCKET,
@@ -115,11 +124,30 @@ export async function publishLive({
       fetch, now, until: () => started + deadlineMs, ...putOptions,
     });
     // Order is the contract: both bodies, then the pointer.
-    const steps = [
-      [snapKey, snapBody],
-      [hourKey(started), ndjson(hourEvents, publishedAt)],
-      ['v1/latest.json', pointer],
-    ];
+    let prior = null;
+    try { prior = db.getKv(LAST_UPLOAD_KEY); } catch { /* none */ }
+    const steps = [];
+    if (prior?.last_snap !== snapKey) steps.push([snapKey, snapBody]);
+    steps.push([hourKey(started), ndjson(hourEvents, publishedAt)]);
+    // The UTC hour changed since the last good upload: that hour's file was
+    // last written mid-hour; write it once more from the events table (the
+    // builder, asked as of the hour's last millisecond), now past, so immutable.
+    const lastOkMs = Date.parse(prior?.last_ok_at ?? '');
+    if (Number.isFinite(lastOkMs) && hourKey(lastOkMs) !== hourKey(started)) {
+      const closing = hourKey(lastOkMs);
+      const hourEndMs = Math.floor(lastOkMs / 3_600_000) * 3_600_000 + 3_599_999;
+      try {
+        const old = await build(db, { now: hourEndMs, config, retry: null, version });
+        if (Array.isArray(old?.problems) && old.problems.length) {
+          for (const line of describeProblems(old.problems)) log(`live: closing hour file skipped, scan: ${line}`);
+        } else if (old?.hourEvents) {
+          steps.push([closing, ndjson(old.hourEvents, publishedAt)]);
+        }
+      } catch {
+        log('live: closing hour file skipped (build failed)');
+      }
+    }
+    steps.push(['v1/latest.json', pointer]);
     for (const [key, body] of steps) {
       if (ctl.signal.aborted) return fail('deadline');
       try {
@@ -130,7 +158,7 @@ export async function publishLive({
       }
     }
     if (ctl.signal.aborted) return fail('deadline');
-    record({ ok: true, seq: snap.seq, bytes: Buffer.byteLength(snapBody) });
+    record({ ok: true, seq: snap.seq, bytes: Buffer.byteLength(snapBody), snap: snapKey });
     return { ok: true, seq: snap.seq, bytes: Buffer.byteLength(snapBody) };
   })().catch((err) => fail('unexpected', { detail: String(err?.name ?? 'Error').slice(0, 40) }));
 

@@ -84,14 +84,14 @@ const IMMUTABLE = 'public, max-age=31536000, immutable';
 /**
  * Cache-Control for a live object key (build plan section 4):
  *   v1/latest.json                      public, max-age=5, s-maxage=10
- *   v1/snap/<seq>.json                  immutable
+ *   v1/snap/<16 hex of the body's sha256>.json  immutable
  *   v1/events/<date>/<HH>.ndjson        max-age=60 for the open hour, immutable once it is past
  *   v1/heartbeat.json                   max-age=30
  */
 export function cacheControlFor(key, { now = Date.now() } = {}) {
   if (key === 'v1/latest.json') return 'public, max-age=5, s-maxage=10';
   if (key === 'v1/heartbeat.json') return 'public, max-age=30';
-  if (/^v1\/snap\/\d+\.json$/.test(key)) return IMMUTABLE;
+  if (/^v1\/snap\/[0-9a-f]{16}\.json$/.test(key)) return IMMUTABLE;
   const m = /^v1\/events\/(\d{4}-\d{2}-\d{2})\/(\d{2})\.ndjson$/.exec(key);
   if (m) {
     const hourStart = Date.parse(`${m[1]}T${m[2]}:00:00Z`);

@@ -56,10 +56,10 @@ const putter = (fetch, over = {}) => createR2Putter({ accountId: ACCOUNT, bucket
 
 test('a PUT goes to the account endpoint and bucket path, signed, with Content-Type and Cache-Control', async () => {
   const f = fakeFetch();
-  const r = await putter(f)('v1/snap/42.json', '{"a":1}');
+  const r = await putter(f)('v1/snap/0123456789abcdef.json', '{"a":1}');
   assert.equal(r.status, 200);
   const { url, init } = f.calls[0];
-  assert.equal(url, `https://${ACCOUNT}.r2.cloudflarestorage.com/isokron-loop-live/v1/snap/42.json`);
+  assert.equal(url, `https://${ACCOUNT}.r2.cloudflarestorage.com/isokron-loop-live/v1/snap/0123456789abcdef.json`);
   assert.equal(init.method, 'PUT');
   assert.equal(init.headers['content-type'], 'application/json; charset=utf-8');
   assert.equal(init.headers['cache-control'], 'public, max-age=31536000, immutable');
@@ -71,11 +71,12 @@ test('a PUT goes to the account endpoint and bucket path, signed, with Content-T
 
 test('Cache-Control and Content-Type per key follow the R2 layout', () => {
   assert.equal(cacheControlFor('v1/latest.json'), 'public, max-age=5, s-maxage=10');
-  assert.equal(cacheControlFor('v1/snap/7.json'), 'public, max-age=31536000, immutable');
+  assert.equal(cacheControlFor('v1/snap/0123456789abcdef.json'), 'public, max-age=31536000, immutable');
   assert.equal(cacheControlFor('v1/heartbeat.json'), 'public, max-age=30');
   assert.equal(cacheControlFor('v1/events/2026-11-25/13.ndjson', { now: NOW }), 'public, max-age=60', 'the open hour');
   assert.equal(cacheControlFor('v1/events/2026-11-25/12.ndjson', { now: NOW }), 'public, max-age=31536000, immutable', 'a past hour');
   assert.throws(() => cacheControlFor('v1/other.json'));
+  assert.throws(() => cacheControlFor('v1/snap/42.json'), /no cache policy/, 'snapshots are keyed by content hash, not seq');
   assert.equal(contentTypeFor('v1/events/2026-11-25/13.ndjson'), 'application/x-ndjson; charset=utf-8');
 });
 
