@@ -73,3 +73,31 @@ outage recovery), the rest wait for the next tick, in table order.
 5. Watch the logs with `npx wrangler@4 tail`. Within 5 minutes you should see one `heartbeat: <workflow>: ok (...)` line per watched workflow.
 
 **To stop it:** set `HEARTBEAT_ENABLED = "false"` and redeploy, or run `npx wrangler@4 delete`.
+
+## Report to the live loop view (REPORT_ENABLED)
+
+Besides restarting workflows, the heartbeat Worker can write one public file for the live loop view:
+`v1/heartbeat.json` in the R2 bucket `isokron-loop-live` (binding `LIVE`, served only through `live.isokron.ai`,
+`Cache-Control: public, max-age=30`). It is **off** until the owner sets `REPORT_ENABLED = "true"` in `wrangler.toml` and redeploys.
+
+The report runs after the tick in its own `ctx.waitUntil`, only when `REPORT_ENABLED` is exactly `"true"` and the `LIVE` binding exists.
+A report that throws, times out or finds nothing to write cannot change what the tick dispatched.
+
+What the file holds (schema `isokron-loop-heartbeat/1`):
+
+| Field | Content |
+|---|---|
+| `checked_at` | when this report ran |
+| `decisions` | the last 48 of `{at, workflow, action: ok / restarted / failed / skipped_switch, http?}` from the tick, kept in the same object (read, append, write). `ok` and `skipped_switch` are written when a workflow's state changes; `restarted` and `failed` every time, so a restart stays in the ring for hours instead of 20 minutes |
+| `github` | `{checked_at, components: {actions, api, git, webhooks}}`: the status of "Actions", "API Requests", "Git Operations" and "Webhooks" from githubstatus.com `components.json` |
+| `health` | `{checked_at, updated, overall, checks: [{id, status, at?, summary?}]}` from the `loop-health:v1` block of issue #40, read with `GH_TOKEN` (retried once without it on 401, 403 or 404). Summary text only for `pump`, `slots`, `dispatches`, `history-*` and `sandbox-breaker`, with URLs removed; no links, no other fields |
+
+A source that cannot be read becomes `{error: "unavailable", checked_at}` for that section only.
+
+**Scan before writing.** The whole document is scanned for token, key and email patterns (a minimal copy of `ingest/redact.mjs`,
+`heartbeat/scan.mjs`) and for AI vendor and model names (the R-PUB-08 word list). On a hit nothing is written and the log
+(`heartbeat report: scan hit, rule <rule> at <path>`) names the rule and path, never the text. The old file stays, so the page shows its age.
+
+**To stop it:** set `REPORT_ENABLED = "false"` and redeploy (the tick is unaffected). To remove what is already public, delete
+`v1/heartbeat.json` from the bucket. The first deploy with the report needs the bucket to exist and the `LIVE` binding in `wrangler.toml`
+(already declared); do not enable it before the owner's go.

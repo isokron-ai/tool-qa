@@ -9,6 +9,12 @@ crons = ["*/5 * * * *"]
 
 [vars]
 HEARTBEAT_ENABLED = "true"
+# The report step (v1/heartbeat.json). Off until the owner turns it on; see README.
+REPORT_ENABLED = "false"
+
+[[r2_buckets]]
+binding = "LIVE"
+bucket_name = "isokron-loop-live"
 
 [observability]
 enabled = true

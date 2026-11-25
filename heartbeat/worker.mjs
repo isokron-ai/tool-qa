@@ -17,6 +17,9 @@
 // Secret GH_TOKEN: a fine-grained token for isokron-ai/tool-qa only, with Actions read and write and Variables read.
 // It can start workflows in that one repository and read their runs; nothing else.
 
+import { report } from './report.mjs';
+export { report };
+
 export const REPO = 'isokron-ai/tool-qa';
 export const REF = 'main';
 // One entry per scheduled workflow that should keep running (publish-results.yml is left out: off by design, behind
@@ -153,20 +156,26 @@ async function readVars(call) {
 /** One heartbeat tick. Returns a log of what it saw and did; never throws. */
 export async function tick({ token, enabled, fetch: fetchImpl = globalThis.fetch, now = Date.now(), watch = WATCH } = {}) {
   const log = [];
+  // Structured record of what the tick decided, for the report step. Not part of the log (log stays a plain array of
+  // lines); it only records, and nothing below reads it.
+  const decisions = [];
+  Object.defineProperty(log, 'decisions', { value: decisions, enumerable: false });
+  const at = new Date(now).toISOString();
+  const decided = (workflow, action, http) => decisions.push({ at, workflow, action, ...(http ? { http } : {}) });
   if (enabled !== 'true') { log.push('heartbeat: HEARTBEAT_ENABLED is not "true"; nothing done'); return log; }
   if (!token) { log.push('heartbeat: no GH_TOKEN; nothing done'); return log; }
   let calls = 0; // the subrequest budget: never more than MAX_CALLS per tick
   const call = (method, path, body) => (calls++ >= MAX_CALLS ? Promise.resolve({ ok: false, status: 0, error: 'call budget' }) : gh(fetchImpl, token, method, path, body));
   const rv = await readVars(call);
-  if (!rv.ok) { log.push(`heartbeat: could not read the repository variables (HTTP ${rv.status || rv.error}); nothing done, next tick retries`); return log; }
+  if (!rv.ok) { log.push(`heartbeat: could not read the repository variables (HTTP ${rv.status || rv.error}); nothing done, next tick retries`); for (const w of watch) decided(w.label || w.workflow, 'failed', rv.status); return log; }
   const vars = rv.vars;
   // The kill switch first: a missing or wrong LOOP_ENABLED ends the tick before any run is read.
-  if (vars.LOOP_ENABLED !== 'true') { log.push('heartbeat: the loop kill switch is off (LOOP_ENABLED is not "true"); nothing done'); return log; }
+  if (vars.LOOP_ENABLED !== 'true') { log.push('heartbeat: the loop kill switch is off (LOOP_ENABLED is not "true"); nothing done'); for (const w of watch) decided(w.label || w.workflow, 'skipped_switch'); return log; }
   let dispatched = 0;
   for (const w of watch) {
     const name = w.label || w.workflow;
     const why = pausedBy(vars, { lane: w.lane, usesSlots: w.usesSlots, now });
-    if (why) { log.push(`heartbeat: ${name}: not started: ${why}`); continue; }
+    if (why) { log.push(`heartbeat: ${name}: not started: ${why}`); decided(name, 'skipped_switch'); continue; }
     // Only runs on main: a pull request run (perf-baselines has a pull_request trigger) must not hide a missed scheduled run.
     // history-registry: a created window plus paging until the full run shows up, since deltas outnumber it ~100 to 1.
     const perPage = w.perPage || 5;
@@ -179,14 +188,15 @@ export async function tick({ token, enabled, fetch: fetchImpl = globalThis.fetch
       runs = runs.concat(w.match ? got.filter((x) => x && w.match(x)) : got);
       if (got.length < perPage || runs.length) break;
     }
-    if (failed) { log.push(`heartbeat: ${name}: could not list runs (HTTP ${failed.status || failed.error}); next tick retries`); continue; }
+    if (failed) { log.push(`heartbeat: ${name}: could not list runs (HTTP ${failed.status || failed.error}); next tick retries`); decided(name, 'failed', failed.status); continue; }
     const d = decide(runs, { staleMin: w.staleMin, stuckMin: w.stuckMin, retryFailedAfterMin: w.retryFailedAfterMin, now });
     if (d.alert) log.push(`heartbeat: ALERT ${name}: ${d.alert}`);
-    if (d.action === 'ok') { log.push(`heartbeat: ${name}: ok (${d.why})`); continue; }
+    if (d.action === 'ok') { log.push(`heartbeat: ${name}: ok (${d.why})`); decided(name, 'ok'); continue; }
     if (dispatched >= MAX_DISPATCHES) { log.push(`heartbeat: ${name}: needs a dispatch (${d.why}) but ${MAX_DISPATCHES} were already sent this tick; next tick retries`); continue; }
     dispatched++;
     const inputs = w.inputs ? w.inputs(now) : undefined;
     const p = await call('POST', `/repos/${REPO}/actions/workflows/${w.workflow}/dispatches`, inputs ? { ref: REF, inputs } : { ref: REF });
+    decided(name, p.ok ? 'restarted' : 'failed', p.status);
     log.push(p.ok ? `heartbeat: ${name}: ${d.warn ? 'WARNING stuck run; ' : ''}dispatched (${d.why})` : `heartbeat: ${name}: dispatch failed (HTTP ${p.status || p.error}; ${d.why}); next tick retries`);
   }
   return log;
@@ -194,6 +204,15 @@ export async function tick({ token, enabled, fetch: fetchImpl = globalThis.fetch
 
 export default {
   async scheduled(_event, env, ctx) {
-    ctx.waitUntil(tick({ token: env.GH_TOKEN, enabled: env.HEARTBEAT_ENABLED }).then((log) => { for (const l of log) console.log(l); }));
+    const ticked = tick({ token: env.GH_TOKEN, enabled: env.HEARTBEAT_ENABLED }).then((log) => { for (const l of log) console.log(l); return log; });
+    ctx.waitUntil(ticked);
+    // The report is its own waitUntil, off by default. Nothing it does (or throws) can reach the promise above.
+    if (env.REPORT_ENABLED === 'true' && env.LIVE) {
+      ctx.waitUntil(ticked
+        .then((log) => log.decisions, () => [])
+        .then((decisions) => report({ env, decisions }))
+        .then((r) => console.log(`heartbeat report: ${r.written ? 'written' : 'not written' + (r.blocked ? ` (blocked by scan rule ${r.blocked})` : '')}`))
+        .catch((e) => console.log(`heartbeat report: failed (${e && e.name ? e.name : 'error'})`)));
+    }
   },
 };

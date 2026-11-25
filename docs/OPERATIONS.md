@@ -1095,6 +1095,14 @@ person. off: switched off on purpose.
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
 
+## Heartbeat report to the live view
+
+The heartbeat Worker (`heartbeat/`) writes `v1/heartbeat.json` to the public live bucket every 5 minutes when `REPORT_ENABLED = "true"` in
+`heartbeat/wrangler.toml` (default `"false"`). It holds the last 48 tick decisions, GitHub's own status for Actions, API Requests, Git
+Operations and Webhooks, and the allowlisted fields of the loop health issue. Nothing is written if the secret or vendor-name scan hits.
+Switch: `REPORT_ENABLED` (Worker variable, redeploy to change). Stop: set it to `"false"` and redeploy; delete the object to clear the page.
+Details: `heartbeat/README.md`.
+
 ## Archive of history artifacts and ingest outputs
 
 GitHub keeps history artifacts for 30 days and the sealed ingest outputs
