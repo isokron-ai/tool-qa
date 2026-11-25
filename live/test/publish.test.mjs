@@ -348,3 +348,34 @@ test('publishRetry: a scan hit, a missing scanner or a hang uploads nothing or i
   assert.equal(r.error, 'deadline');
   assert.ok(Date.now() - t0 < 1500);
 });
+
+test('previousHourEvents from the builder is written to the previous hour key (immutable) before the pointer; null writes nothing; midnight rolls the date back', async () => {
+  const mk = (prev) => async () => ({ ...good(), previousHourEvents: prev });
+  const go = async (iso, prev) => {
+    const seen = [];
+    const db = fakeDb();
+    const t = Date.parse(iso);
+    await publishLive({ db, build: mk(prev), put: async (k, b, o) => { seen.push({ k, cc: o.cacheControl, b }); return { status: 200 }; }, env: ENV, now: () => t, deadlineMs: 2000, log: () => {} });
+    return seen;
+  };
+  let seen = await go('2026-11-25T14:02:00Z', [{ seq: 5, type: 'result' }]);
+  const ev = seen.filter((x) => x.k.includes('/events/'));
+  assert.deepEqual(ev.map((x) => x.k), ['v1/events/2026-11-25/14.ndjson', 'v1/events/2026-11-25/13.ndjson']);
+  assert.equal(ev[1].cc, 'public, max-age=31536000, immutable');
+  assert.equal(seen.at(-1).k, 'v1/latest.json');
+  assert.equal(JSON.parse(ev[1].b.trim()).published_at, '2026-11-25T14:02:00.000Z');
+  seen = await go('2026-11-25T14:02:00Z', null);
+  assert.deepEqual(seen.filter((x) => x.k.includes('/events/')).map((x) => x.k), ['v1/events/2026-11-25/14.ndjson']);
+  seen = await go('2026-11-26T00:01:00Z', [{ seq: 6, type: 'result' }]);
+  assert.deepEqual(seen.filter((x) => x.k.includes('/events/')).map((x) => x.k), ['v1/events/2026-11-26/00.ndjson', 'v1/events/2026-11-25/23.ndjson']);
+});
+
+test('with previousHourEvents present the builder is not asked again for the closing hour, even across an hour change', async () => {
+  const db = fakeDb();
+  let builds = 0;
+  const build = async () => { builds += 1; return { ...good(), previousHourEvents: null }; };
+  const put = async () => ({ status: 200 });
+  await publishLive({ db, build, put, env: ENV, now: () => Date.parse('2026-11-25T13:58:00Z'), deadlineMs: 2000, log: () => {} });
+  await publishLive({ db, build, put, env: ENV, now: () => Date.parse('2026-11-25T14:20:00Z'), deadlineMs: 2000, log: () => {} });
+  assert.equal(builds, 2);
+});

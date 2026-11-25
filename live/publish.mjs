@@ -159,7 +159,7 @@ export async function publishLive({
     } catch (err) {
       return fail('build', { detail: String(err?.code ?? err?.name ?? 'Error').slice(0, 40) });
     }
-    const { snapshot, hourEvents, problems } = built ?? {};
+    const { snapshot, hourEvents, problems, previousHourEvents } = built ?? {};
     if (Array.isArray(problems) && problems.length) {
       for (const line of describeProblems(problems)) log(`live: upload blocked by the scan: ${line}`);
       record({ ok: false, blocked: 'scan' });
@@ -182,11 +182,16 @@ export async function publishLive({
     const snapPutAt = snapFresh ? prior.last_snap_put_at : publishedAt;
     if (!snapFresh) steps.push([snapKey, snapBody]);
     steps.push([hourKey(started), ndjson(hourEvents, publishedAt)]);
-    // The UTC hour changed since the last good upload: that hour's file was
-    // last written mid-hour; write it once more from the events table (the
-    // builder, asked as of the hour's last millisecond), now past, so immutable.
     const closing = prior?.last_ok_hour;
-    if (closing && closing !== hourKey(started) && Number.isFinite(hourKeyStart(closing))) {
+    if (previousHourEvents !== undefined) {
+      // The builder says what the previous hour held (non-null only in the first
+      // minutes of an hour): write it to that hour's key, now past, so immutable.
+      if (Array.isArray(previousHourEvents) || typeof previousHourEvents === 'string') {
+        steps.push([hourKey(Math.floor(started / 3_600_000) * 3_600_000 - 1), ndjson(previousHourEvents, publishedAt)]);
+      }
+    } else if (closing && closing !== hourKey(started) && Number.isFinite(hourKeyStart(closing))) {
+      // An older builder without previousHourEvents: the UTC hour changed since
+      // the last good upload, so ask it again as of that hour's last millisecond.
       if (ctl.signal.aborted) return fail('deadline');
       if (db?.inTx) return fail('in_tx');
       try {
