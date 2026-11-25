@@ -5,6 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runWatchdog } from '../run.mjs';
+import { readFileSync } from 'node:fs';
+
+const SHIPPED = JSON.parse(readFileSync(new URL('../../pump/workflows.json', import.meta.url), 'utf8')).workflows;
+/** The sandbox commit the enabled runs_untrusted lanes pin (the shipped config unless a test gives its own lanes). */
+function pinnedSandbox(lanes) {
+  const pin = Object.values(lanes ?? SHIPPED).find((w) => w.enabled === true && w.runs_untrusted !== false && w.sandbox_sha)?.sandbox_sha;
+  return pin ?? 'a'.repeat(40);
+}
 import { parseBody } from '../health.mjs';
 import { openState } from '../../state/db.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
@@ -68,7 +76,8 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
     apiUrl: API,
     log: () => {},
     stateDir: dir,
-    readConformance: async () => ({ status: greenStatus(c.t - 3_600_000) }),
+    // A healthy nightly tested the commit the enabled lanes pin: the shipped config's, or a test's own lanes.
+    readConformance: async () => ({ status: { ...greenStatus(c.t - 3_600_000), sandbox_sha: pinnedSandbox(opts.workerWorkflows) } }),
     verifyConformanceRun: backed,
     mintToken: async (args) => {
       mints.push(args);
@@ -248,6 +257,7 @@ test('R-WD-01: the watchdog fetches the conformance status itself, with no token
 test('R-WD-03: the health issue shows amber while an enabled lane pins another sandbox commit than the nightly tested', async () => {
   const w = world({ seed: () => {} });
   w.opts.workerWorkflows = { 'live-probe': { enabled: true, runs_untrusted: true, sandbox_sha: 'b'.repeat(40) }, writecheck: { enabled: true, runs_untrusted: true, sandbox_sha: null } };
+  w.opts.readConformance = async () => ({ status: greenStatus(w.c.t - 3_600_000) }); // the nightly tested aaaa…, not the pins
   const out = await runWatchdog(w.opts);
   const b = out.checks.find((c) => c.id === 'sandbox-breaker');
   assert.equal(b.status, 'amber');
