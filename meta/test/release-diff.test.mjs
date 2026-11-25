@@ -362,8 +362,10 @@ test('downloads stay on the registry host: a tarball URL elsewhere is not fetche
   assert.ok(!f.calls.some((x) => x.url.includes('evil.example')));
   f = npmWorld({ pkg: { 'package.json': PKG_JSON }, src: {}, doc: { dist: { tarball: 'https://registry.npmjs.org/acme-tool/-/acme-tool-1.0.0.tgz', integrity: `sha512-${Buffer.alloc(64).toString('base64')}` } } });
   c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED });
-  assert.equal(c.artifacts[0].outcome, 'integrity_mismatch');
-  assert.deepEqual(c.skips, [{ stage: 'npm', reason: 'upstream_unavailable', fault: 'infra', retryable: true }]);
+  // A digest mismatch is held (R-RD-19), not a retryable skip; the public record only says it was not verified.
+  assert.equal(c.artifacts[0].outcome, 'artifact_not_verified');
+  assert.deepEqual(c.skips, []);
+  assert.deepEqual(c.held.map((h) => h.indicators), [['integrity_mismatch']]);
   // The guard itself: no host outside the list, no plain HTTP, no port or credentials.
   assert.throws(() => guardHttp(http(f)).request('https://example.com/'), HostRefused);
   for (const u of ['http://registry.npmjs.org/x', 'https://registry.npmjs.org:8443/x', 'https://u:p@registry.npmjs.org/x', 'https://registry.npmjs.org.evil.example/x']) assert.equal(allowedUrl(u), false, u);

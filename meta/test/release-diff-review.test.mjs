@@ -344,3 +344,82 @@ test('R-RD-16: release_artifacts holds upstream text (tag names, provenance refs
   assert.deepEqual(reg.fields.get('release_artifacts').redaction, ['R1']);
   assert.deepEqual(reg.fields.get('release_diff_summary').redaction, ['R1']);
 });
+
+// ---------------------------------------------------------------- 8: re-review of #37 (gate A)
+
+test('R-RD-17: a changed executable file keeps medium when the only link is the package\'s own repository field; other findings still drop to low', async () => {
+  // No provenance (most npm packages): the repository field is the only link.
+  const pkg = { 'package.json': PKG_JSON, 'lib/index.js': 'require("https").get("https://evil.example/x");\n', 'bin/run.sh': '#!/bin/sh\necho hi\n', 'docs.md': 'changed\n' };
+  const src = { 'package.json': SRC_JSON, 'lib/index.js': 'module.exports = 1;\n', 'docs.md': 'hello\n' };
+  const c = await collectSubject(http(npmWorld({ pkg, src })), 'acme/tool', { seed: NPM_SEED });
+  assert.equal(c.artifacts[0].linked_by, 'repository_field');
+  const differs = c.findings.filter((f) => f.kind === 'content_differs');
+  const js = differs.find((f) => f.path === 'lib/index.js');
+  assert.deepEqual([js.executable, js.level, js.level_capped_from, js.linked_by], [true, 'medium', 'high', 'repository_field']);
+  // A differing text file that is not executable is capped to low as before; so is an unexpected executable file.
+  assert.equal(differs.find((f) => f.path === 'docs.md').level, 'low');
+  assert.equal(c.findings.find((f) => f.kind === 'unexpected_file' && f.path === 'bin/run.sh').level, 'low');
+  assert.ok(!c.findings.some((f) => f.level === 'high'), 'nothing high in public for a self-declared link');
+});
+
+test('R-RD-18: a 403 for a DMCA-blocked or disabled repository is a settled skip (upstream_unavailable, fault subject, not retryable); throttling stays a retryable infra skip', async () => {
+  const world = (extra) => npmWorld({ pkg: { 'package.json': PKG_JSON }, src: { 'package.json': SRC_JSON }, extra });
+  const refs = (status, body, headers = {}) => [{ method: 'POST', prefix: 'https://github.com/acme/tool.git', status, body, headers }];
+  const gone = { stage: 'git_refs', reason: 'upstream_unavailable', fault: 'subject' };
+  const throttled = { stage: 'git_refs', reason: 'rate_limited', fault: 'infra', retryable: true };
+
+  for (const [body, why] of [
+    ['remote: Repository access blocked\nremote: This repository has been disabled due to a DMCA takedown notice.', 'dmca'],
+    ['Access to this repository has been disabled by GitHub Staff due to excessive use.', 'disabled'],
+  ]) {
+    const f = world(refs(403, body));
+    const c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED });
+    assert.deepEqual(c.skips, [gone], why);
+    assert.equal(c.artifacts[0].outcome, 'source_repository_gone');
+    assert.ok(!f.calls.some((x) => x.url.startsWith('https://codeload.github.com/')), 'no source read for a gone repository');
+    assert.equal((await readGitRefs(http(f), 'acme/tool')).why, why);
+  }
+  // 451 (unavailable for legal reasons) is gone by its status.
+  let c = await collectSubject(http(world(refs(451, ''))), 'acme/tool', { seed: NPM_SEED });
+  assert.deepEqual(c.skips, [gone]);
+
+  // Throttling: rate-limit headers, a secondary-limit message, or a 403 that says nothing. Headers and message win over a body that also says "disabled".
+  for (const [body, headers] of [
+    ['', { 'x-ratelimit-remaining': '0' }],
+    ['', { 'retry-after': '60' }],
+    ['You have exceeded a secondary rate limit.', {}],
+    ['You have triggered an abuse detection mechanism; repository access blocked for a while.', {}],
+    ['Rate limit exceeded: API access has been disabled for this token.', {}],
+    ['', {}],
+  ]) {
+    c = await collectSubject(http(world(refs(403, body, headers))), 'acme/tool', { seed: NPM_SEED });
+    assert.deepEqual(c.skips, [throttled], JSON.stringify([body, headers]));
+    assert.notEqual(c.artifacts[0].outcome, 'source_repository_gone');
+  }
+
+  // The source archive (codeload) says the same things.
+  const code = (status, body, headers = {}) => [{ prefix: 'https://codeload.github.com/', status, body, headers }];
+  c = await collectSubject(http(world(code(403, 'Repository access blocked: DMCA takedown'))), 'acme/tool', { seed: NPM_SEED });
+  assert.deepEqual(c.skips, [{ stage: 'source', reason: 'upstream_unavailable', fault: 'subject' }]);
+  assert.equal(c.artifacts[0].outcome, 'source_gone');
+  c = await collectSubject(http(world(code(403, '', { 'x-ratelimit-remaining': '0' }))), 'acme/tool', { seed: NPM_SEED });
+  assert.deepEqual(c.skips, [{ stage: 'source', reason: 'rate_limited', fault: 'infra', retryable: true }]);
+  assert.equal(c.artifacts[0].outcome, 'source_rate_limited');
+});
+
+test('R-RD-19: an artifact whose bytes do not match the registry\'s digest is a held finding (not a retryable infra skip), and the public record does not say so', async () => {
+  const pkg = { 'package.json': PKG_JSON, 'lib/index.js': 'x' };
+  const f = npmWorld({ pkg, src: { 'package.json': SRC_JSON, 'lib/index.js': 'x' }, doc: { dist: { tarball: 'https://registry.npmjs.org/acme-tool/-/acme-tool-1.0.0.tgz', integrity: sha512i(Buffer.from('another file')) } } });
+  const c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED });
+  assert.deepEqual(c.skips, [], 'no skip: the result is settled, not retried');
+  assert.equal(c.held.length, 1);
+  assert.deepEqual(
+    [c.held[0].package, c.held[0].version, c.held[0].ecosystem, c.held[0].artifact, c.held[0].indicators, c.held[0].sha256, c.held[0].size],
+    ['acme-tool', '1.0.0', 'npm', 'npm_tarball', ['integrity_mismatch'], sha256(f.tarball), f.tarball.length],
+  );
+  assert.equal(c.artifacts[0].outcome, 'artifact_not_verified');
+  // Nothing public names it: not the findings, the summaries, the artifacts, nor the held count in the stages.
+  const pub = JSON.stringify([c.findings, c.summaries, c.artifacts, c.stages, c.skips]);
+  assert.ok(!/integrity|mismatch|held/i.test(pub), pub);
+  assert.equal(c.findings.length, 0);
+});

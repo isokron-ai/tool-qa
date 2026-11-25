@@ -112,6 +112,41 @@ export async function readCapped(res, max = MAX_BODY_BYTES, where = '') {
   return (await readBytesCapped(res, max, where)).toString('utf8');
 }
 
+/**
+ * What a GitHub 403 (or 451) means, told apart from its headers and its body
+ * (R-RD-18). Throttling says so: a rate-limit header (`x-ratelimit-remaining: 0`,
+ * `retry-after`) or a primary or secondary limit message. A repository GitHub
+ * took down says so in the body: a DMCA notice, "access to this repository has
+ * been disabled", "repository access blocked"; 451 is a legal block by its
+ * status. An answer that says neither is read as throttling, as before: it is
+ * retried, never blamed on the subject.
+ * @returns {Promise<{kind: 'throttled'} | {kind: 'gone', why: 'dmca'|'disabled'}>}
+ */
+export async function forbiddenKind(res) {
+  let text = '';
+  try {
+    if (res.body) {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+        if (total >= 4096) { await reader.cancel().catch(() => {}); break; }
+      }
+      text = Buffer.concat(chunks).subarray(0, 4096).toString('utf8');
+    }
+  } catch { /* a body that cannot be read says nothing: throttling */ }
+  const throttled = res.headers.get('x-ratelimit-remaining') === '0' || res.headers.get('retry-after') !== null
+    || /rate limit|abuse|too many requests|temporarily blocked|try again/i.test(text);
+  if (throttled) return { kind: 'throttled' };
+  if (/dmca|takedown/i.test(text) || res.status === 451) return { kind: 'gone', why: 'dmca' };
+  if (/has been disabled|repository access blocked|access blocked|disabled by github/i.test(text)) return { kind: 'gone', why: 'disabled' };
+  return { kind: 'throttled' };
+}
+
 /** readCapped, parsed as JSON; a body that is not JSON is upstream_unavailable. */
 export async function readJsonCapped(res, max = MAX_BODY_BYTES, where = '') {
   const text = await readCapped(res, max, where);
