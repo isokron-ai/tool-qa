@@ -26,8 +26,6 @@ test('recordEvent appends rows with growing ids; listEvents reads after an id', 
   assert.equal(all[1].recorded_at, new Date(T0 + 1000).toISOString());
   assert.deepEqual(db.listEvents({ sinceId: a }).map((e) => e.id), [b]);
   assert.deepEqual(db.listEvents({ limit: 1 }).map((e) => e.id), [a]);
-  assert.throws(() => db.recordEvent({ type: '' }, T0), TypeError);
-  assert.throws(() => db.recordEvent({ type: 'x', n: -1 }, T0), TypeError);
 });
 
 test('an event id is never reused after the newest row is deleted', () => {
@@ -58,10 +56,13 @@ function withDispatch({ n = 2, now = T0, attemptId = 'att-1', ttlMs = 30 * MIN }
 const events = (db, type) => db.listEvents().filter((e) => type === undefined || e.type === type);
 const status = (db, id = 'att-1') => db.raw.prepare('SELECT status FROM dispatches WHERE attempt_id = ?').get(id)?.status;
 
-/** Make every insert into events fail, as a full disk or a bug would. */
-function breakEvents(db) {
-  db.raw.exec("CREATE TEMP TRIGGER events_fail BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'events insert refused'); END");
-  return () => db.raw.exec('DROP TRIGGER temp.events_fail');
+/** Make inserts into events fail (of one type, or all), as a full disk or a bug would. */
+function breakEvents(db, type = null) {
+  const when = type ? ` WHEN NEW.type = '${type}'` : '';
+  db.raw.exec(`CREATE TEMP TRIGGER events_fail BEFORE INSERT ON events${when} BEGIN SELECT RAISE(ABORT, 'events insert refused'); END`);
+  const lines = [];
+  db.log = (l) => lines.push(l);
+  return { lines, restore: () => db.raw.exec('DROP TRIGGER temp.events_fail') };
 }
 
 /** fn() inside an outer transaction that then throws: nothing it wrote may stay. */
@@ -69,42 +70,84 @@ function rolledBack(db, fn) {
   assert.throws(() => db.tx(() => { fn(); throw new Error('boom'); }), /boom/);
 }
 
-test('dispatch_created is written with the dispatch and rolls back with it', () => {
+/**
+ * With every event insert failing, call() still writes its fact (checked by
+ * factDone) and returns as usual; no event, the failure counted and logged once.
+ */
+function factKeptWithoutEvent(db, call, factDone, type) {
+  const before = db.listEvents().length;
+  const { lines, restore } = breakEvents(db);
+  call();
+  restore();
+  factDone();
+  assert.equal(db.listEvents().length, before, 'no event');
+  const f = db.getKv('events.insert_failures');
+  assert.equal(f.count, 1);
+  assert.equal(f.last_type, type);
+  assert.ok(Date.parse(f.last_at) > 0);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], new RegExp(`^state: event ${type} not recorded \\(events insert refused\\); its fact is kept$`));
+}
+
+test('a failing event insert is counted and logged and never thrown; recordEvent returns null', () => {
+  const db = openState(':memory:');
+  const lines = [];
+  db.log = (l) => lines.push(l);
+  assert.equal(db.recordEvent({ type: '' }, T0), null);
+  assert.equal(db.recordEvent({ type: 'x', n: -1 }, T0), null);
+  assert.equal(db.recordEvent(() => { throw new Error('lookup failed'); }, T0), null);
+  assert.deepEqual(db.getKv('events.insert_failures'), { count: 3, last_at: new Date(T0).toISOString(), last_type: null });
+  assert.equal(lines.length, 3);
+  assert.equal(db.listEvents().length, 0);
+  db.log = () => { throw new Error('log down'); };
+  assert.equal(db.recordEvent({ type: '' }, T0), null, 'a log that throws changes nothing');
+  assert.equal(db.inTx, false);
+});
+
+test('dispatch_created is written with the dispatch and rolls back with it; a failed event keeps the dispatch', () => {
   const { db } = withDispatch({ n: 3 });
   assert.deepEqual(events(db).map((e) => [e.type, e.lane, e.n, e.data]), [['dispatch_created', 'live-probe', 3, { shard_id: 'shard-1', items: 3 }]]);
   const l = db.acquireLease('k2', 'att-2', { ttlMs: MIN, now: T0 });
   const make = () => db.createDispatch({ attemptId: 'att-2', shardId: 's2', workflow: 'live-probe', repo: 'o/w', workflowFile: 'f.yml', ref: 'main', expires: T0 + MIN, items: [{ run_key: 'k2', subject: 'repo:9', fence: l.fence }], now: T0 });
   rolledBack(db, make);
-  const restore = breakEvents(db);
-  assert.throws(make, /events insert refused/);
-  restore();
-  assert.equal(status(db, 'att-2'), undefined, 'no dispatch without its event');
+  assert.equal(status(db, 'att-2'), undefined);
   assert.equal(events(db).length, 1);
+  factKeptWithoutEvent(db, make, () => assert.equal(status(db, 'att-2'), 'pending'), 'dispatch_created');
 });
 
 test('dispatch_sent is written with markDispatched (now in its own transaction), once', () => {
   const { db } = withDispatch();
-  const restore = breakEvents(db);
-  assert.throws(() => db.markDispatched('att-1', { runId: 42, runUrl: 'https://github.test/run/42', now: T0 + 1000 }), /events insert refused/);
-  restore();
-  assert.equal(status(db), 'pending', 'the dispatch is not marked sent without its event');
   rolledBack(db, () => db.markDispatched('att-1', { runId: 42, now: T0 + 1000 }));
   assert.equal(status(db), 'pending');
+  assert.equal(events(db, 'dispatch_sent').length, 0);
   assert.equal(db.markDispatched('att-1', { runId: 42, runUrl: 'https://github.test/run/42', now: T0 + 1000 }), true);
   assert.equal(db.markDispatched('att-1', { runId: 43, now: T0 + 2000 }), false);
   const sent = events(db, 'dispatch_sent');
   assert.deepEqual(sent.map((e) => [e.lane, e.n, e.data, e.occurred_at]), [['live-probe', 2, { run_id: '42', run_url: 'https://github.test/run/42' }, new Date(T0 + 1000).toISOString()]]);
+
+  const w = withDispatch();
+  factKeptWithoutEvent(w.db, () => assert.equal(w.db.markDispatched('att-1', { runId: 42, now: T0 + 1000 }), true), () => assert.equal(status(w.db), 'dispatched'), 'dispatch_sent');
+});
+
+test('setDispatchRun writes dispatch_sent (correlated by run name) for a pending dispatch only', () => {
+  const { db } = withDispatch();
+  rolledBack(db, () => db.setDispatchRun('att-1', { runId: 7, now: T0 + 1000 }));
+  assert.equal(status(db), 'pending');
+  assert.equal(db.setDispatchRun('att-1', { runId: 7, runUrl: 'https://github.test/run/7', correlatedBy: 'run-name', now: T0 + 1000 }), true);
+  assert.equal(db.setDispatchRun('att-1', { runId: 8, now: T0 + 2000 }), false);
+  assert.deepEqual(events(db, 'dispatch_sent').map((e) => [e.lane, e.n, e.data]), [['live-probe', 2, { run_id: '7', run_url: 'https://github.test/run/7', correlated_by: 'run-name' }]]);
+  // Marked sent without a run id: its dispatch_sent is from markDispatched, not again here.
+  const w = withDispatch();
+  w.db.markDispatched('att-1', { runId: null, now: T0 });
+  assert.equal(w.db.setDispatchRun('att-1', { runId: 9, now: T0 + 1000 }), true);
+  assert.deepEqual(events(w.db, 'dispatch_sent').map((e) => e.data), [{ run_id: null, run_url: null }]);
 });
 
 test('dispatch_failed is written with failDispatch and rolls back with it; a dispatch not pending writes nothing', () => {
   const { db, items } = withDispatch();
-  const restore = breakEvents(db);
-  assert.throws(() => db.failDispatch('att-1', { error: 'HTTP 422', status: 422, now: T0 + 1000 }), /events insert refused/);
-  restore();
-  assert.equal(status(db), 'pending');
-  assert.equal(db.getLease(items[0].run_key).holder, 'att-1', 'leases are not released without the event');
   rolledBack(db, () => db.failDispatch('att-1', { error: 'x', now: T0 + 1000 }));
   assert.equal(status(db), 'pending');
+  assert.equal(db.getLease(items[0].run_key).holder, 'att-1');
   assert.equal(db.failDispatch('att-1', { error: 'HTTP 422', status: 422, now: T0 + 1000 }), true);
   assert.equal(db.failDispatch('att-1', { error: 'again', now: T0 + 2000 }), false);
   assert.deepEqual(events(db, 'dispatch_failed').map((e) => [e.lane, e.n, e.data]), [['live-probe', 2, { status: 422, withdrawn: false }]]);
@@ -112,6 +155,12 @@ test('dispatch_failed is written with failDispatch and rolls back with it; a dis
   const w = withDispatch();
   w.db.failDispatch('att-1', { error: 'not sent: the run deadline passed', withdrawn: true, now: T0 + 1000 });
   assert.deepEqual(events(w.db, 'dispatch_failed').map((e) => e.data), [{ status: null, withdrawn: true }]);
+
+  const k = withDispatch();
+  factKeptWithoutEvent(k.db, () => k.db.failDispatch('att-1', { error: 'HTTP 422', status: 422, now: T0 + 1000 }), () => {
+    assert.equal(status(k.db), 'failed');
+    assert.equal(k.db.getLease(k.items[0].run_key).holder, null, 'leases released all the same');
+  }, 'dispatch_failed');
 });
 
 test('dispatch_unconfirmed is written for a pending dispatch only, and rolls back with its transaction', () => {
@@ -125,47 +174,40 @@ test('dispatch_unconfirmed is written for a pending dispatch only, and rolls bac
   assert.equal(db.noteUnconfirmedDispatch('att-1', { status: 0, now: T0 + 3000 }), false);
   assert.equal(db.noteUnconfirmedDispatch('nope', { now: T0 }), false);
   assert.equal(events(db, 'dispatch_unconfirmed').length, 1);
+  const w = withDispatch();
+  factKeptWithoutEvent(w.db, () => assert.equal(w.db.noteUnconfirmedDispatch('att-1', { status: 502, now: T0 }), true), () => assert.equal(status(w.db), 'pending'), 'dispatch_unconfirmed');
 });
 
 test('dispatch_expired is written per reaped dispatch and rolls back with the reap', () => {
   const { db } = withDispatch({ n: 3 });
   db.markDispatched('att-1', { runId: 1, now: T0 });
   const later = T0 + 31 * MIN;
-  const restore = breakEvents(db);
-  assert.throws(() => db.reapExpiredDispatches({ now: later }), /events insert refused/);
-  restore();
-  assert.equal(status(db), 'dispatched');
   rolledBack(db, () => db.reapExpiredDispatches({ now: later }));
   assert.equal(status(db), 'dispatched');
   assert.equal(db.reapExpiredDispatches({ now: later }).length, 1);
   assert.equal(db.reapExpiredDispatches({ now: later + MIN }).length, 0);
-  assert.deepEqual(events(db, 'dispatch_expired').map((e) => [e.lane, e.n, e.data]), [['live-probe', 3, { count: 3 }]]);
+  assert.deepEqual(events(db, 'dispatch_expired').map((e) => [e.lane, e.n, e.data]), [['live-probe', 3, {}]]);
+  const w = withDispatch();
+  factKeptWithoutEvent(w.db, () => assert.equal(w.db.reapExpiredDispatches({ now: later }).length, 1), () => assert.equal(status(w.db), 'expired'), 'dispatch_expired');
 });
 
 test('dispatch_closed is written with closeDispatch and rolls back with it; closing twice writes one', () => {
   const { db } = withDispatch();
   db.markDispatched('att-1', { runId: 1, now: T0 });
-  const restore = breakEvents(db);
-  assert.throws(() => db.closeDispatch('att-1', { reason: 'run_completed', now: T0 + MIN }), /events insert refused/);
-  restore();
-  assert.equal(status(db), 'dispatched');
   rolledBack(db, () => db.closeDispatch('att-1', { reason: 'run_completed', now: T0 + MIN }));
   assert.equal(status(db), 'dispatched');
   assert.equal(db.closeDispatch('att-1', { reason: 'run_completed', now: T0 + MIN }), true);
   assert.equal(db.closeDispatch('att-1', { reason: 'again', now: T0 + 2 * MIN }), false);
   assert.deepEqual(events(db, 'dispatch_closed').map((e) => [e.lane, e.n, e.data]), [['live-probe', 2, { close_reason: 'run_completed' }]]);
+  const w = withDispatch();
+  factKeptWithoutEvent(w.db, () => assert.equal(w.db.closeDispatch('att-1', { reason: 'run_completed', now: T0 + MIN }), true), () => assert.equal(status(w.db), 'done'), 'dispatch_closed');
 });
 
 test('result_recorded is written with each fresh result, never for a duplicate; the last result also writes dispatch_closed results_in', () => {
   const { db, items } = withDispatch();
   db.markDispatched('att-1', { runId: 1, now: T0 });
-  const rec = (i, over = {}) => db.recordResult({ run_key: items[i].run_key, attempt_id: 'att-1', fence: items[i].fence, outcome: 'accepted', verdict: 'accepted', fault: null, coverage: 'assessed', now: T0 + MIN, ...over });
+  const rec = (i, over = {}, d = db, its = items) => d.recordResult({ run_key: its[i].run_key, attempt_id: 'att-1', fence: its[i].fence, outcome: 'accepted', verdict: 'accepted', fault: null, coverage: 'assessed', now: T0 + MIN, ...over });
 
-  const restore = breakEvents(db);
-  assert.throws(() => rec(0), /events insert refused/);
-  restore();
-  assert.equal(db.listAttempts('repo:0').length, 0, 'no attempt without its event');
-  assert.equal(db.getResult(items[0].run_key), undefined);
   rolledBack(db, () => rec(0));
   assert.equal(db.listAttempts('repo:0').length, 0);
   assert.equal(events(db, 'result_recorded').length, 0);
@@ -180,56 +222,115 @@ test('result_recorded is written with each fresh result, never for a duplicate; 
   ]);
   assert.deepEqual(events(db, 'dispatch_closed').map((e) => e.data), [{ close_reason: 'results_in' }]);
   assert.deepEqual(events(db).map((e) => e.type), ['dispatch_created', 'dispatch_sent', 'result_recorded', 'result_recorded', 'dispatch_closed']);
+
+  const w = withDispatch();
+  w.db.markDispatched('att-1', { runId: 1, now: T0 });
+  factKeptWithoutEvent(w.db, () => assert.equal(rec(0, {}, w.db, w.items).accepted, true), () => assert.equal(w.db.getResult(w.items[0].run_key).attempt_id, 'att-1'), 'result_recorded');
+});
+
+test('an event goes when its fact fails after it was written (the results insert of recordResult)', () => {
+  const { db, items } = withDispatch();
+  db.markDispatched('att-1', { runId: 1, now: T0 });
+  db.raw.exec("CREATE TEMP TRIGGER results_fail BEFORE INSERT ON results BEGIN SELECT RAISE(ABORT, 'results insert refused'); END");
+  assert.throws(() => db.recordResult({ run_key: items[0].run_key, attempt_id: 'att-1', fence: items[0].fence, outcome: 'accepted', verdict: 'accepted', now: T0 + MIN }), /results insert refused/);
+  assert.equal(db.listAttempts('repo:0').length, 0);
+  assert.equal(events(db, 'result_recorded').length, 0, 'the event written before the failure rolled back with the fact');
+});
+
+test('event data is bounded: reasons, run URLs and held lane names are cut to 200 characters', () => {
+  const { db, items } = withDispatch();
+  const long = 'x'.repeat(500);
+  db.markDispatched('att-1', { runId: 1, runUrl: `https://github.test/${long}`, now: T0 });
+  db.recordResult({ run_key: items[0].run_key, attempt_id: 'att-1', fence: items[0].fence, outcome: 'rejected', verdict: 'rejected', reason: long, now: T0 + MIN });
+  db.noteBreaker('pump.breaker', { tripped: true, reason: long, held: [long] }, { now: T0 });
+  db.closeDispatch('att-1', { reason: long, now: T0 + 2 * MIN });
+  assert.equal(events(db, 'dispatch_sent')[0].data.run_url.length, 200);
+  assert.equal(events(db, 'result_recorded')[0].data.reason.length, 200);
+  const b = events(db, 'breaker_changed')[0].data;
+  assert.equal(b.reason.length, 200);
+  assert.equal(b.held[0].length, 200);
+  assert.equal(events(db, 'dispatch_closed')[0].data.close_reason.length, 200);
+  assert.equal(db.getKv('pump.breaker').reason.length, 500, 'the kv record itself is unchanged');
 });
 
 test('workflow_paused is written with the pause, in one transaction; mismatches below the limit write none', () => {
-  const db = openState(':memory:');
-  const note = (i) => db.noteShaMismatch('live-probe', { sha: `${i}`.repeat(40), created: T0 + i * 10 * MIN, now: T0 + i * 10 * MIN });
-  note(1);
-  note(2);
+  const mk = () => {
+    const db = openState(':memory:');
+    const note = (i) => db.noteShaMismatch('live-probe', { sha: `${i}`.repeat(40), created: T0 + i * 10 * MIN, now: T0 + i * 10 * MIN });
+    note(1);
+    note(2);
+    return { db, note };
+  };
+  const { db, note } = mk();
   assert.equal(events(db).length, 0);
-  const before = db.getKv('pump.sha_mismatch:live-probe');
-  const restore = breakEvents(db);
-  assert.throws(() => note(3), /events insert refused/);
-  restore();
-  assert.equal(db.getKv('pump.paused:live-probe'), undefined, 'no pause without its event');
-  assert.deepEqual(db.getKv('pump.sha_mismatch:live-probe'), before, 'the count is kept');
   rolledBack(db, () => note(3));
   assert.equal(db.getKv('pump.paused:live-probe'), undefined);
+  assert.equal(db.getKv('pump.sha_mismatch:live-probe').count, 2);
   assert.equal(note(3).paused, true);
   const until = db.getKv('pump.paused:live-probe').until;
   assert.deepEqual(events(db).map((e) => [e.type, e.lane, e.data]), [['workflow_paused', 'live-probe', { until }]]);
   assert.equal(db.getKv('pump.sha_mismatch:live-probe'), undefined);
+  const w = mk();
+  factKeptWithoutEvent(w.db, () => assert.equal(w.note(3).paused, true), () => {
+    assert.ok(w.db.getKv('pump.paused:live-probe'));
+    assert.equal(w.db.getKv('pump.sha_mismatch:live-probe'), undefined);
+  }, 'workflow_paused');
 });
 
 test('the pump notes write their kv record and event together, and the kv record reads as before', () => {
-  const db = openState(':memory:');
   const cases = [
-    ['notePumpRun', () => db.notePumpRun('finished', { ticks: 4, dispatched: 2, lastRun: { ticks: 4, dispatched: 2 } }, { now: T0 }), 'pump.last_run', { ticks: 4, dispatched: 2 }, ['pump_run_finished', { ticks: 4, dispatched: 2 }]],
-    ['noteSuccessor', () => db.noteSuccessor({ ok: false, error: 'POST returned HTTP 502', at: 'x' }, { now: T0 }), 'pump.successor', { ok: false, error: 'POST returned HTTP 502', at: 'x' }, ['successor', { ok: false, run_id: null, status: 502 }]],
-    ['noteRegistryDelta', () => db.noteRegistryDelta('pump.registry_delta', { action: 'dispatched', at: 'x' }, { now: T0 }), 'pump.registry_delta', { action: 'dispatched', at: 'x' }, ['registry_delta', { action: 'dispatched' }]],
-    ['noteBreaker', () => db.noteBreaker('pump.breaker', { tripped: true, reason: 'stale', held: ['live-probe'], at: 'x' }, { now: T0 }), 'pump.breaker', { tripped: true, reason: 'stale', held: ['live-probe'], at: 'x' }, ['breaker_changed', { tripped: true, reason: 'stale', held: ['live-probe'] }]],
+    ['notePumpRun', (db) => db.notePumpRun('finished', { ticks: 4, dispatched: 2, lastRun: { ticks: 4, dispatched: 2 } }, { now: T0 }), 'pump.last_run', { ticks: 4, dispatched: 2 }, ['pump_run_finished', { ticks: 4, dispatched: 2 }]],
+    ['noteSuccessor', (db) => db.noteSuccessor({ ok: false, error: 'POST returned HTTP 502', at: 'x' }, { now: T0 }), 'pump.successor', { ok: false, error: 'POST returned HTTP 502', at: 'x' }, ['successor', { ok: false, run_id: null, status: 502 }]],
+    ['noteRegistryDelta', (db) => db.noteRegistryDelta('pump.registry_delta', { action: 'dispatched', at: 'x' }, { now: T0 }), 'pump.registry_delta', { action: 'dispatched', at: 'x' }, ['registry_delta', { action: 'dispatched' }]],
+    ['noteBreaker', (db) => db.noteBreaker('pump.breaker', { tripped: true, reason: 'stale', held: ['live-probe'], at: 'x' }, { now: T0 }), 'pump.breaker', { tripped: true, reason: 'stale', held: ['live-probe'], at: 'x' }, ['breaker_changed', { tripped: true, reason: 'stale', held: ['live-probe'] }]],
   ];
   for (const [name, call, key, value, [type, data]] of cases) {
-    const restore = breakEvents(db);
-    assert.throws(call, /events insert refused/, name);
-    restore();
-    assert.equal(db.getKv(key), undefined, `${name}: no kv record without its event`);
-    rolledBack(db, call);
+    const db = openState(':memory:');
+    rolledBack(db, () => call(db));
     assert.equal(db.getKv(key), undefined, name);
-    call();
+    assert.equal(db.listEvents().length, 0, name);
+    call(db);
     assert.deepEqual(db.getKv(key), value, name);
     assert.deepEqual(events(db, type).map((e) => e.data), [data], name);
+    const w = openState(':memory:');
+    factKeptWithoutEvent(w, () => call(w), () => assert.deepEqual(w.getKv(key), value, name), type);
   }
+  const db = openState(':memory:');
   db.notePumpRun('started', { occurredAt: T0 - 5000 }, { now: T0 });
   const started = events(db, 'pump_run_started');
   assert.deepEqual(started.map((e) => [e.occurred_at, e.data]), [[new Date(T0 - 5000).toISOString(), { ticks: 0, dispatched: 0 }]]);
+  const w = openState(':memory:');
+  factKeptWithoutEvent(w, () => w.notePumpRun('started', {}, { now: T0 }), () => {}, 'pump_run_started');
   db.noteSuccessor({ ok: true, at: 'y', runId: 77 }, { now: T0 });
   assert.deepEqual(events(db, 'successor').at(-1).data, { ok: true, run_id: 77, status: null });
   for (const action of ['fresh', 'running', 'spaced']) db.noteRegistryDelta('pump.registry_delta', { action, at: 'z' }, { now: T0 });
   assert.equal(db.getKv('pump.registry_delta').action, 'spaced', 'the record is still written');
-  assert.equal(events(db, 'registry_delta').length, 1, 'only dispatched or failed is an event');
+  assert.equal(events(db, 'registry_delta').length, 0, 'only dispatched or failed is an event');
   assert.throws(() => db.notePumpRun('paused', {}, { now: T0 }), TypeError);
+});
+
+// ---- events on or off: everything else is the same ----
+
+test('the same history with events recorded and with recordEvent a no-op leaves every other table byte for byte the same', () => {
+  const dumpOthers = (db) => {
+    const tables = db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'events' ORDER BY name").all().map((r) => r.name);
+    return Object.fromEntries(tables.map((t) => [t, JSON.stringify(db.raw.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all().map((r) => Object.entries(r)))]));
+  };
+  const on = buildHistory({ seed: 5, days: 10, subjects: 6 });
+  assert.ok(on.db.listEvents({ limit: 1 }).length === 1);
+  const real = StateDb.prototype.recordEvent;
+  let off;
+  StateDb.prototype.recordEvent = function noEvent() { return null; };
+  try {
+    off = buildHistory({ seed: 5, days: 10, subjects: 6 });
+  } finally {
+    StateDb.prototype.recordEvent = real;
+  }
+  assert.equal(off.db.raw.prepare('SELECT COUNT(*) AS n FROM events').get().n, 0);
+  assert.deepEqual(dumpOthers(off.db), dumpOthers(on.db));
+  assert.equal(on.db.getKv('events.insert_failures'), undefined);
+  on.db.close();
+  off.db.close();
 });
 
 // ---- migration 9 -> 10 ----

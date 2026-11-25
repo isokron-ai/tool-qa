@@ -94,6 +94,11 @@ function checkTtl(ttlMs) {
 export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch']);
 const NOT_COUNTED = NOT_COUNTED_REASONS.map((r) => `'${r}'`).join(', ');
 
+/** Event data strings are bounded (reasons, URLs, lane names). */
+function cap(v, max = 200) {
+  return typeof v === 'string' ? v.slice(0, max) : v;
+}
+
 function plain(row) {
   return row ? { ...row } : undefined;
 }
@@ -125,6 +130,8 @@ export class StateDb {
   constructor(path) {
     this.raw = new DatabaseSync(path);
     this.inTx = false;
+    /** Where a failed event insert is reported (one line); the pump sets its own log. */
+    this.log = (line) => process.stderr.write(`${line}\n`);
     this.raw.exec('PRAGMA journal_mode = DELETE; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
   }
 
@@ -747,18 +754,20 @@ export class StateDb {
         WHERE attempt_id = ? AND status = 'pending'
       `).run(runId === null ? null : String(runId), runUrl, workflowSha, correlatedBy, attemptId);
       if (r.changes === 0) return false;
-      this.dispatchEvent('dispatch_sent', attemptId, { run_id: runId === null ? null : String(runId), run_url: runUrl }, now);
+      this.dispatchEvent('dispatch_sent', attemptId, { run_id: runId === null ? null : String(runId), run_url: cap(runUrl) }, now);
       return true;
     });
   }
 
   /** An event about one dispatch: lane its workflow, n its item count. */
   dispatchEvent(type, attemptId, data, now) {
-    const d = this.raw.prepare(`
-      SELECT d.workflow, (SELECT COUNT(*) FROM dispatch_items i WHERE i.attempt_id = d.attempt_id) AS n
-      FROM dispatches d WHERE d.attempt_id = ?
-    `).get(attemptId);
-    return this.recordEvent({ type, lane: d?.workflow ?? null, n: d?.n ?? 0, data }, now);
+    return this.recordEvent(() => {
+      const d = this.raw.prepare(`
+        SELECT d.workflow, (SELECT COUNT(*) FROM dispatch_items i WHERE i.attempt_id = d.attempt_id) AS n
+        FROM dispatches d WHERE d.attempt_id = ?
+      `).get(attemptId);
+      return { type, lane: d?.workflow ?? null, n: d?.n ?? 0, data };
+    }, now);
   }
 
   /**
@@ -771,13 +780,20 @@ export class StateDb {
    * against (R-ING-12). Ingest compares the run with the commit recorded when
    * the dispatch was created.
    */
-  setDispatchRun(attemptId, { runId, runUrl = null, correlatedBy = null } = {}) {
+  setDispatchRun(attemptId, { runId, runUrl = null, correlatedBy = null, now } = {}) {
     if (runId === undefined || runId === null) throw new TypeError('setDispatchRun needs a runId');
-    const r = this.raw.prepare(`
-      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, correlated_by = ?
-      WHERE attempt_id = ? AND run_id IS NULL AND status IN ('pending', 'dispatched')
-    `).run(String(runId), runUrl, correlatedBy, attemptId);
-    return r.changes > 0;
+    return this.tx(() => {
+      // A pending one was never marked sent, so this is its dispatch_sent; a
+      // dispatched one had its event from markDispatched already.
+      const wasPending = this.raw.prepare("SELECT 1 FROM dispatches WHERE attempt_id = ? AND status = 'pending' AND run_id IS NULL").get(attemptId);
+      const r = this.raw.prepare(`
+        UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, correlated_by = ?
+        WHERE attempt_id = ? AND run_id IS NULL AND status IN ('pending', 'dispatched')
+      `).run(String(runId), runUrl, correlatedBy, attemptId);
+      if (r.changes === 0) return false;
+      if (wasPending) this.dispatchEvent('dispatch_sent', attemptId, { run_id: String(runId), run_url: cap(runUrl), correlated_by: 'run-name' }, now);
+      return true;
+    });
   }
 
   /**
@@ -834,7 +850,7 @@ export class StateDb {
         this.releaseLease(it.run_key, attemptId, it.fence, { now });
       }
       this.releaseSlotForAttempt(attemptId, why, { now });
-      this.dispatchEvent('dispatch_closed', attemptId, { close_reason: why }, now);
+      this.dispatchEvent('dispatch_closed', attemptId, { close_reason: cap(why) }, now);
       return true;
     });
   }
@@ -966,8 +982,7 @@ export class StateDb {
       for (const d of rows) {
         this.raw.prepare("UPDATE dispatches SET status = 'expired', closed = ?, close_reason = 'lease_expired' WHERE attempt_id = ?").run(t, d.attempt_id);
         this.releaseSlotForAttempt(d.attempt_id, 'expired', { now });
-        const n = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ?').get(d.attempt_id).n;
-        this.recordEvent({ type: 'dispatch_expired', lane: d.workflow, n, data: { count: n } }, now);
+        this.dispatchEvent('dispatch_expired', d.attempt_id, {}, now);
       }
       this.reapExpired({ now });
       return rows;
@@ -1053,7 +1068,7 @@ export class StateDb {
       `).run(subject, attemptId, Number.isSafeInteger(fence) ? fence : -1, d?.run_id ?? null, runKey, digest, t, ok ? 1 : 0, why, attemptId, stored);
       this.recordEvent({
         type: 'result_recorded', lane: item?.workflow ?? d?.workflow ?? this.getRunKey(runKey)?.workflow ?? null, subject: subject === 'unknown' ? null : subject,
-        data: { verdict: ok ? 'accepted' : 'rejected', reason: why, outcome: ok ? resultOutcome ?? outcome : stored, fault: ok ? fault : null, coverage: ok ? coverage : null },
+        data: { verdict: ok ? 'accepted' : 'rejected', reason: cap(why), outcome: ok ? resultOutcome ?? outcome : stored, fault: ok ? fault : null, coverage: ok ? coverage : null },
       }, now);
       if (current) {
         this.raw.prepare('UPDATE dispatch_items SET resolved = ? WHERE attempt_id = ? AND run_key = ?').run(t, attemptId, runKey);
@@ -1368,17 +1383,55 @@ export class StateDb {
 
   /**
    * Append one event. Call it inside the transaction that writes the fact it
-   * describes, so the two commit or roll back together. occurredAt defaults to
-   * now; data is stored as JSON. Returns the new id.
+   * describes: an event commits only with its fact. `event` is the event or a
+   * function that returns it (run inside the guard below). occurredAt
+   * defaults to now; data is stored as JSON. Returns the new id.
+   *
+   * A failed event never undoes or blocks its fact: the insert runs in its
+   * own savepoint, and if anything about it throws, only that savepoint is
+   * rolled back, the failure is counted in kv `events.insert_failures`
+   * ({count, last_at, last_type}, in the same transaction), one line is
+   * logged, and null is returned.
    */
-  recordEvent({ type, occurredAt, lane = null, n = 1, subject = null, data = {} } = {}, now) {
-    if (typeof type !== 'string' || type === '') throw new TypeError('recordEvent needs a type');
-    if (!Number.isSafeInteger(n) || n < 0) throw new TypeError(`recordEvent n must be a whole number >= 0, got ${n}`);
-    const recorded = iso(now);
-    const r = this.raw.prepare(`
-      INSERT INTO events (type, occurred_at, recorded_at, lane, n, subject, data) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(type, occurredAt === undefined || occurredAt === null ? recorded : iso(occurredAt), recorded, lane ?? null, n, subject ?? null, JSON.stringify(data ?? {}));
-    return Number(r.lastInsertRowid);
+  recordEvent(event = {}, now) {
+    return this.tx(() => {
+      this.raw.exec('SAVEPOINT event_insert');
+      let type = typeof event === 'function' ? null : event?.type ?? null;
+      try {
+        const ev = typeof event === 'function' ? event() : event;
+        type = ev?.type ?? null;
+        const { occurredAt, lane = null, n = 1, subject = null, data = {} } = ev ?? {};
+        if (typeof type !== 'string' || type === '') throw new TypeError('recordEvent needs a type');
+        if (!Number.isSafeInteger(n) || n < 0) throw new TypeError(`recordEvent n must be a whole number >= 0, got ${n}`);
+        const recorded = iso(now);
+        const r = this.raw.prepare(`
+          INSERT INTO events (type, occurred_at, recorded_at, lane, n, subject, data) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(type, occurredAt === undefined || occurredAt === null ? recorded : iso(occurredAt), recorded, lane ?? null, n, subject ?? null, JSON.stringify(data ?? {}));
+        this.raw.exec('RELEASE event_insert');
+        return Number(r.lastInsertRowid);
+      } catch (err) {
+        try {
+          this.raw.exec('ROLLBACK TO event_insert');
+          this.raw.exec('RELEASE event_insert');
+        } catch {
+          throw err; // SQLite gave up the whole transaction: the fact is gone too
+        }
+        this.noteEventFailure(type, err, now);
+        return null;
+      }
+    });
+  }
+
+  /** Count and log an event that could not be recorded (never throws). */
+  noteEventFailure(type, err, now) {
+    const t = Number.isFinite(toMs(now)) ? iso(now) : new Date().toISOString();
+    try {
+      const prev = this.getKv('events.insert_failures');
+      this.setKv('events.insert_failures', { count: (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1, last_at: t, last_type: cap(type) }, { now: t });
+    } catch { /* the count is best effort */ }
+    try {
+      this.log(`state: event ${cap(type) ?? '(no type)'} not recorded (${cap(String(err?.message ?? err))}); its fact is kept`);
+    } catch { /* a log that throws changes nothing */ }
   }
 
   /** Events with id > sinceId, oldest first, at most `limit`; data parsed. */
@@ -1429,7 +1482,7 @@ export class StateDb {
       this.setKv(key, value, { now });
       return this.recordEvent({
         type: 'breaker_changed',
-        data: { tripped: value?.tripped === true, reason: value?.reason ?? null, held: Array.isArray(value?.held) ? value.held : [] },
+        data: { tripped: value?.tripped === true, reason: cap(value?.reason ?? null), held: Array.isArray(value?.held) ? value.held.map((h) => cap(h)) : [] },
       }, now);
     });
   }

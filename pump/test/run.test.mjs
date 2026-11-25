@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import { runPump } from '../run.mjs';
 import { ApiBudget } from '../budgets.mjs';
-import { openState } from '../../state/db.mjs';
+import { openState, StateDb } from '../../state/db.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
 import { backed, greenStatus } from '../../test/lib/conformance.mjs';
 import { IngestSetupError } from '../../ingest/collect.mjs';
@@ -119,6 +119,21 @@ test('the successor result is recorded for the watchdog', async () => {
   assert.deepEqual(db.getKv('pump.successor'), { ok: false, error: 'HTTP 502', at: '2026-03-02T10:00:00.000Z' });
   assert.deepEqual(db.listEvents().filter((e) => e.type === 'successor').map((e) => e.data), [{ ok: false, run_id: null, status: 502 }]);
   db.close();
+  h.cleanup();
+});
+
+test('a state error while recording the successor result is logged as such, and the run goes on', async () => {
+  const h = harness({ slots: '0', successor: { ok: true, at: '2026-03-02T10:00:00.000Z' } });
+  const real = StateDb.prototype.noteSuccessor;
+  StateDb.prototype.noteSuccessor = () => { throw new Error('database is locked'); };
+  try {
+    const out = await runPump(h.opts);
+    assert.equal(out.ticks, 1);
+  } finally {
+    StateDb.prototype.noteSuccessor = real;
+  }
+  assert.ok(h.lines.includes('pump: could not record the successor result in the state: database is locked'), h.lines.join('\n'));
+  assert.ok(!h.lines.some((l) => l.startsWith('pump: could not read the successor result')));
   h.cleanup();
 });
 

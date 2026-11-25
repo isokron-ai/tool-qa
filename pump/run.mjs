@@ -263,6 +263,7 @@ export async function runPump({
       }
     }
     db = openState(stateFile);
+    db.log = say; // a failed event insert is one line here; its fact is kept
   } catch (err) {
     say(`pump: cannot start: ${err?.message ?? err}`);
     // A GitHub outage or rate limit may pass by the next run: the chain goes on.
@@ -300,10 +301,18 @@ export async function runPump({
   try {
     db.notePumpRun('started', { occurredAt: start }, { now: now() });
     if (successorFile && existsSync(successorFile)) {
+      let result;
       try {
-        db.noteSuccessor(JSON.parse(readFileSync(successorFile, 'utf8')), { now: now() });
+        result = JSON.parse(readFileSync(successorFile, 'utf8'));
       } catch (err) {
         say(`pump: could not read the successor result: ${err.message}`);
+      }
+      if (result !== undefined) {
+        try {
+          db.noteSuccessor(result, { now: now() });
+        } catch (err) {
+          say(`pump: could not record the successor result in the state: ${err?.message ?? err}`);
+        }
       }
     }
     // The seed subjects (pump/subjects.mjs); written only when the seed file changed.

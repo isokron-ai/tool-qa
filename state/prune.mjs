@@ -91,7 +91,11 @@ export function pruneFloorMs(lateMs) {
   return Math.max(0, Number(lateMs) || 0) + HOUR;
 }
 
-/** Tables in the order rows are deleted (children before parents, leases before run_keys). */
+/**
+ * Tables in the order rows are deleted (children before parents, leases before
+ * run_keys). events is last, so when a pass hits its row or time budget it is
+ * the first table left for the next pass.
+ */
 export const DELETE_ORDER = Object.freeze(['dispatch_items', 'dispatches', 'kv', 'attempts', 'slot_ledger', 'leases', 'run_keys', 'events']);
 
 /** The columns that identify a row of each table. */

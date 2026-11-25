@@ -339,6 +339,16 @@ merge the revert, then turn the pump back on. Pruned rows stay in their
 archives; nothing needs them back. To stop pruning without going back, set
 `LANE_STATE_PRUNE_ENABLED=false`.
 
+**Going back past schema v10 (the events table).** The first pump run with
+v10 code migrates the state, and code from before it (the pump and the
+watchdog) refuses a v10 state ("newer than this code"). To roll back, either
+restore the last v9 snapshot with `snapshot/restore.mjs` ("State snapshots";
+the runs since then are lost), or merge a revert that keeps
+`state/schema-v10.sql` and `SCHEMA_VERSION = 10` so the state stays readable
+and only the event writes go. A failed event insert never blocks its fact: it
+is counted in kv `events.insert_failures` (`{ count, last_at, last_type }`)
+and logged as one line, `state: event <type> not recorded`.
+
 ## State snapshots
 
 The state asset is overwritten on every pump run, so on its own a damaged or
