@@ -9,12 +9,18 @@ didn't fire after recovery. GitHub's scheduled runs are unreliable under load: t
 5–9 hours. This Worker doesn't depend on GitHub's scheduler.
 
 **Safety.**
-- **Kill switches.** It dispatches nothing while tool-qa's `LOOP_ENABLED` variable is not `true`, while
-  `HEARTBEAT_ENABLED` (in `wrangler.toml`) is not `true`, or when it can't read either.
+- **Kill switches.** It reads the loop's variables the way `scripts/guard.mjs` does. It dispatches nothing while
+  tool-qa's `LOOP_ENABLED` variable is not `true`, while `HEARTBEAT_ENABLED` (in `wrangler.toml`) is not `true`, or when
+  it can't read a variable (401, 5xx, network). It leaves a workflow alone while `LOOP_PAUSE_UNTIL` is in the future
+  (or unreadable) or that workflow's `LANE_PUMP_ENABLED` / `LANE_WATCHDOG_ENABLED` is set and not `true`, and the pump
+  alone while `LOOP_SLOTS` is set to 0. A variable that isn't set (404) takes the guard's default.
+- **Stuck runs.** A run that stays queued longer than twice its workflow's timeout (pump 40 min, watchdog 20 min)
+  doesn't count as healthy: the Worker logs a warning and dispatches.
 - **No route.** It only runs on its cron trigger, and has no `workers.dev` URL.
 - **Narrow token.** `GH_TOKEN` is a fine-grained token for isokron-ai/tool-qa only. It has **Actions: read and
   write** and **Variables: read**, nothing else.
-- **Duplicate dispatches are harmless.** Both workflows run in a concurrency group with `cancel-in-progress: false`.
+- **Duplicate dispatches are harmless.** The pump's concurrency group (`pump`, `cancel-in-progress: false`) keeps one
+  run going and one pending, and a newer pending run supersedes an older one. The watchdog has the same shape.
 
 **Cost.** It makes 288 runs a day, each a few GitHub API calls. That's well inside the Workers free plan.
 
