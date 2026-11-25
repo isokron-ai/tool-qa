@@ -190,7 +190,7 @@ export async function runTick({
     } catch (err) {
       for (const l of leased) db.releaseLease(l.run_key, attemptId, l.fence, { now: t });
       db.releaseSlotForAttempt(attemptId, 'failed', { now: t });
-      for (const r of reserved) db.failDispatch(r.attemptId, { error: 'not sent: the tick failed before sending', now: now() });
+      for (const r of reserved) db.failDispatch(r.attemptId, { error: 'not sent: the tick failed before sending', withdrawn: true, now: now() });
       throw err;
     }
     reserved.push({ shard, wf, attemptId, shardId, leased, workflowSha });
@@ -203,7 +203,7 @@ export async function runTick({
   // nothing is sent and the reservations are withdrawn.
   const withdraw = (list, why) => {
     for (const r of list) {
-      db.failDispatch(r.attemptId, { error: `not sent: ${why}`, now: now() });
+      db.failDispatch(r.attemptId, { error: `not sent: ${why}`, withdrawn: true, now: now() });
       summary.withdrawn += 1;
     }
   };
@@ -249,7 +249,7 @@ export async function runTick({
       const inputs = workerInputs({ shardId, attemptId, items: leased });
       const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile: wf.file, ref: wf.ref, inputs, shardId });
       // The expected commit was recorded at creation; markDispatched keeps it.
-      db.markDispatched(attemptId, { runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, correlatedBy: out?.correlatedBy ?? null });
+      db.markDispatched(attemptId, { runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, correlatedBy: out?.correlatedBy ?? null, now: now() });
       summary.dispatched += 1;
       log(`dispatched ${shardId}: ${leased.length} item(s) to ${wf.repo} ${wf.file}${out?.runId ? `, run ${out.runId}` : ', run not matched yet'}`);
     } catch (err) {
@@ -264,9 +264,10 @@ export async function runTick({
         // them now would let a run the slot ledger does not count go on, its
         // result never judged, while the same work is sent again.
         summary.unconfirmed = (summary.unconfirmed ?? 0) + 1;
+        db.noteUnconfirmedDispatch(attemptId, { status: Number(err?.status) || null, now: now() });
         log(`dispatch of ${shardId} may or may not have started a run (${message}); it stays pending until ingest finds its run or its lease expires`);
       } else {
-        db.failDispatch(attemptId, { error: message, now: now() });
+        db.failDispatch(attemptId, { error: message, status: Number(err?.status) || null, now: now() });
         log(`dispatch of ${shardId} failed: ${message}`);
       }
       const stop = stopReason(err);

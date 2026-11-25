@@ -214,13 +214,33 @@ test('when the outputs cannot be sealed nothing is recorded, and the next tick j
     assert.equal(db.getLease(RUN_KEY).holder, 'att-1');
     assert.equal(existsSync(h.sealed()), false);
     assert.ok(h.lines.some((l) => /att-1.*disk full.*try again/.test(l)), h.lines.join('\n'));
+    const types = () => db.listEvents().map((e) => e.type).filter((t) => t !== 'dispatch_created' && t !== 'dispatch_sent');
+    assert.deepEqual(types(), [], 'the result_recorded and dispatch_closed events were rolled back with the result');
 
     fail = false;
     const again = await h.collect(db);
     assert.deepEqual(again.outcomes, { accepted: 1 });
+    assert.deepEqual(types(), ['result_recorded', 'dispatch_closed']);
+    await h.collect(db);
+    assert.deepEqual(types(), ['result_recorded', 'dispatch_closed'], 'looking again writes nothing');
     assert.equal(db.getResult(RUN_KEY).attempt_id, 'att-1');
     assert.ok(existsSync(h.sealed()));
     assert.equal(db.ingestFailures('att-1', 0).count, 0, 'the count goes with the decision');
+  } finally {
+    h.cleanup();
+    db.close();
+  }
+});
+
+test('a dispatch refused before any item is judged writes no result_recorded event; its close is one dispatch_closed', async () => {
+  const { db } = setup();
+  const api = worker({ run: defaultRun({ id: RUN_ID + 1 }) }); // GitHub answers with another run: run_not_found
+  const h = harness({ api });
+  try {
+    await h.collect(db);
+    assert.equal(db.listAttempts('repo:1').length, 0, 'nothing recorded');
+    assert.equal(db.getDispatch('att-1').status, 'done');
+    assert.deepEqual(db.listEvents().map((e) => [e.type, e.data.close_reason ?? null]), [['dispatch_created', null], ['dispatch_sent', null], ['dispatch_closed', 'run_completed']]);
   } finally {
     h.cleanup();
     db.close();

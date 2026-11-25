@@ -298,9 +298,10 @@ export async function runPump({
     }
   };
   try {
+    db.notePumpRun('started', { occurredAt: start }, { now: now() });
     if (successorFile && existsSync(successorFile)) {
       try {
-        db.setKv('pump.successor', JSON.parse(readFileSync(successorFile, 'utf8')), { now: now() });
+        db.noteSuccessor(JSON.parse(readFileSync(successorFile, 'utf8')), { now: now() });
       } catch (err) {
         say(`pump: could not read the successor result: ${err.message}`);
       }
@@ -349,7 +350,7 @@ export async function runPump({
           registryUntil = until;
           r = await ensureRegistryDelta({ client: registryClient, repo, ref: env.GITHUB_REF_NAME || 'main', now: now(), lastDispatchAt: Number.isFinite(lastDispatchAt) ? lastDispatchAt : null, lastCaptureAt: Number.isFinite(Date.parse(prior?.captureAt)) ? Date.parse(prior.captureAt) : null, log: say });
         }
-        db.setKv(REGISTRY_DELTA_KEY, { ...r, dispatchedAt: r.action === 'dispatched' ? r.at : prior?.dispatchedAt ?? null, captureAt: r.captureAt ?? prior?.captureAt ?? null }, { now: now() });
+        db.noteRegistryDelta(REGISTRY_DELTA_KEY, { ...r, dispatchedAt: r.action === 'dispatched' ? r.at : prior?.dispatchedAt ?? null, captureAt: r.captureAt ?? prior?.captureAt ?? null }, { now: now() });
       } catch (err) {
         // Never blocks the pump.
         say(`pump: registry delta check failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
@@ -380,7 +381,7 @@ export async function runPump({
         say(breaker.tripped
           ? `pump: sandbox breaker open (${breaker.reason}): not dispatching ${breaker.held.join(', ')}: ${breaker.summary}`
           : `pump: sandbox breaker closed: ${breaker.summary}${breaker.mismatch.length ? `; pinned at another sandbox commit than the one tested: ${breaker.mismatch.map((m) => m.lane).join(', ')}` : ''}`);
-        db.setKv(BREAKER_KEY, { ...breaker, at: new Date(now()).toISOString() }, { now: now() });
+        db.noteBreaker(BREAKER_KEY, { ...breaker, at: new Date(now()).toISOString() }, { now: now() });
         lastBreaker = breaker;
       }
       const tickConfig = breaker?.tripped ? { ...cfg, workflows: allowedWorkflows(cfg.workflows, breaker) } : cfg;
@@ -435,7 +436,7 @@ export async function runPump({
       say(`pump: could not record the state size: ${err?.message ?? err}`);
     }
     keepBudget();
-    db.setKv('pump.last_run', { started: new Date(start).toISOString(), finished: new Date(now()).toISOString(), ticks, dispatched, failed, workerSlots, loopBudget }, { now: now() });
+    db.notePumpRun('finished', { ticks, dispatched, lastRun: { started: new Date(start).toISOString(), finished: new Date(now()).toISOString(), ticks, dispatched, failed, workerSlots, loopBudget } }, { now: now() });
   } finally {
     db.close();
   }

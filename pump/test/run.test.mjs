@@ -95,6 +95,7 @@ test('LOOP_SLOTS=0: one housekeeping tick, no dispatches, state still saved', as
   const db = openState(h.stateFile);
   assert.equal(db.getKv('pump.last_tick').dispatched, 0);
   assert.equal(db.getKv('pump.last_run').ticks, 1);
+  assert.deepEqual(db.listEvents().map((e) => [e.type, e.data]), [['pump_run_started', { ticks: 0, dispatched: 0 }], ['pump_run_finished', { ticks: 1, dispatched: 0 }]]);
   db.close();
   h.cleanup();
 });
@@ -116,6 +117,7 @@ test('the successor result is recorded for the watchdog', async () => {
   await runPump(h.opts);
   const db = openState(h.stateFile);
   assert.deepEqual(db.getKv('pump.successor'), { ok: false, error: 'HTTP 502', at: '2026-03-02T10:00:00.000Z' });
+  assert.deepEqual(db.listEvents().filter((e) => e.type === 'successor').map((e) => e.data), [{ ok: false, run_id: null, status: 502 }]);
   db.close();
   h.cleanup();
 });
@@ -453,6 +455,7 @@ test('R-WD-01: a red, stale or unreadable conformance status holds every untrust
     assert.equal(b.reason, reason);
     assert.deepEqual(b.held, ['live-probe']);
     assert.deepEqual(db.getKv('pump.last_tick').breaker, { tripped: true, reason, held: ['live-probe'] });
+    assert.deepEqual(db.listEvents().filter((e) => e.type === 'breaker_changed').map((e) => e.data), [{ tripped: true, reason, held: ['live-probe'] }], 'one event: the breaker did not change again');
     db.close();
     h.cleanup();
   }

@@ -730,6 +730,7 @@ export class StateDb {
       // result is recorded under the subject key whatever it is called later.
       const ins = this.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence, item_index, subject_name) VALUES (?, ?, ?, ?, ?, ?, ?)');
       items.forEach((it, index) => ins.run(attemptId, it.run_key, it.subject, workflow, it.fence, index, it.subject_name ?? it.name ?? null));
+      this.recordEvent({ type: 'dispatch_created', lane: workflow, n: items.length, data: { shard_id: shardId, items: items.length } }, now);
     });
   }
 
@@ -737,14 +738,27 @@ export class StateDb {
    * The worker run was created. runId may be null when it could not be
    * correlated yet. workflowSha only fills in a dispatch created without the
    * expected commit; the one recorded at creation (the ref's commit before
-   * sending) is never replaced.
+   * sending) is never replaced. Records a dispatch_sent event with it.
    */
-  markDispatched(attemptId, { runId = null, runUrl = null, workflowSha = null, correlatedBy = null } = {}) {
-    const r = this.raw.prepare(`
-      UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = COALESCE(workflow_sha, ?), correlated_by = ?
-      WHERE attempt_id = ? AND status = 'pending'
-    `).run(runId === null ? null : String(runId), runUrl, workflowSha, correlatedBy, attemptId);
-    return r.changes > 0;
+  markDispatched(attemptId, { runId = null, runUrl = null, workflowSha = null, correlatedBy = null, now } = {}) {
+    return this.tx(() => {
+      const r = this.raw.prepare(`
+        UPDATE dispatches SET status = 'dispatched', run_id = ?, run_url = ?, workflow_sha = COALESCE(workflow_sha, ?), correlated_by = ?
+        WHERE attempt_id = ? AND status = 'pending'
+      `).run(runId === null ? null : String(runId), runUrl, workflowSha, correlatedBy, attemptId);
+      if (r.changes === 0) return false;
+      this.dispatchEvent('dispatch_sent', attemptId, { run_id: runId === null ? null : String(runId), run_url: runUrl }, now);
+      return true;
+    });
+  }
+
+  /** An event about one dispatch: lane its workflow, n its item count. */
+  dispatchEvent(type, attemptId, data, now) {
+    const d = this.raw.prepare(`
+      SELECT d.workflow, (SELECT COUNT(*) FROM dispatch_items i WHERE i.attempt_id = d.attempt_id) AS n
+      FROM dispatches d WHERE d.attempt_id = ?
+    `).get(attemptId);
+    return this.recordEvent({ type, lane: d?.workflow ?? null, n: d?.n ?? 0, data }, now);
   }
 
   /**
@@ -766,8 +780,11 @@ export class StateDb {
     return r.changes > 0;
   }
 
-  /** The dispatch call failed: close it and free its leases and slot so the work is due again. */
-  failDispatch(attemptId, { error, now } = {}) {
+  /**
+   * The dispatch call failed: close it and free its leases and slot so the work is due again.
+   * status: the HTTP status of the failed call, if any; withdrawn: it was never sent.
+   */
+  failDispatch(attemptId, { error, status = null, withdrawn = false, now } = {}) {
     const t = iso(now);
     return this.tx(() => {
       const r = this.raw.prepare(`
@@ -779,6 +796,21 @@ export class StateDb {
         this.releaseLease(it.run_key, attemptId, it.fence, { now });
       }
       this.releaseSlotForAttempt(attemptId, 'failed', { now });
+      this.dispatchEvent('dispatch_failed', attemptId, { status: Number.isSafeInteger(status) ? status : null, withdrawn: withdrawn === true }, now);
+      return true;
+    });
+  }
+
+  /**
+   * The dispatch call ended so that GitHub may or may not have started the run
+   * (R-CHAOS-05): the dispatch stays pending. Only records a
+   * dispatch_unconfirmed event; false if the dispatch is not pending.
+   */
+  noteUnconfirmedDispatch(attemptId, { status = null, now } = {}) {
+    return this.tx(() => {
+      const d = this.raw.prepare("SELECT 1 FROM dispatches WHERE attempt_id = ? AND status = 'pending'").get(attemptId);
+      if (!d) return false;
+      this.dispatchEvent('dispatch_unconfirmed', attemptId, { status: Number.isSafeInteger(status) ? status : null }, now);
       return true;
     });
   }
@@ -802,6 +834,7 @@ export class StateDb {
         this.releaseLease(it.run_key, attemptId, it.fence, { now });
       }
       this.releaseSlotForAttempt(attemptId, why, { now });
+      this.dispatchEvent('dispatch_closed', attemptId, { close_reason: why }, now);
       return true;
     });
   }
@@ -933,6 +966,8 @@ export class StateDb {
       for (const d of rows) {
         this.raw.prepare("UPDATE dispatches SET status = 'expired', closed = ?, close_reason = 'lease_expired' WHERE attempt_id = ?").run(t, d.attempt_id);
         this.releaseSlotForAttempt(d.attempt_id, 'expired', { now });
+        const n = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ?').get(d.attempt_id).n;
+        this.recordEvent({ type: 'dispatch_expired', lane: d.workflow, n, data: { count: n } }, now);
       }
       this.reapExpired({ now });
       return rows;
@@ -1016,6 +1051,10 @@ export class StateDb {
         INSERT INTO attempts (subject, holder, fence, run_id, run_key, digest, received, accepted, reason, attempt_id, outcome)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(subject, attemptId, Number.isSafeInteger(fence) ? fence : -1, d?.run_id ?? null, runKey, digest, t, ok ? 1 : 0, why, attemptId, stored);
+      this.recordEvent({
+        type: 'result_recorded', lane: item?.workflow ?? d?.workflow ?? this.getRunKey(runKey)?.workflow ?? null, subject: subject === 'unknown' ? null : subject,
+        data: { verdict: ok ? 'accepted' : 'rejected', reason: why, outcome: ok ? resultOutcome ?? outcome : stored, fault: ok ? fault : null, coverage: ok ? coverage : null },
+      }, now);
       if (current) {
         this.raw.prepare('UPDATE dispatch_items SET resolved = ? WHERE attempt_id = ? AND run_key = ?').run(t, attemptId, runKey);
         this.releaseLease(runKey, attemptId, fence, { now });
@@ -1042,11 +1081,12 @@ export class StateDb {
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {
-          this.raw.prepare(`
+          const closed = this.raw.prepare(`
             UPDATE dispatches SET status = 'done', closed = ?, close_reason = 'results_in'
             WHERE attempt_id = ? AND status IN ('pending', 'dispatched')
           `).run(t, attemptId);
           this.releaseSlotForAttempt(attemptId, 'result', { now });
+          if (closed.changes > 0) this.dispatchEvent('dispatch_closed', attemptId, { close_reason: 'results_in' }, now);
         }
       }
       return { accepted: ok, reason: why, id: Number(r.lastInsertRowid) };
@@ -1263,10 +1303,12 @@ export class StateDb {
       }, { now });
       return { count, paused: false };
     }
-    this.setKv(`pump.paused:${workflow}`, {
-      reason: 'run_sha_mismatch', count, since: iso(now), until: iso(toMs(now) + pauseMs),
-    }, { now });
-    this.deleteKv(key);
+    const until = iso(toMs(now) + pauseMs);
+    this.tx(() => {
+      this.setKv(`pump.paused:${workflow}`, { reason: 'run_sha_mismatch', count, since: iso(now), until }, { now });
+      this.deleteKv(key);
+      this.recordEvent({ type: 'workflow_paused', lane: workflow, data: { until } }, now);
+    });
     return { count, paused: true };
   }
 
@@ -1343,6 +1385,53 @@ export class StateDb {
   listEvents({ sinceId = 0, limit = 1000 } = {}) {
     return this.raw.prepare('SELECT * FROM events WHERE id > ? ORDER BY id LIMIT ?').all(sinceId, limit)
       .map((row) => ({ ...row, data: JSON.parse(row.data) }));
+  }
+
+  // ---- pump notes: a kv record and its event in one transaction ----
+
+  /**
+   * pump_run_started / pump_run_finished. With lastRun, also writes kv
+   * pump.last_run (as run.mjs did on its own before).
+   */
+  notePumpRun(phase, { ticks = 0, dispatched = 0, lastRun, occurredAt } = {}, { now } = {}) {
+    if (phase !== 'started' && phase !== 'finished') throw new TypeError(`notePumpRun phase must be started or finished, got ${phase}`);
+    return this.tx(() => {
+      if (lastRun !== undefined) this.setKv('pump.last_run', lastRun, { now });
+      return this.recordEvent({ type: `pump_run_${phase}`, occurredAt, data: { ticks, dispatched } }, now);
+    });
+  }
+
+  /** kv pump.successor (what pump/successor.mjs wrote) and a successor event. */
+  noteSuccessor(result, { now } = {}) {
+    return this.tx(() => {
+      this.setKv('pump.successor', result, { now });
+      const status = /\bHTTP (\d{3})\b/.exec(String(result?.error ?? ''));
+      return this.recordEvent({
+        type: 'successor',
+        data: { ok: result?.ok === true, run_id: Number.isSafeInteger(result?.runId) ? result.runId : null, status: status ? Number(status[1]) : null },
+      }, now);
+    });
+  }
+
+  /** kv `key` (the registry delta record); a registry_delta event when it dispatched or failed. */
+  noteRegistryDelta(key, value, { now } = {}) {
+    return this.tx(() => {
+      this.setKv(key, value, { now });
+      if (value?.action === 'dispatched' || value?.action === 'failed') {
+        this.recordEvent({ type: 'registry_delta', data: { action: value.action } }, now);
+      }
+    });
+  }
+
+  /** kv `key` (the sandbox breaker record) and a breaker_changed event. */
+  noteBreaker(key, value, { now } = {}) {
+    return this.tx(() => {
+      this.setKv(key, value, { now });
+      return this.recordEvent({
+        type: 'breaker_changed',
+        data: { tripped: value?.tripped === true, reason: value?.reason ?? null, held: Array.isArray(value?.held) ? value.held : [] },
+      }, now);
+    });
   }
 
   // ---- kv ----
