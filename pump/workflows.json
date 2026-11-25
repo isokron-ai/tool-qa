@@ -20,7 +20,7 @@
     "live-probe": {
       "enabled": false,
       "runs_untrusted": true,
-      "sandbox_sha": null,
+      "sandbox_sha": "4c16b586e8e5886acb098285b6ec405fd4db4ac7",
       "repo": "isokron-ai/mcp-check",
       "file": "live-probe.yml",
       "ref": "main",
@@ -65,7 +65,7 @@
     "writecheck": {
       "enabled": false,
       "runs_untrusted": true,
-      "sandbox_sha": null,
+      "sandbox_sha": "4c16b586e8e5886acb098285b6ec405fd4db4ac7",
       "repo": "isokron-ai/mcp-writecheck-action",
       "file": "corpus.yml",
       "ref": "main",
