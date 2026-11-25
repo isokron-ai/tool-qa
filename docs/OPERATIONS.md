@@ -1834,7 +1834,9 @@ written as a full 40-character SHA needs no lookup.
 Today: tool-qa's own lanes (meta-github, meta-registry, release-diff) are
 `enforce`: their bundles report `tool-qa-<lane>` at the lane `VERSION`, which
 is their pin. scan-static, live-probe and writecheck are `label` until
-isokron-ai/mcp-check and isokron-ai/mcp-writecheck-action take `tool_sha`.
+isokron-ai/mcp-check and isokron-ai/mcp-writecheck-action take `tool_sha`
+and report what they ran (live-probe also pins its `fuzz` probe stage, which
+its bundles must then report at the full mcp-check commit).
 On a `label` lane a worker that already reports a commit (writecheck reports
 `mcp-writecheck-action` at the commit it runs) is refused as soon as its
 branch moves past the pin: bump the pin with every worker merge.

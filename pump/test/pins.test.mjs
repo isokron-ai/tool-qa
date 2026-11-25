@@ -4,9 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import * as gh from '../../meta/github.mjs';
-import * as reg from '../../meta/registry.mjs';
-import * as rd from '../../meta/release-diff.mjs';
+import { LANES } from '../../meta/lanes.mjs';
 import { openState } from '../../state/db.mjs';
 import { createDispatcher, workerInputs } from '../dispatch.mjs';
 import { checkPins, expectedPins, lanePinModes, PIN_CHECK_MODES, pinCheckMode, pinDecision, pinEvidence, selfPin } from '../pins.mjs';
@@ -137,11 +135,11 @@ test('R-PIN-01: an enforce lane\'s own commit pin is the versions.tool entry nam
 });
 
 test('R-PIN-01: tool-qa\'s own lanes are enforced, and what their bundles report proves their pins', () => {
-  const code = { 'meta-github': gh.VERSION, 'meta-registry': reg.VERSION, 'release-diff': rd.VERSION };
-  for (const [name, version] of Object.entries(code)) {
+  assert.deepEqual(Object.keys(LANES).sort(), ['meta-github', 'meta-registry', 'release-diff']);
+  for (const [name, lane] of Object.entries(LANES)) {
     assert.equal(shipped[name].pin_check, 'enforce', `${name} reports its version, so it is enforced`);
-    // meta/run.mjs reports the lane as tool-qa-<lane> at its VERSION.
-    const d = pinDecision({ mode: 'enforce', expected: expectedPins(shipped[name].versions), tools: [{ name: `tool-qa-${name}`, version }] });
+    // meta/run.mjs reports the lane as tool-qa-<lane.name> at lane.version.
+    const d = pinDecision({ mode: 'enforce', expected: expectedPins(shipped[name].versions), tools: [{ name: `tool-qa-${lane.name}`, version: lane.version }] });
     assert.equal(d.reason, null, `${name}: ${JSON.stringify(d.problems)}`);
     assert.equal(d.report.verified.length, Object.keys(shipped[name].versions.tool).length + Object.keys(shipped[name].versions.probe).length);
   }
