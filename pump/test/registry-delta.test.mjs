@@ -203,7 +203,7 @@ function pagedWorld(artifacts) {
 }
 const filler = (n) => Array.from({ length: n }, (_, i) => ({ name: `ingest-${i}-1`, created_at: ago(1 + i / 10), expired: false }));
 
-test('R-HIST-06: with more than 100 newer artifacts of other kinds the stall is still found by paging, and the gap is named in `since`', async () => {
+test('R-HIST-06: with more than 100 newer artifacts of other kinds the stall is still found by paging, and the gap is named in since', async () => {
   const w = pagedWorld([...filler(250), delta(5 * 60)]);
   const r = await ensureRegistryDelta({ client: w.client, repo: REPO, now: NOW });
   assert.equal(r.action, 'dispatched');
@@ -211,7 +211,7 @@ test('R-HIST-06: with more than 100 newer artifacts of other kinds the stall is 
   assert.equal(w.api.calls.filter((c) => c.path.endsWith('/artifacts')).length, 3);
 });
 
-test('R-HIST-06: past the pages read, the capture time kept from earlier runs still sets `since`; with nothing known there is none', async () => {
+test('R-HIST-06: past the pages read, the capture time kept from earlier runs still sets since; with nothing known there is none', async () => {
   const w = pagedWorld(filler(700));
   const known = NOW - 9 * 60 * MIN;
   const r = await ensureRegistryDelta({ client: w.client, repo: REPO, now: NOW, lastCaptureAt: known });
