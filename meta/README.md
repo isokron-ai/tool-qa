@@ -129,7 +129,7 @@ container registry, not the API).
 - The cache holds the same summaries: licence texts, summaries and crate
   descriptions are digests there too.
 - No answer is read past 20 MiB. A larger one stops that stage with a
-  `policy_excluded` skip that is not retried.
+  `too_large` skip (fault tool) that is not retried.
 - Anyone can publish a registry entry that claims a repository. The subject's
   own entry, `io.github.<owner>/<name>`, is read by its exact name first, so a
   crowded or failing search cannot hide it (a failing search is its own
@@ -143,12 +143,15 @@ container registry, not the API).
 
 ## Skips
 
-A stage that could not run for a passing reason is a skip with
+Every skip says its reason and its fault side (R-META-10). A stage that could
+not run for a passing reason is a skip with `fault: infra` and
 `retryable: true`: `rate_limited` for a rate limit or our own budget, and
 `upstream_unavailable` for a timeout, a network error or a 5xx after two
-retries, or a subject not started before the shard deadline (22 minutes,
-`META_DEADLINE_MINUTES`). When every skip of an item is retryable, ingest sends
-it back later. A subject that is not `owner/name` reports `policy_excluded`. A
+retries. A subject not started before the shard deadline (22 minutes,
+`META_DEADLINE_MINUTES`) is `reader_limit` with `fault: tool`, retryable: the
+time limit is ours. When every skip of an item is retryable, ingest sends
+it back later. A subject that is not `owner/name` reports `unsupported_layout`
+with `fault: tool` (the lane reads GitHub only). A
 repository or package that does not exist is data (`null` with a `why`), not
 a skip. A subject whose data makes the lane fail is that subject's own skip
 (`upstream_unavailable`, not retryable), never a failed shard.
@@ -192,7 +195,7 @@ costs a 304.
 
 The job has 40 minutes; the pump's lease for a shard of 100 is 43. The worker
 starts no subject after 22 minutes (`META_DEADLINE_MINUTES`, checked before
-each subject). Then come the 100 worker-kit slots. The kit pinned at b1f25a9
+each subject). Then come the 100 worker-kit slots. The kit pinned at 2ffcea1
 downloads and checks age in every slot (`install-age.sh` has no "already
 installed" check, and the action calls it with its own path, so a copy on
 `PATH` is not used), then encrypts and uploads. The fixture's upload mode
@@ -347,9 +350,9 @@ repository that is gone) is the subject's, and it is data, not a skip. Our own l
 compute budget of 90 seconds for all comparisons of a subject, a zip feature or
 tar number our readers lack: zip64, unsupported compression, encryption),
 `tool_error` (the lane failed on the subject), `unsupported_layout` (a subject
-that is not a GitHub repository). The shard deadline is `upstream_unavailable`
-with `fault: tool`, retryable. These need the worker kit at 2ffcea1 or later,
-which `release-diff.yml` pins (the meta lanes stay at b1f25a9).
+that is not a GitHub repository). The shard deadline is `reader_limit` with
+`fault: tool`, retryable. These need the worker kit at 2ffcea1 or later,
+which every lane's workflow and the fixture pin (R-META-11).
 
 ### Controls
 

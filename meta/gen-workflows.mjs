@@ -19,13 +19,11 @@ export const PINS = Object.freeze({
   setupNode: 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0',
   cacheRestore: 'actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0',
   cacheSave: 'actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0',
-  // The tool-qa commit whose worker kit seals and uploads the bundles (main, with item-index).
-  workerKit: 'isokron-ai/tool-qa/worker-kit@b1f25a9b0b7655f45eb353f31562a93d9319d5a4 # main at b1f25a9',
-  // release-diff's skips say their fault side (too_large, reader_limit, tool_error with fault tool), which the kit
-  // knows from 2ffcea1 on (R-COV-01); the same pin as mcp-check's scan-static.
-  workerKitFault: 'isokron-ai/tool-qa/worker-kit@2ffcea16117ec679398f83eefe8c6fa66d38bac6 # main at 2ffcea1 (skip fault sides)',
+  // The tool-qa commit whose worker kit seals and uploads the bundles. Every lane's skips say their fault side
+  // (too_large, tool_error, reader_limit, unsupported_layout with fault tool; rate_limited with fault infra), which
+  // the kit knows from 2ffcea1 on (R-COV-01); the same pin as mcp-check's scan-static (R-META-10).
+  workerKit: 'isokron-ai/tool-qa/worker-kit@2ffcea16117ec679398f83eefe8c6fa66d38bac6 # main at 2ffcea1 (skip fault sides)',
 });
-const kitFor = (lane) => (lane === 'release-diff' ? PINS.workerKitFault : PINS.workerKit);
 const ROOT = new URL('../', import.meta.url);
 
 const ABOUT = {
@@ -214,7 +212,7 @@ export function workerWorkflow(lane) {
     `          path: \${{ runner.temp }}/meta-cache/${lane}.json`,
     `          key: ${lane}-http-v1-\${{ github.run_id }}-\${{ github.run_attempt }}`,
     `      # One step per item slot (has_<i> is set for every dispatched item). One item's failed upload does not stop the others.`,
-    ...kitSteps({ uses: kitFor(lane), dryRun: false, attemptExpr: '${{ inputs.attempt_id }}', outDir: 'meta-out', slots }),
+    ...kitSteps({ uses: PINS.workerKit, dryRun: false, attemptExpr: '${{ inputs.attempt_id }}', outDir: 'meta-out', slots }),
     '',
   ].join('\n');
 }
@@ -302,7 +300,7 @@ export function fixtureWorkflow() {
   ].join('\n');
 }
 
-/** release-diff's fixture job: our own published packages, the newer kit (skip fault sides), 20 slots. */
+/** release-diff's fixture job: our own published packages, 20 slots. */
 function releaseDiffFixtureJob() {
   const slots = LANE_SLOTS['release-diff'];
   return [
@@ -340,7 +338,7 @@ function releaseDiffFixtureJob() {
     '        run: |',
     ...inputChecks(10, slots),
     '          node meta/run.mjs release-diff "$RUNNER_TEMP/meta-out"',
-    ...kitSteps({ uses: PINS.workerKitFault, dryRunExpr: "${{ matrix.mode == 'check' && 'true' || 'false' }}", attemptExpr: '${{ steps.items.outputs.attempt_id }}', outDir: 'meta-out', slots }),
+    ...kitSteps({ uses: PINS.workerKit, dryRunExpr: "${{ matrix.mode == 'check' && 'true' || 'false' }}", attemptExpr: '${{ steps.items.outputs.attempt_id }}', outDir: 'meta-out', slots }),
     '      - name: Judge every bundle with ingest\'s checks',
     "        if: matrix.mode == 'check'",
     '        env:',

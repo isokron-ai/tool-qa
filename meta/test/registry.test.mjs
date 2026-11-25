@@ -129,7 +129,7 @@ test('an upstream outage is a retryable skip for that stage only', async () => {
   routes['https://registry.npmjs.org/@isokron%2Fmcp-check'] = { __status: 503 };
   const c = await collectSubject(httpFor(registryFetch(routes)), 'isokron-ai/mcp-check');
   const o = subjectOutput(c, OBS);
-  assert.deepEqual(o.skips, [{ stage: 'npm', reason: 'upstream_unavailable', retryable: true }]);
+  assert.deepEqual(o.skips, [{ stage: 'npm', reason: 'upstream_unavailable', fault: 'infra', retryable: true }]);
   assert.equal(o.records.find((r) => r.field === 'registry_entry_history').value.length, 1);
   const npm = o.records.find((r) => r.field === 'npm_version_doc');
   assert.equal(npm.value, null);
@@ -140,7 +140,7 @@ test('the MCP registry rate-limiting us is a retryable rate_limited skip', async
   const f = registryFetch({}, { fallback: (url) => (url.startsWith('https://registry.modelcontextprotocol.io/') ? new Response('', { status: 429 }) : undefined) });
   const c = await collectSubject(httpFor(f), 'a/b');
   const o = subjectOutput(c, OBS);
-  assert.deepEqual(o.skips, [{ stage: 'mcp_registry', reason: 'rate_limited', retryable: true }]);
+  assert.deepEqual(o.skips, [{ stage: 'mcp_registry', reason: 'rate_limited', fault: 'infra', retryable: true }]);
 });
 
 test('a subject with no registry entry reports an empty history', async () => {

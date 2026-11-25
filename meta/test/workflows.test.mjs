@@ -42,8 +42,8 @@ for (const lane of ['meta-github', 'meta-registry', 'release-diff']) {
     const kit = job.steps.filter((s) => typeof s.uses === 'string' && s.uses.startsWith('isokron-ai/tool-qa/worker-kit@'));
     assert.equal(kit.length, LANE_SLOTS[lane]);
     kit.forEach((s, i) => {
-      // release-diff's skips carry a fault side, which the kit knows from 2ffcea1 on.
-      assert.equal(s.uses, (lane === 'release-diff' ? PINS.workerKitFault : PINS.workerKit).split(' ')[0]);
+      // Every lane's skips carry a fault side, which the kit knows from 2ffcea1 on (R-META-10).
+      assert.equal(s.uses, PINS.workerKit.split(' ')[0]);
       assert.equal(s.with['item-index'], String(i));
       assert.equal(s.with.fence, `\${{ steps.collect.outputs.fence_${i} }}`);
       assert.equal(s.with['run-key'], `\${{ steps.collect.outputs.run_key_${i} }}`);
@@ -70,8 +70,21 @@ test('meta-fixture.yml runs on pull requests only, dry-run, and judges the bundl
   assert.match(steps.at(-1).run, /meta\/fixture\.mjs judge/);
   const rd = w.jobs['release-diff-fixture'];
   assert.deepEqual(rd.permissions, { contents: 'read' });
-  const rdKit = rd.steps.filter((s) => s.uses === PINS.workerKitFault.split(' ')[0]);
+  const rdKit = rd.steps.filter((s) => s.uses === PINS.workerKit.split(' ')[0]);
   assert.equal(rdKit.length, LANE_SLOTS['release-diff']);
   assert.ok(!('GITHUB_TOKEN' in rd.steps.find((s) => s.id === 'collect').env), 'release-diff gets no token');
   assert.match(rd.steps.at(-1).run, /meta\/fixture\.mjs judge release-diff/);
+});
+
+test('R-META-11: every meta lane\'s workflow, and the fixture, pins a worker kit that knows skip fault sides (2ffcea1 or later)', () => {
+  const kitPin = /^isokron-ai\/tool-qa\/worker-kit@([0-9a-f]{40})$/;
+  const pinned = PINS.workerKit.split(' ')[0];
+  assert.equal(pinned.match(kitPin)?.[1], '2ffcea16117ec679398f83eefe8c6fa66d38bac6');
+  assert.equal(PINS.workerKitFault, undefined, 'one kit pin for every lane');
+  for (const file of ['meta-github', 'meta-registry', 'release-diff', 'meta-fixture']) {
+    const w = read(`.github/workflows/${file}.yml`);
+    const uses = Object.values(w.jobs).flatMap((j) => j.steps).map((s) => s.uses).filter((u) => typeof u === 'string' && u.startsWith('isokron-ai/tool-qa/worker-kit@'));
+    assert.ok(uses.length > 0, file);
+    assert.ok(uses.every((u) => u === pinned), `${file}: every worker-kit step uses ${pinned}`);
+  }
 });
