@@ -1191,3 +1191,27 @@ test('R-RET-23: when one item\'s keep-forever file cannot be written, a gap mark
     }
   }
 });
+
+test('R-WD-14: the seal record notes each keep-forever file that failed with the pump run whose gap marker artifact must carry it', async () => {
+  for (const [env, run] of [[{ GITHUB_RUN_ID: '77', GITHUB_RUN_ATTEMPT: '2' }, '77-2'], [{}, null]]) {
+    const keys = shardKeys(2);
+    const { db, items } = setup({ runKeys: keys });
+    let calls = 0;
+    const encrypt = (plaintext) => {
+      calls += 1;
+      if (calls === 2) throw new Error('disk full'); // item 0's keep file
+      return fakeEncrypt(plaintext);
+    };
+    const h = harness({ env, api: shardWorker(shardArtifacts(items)), crypto: { decrypt: fakeDecrypt, encrypt, publicKey: () => PUBKEY } });
+    try {
+      await h.collect(db);
+      const seal = db.getKv(SEAL_KEY);
+      assert.equal(seal.keep_gaps.length, 1, 'one failed item, one entry; the clean item adds none');
+      assert.deepEqual([seal.keep_gaps[0].attempt, seal.keep_gaps[0].run], ['att-1-0', run]);
+      assert.ok(Number.isFinite(Date.parse(seal.keep_gaps[0].at)));
+    } finally {
+      h.cleanup();
+      db.close();
+    }
+  }
+});

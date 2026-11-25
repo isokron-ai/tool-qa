@@ -217,3 +217,15 @@ test('R-CHAOS-04: api-budget is amber while a saved rate-limit block holds or th
     assert.equal(byId(evaluate(base({ state: st(kv) })))['api-budget'], undefined, JSON.stringify(kv));
   }
 });
+
+test('R-WD-14: the health issue shows a failed keep-forever file whose gap marker artifact is missing as red, and the marker present as green', () => {
+  const seal = { at: ago(2 * HOUR), sealed: 4, failures: { compress: 0, keep: 1 }, streak: 0, keep_gaps: [{ attempt: 'att-9-0', run: '55-1', at: ago(3 * HOUR) }] };
+  const withSeal = (artifacts) => evaluate(base({ artifacts: [...freshArtifacts(), ...artifacts], state: { openSlots: [], openDispatches: [], kv: { 'retention.seal': seal } } }));
+  const lost = byId(withSeal([]))['keep-markers'];
+  assert.equal(lost.status, 'red');
+  assert.match(lost.summary, /att-9-0 \(run 55-1\)/);
+  assert.equal(overallStatus(withSeal([]).checks), 'red');
+  assert.equal(byId(withSeal([{ name: 'ingest-keepgap-55-1', created_at: ago(2 * HOUR), expired: false }]))['keep-markers'].status, 'green');
+  assert.equal(byId(evaluate(base({ state: null })))['keep-markers'], undefined, 'no state asset, no item: it is judged with the state');
+  assert.equal(byId(evaluate(base({ state: { openSlots: [], openDispatches: [], kv: {} } })))['keep-markers'].status, 'green');
+});

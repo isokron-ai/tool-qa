@@ -39,6 +39,11 @@ async function localS3() {
         }
         const o = objects.get(key);
         if (!o) return res.writeHead(404).end(req.method === 'GET' ? '<Error><Code>NoSuchKey</Code></Error>' : undefined);
+        const range = /^bytes=(\d+)-(\d+)$/.exec(String(req.headers.range ?? ''));
+        if (range && req.method === 'GET') {
+          const part = o.body.subarray(Number(range[1]), Number(range[2]) + 1);
+          return res.writeHead(206, { 'content-length': part.length, 'content-range': `bytes ${range[1]}-${Math.min(Number(range[2]), o.body.length - 1)}/${o.body.length}` }).end(part);
+        }
         res.writeHead(200, { 'content-length': o.body.length, etag: `"${hash('md5', o.body)}"`, ...(o.meta ? { 'x-amz-meta-sha256': o.meta } : {}) });
         return res.end(req.method === 'GET' ? o.body : undefined);
       }
@@ -76,6 +81,12 @@ test('R-OFF-11: the R2 store sends If-None-Match, Content-MD5, x-amz-checksum-sh
     assert.equal(page.next, null);
     assert.ok((await store.get('ingest/2026-03-02/x/x.zip')).equals(body));
     assert.equal(await store.get('nope'), null);
+    // R-RET-27: a ranged read returns just those bytes (inclusive), and null for a missing key.
+    const part = await store.getRange('ingest/2026-03-02/x/x.zip', { start: 1, end: 3 });
+    assert.ok(part.equals(body.subarray(1, 4)));
+    assert.equal(s3.requests.filter((r) => r.method === 'GET').at(-1).headers.range, 'bytes=1-3');
+    assert.equal(await store.getRange('nope', { start: 0, end: 1 }), null);
+    await assert.rejects(store.getRange('x', { start: 5, end: 1 }), /bad range/);
     // By default (OFFSITE_SHA256_HEADER unset: R2 refuses the header with Content-MD5) it is not sent; the metadata still goes.
     await store.put('k2', body, d);
     const r2 = s3.requests.filter((r) => r.method === 'PUT').at(-1);

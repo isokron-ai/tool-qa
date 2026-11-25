@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { CALLS } from './lib/faults.mjs';
 import { HOUR, MIN, WORKER } from './lib/sim.mjs';
-import { acceptedPerKey, assertRecovered, CHAOS, logLines, startPump, withSim } from './lib/harness.mjs';
+import { acceptedPerKey, assertRecovered, CHAOS, healthOf, logLines, startPump, withSim } from './lib/harness.mjs';
 
 const isoS = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
@@ -159,4 +159,18 @@ test('R-RET-26: one item\'s keep-forever file fails to write while the others su
     for (const [k, n] of acceptedPerKey(sim)) assert.equal(n, 1, `${k.slice(0, 12)} accepted once`);
     assertRecovered(sim);
   });
+});
+
+test('R-WD-14: a keep-forever file that fails with its gap marker artifact lost turns keep-markers red in the health issue; with the marker uploaded it stays green', CHAOS, async () => {
+  for (const [lost, expect] of [[false, 'green'], [true, 'red']]) {
+    await withSim({}, async (sim) => {
+      sim.sealFault = (n) => n === 2;
+      sim.markerUpload = !lost;
+      startPump(sim);
+      await sim.runFor(3 * HOUR);
+      assert.ok((sim.keepGaps ?? []).length >= 1, 'a gap marker was sealed');
+      assert.equal(healthOf(sim, 'keep-markers'), expect, `marker ${lost ? 'lost' : 'uploaded'}`);
+      assert.equal(sim.missing().length, 0, 'every subject still has its result');
+    });
+  }
 });

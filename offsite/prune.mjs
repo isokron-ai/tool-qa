@@ -15,8 +15,15 @@
 // The keep-forever set (keep/, history/) is never deleted, and neither is an
 // artifact on the hold list (offsite/holds.mjs). Separately from the cap, a full
 // bundle past 30 days that has its keep-forever copy is expired whatever the
-// bucket's size (loop upgrade 20). A full bundle with no copy (from before that
-// upgrade) is only taken with OFFSITE_PRUNE_LEGACY_INGEST=true.
+// bucket's size (loop upgrade 20). "Has its keep-forever copy" is checked item by
+// item, failing closed (R-RET-27): the prune lists the member names of the full
+// bundle and of its keep artifact (ranged reads of the zip directory, nothing is
+// decrypted), and takes the bundle only when every item `ingest-<attempt>.tar.age`
+// in it has its `keep-<attempt>.tar.age` in the keep artifact. A bundle it cannot
+// list, or whose keep artifact it cannot list, or any missing item, keeps the
+// bundle, whatever the gap markers say and with or without OFFSITE_PRUNE_LEGACY_INGEST.
+// A full bundle with no keep artifact at all (from before loop upgrade 20) is only
+// taken with OFFSITE_PRUNE_LEGACY_INGEST=true.
 // Only objects last written more than 31 days ago are candidates: the
 // bucket's lock rule (keep-30-days) refuses any delete before 30 days, and a
 // day of margin covers clock skew. The run manifests under manifest/ are
@@ -38,6 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { scrub as scrubText } from '../pump/github.mjs';
 import { DEFAULTS, PREFIX, inventory, meter, readConfig } from './backup.mjs';
 import { artifactOfKey, isHeld, readHolds } from './holds.mjs';
+import { zipMembers } from './members.mjs';
 
 const DAY = 24 * 3_600_000;
 export const LOCK_DAYS = 30;
@@ -54,6 +62,22 @@ const pairedKeepName = (key) => {
   const m = /^ingest-(\d+-\d+)$/.exec(artifactOfKey(key) ?? '');
   return m ? `ingest-keep-${m[1]}` : null;
 };
+
+/** The attempt ids of the items in a full bundle's member names (ingest-<attempt>.tar.age), or the keep files' (keep-<attempt>.tar.age). */
+const itemsIn = (names, prefix) => (names ?? []).map((n) => new RegExp(`^${prefix}-(.+)\\.tar\\.age$`).exec(String(n).split('/').pop())?.[1]).filter(Boolean);
+
+/**
+ * Whether a keep artifact holds a keep file for every item of a full bundle. Fails closed: an unlisted
+ * (null) bundle or keep artifact, a bundle with no item, or one item without its keep file is not covered.
+ * @returns {{ ok: boolean, missing: string[] }}
+ */
+export function keepCoverage(fullMembers, keepMembers) {
+  if (!Array.isArray(fullMembers) || !Array.isArray(keepMembers)) return { ok: false, missing: [] };
+  const items = itemsIn(fullMembers, 'ingest');
+  const have = new Set(itemsIn(keepMembers, 'keep'));
+  const missing = items.filter((id) => !have.has(id));
+  return { ok: items.length > 0 && missing.length === 0, missing };
+}
 
 /** The prune thresholds from the environment (defaults from the cap). */
 export function pruneLimits(env, maxBytes = DEFAULTS.maxBytes) {
@@ -75,9 +99,12 @@ export function pruneLimits(env, maxBytes = DEFAULTS.maxBytes) {
  *   cap      only while the bucket is over `at`, down to `to`: the groups in ORDER, oldest first.
  * The keep-forever set (keep/, history/) is in neither, and a held artifact is never deleted. A full
  * bundle with no keep-forever copy (made before loop upgrade 20) is only deleted when `legacy` is set.
+ * `members` ({ full: Map key -> names|null, keep: Map artifact name -> names|null }, from readMembers) names what each
+ * full bundle and keep artifact holds; a pump bundle with a keep artifact is taken only when the keep artifact has a
+ * keep file for every item in it (R-RET-27). Without `members` nothing of the kind is taken.
  * @returns {{ total: number, needed: boolean, delete: object[], freed: number, after: number, reachesTarget: boolean, kept: object }}
  */
-export function planPrune(objects, { now, at, to, keepSnapshots = KEEP_SNAPSHOTS, lockDays = LOCK_DAYS, marginDays = MARGIN_DAYS, holds = [], legacy = false }) {
+export function planPrune(objects, { now, at, to, keepSnapshots = KEEP_SNAPSHOTS, lockDays = LOCK_DAYS, marginDays = MARGIN_DAYS, holds = [], legacy = false, members = { full: new Map(), keep: new Map() } }) {
   const total = objects.reduce((s, o) => s + (Number(o.size) || 0), 0);
   const plan = { total, needed: false, delete: [], freed: 0, after: total, reachesTarget: true, kept: { locked: 0, protected: 0, held: 0, unpaired: 0 }, expired: 0 };
   const cutoff = now - (lockDays + marginDays) * DAY;
@@ -110,6 +137,8 @@ export function planPrune(objects, { now, at, to, keepSnapshots = KEEP_SNAPSHOTS
     const pump = o.key.startsWith(PREFIX.ingest) && /^ingest-\d+-\d+$/.test(artifactOfKey(o.key) ?? '');
     if (pump && gapNames.has(pairedKeepName(o.key))) return 'unpaired'; // never taken, not even with `legacy`
     if (pump && !keepNames.has(pairedKeepName(o.key)) && !legacy) return 'unpaired';
+    // A keep artifact exists: it must hold a keep file for every item of this bundle, or the bundle stays (never with `legacy`).
+    if (pump && keepNames.has(pairedKeepName(o.key)) && !keepCoverage(members.full.get(o.key) ?? null, members.keep.get(pairedKeepName(o.key)) ?? null).ok) return 'unpaired';
     return null;
   };
   const count = (why) => { plan.kept[why] += 1; };
@@ -145,6 +174,38 @@ export function planPrune(objects, { now, at, to, keepSnapshots = KEEP_SNAPSHOTS
 }
 
 /**
+ * Read the member names of what the plan could take: pump full bundles past the lock and the keep artifacts that pair
+ * with them. A zip that cannot be listed maps to null (and so is kept). Names only, by ranged GETs of the zip directory.
+ * @returns {Promise<{ full: Map<string, string[]|null>, keep: Map<string, string[]|null>, failed: number }>}
+ */
+export async function readMembers(m, objects, { now, lockDays = LOCK_DAYS, marginDays = MARGIN_DAYS, log = () => {} }) {
+  const cutoff = now - (lockDays + marginDays) * DAY;
+  const out = { full: new Map(), keep: new Map(), failed: 0 };
+  const keepObjects = new Map();
+  for (const o of objects) if (o.key.startsWith(PREFIX.keep)) keepObjects.set(artifactOfKey(o.key), o);
+  const list = async (o) => {
+    try {
+      return await zipMembers(m, o.key, Number(o.size));
+    } catch (err) {
+      out.failed += 1;
+      log(`offsite-prune: could not list ${o.key}: ${err?.message ?? err}`);
+      return null;
+    }
+  };
+  for (const o of objects) {
+    if (!o.key.startsWith(PREFIX.ingest) || !/^ingest-\d+-\d+$/.test(artifactOfKey(o.key) ?? '')) continue;
+    const t = Date.parse(o.lastModified ?? '');
+    if (!Number.isFinite(t) || t > cutoff) continue;
+    const keepName = pairedKeepName(o.key);
+    const keep = keepObjects.get(keepName);
+    if (!keep) continue; // no keep artifact: nothing to pair with, decided without members
+    out.full.set(o.key, await list(o));
+    if (!out.keep.has(keepName)) out.keep.set(keepName, await list(keep));
+  }
+  return out;
+}
+
+/**
  * Why the full listing cannot be trusted to delete from, or null: the newest
  * cursor and the newest run manifest, each listed on its own, must both be in
  * it (a listing cut short loses its tail, and `manifest/` sorts late).
@@ -163,10 +224,11 @@ export async function listingProblem(m, inv) {
 export async function runPrune({ store, mode, limits, holds = [], now = Date.now, log = () => {} }) {
   const m = meter(store, { maxClassA: Infinity, maxClassB: Infinity });
   const inv = await inventory(m);
-  const plan = planPrune(inv.objects, { now: now(), holds, ...limits });
+  const members = await readMembers(m, inv.objects, { now: now(), log });
+  const plan = planPrune(inv.objects, { now: now(), holds, members, ...limits });
   if (mode === 'apply' && plan.delete.length) {
     const problem = await listingProblem(m, inv);
-    if (problem) return { mode, plan, deleted: [], failed: [], refused: problem, ops: m.counts() };
+    if (problem) return { mode, plan, deleted: [], failed: [], refused: problem, unlisted: members.failed, ops: m.counts() };
   }
   const deleted = [];
   const failed = [];
@@ -181,7 +243,7 @@ export async function runPrune({ store, mode, limits, holds = [], now = Date.now
       }
     }
   }
-  return { mode, plan, deleted, failed, ops: m.counts() };
+  return { mode, plan, deleted, failed, unlisted: members.failed, ops: m.counts() };
 }
 
 function parseArgs(argv) {
@@ -229,8 +291,9 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       '',
       `- bucket: ${gb(r.plan.total)}; prune above ${gb(limits.at)}, down to ${gb(limits.to)}`,
       r.plan.needed ? `- ${verb} ${r.plan.delete.length} object(s), ${gb(r.plan.freed)} (${r.plan.expired} full bundle(s) past ${LOCK_DAYS} days); left: ${gb(r.plan.after)}` : '- nothing to do',
-      ...(r.plan.kept.held || r.plan.kept.unpaired ? [`- kept: ${r.plan.kept.held} held, ${r.plan.kept.unpaired} full bundle(s) with no keep-forever copy (OFFSITE_PRUNE_LEGACY_INGEST=true lets the prune take those too)`] : []),
+      ...(r.plan.kept.held || r.plan.kept.unpaired ? [`- kept: ${r.plan.kept.held} held, ${r.plan.kept.unpaired} full bundle(s) kept: no keep-forever copy of every item (OFFSITE_PRUNE_LEGACY_INGEST=true lets the prune take only those with no keep artifact at all)`] : []),
       ...(r.plan.needed && !r.plan.reachesTarget ? [`- the rest is still under the 30-day lock or protected (${r.plan.kept.locked} locked, ${r.plan.kept.protected} protected, ${r.plan.kept.held} held, ${r.plan.kept.unpaired} unpaired); the keep-forever set is never deleted`] : []),
+      ...(r.unlisted ? [`- ${r.unlisted} zip(s) could not be listed: their bundles are kept (fail closed)`] : []),
       ...r.failed.map((f) => `- FAILED ${f.key}: ${f.error}`),
       ...(r.refused ? [`- REFUSED to delete: ${r.refused}`] : []),
     ].map((l) => scrubText(l, secrets));

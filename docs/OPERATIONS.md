@@ -1054,6 +1054,7 @@ person. off: switched off on purpose.
 | `offsite-backup` | The off-site backup to R2: no good run for 12 hours, not configured yet, near the cost cap, or a run stopped early (amber); no good run for 24 hours, over the cost cap, or a verification failure (red). | Open the newest `offsite-backup` run's summary. See "Off-site backup". |
 | `keep-forever` | The keep-forever copy on the `keep-forever` release ("Data retention"): no good run for 12 hours, the last run failed, or an artifact has waited over 30 days to be copied (amber); no good run for 24 hours, or an artifact has waited over 60 days (red: GitHub deletes it at 90). Off: `LANE_KEEP_FOREVER_ENABLED` is not `true`. | Open the newest `keep-forever` run's summary. Dispatch it if no run is recent (`gh workflow run keep-forever.yml --repo isokron-ai/tool-qa`) and check the stand-in scheduler. |
 | `retention-seal` | The last seal of the pump's outputs could not compress, or could not write the keep-forever file (amber); three seals in a row failed (red). The full bundle was still sealed, as a plain tar if need be, so nothing is lost, but each such seal leaves a hole in the keep-forever set. | Read the item's summary for the error (kv `retention.seal` in the state); fix the cause, then the next clean seal turns it green. "Data retention". |
+| `keep-markers` | A seal whose keep-forever file failed has no `ingest-keepgap-<run>-<attempt>` artifact an hour later (red: the marker was lost), or cannot be matched to a run or is older than the artifact list reaches (amber). Green when every failed one has its marker, or none failed in the last 2 days. | Open the named pump run's "Upload the keep-forever gap markers" step. The prune checks every item's keep file itself ("Data retention"), so nothing expires unprotected; the marker is the second line. |
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
@@ -1526,11 +1527,28 @@ back. Window changes belong in
 **A keep-forever gap.** If the pump cannot write one item's keep-forever file
 (`retention-seal` turns amber), it seals a marker `keep-gap-<attempt>-<index>.tar.age`,
 uploaded as the artifact `ingest-keepgap-<run>-<attempt>`. The prune never
-expires any full bundle of that run (not even with `OFFSITE_PRUNE_LEGACY_INGEST`),
-since the run's keep artifact does not cover every item. If the marker cannot be
-written either, the item is not recorded and is judged again next tick. To
-release such a run after fixing it by hand, delete its `ingest-keepgap-*`
-object from R2.
+expires any full bundle of that run (not even with `OFFSITE_PRUNE_LEGACY_INGEST`).
+If the marker cannot be written either, the item is not recorded and is judged
+again next tick. To release such a run after fixing it by hand, delete its
+`ingest-keepgap-*` object from R2.
+
+**The prune does not rely on the marker (R-RET-27).** A marker can itself be
+lost (its upload, or its off-site copy, fails), and then the full bundle would
+have expired at day 31 with no keep copy. So before it takes a pump full bundle
+that has a keep artifact, the prune lists the member names of both zips (ranged
+reads of the zip directory, a few KiB; nothing is decrypted) and requires a
+`keep-<attempt>.tar.age` in the keep artifact for every `ingest-<attempt>.tar.age`
+in the bundle. A missing keep file, a zip it cannot list, or a bundle with no
+item keeps the bundle, whatever the markers say and with or without
+`OFFSITE_PRUNE_LEGACY_INGEST` (which only releases bundles with no keep artifact
+at all, from before the keep files). The summary says how many zips could not be
+listed. This check must hold before `OFFSITE_PRUNE_ENABLED` is set to `true`.
+The watchdog's `keep-markers` item checks the markers too: every seal whose
+keep-forever file failed (kv `retention.seal`, `keep_gaps`, each with the pump
+run) must have its `ingest-keepgap-<run>` artifact an hour after the seal; a
+missing one is red, one that cannot be matched to a run or is older than the
+artifact list reaches is amber (R-WD-14). Red means the marker was lost: look at
+the pump run's "Upload the keep-forever gap markers" step.
 
 **R2.** The bucket lock stays at 30 days and no bucket setting is changed. The
 off-site backup copies `ingest-keep-*` to `keep/` and everything else as
@@ -1578,7 +1596,8 @@ outputs". A `catalog-<sha256>.tar.age` holds one `tools.json`; the item's
 `manifest.json` names the tool list's sha256 for the match.
 
 **Health.** `keep-forever` (the copy: stalled, failing or off) and
-`retention-seal` (compression or keep-forever file failures) are on the health
+`retention-seal` (compression or keep-forever file failures) and `keep-markers`
+(every failed keep-forever file has its gap marker) are on the health
 issue ("The loop health issue").
 
 ## Result encryption keys

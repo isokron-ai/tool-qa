@@ -44,6 +44,10 @@
 //                        release or manifest is missing or unreadable, or its
 //                        time is in the future), red after 6. Off when the
 //                        state-snapshot lane is off.
+//   keep-markers         every seal whose keep-forever file failed (kv retention.seal
+//                        keep_gaps) has its ingest-keepgap-<run>-<attempt> artifact
+//                        (keep/health.mjs markerCheck): red when the marker is missing
+//                        an hour after the seal, amber when it cannot be matched.
 //   state-size           the state database's size, rows and last prune pass
 //                        as the pump recorded them (kv state.size), the asset
 //                        it was pulled from, and the snapshot release's total
@@ -53,7 +57,7 @@
 
 import { snapshotCheck } from '../snapshot/health.mjs';
 import { sizeCheck } from './size.mjs';
-import { sealCheck } from '../keep/health.mjs';
+import { markerCheck, sealCheck } from '../keep/health.mjs';
 import { identityCheck } from './identity.mjs';
 
 const MIN = 60_000;
@@ -205,6 +209,7 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
     }
     checks.push(size);
     checks.push(sealCheck(state.kv?.['retention.seal'] ?? null)); // compression and keep-forever files at seal time (keep/health.mjs)
+    checks.push(markerCheck({ now, seal: state.kv?.['retention.seal'] ?? null, artifacts })); // every failed keep-forever file has its gap marker (R-WD-14)
     const subj = state.kv?.['pump.subjects'];
     if (subj && typeof subj === 'object') {
       checks.push(subj.ok
