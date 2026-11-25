@@ -234,8 +234,7 @@ is the pump's business: a worker it has already dispatched finishes its shard.
 Is what a subject publishes what its source says? For each npm tarball,
 PyPI sdist and wheel a repository publishes, the lane compares the artifact
 with the source tree at the version's git tag (`release-diff.mjs`,
-`lib/diff.mjs`). It is switched off in `pump/workflows.json` until review
-switches it on; shard size 20, one slot.
+`lib/diff.mjs`). It was switched on by review on 25 Nov 2026 (tool-qa#77); shard size 20, one slot.
 
 ### What it reads, and from where
 
