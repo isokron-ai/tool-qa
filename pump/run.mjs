@@ -96,8 +96,18 @@ import { computeBudget, reapExpired } from './slots.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
 import { planShards, runTick } from './tick.mjs';
+import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
+// How long the first pull may keep retrying, and how long past its deadline the
+// last push may. The job's timeout-minutes (pump.yml) leaves room for both.
+export const PULL_RETRY_MS = 120_000;
+export const FINAL_PUSH_GRACE_MS = 90_000;
+export const FINAL_REQUEST_TIMEOUT_MS = 30_000;
+// The registry delta capture is checked at most this often within a run.
+export const REGISTRY_DELTA_CHECK_MS = 5 * 60_000;
+export const REGISTRY_DELTA_WINDOW_MS = 60_000;
+export const REGISTRY_DELTA_KEY = 'pump.registry_delta';
 export const BUDGET_KEY = 'pump.api_budget';
 export const BREAKER_KEY = 'pump.breaker';
 export const CONFORMANCE_KEY = 'pump.conformance';
@@ -147,6 +157,7 @@ export async function runPump({
   prune = {},
   crypto,
   fetchArchive,
+  registryDelta,
 } = {}) {
   const start = now();
   const deadline = start + maxRunMs;
@@ -175,14 +186,14 @@ export async function runPump({
   };
   let minter = mintToken;
   const lazyMint = async (args) => {
-    minter = minter ?? appTokenMinter({ env, fetch, now, sleep, budget: bud });
+    minter = minter ?? appTokenMinter({ env, fetch, now, sleep, budget: bud, retryUntil: () => deadline });
     const out = await minter(args);
     mask(out.token);
     return out;
   };
   let disp = dispatcher;
   const getDispatcher = () => {
-    disp = disp ?? createDispatcher({ mintToken: lazyMint, fetch, budget: bud, now, sleep, pollAttempts: 4, pollIntervalMs: 4000 });
+    disp = disp ?? createDispatcher({ mintToken: lazyMint, fetch, budget: bud, now, sleep, pollAttempts: 4, pollIntervalMs: 4000, log: say, retryUntil: () => deadline });
     return disp;
   };
   const apiUrl = env.GITHUB_API_URL || 'https://api.github.com';
@@ -241,7 +252,7 @@ export async function runPump({
   let db;
   let pulled;
   try {
-    pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, ...stateKeys });
+    pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, clock: now, retryUntil: start + PULL_RETRY_MS, ...stateKeys });
     // No state asset, but snapshots of one: the state was lost, not never
     // made. Starting from empty would silently throw away every result and
     // the fence counter (R-CHAOS-01); a person restores a snapshot instead.
@@ -255,7 +266,7 @@ export async function runPump({
   } catch (err) {
     say(`pump: cannot start: ${err?.message ?? err}`);
     // A GitHub outage or rate limit may pass by the next run: the chain goes on.
-    if (err?.transient !== true) await cancelSuccessor({ successorFile, repo, mint: lazyMint, fetch, apiUrl, budget: bud, now, sleep, say });
+    if (err?.transient !== true) await cancelSuccessor({ successorFile, repo, mint: lazyMint, fetch, apiUrl, budget: bud, now, sleep, say, retryUntil: () => deadline });
     throw err;
   }
   // The hourly API caps hold across runs (R-ING-11): this run starts with the
@@ -274,7 +285,10 @@ export async function runPump({
   const save = async (why, { open = true } = {}) => {
     if (open) keepBudget();
     try {
-      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), ...stateKeys });
+      // Retries (pump/retry.mjs) stop at the run's deadline, so a tick's push
+      // cannot hold the run past it; the push at the end of the run may go on a
+      // little longer, still inside the job's timeout (R-CHAOS-13).
+      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), clock: now, retryUntil: open ? deadline : deadline + FINAL_PUSH_GRACE_MS, ...(open ? {} : { requestTimeoutMs: FINAL_REQUEST_TIMEOUT_MS }), ...stateKeys });
       return true;
     } catch (err) {
       ok = false;
@@ -300,7 +314,7 @@ export async function runPump({
     // Subject ids (pump/identity.mjs): backfill and daily re-check, a few
     // GraphQL queries at most; never fails or holds the run (loop upgrade #15).
     if (identity !== null && identityEnabled(env)) {
-      const client = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep }) : null;
+      const client = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => deadline }) : null;
       const ids = await refreshIdentities(db, { client, now, log: say, ...(identity ?? {}) });
       say(`pump: subject ids: ${ids.summary}`);
     } else if (identity !== null) {
@@ -308,9 +322,43 @@ export async function runPump({
       // The watchdog shows the item off, not the last pass's colour (R-SUBJ-18).
       db.setKv(IDENTITY_KV_KEY, { ...(db.getKv(IDENTITY_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
     }
+    // Registry delta capture (pump/registry-delta.mjs): GitHub's */15 cron for it
+    // fires hours late, so the pump dispatches it when the newest capture is
+    // stale. registryDelta: undefined for the real check, null for none, or a
+    // function called as ({ now, lastDispatchAt }).
+    let registryClient = null;
+    let registryUntil = deadline;
+    let lastRegistryCheck = -Infinity;
+    const registryStep = async () => {
+      if (registryDelta === null || !repo || !registryLaneOn(env) || now() - lastRegistryCheck < REGISTRY_DELTA_CHECK_MS) return;
+      lastRegistryCheck = now();
+      try {
+        const prior = db.getKv(REGISTRY_DELTA_KEY);
+        const lastDispatchAt = prior?.dispatchedAt ? Date.parse(prior.dispatchedAt) : null;
+        let r;
+        if (typeof registryDelta === 'function') {
+          r = await registryDelta({ now: now(), lastDispatchAt: Number.isFinite(lastDispatchAt) ? lastDispatchAt : null });
+        } else {
+          // Its own short window (REGISTRY_DELTA_WINDOW_MS, never past the run's
+          // deadline): a registry outage must not starve the rest of the tick.
+          const until = Math.min(deadline, now() + REGISTRY_DELTA_WINDOW_MS);
+          if (!registryClient) {
+            const { token } = await lazyMint({ repositories: [repo.split('/')[1]], permissions: { actions: 'write' } });
+            registryClient = createClient({ token, fetch, apiUrl, budget: bud, now, sleep, log: say, retryTotalMs: REGISTRY_DELTA_WINDOW_MS, requestTimeoutMs: 20_000, retryUntil: () => registryUntil });
+          }
+          registryUntil = until;
+          r = await ensureRegistryDelta({ client: registryClient, repo, ref: env.GITHUB_REF_NAME || 'main', now: now(), lastDispatchAt: Number.isFinite(lastDispatchAt) ? lastDispatchAt : null, lastCaptureAt: Number.isFinite(Date.parse(prior?.captureAt)) ? Date.parse(prior.captureAt) : null, log: say });
+        }
+        db.setKv(REGISTRY_DELTA_KEY, { ...r, dispatchedAt: r.action === 'dispatched' ? r.at : prior?.dispatchedAt ?? null, captureAt: r.captureAt ?? prior?.captureAt ?? null }, { now: now() });
+      } catch (err) {
+        // Never blocks the pump.
+        say(`pump: registry delta check failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
+      }
+    };
     for (;;) {
       const tickStart = now();
       ticks += 1;
+      await registryStep();
       const early = reapExpired(db, { now: tickStart });
       for (const d of early.dispatches) say(`lease expired: closed ${d.workflow} shard ${d.shard_id} (${d.attempt_id})`);
       let ingested = null;
@@ -420,7 +468,7 @@ export async function snapshotCount({ repo, token, fetch, apiUrl, sleep }) {
  * Cancel the pump run this run dispatched as its successor (pump/successor.mjs
  * wrote its id to `successorFile`). Best effort: it is logged and never throws.
  */
-export async function cancelSuccessor({ successorFile, repo, mint, fetch, apiUrl, budget, now, sleep, say }) {
+export async function cancelSuccessor({ successorFile, repo, mint, fetch, apiUrl, budget, now, sleep, say, retryUntil }) {
   if (!successorFile || !existsSync(successorFile)) return false;
   let s;
   try {
@@ -436,7 +484,7 @@ export async function cancelSuccessor({ successorFile, repo, mint, fetch, apiUrl
   }
   try {
     const { token } = await mint({ repositories: [String(repo).split('/')[1]], permissions: { actions: 'write' } });
-    const client = createClient({ token, fetch, apiUrl, budget, now, sleep });
+    const client = createClient({ token, fetch, apiUrl, budget, now, sleep, retryUntil });
     const res = await client.request('POST', `/repos/${repo}/actions/runs/${runId}/cancel`, { essential: true, allow: [409] });
     if (res.status === 409) {
       say(`pump: the successor run ${runId} could not be cancelled (HTTP 409: it already finished or cannot be cancelled now)`);

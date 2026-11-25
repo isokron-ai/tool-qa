@@ -2,12 +2,14 @@
 //
 // - Every call takes from an ApiBudget first and shows it the response, so
 //   endpoint caps, pacing and rate-limit back-off live in one place.
-// - Server errors (5xx) and network failures are retried with exponential
-//   back-off. A rate-limit refusal is retried after the budget's wait. Other
-//   4xx responses throw GitHubError straight away.
+// - Server errors (500, 502, 503, 504) and network failures are retried with
+//   exponential back-off and full jitter (pump/retry.mjs), up to 6 attempts.
+//   A rate-limit refusal is retried after the budget's wait. Other 4xx
+//   responses throw GitHubError straight away. Retries stop at `retryUntil`.
 // - The token never appears in an error message or a log line.
 
 import { ApiBudget, familyFor } from './budgets.mjs';
+import { RETRY_STATUS, POLICY, classify, createRetrier } from './retry.mjs';
 
 export const API_VERSION = '2022-11-28';
 const IDEMPOTENT = new Set(['GET', 'HEAD', 'PUT', 'PATCH', 'DELETE']);
@@ -53,7 +55,11 @@ export function createClient({
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   now = Date.now,
   random = Math.random,
-  maxAttempts = 4,
+  maxAttempts = POLICY.attempts,
+  retryTotalMs = 300_000,
+  retryUntil = null,
+  requestTimeoutMs = 60_000,
+  log = () => {},
   userAgent = 'isokron-tool-qa',
 } = {}) {
   if (!token) throw new TypeError('createClient: a token is required');
@@ -69,8 +75,10 @@ export function createClient({
     const fam = family ?? familyFor(m, path);
     const url = buildUrl(apiUrl, path, query);
     const where = `${m} ${url.pathname}`;
-    let lastError;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const retrier = createRetrier({
+      attempts: maxAttempts, totalMs: retryTotalMs, until: retryUntil, sleep, random, now, log,
+    });
+    return retrier.run(where, async () => {
       await bud.take(fam, { essential });
       const headers = {
         accept: accept ?? 'application/vnd.github+json',
@@ -80,6 +88,7 @@ export function createClient({
         ...extra,
       };
       const init = { method: m, headers };
+      if (requestTimeoutMs > 0 && typeof AbortSignal?.timeout === 'function') init.signal = AbortSignal.timeout(requestTimeoutMs);
       if (body !== undefined) {
         init.body = typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body);
         if (!headers['content-type']) headers['content-type'] = 'application/json';
@@ -89,12 +98,11 @@ export function createClient({
       try {
         res = await fetch(url.href, init);
       } catch (err) {
-        lastError = new GitHubError(scrub(`${where}: network error: ${err?.message ?? err}`, secrets), { status: 0, method: m, path: url.pathname });
-        if (repeatable && attempt < maxAttempts) {
-          await sleep(backoff(attempt));
-          continue;
-        }
-        throw lastError;
+        const e = new GitHubError(scrub(`${where}: network error: ${err?.message ?? err}`, secrets), { status: 0, method: m, path: url.pathname });
+        e.transient = true;
+        e.retryable = repeatable;
+        e.reason = 'network error';
+        throw e;
       }
       const text = res.status === 204 || res.status === 304 ? '' : await res.text();
       bud.observe(fam, res, text);
@@ -109,24 +117,27 @@ export function createClient({
       const ok = (res.status >= 200 && res.status < 300) || (res.status >= 300 && res.status < 400 && redirect === 'manual');
       if (ok || allow.includes(res.status)) return { status: res.status, headers: res.headers, data };
       const message = typeof data === 'object' && data?.message ? data.message : String(text).slice(0, 200);
-      lastError = new GitHubError(scrub(`${where} returned ${res.status}: ${message}`, secrets), {
+      const error = new GitHubError(scrub(`${where} returned ${res.status}: ${message}`, secrets), {
         status: res.status,
         method: m,
         path: url.pathname,
         documentationUrl: typeof data === 'object' ? data?.documentation_url ?? null : null,
       });
       const rateLimited = ApiBudget.isRateLimited(res, text);
-      const retryable = rateLimited || (repeatable && res.status >= 500);
-      if (!retryable || attempt >= maxAttempts) throw lastError;
-      if (!rateLimited) await sleep(backoff(attempt));
-      // Rate limited: the budget now holds every call until the limit passes,
-      // or throws BudgetExceededError on the next take() if that is too long.
-    }
-    throw lastError;
-  }
-
-  function backoff(attempt) {
-    return 1000 * 2 ** (attempt - 1) + Math.floor(random() * 500);
+      const verdict = classify({ status: res.status, headers: res.headers, text, now: now() });
+      if (rateLimited) {
+        // The budget now holds every call until the limit passes, or throws
+        // BudgetExceededError on the next take() if that is too long.
+        error.retryable = true;
+        error.waitMs = 0;
+      } else if (repeatable && verdict.retryable && res.status !== 403 && res.status !== 429) {
+        error.retryable = true;
+        error.waitMs = verdict.waitMs ?? undefined;
+      }
+      if (error.retryable || RETRY_STATUS.has(res.status)) error.transient = true;
+      error.reason = `HTTP ${res.status}`;
+      throw error;
+    });
   }
 
   /** GET every page of a list endpoint. `key` names the array in an object response. */

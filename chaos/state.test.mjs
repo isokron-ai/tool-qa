@@ -70,7 +70,7 @@ test('R-CHAOS-03: a pump that cannot read its state cancels the successor it dis
 test('R-CHAOS-03: a passing GitHub error while pulling the state does not cancel the successor: the chain goes on', CHAOS, async () => {
   await withSim({}, async (sim) => {
     await warmUp(sim);
-    sim.gh.addFault({ name: 'download 502', times: 3, match: CALLS.stateDownload, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
+    sim.gh.addFault({ name: 'download 502', times: 6, match: CALLS.stateDownload, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
     sim.cronOn.pump = false;
     sim.cronOn.watchdog = false;
     await sim.runFor(30 * MIN);
@@ -216,8 +216,8 @@ test('R-CHAOS-09: a passing GitHub error while counting snapshots (state asset m
     sim.deleteState();
     sim.cronOn.pump = false;
     sim.cronOn.watchdog = false;
-    // Every try of the snapshot release read fails with a server error, once.
-    sim.gh.addFault({ name: 'snapshots 502', times: 3, match: (r) => r.method === 'GET' && r.path === `/repos/${TOOLQA}/releases/tags/state-snapshots`, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
+    // Every try (6) of the snapshot release read fails with a server error, once.
+    sim.gh.addFault({ name: 'snapshots 502', times: 6, match: (r) => r.method === 'GET' && r.path === `/repos/${TOOLQA}/releases/tags/state-snapshots`, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
     await sim.runFor(30 * MIN);
     const hit = logLines(sim, /pump: cannot start: GitHub GET .*state-snapshots failed: HTTP 502/);
     assert.equal(hit.length, 1);

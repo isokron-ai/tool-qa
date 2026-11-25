@@ -56,13 +56,13 @@ import { tmpdir } from 'node:os';
 
 import { ageDecrypt, ageEncrypt, agePublicKey, readSealRecipients } from '../ingest/age.mjs';
 import { isAgeCiphertext } from '../ingest/container.mjs';
+import { createRetrier, markRetry } from '../pump/retry.mjs';
 
 export const TAG = 'state';
 export const ASSET_NAME = 'state.sqlite';
 const UPLOAD_PREFIX = `${ASSET_NAME}.upload-`;
 const DEFAULT_FILE = 'state/state.sqlite';
 const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'binary');
-const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
 const USER_AGENT = 'isokron-tool-qa-state-asset';
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
@@ -153,13 +153,17 @@ function transient(err) {
   return err;
 }
 
-function makeClient({ repo, token, fetch, apiUrl, sleep, log }) {
+function makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now, retryUntil, retryTotalMs = 180_000, requestTimeoutMs = 120_000 }) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repo || ''))) {
     throw new Error(`repository must be "owner/name", got ${JSON.stringify(repo)}`);
   }
   const api = String(apiUrl || 'https://api.github.com').replace(/\/+$/, '');
   const scrub = (text) => (token ? String(text).split(token).join('***') : String(text));
   const doSleep = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  // One retrier for the whole pull or push: its sleeping is capped as a whole
+  // (retryTotalMs) and stops at retryUntil, so a push can neither outlast the
+  // job nor hold the run past its deadline (R-CHAOS-13).
+  const retrier = createRetrier({ totalMs: retryTotalMs, until: retryUntil ?? null, sleep: doSleep, random, now, log });
 
   function headers(extra = {}, withAuth = true) {
     const h = { 'User-Agent': USER_AGENT, 'X-GitHub-Api-Version': '2022-11-28', Accept: 'application/vnd.github+json', ...extra };
@@ -174,34 +178,45 @@ function makeClient({ repo, token, fetch, apiUrl, sleep, log }) {
       try { detail = JSON.parse(text).message || text; } catch { detail = text; }
     } catch { /* ignore */ }
     const path = new URL(url).pathname;
-    return new Error(scrub(`GitHub ${method} ${path} failed: HTTP ${res.status}${detail ? ` (${String(detail).slice(0, 200)})` : ''}`));
+    const err = new Error(scrub(`GitHub ${method} ${path} failed: HTTP ${res.status}${detail ? ` (${String(detail).slice(0, 200)})` : ''}`));
+    err.detail = String(detail);
+    return err;
   }
 
-  // Send a request. Idempotent methods are retried on 429/5xx and network errors.
-  async function request(method, url, { body, extraHeaders, ok = [200], redirect, withAuth = true } = {}) {
-    const attempts = method === 'POST' ? 1 : 3;
-    for (let i = 1; ; i++) {
+  // Send a request. Retried (pump/retry.mjs) on 429, 500, 502, 503, 504, a
+  // rate-limited 403 and network errors. A POST is sent once unless the caller
+  // gives `recover`: a function that looks for what the failed POST may have
+  // done and returns it (anything with json()), or null. It runs before every
+  // repeat, so a POST that was carried out is never sent a second time.
+  async function request(method, url, { body, extraHeaders, ok = [200], redirect, withAuth = true, recover } = {}) {
+    const repeatable = method !== 'POST' || typeof recover === 'function';
+    const where = `${method} ${new URL(url).pathname}`;
+    return retrier.run(where, async (n) => {
+      if (n > 1 && recover) {
+        const done = await recover();
+        if (done) return done;
+      }
       let res;
       try {
-        res = await fetch(url, { method, headers: headers(extraHeaders, withAuth), body, redirect });
+        const init = { method, headers: headers(extraHeaders, withAuth), body, redirect };
+        if (requestTimeoutMs > 0 && typeof AbortSignal?.timeout === 'function') init.signal = AbortSignal.timeout(requestTimeoutMs);
+        res = await fetch(url, init);
       } catch (err) {
-        if (i >= attempts) throw transient(new Error(scrub(`GitHub ${method} ${new URL(url).pathname} failed: ${err.message}`)));
-        await doSleep(1000 * 2 ** (i - 1));
-        continue;
+        throw markRetry(transient(new Error(scrub(`GitHub ${method} ${new URL(url).pathname} failed: ${err.message}`))), { status: 0, repeatable });
       }
       if (ok.includes(res.status)) return res;
-      if (RETRY_STATUS.has(res.status) && i < attempts) {
-        const after = Number(res.headers.get('retry-after'));
-        log(`GitHub ${method} ${new URL(url).pathname}: HTTP ${res.status}, retrying`);
-        await doSleep(Number.isFinite(after) && after >= 0 ? after * 1000 : 1000 * 2 ** (i - 1));
-        continue;
+      if (n > 1 && recover && res.status === 422) {
+        // "already exists": an earlier try was carried out after all.
+        const done = await recover();
+        if (done) return done;
       }
       const err = await failure(method, url, res);
       // A server error, a rate limit or a lost connection may pass by itself;
       // the caller can tell it from a state that is wrong (R-CHAOS-03).
-      if (RETRY_STATUS.has(res.status) || (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0')) transient(err);
+      markRetry(err, { status: res.status, headers: res.headers, text: err.detail, repeatable });
+      if (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0') transient(err);
       throw err;
-    }
+    });
   }
 
   return {
@@ -214,6 +229,11 @@ function makeClient({ repo, token, fetch, apiUrl, sleep, log }) {
     async createRelease() {
       const res = await request('POST', `${api}/repos/${repo}/releases`, {
         ok: [201],
+        // A create that failed on a server error may have been made: look for it before repeating.
+        recover: async () => {
+          const release = await this.getRelease();
+          return release ? { json: async () => release } : null;
+        },
         extraHeaders: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tag_name: TAG,
@@ -241,15 +261,43 @@ function makeClient({ repo, token, fetch, apiUrl, sleep, log }) {
       });
       return Buffer.from(await blob.arrayBuffer());
     },
+    /**
+     * Upload `data` as asset `name`. An upload that failed on a server error or the
+     * network may still have been stored, so before every repeat the release is read:
+     * a complete asset of that name with the same size and label is the upload and is
+     * used as it is; a partial or different one is deleted first, so the name is free
+     * and the repeat cannot fail as "already exists". The caller's fencing (the
+     * unchanged-remote checks in pushState) still runs on the result.
+     */
     async upload(release, name, data, label) {
       const base = String(release.upload_url).replace(/\{[^}]*\}$/, '');
       const url = `${base}?name=${encodeURIComponent(name)}&label=${encodeURIComponent(label)}`;
+      const recover = async () => {
+        const assets = await this.listAssets(release);
+        for (const a of assets.filter((x) => x.name === name)) {
+          if ((!a.state || a.state === 'uploaded') && a.size === data.length && a.label === label) return { json: async () => a };
+          await this.deleteAsset(a.id);
+        }
+        return null;
+      };
       const res = await request('POST', url, {
         ok: [201],
+        recover,
         body: data,
         extraHeaders: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(data.length) },
       });
       return res.json();
+    },
+    async listAssets(release) {
+      const out = [];
+      for (let page = 1; page <= 20; page++) {
+        const res = await request('GET', `${api}/repos/${repo}/releases/${release.id}/assets?per_page=100&page=${page}`);
+        const list = await res.json();
+        if (!Array.isArray(list)) break;
+        out.push(...list);
+        if (list.length < 100) break;
+      }
+      return out;
     },
     async deleteAsset(id) {
       await request('DELETE', `${api}/repos/${repo}/releases/assets/${id}`, { ok: [204, 404] });
@@ -308,11 +356,11 @@ function assertUnchanged(release, expected, ignoreId = null) {
  * `crypto` defaults to stateCrypto({ identity, ageBin, keygenBin, tmpDir }).
  */
 export async function pullState({
-  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep,
+  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, requestTimeoutMs,
   identity, ageBin, keygenBin, tmpDir, crypto, allowPlaintext = false,
 } = {}) {
   const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
-  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log });
+  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs, ...(requestTimeoutMs ? { requestTimeoutMs } : {}) });
   const release = await gh.getRelease();
   const asset = release && pickAsset(release);
   if (!asset) {
@@ -359,12 +407,12 @@ export async function pullState({
  * Never uploads anything that is not age ciphertext.
  */
 export async function pushState({
-  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, now = Date.now(), expected, force = false,
+  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, requestTimeoutMs, now = Date.now(), expected, force = false,
   identity, ageBin, keygenBin, tmpDir, crypto, compress = true,
 } = {}) {
   if (!token) throw new Error('GITHUB_TOKEN is required to push the state asset');
   const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
-  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log });
+  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs, ...(requestTimeoutMs ? { requestTimeoutMs } : {}) });
   expected = expected ?? readRecord(file);
   if (!expected && !force) {
     throw new Error(`no pull record for ${file}; pull first, or pass --force to overwrite whatever is on the release`);
@@ -419,7 +467,7 @@ export async function pushState({
  */
 export async function migrateState(opts = {}) {
   const log = opts.log ?? console.error;
-  const gh = makeClient({ repo: opts.repo, token: opts.token, fetch: opts.fetch ?? globalThis.fetch, apiUrl: opts.apiUrl, sleep: opts.sleep, log });
+  const gh = makeClient({ repo: opts.repo, token: opts.token, fetch: opts.fetch ?? globalThis.fetch, apiUrl: opts.apiUrl, sleep: opts.sleep, log, random: opts.random });
   const release = await gh.getRelease();
   const asset = release && pickAsset(release);
   if (!asset) {

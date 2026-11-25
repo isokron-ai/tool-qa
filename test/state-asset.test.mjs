@@ -78,6 +78,9 @@ function fakeGitHub({ release = null, failFirst = {} } = {}) {
       state.release = { id: 7, assets: [] };
       return json(201, releaseJson());
     }
+    if (url.origin === API && method === 'GET' && state.release && url.pathname === `/repos/${REPO}/releases/${state.release.id}/assets`) {
+      return json(200, releaseJson().assets);
+    }
     const assetMatch = url.pathname.match(new RegExp(`^/repos/${REPO}/releases/assets/(\\d+)$`));
     if (url.origin === API && assetMatch) {
       const id = Number(assetMatch[1]);
@@ -558,4 +561,147 @@ test('compression: a gzip that is cut short, or that would grow past the limit, 
   assert.throws(() => decodeState(packed, { maxBytes: 100 }), /does not decompress/);
   assert.deepEqual(decodeState(data), { data, compressed: false });
   assert.ok(decodeState(packed).data.equals(data));
+});
+
+// R-CHAOS-14: the state push survives GitHub server errors (25 Nov 2026: HTTP 500
+// and 502 on the asset upload), and a retried upload cannot leave two copies or
+// roll newer state back.
+function pushSetup() {
+  const dir = tmp();
+  const data = readFileSync(makeDb(dir, 'seed.sqlite'));
+  const api = fakeGitHub({ release: { id: 7, assets: [{ ...asset(1, ASSET_NAME, data), updated_at: '2026-11-23T10:00:00Z' }] } });
+  const file = join(dir, 'state.sqlite');
+  return { dir, api, file };
+}
+const uploadPath = `/repos/${REPO}/releases/7/assets`;
+const retryOpts = (extra = {}) => {
+  const sleeps = [];
+  const lines = [];
+  return { sleeps, lines, opts: { sleep: async (ms) => { sleeps.push(ms); }, random: () => 0.5, log: (l) => lines.push(l), ...extra } };
+};
+
+test('R-CHAOS-14: a push whose upload gets HTTP 500 and 502 is repeated until it lands, with backoff, and logs the retries', async () => {
+  const { api, file } = pushSetup();
+  await pull(api, file);
+  const r = retryOpts();
+  const inner = api.fetch;
+  let hits = 0;
+  const flaky = async (input, init) => {
+    if (new URL(String(input)).pathname === uploadPath && (init?.method ?? 'GET') === 'POST' && hits++ < 2) {
+      return new Response(JSON.stringify({ message: 'Server Error' }), { status: hits === 1 ? 500 : 502 });
+    }
+    return inner(input, init);
+  };
+  const out = await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: flaky, apiUrl: API, ...r.opts });
+  assert.equal(out.status, 'pushed');
+  assert.deepEqual(r.sleeps, [1000, 2000]);
+  assert.equal(api.state.release.assets.length, 1, 'one state asset');
+  assert.equal(api.state.release.assets[0].name, ASSET_NAME);
+  assert.ok(r.lines.some((l) => /attempt 1\/6 failed/.test(l)));
+  assert.ok(r.lines.every((l) => !l.includes(TOKEN)));
+});
+
+test('R-CHAOS-14: an upload that was stored but answered 500 is not uploaded twice: the stored copy is used, and the push still checks the remote is unchanged', async () => {
+  const { api, file } = pushSetup();
+  await pull(api, file);
+  const r = retryOpts();
+  const inner = api.fetch;
+  let first = true;
+  const lostReply = async (input, init) => {
+    const res = await inner(input, init);
+    if (first && new URL(String(input)).pathname === uploadPath && init?.method === 'POST') {
+      first = false;
+      return new Response(JSON.stringify({ message: 'Server Error' }), { status: 500 });
+    }
+    return res;
+  };
+  const out = await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: lostReply, apiUrl: API, ...r.opts });
+  assert.equal(out.status, 'pushed');
+  assert.equal(api.state.calls.filter((c) => c.method === 'POST' && c.url.includes('/assets?')).length, 1, 'the upload was sent once');
+  assert.deepEqual(api.state.release.assets.map((a) => a.name), [ASSET_NAME], 'exactly one asset, under the final name, no leftover upload');
+});
+
+test('R-CHAOS-14: a half-stored upload under the same name is deleted before the repeat, and a rival asset that appeared still refuses the push', async () => {
+  const { dir, api, file } = pushSetup();
+  await pull(api, file);
+  const r = retryOpts();
+  const inner = api.fetch;
+  let first = true;
+  const partial = async (input, init) => {
+    if (first && new URL(String(input)).pathname === uploadPath && init?.method === 'POST') {
+      first = false;
+      const name = new URL(String(input)).searchParams.get('name');
+      api.state.release.assets.push({ id: 900, name, label: 'sha256:partial', data: Buffer.from('cut') });
+      return new Response(JSON.stringify({ message: 'Bad gateway' }), { status: 502 });
+    }
+    return inner(input, init);
+  };
+  const out = await pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: partial, apiUrl: API, ...r.opts });
+  assert.equal(out.status, 'pushed');
+  assert.ok(!api.state.release.assets.some((a) => a.id === 900), 'the partial asset is gone');
+  assert.deepEqual(api.state.release.assets.map((a) => a.name), [ASSET_NAME]);
+
+  // Fenced: the same lost reply, but another writer replaced the state meanwhile.
+  const s2 = pushSetup();
+  await pull(s2.api, s2.file);
+  const newer = readFileSync(makeDb(dir, 'newer.sqlite', 'newer'));
+  const inner2 = s2.api.fetch;
+  let again = true;
+  const raced = async (input, init) => {
+    const res = await inner2(input, init);
+    if (again && new URL(String(input)).pathname === uploadPath && init?.method === 'POST') {
+      again = false;
+      s2.api.state.release.assets = [...s2.api.state.release.assets.filter((a) => a.name !== ASSET_NAME), { ...asset(5, ASSET_NAME, newer), updated_at: '2026-11-23T11:00:00Z' }];
+      return new Response('{}', { status: 500 });
+    }
+    return res;
+  };
+  await assert.rejects(pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file: s2.file, fetch: raced, apiUrl: API, ...retryOpts().opts }), /remote state changed/);
+  assert.deepEqual(s2.api.state.release.assets.find((a) => a.name === ASSET_NAME).data, fakeEncrypt(newer), 'the newer state is untouched');
+});
+
+test('R-CHAOS-14: pull retries a server error on the release read and on the asset download', async () => {
+  const { api, dir } = pushSetup();
+  const r = retryOpts();
+  const inner = api.fetch;
+  const seen = new Set();
+  const flaky = async (input, init) => {
+    const key = `${init?.method ?? 'GET'} ${new URL(String(input)).pathname}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      return new Response('{}', { status: 503 });
+    }
+    return inner(input, init);
+  };
+  const res = await pullState({ crypto: FAKE, repo: REPO, token: TOKEN, file: join(dir, 'p.sqlite'), fetch: flaky, apiUrl: API, ...r.opts });
+  assert.equal(res.status, 'pulled');
+  assert.ok(r.sleeps.length >= 2);
+});
+
+test('R-CHAOS-18: retries stop at the deadline the caller gives, so a push cannot outlast the run; the error is marked transient', async () => {
+  const { api, file } = pushSetup();
+  await pull(api, file);
+  const clock = { t: 1_000_000 };
+  const r = retryOpts({ sleep: async (ms) => { clock.t += ms; } });
+  const down = async () => new Response('{}', { status: 502 });
+  await assert.rejects(
+    pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: down, apiUrl: API, ...r.opts, random: () => 0.999999, retryUntil: Date.now() + 1 }),
+    (e) => e.transient === true,
+  );
+  assert.deepEqual(r.sleeps, [], 'no retry could finish before the deadline');
+  // And with no deadline the total sleeping is still capped.
+  const r2 = retryOpts({ random: () => 0.999999 });
+  await assert.rejects(pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: down, apiUrl: API, ...r2.opts, retryTotalMs: 5000 }), (e) => e.transient === true);
+  assert.ok(r2.sleeps.reduce((a, b) => a + b, 0) <= 5000);
+});
+
+test('R-CHAOS-16: a 4xx is never retried by the state client', async () => {
+  const { api, file } = pushSetup();
+  await pull(api, file);
+  const r = retryOpts();
+  let n = 0;
+  const denied = async () => { n += 1; return new Response(JSON.stringify({ message: 'Bad credentials' }), { status: 401 }); };
+  await assert.rejects(pushState({ crypto: FAKE, repo: REPO, token: TOKEN, file, fetch: denied, apiUrl: API, ...r.opts }), (e) => !e.transient);
+  assert.equal(n, 1);
+  assert.deepEqual(r.sleeps, []);
 });
