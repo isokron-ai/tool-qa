@@ -89,6 +89,9 @@ test('R-WD-14: every failed keep-forever file has its gap marker artifact: a los
   // No run id recorded: cannot be matched, amber. A seal older than the list reaches: amber.
   assert.equal(judge2(seal(gap('att-1-0', null, 5 * HOUR)), [reach]).status, 'amber');
   assert.equal(judge2(seal(gap('att-1-0', '77-1', 30 * HOUR)), [reach]).status, 'amber');
+  // ... unless the list holds the same run's other uploads, which shows the upload steps ran and the marker is missing.
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', 30 * HOUR)), [art('ingest-77-1', 29 * HOUR)]).status, 'red');
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', 5 * HOUR)), [art('ingest-keep-77-1', 4 * HOUR)]).status, 'red');
   assert.equal(judge2(seal(gap('att-1-0', '77-1', 5 * HOUR)), []).status, 'amber', 'an empty artifact list proves nothing');
   // Red beats amber when both are there; old failures (over 2 days) are no longer judged; a broken record is amber, never a throw.
   assert.equal(judge2(seal(gap('a', null, 5 * HOUR), gap('b', '77-1', 5 * HOUR)), [reach]).status, 'red');

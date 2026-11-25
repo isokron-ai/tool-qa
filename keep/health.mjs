@@ -101,8 +101,8 @@ export function sealCheck(seal) {
 /**
  * The `keep-markers` item: every seal whose keep-forever file could not be written (kv `retention.seal`, `keep_gaps`)
  * must have its gap marker artifact `ingest-keepgap-<run>-<attempt>` on GitHub (R-WD-14).
- *   red    a failed seal older than an hour has no marker artifact among the newest artifacts, which reach back
- *          past it: the marker was lost, and only the off-site prune's own check of every item keeps that run's
+ *   red    a failed seal older than an hour has no marker artifact among the newest artifacts, which hold the
+ *          run's other uploads or reach back past it: the marker was lost, and only the off-site prune's own check of every item keeps that run's
  *          full bundles from expiring without a keep copy
  *   amber  a failed seal that cannot be matched (no run id recorded), or one the artifact listing does not reach
  *          back to; or the seal record or artifact list cannot be read
@@ -128,7 +128,10 @@ export function markerCheck({ now, seal, artifacts = [] }) {
       if (now - at < MARKER_GRACE_MS) { waiting += 1; continue; }
       if (typeof g.run !== 'string' || !/^\d+-\d+$/.test(g.run)) { unmatched.push(String(g.attempt ?? '?')); continue; }
       if (live.has(`ingest-keepgap-${g.run}`)) { matched += 1; continue; }
-      if (!Number.isFinite(reach) || reach > at) { unreached.push(String(g.attempt ?? '?')); continue; }
+      // The artifact list is judged to cover the seal when it holds a sibling upload of the same run (the full bundles or keep files,
+      // uploaded by the steps just before the markers) or reaches back past the seal.
+      const sibling = live.has(`ingest-${g.run}`) || live.has(`ingest-keep-${g.run}`);
+      if (!sibling && (!Number.isFinite(reach) || reach > at)) { unreached.push(String(g.attempt ?? '?')); continue; }
       missing.push(`${g.attempt} (run ${g.run})`);
     }
     const tail = `${gaps.length} failed keep-forever file(s) in the last 2 days: ${matched} with a marker, ${waiting} waiting for the run to end`;

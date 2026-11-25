@@ -570,7 +570,17 @@ export class Sim {
     } finally {
       // pump.yml: "Upload the keep-forever gap markers", if: always().
       const gaps = join(dir, 'keep-gap-out');
-      if (existsSync(gaps)) (this.keepGaps ??= []).push(...readdirSync(gaps));
+      if (existsSync(gaps)) {
+        const names = readdirSync(gaps);
+        (this.keepGaps ??= []).push(...names);
+        // The artifact ingest-keepgap-<run>-<attempt>; `markerUpload = false` loses it, as a failed upload step would (R-WD-14).
+        // The steps before it upload the full bundles (ingest-<run>-<attempt>) and the keep files (ingest-keep-<run>-<attempt>).
+        for (const [folder, prefix] of [['ingest-out', 'ingest'], ['keep-out', 'ingest-keep']]) {
+          const d = join(dir, folder);
+          if (names.length && existsSync(d) && readdirSync(d).length) this.gh.uploadArtifact(TOOLQA, run, `${prefix}-${run.id}-1`, Buffer.from(readdirSync(d).join('\n')));
+        }
+        if (names.length && this.markerUpload !== false) this.gh.uploadArtifact(TOOLQA, run, `ingest-keepgap-${run.id}-1`, Buffer.from(names.join('\n')));
+      }
       // pump.yml: "Upload the staged state archive", if: always().
       this.uploadArchive(run, join(dir, 'state-archive'), say);
     }
