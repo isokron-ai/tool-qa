@@ -17,19 +17,20 @@ name: publish-results
 #            publish/pin-check.mjs shows the reviewed version, in a step with no secret), and uploads
 #            ONLY ciphertext: the output sealed to worker-kit/ingest.pub, and a sealed, padded private
 #            report. It never delivers. Its summary shows the digest of the output's SHA256SUMS.
-#   deliver  runs only from a manual dispatch with two inputs: the run id of a build run and
+#   approve  runs only from a manual dispatch with two inputs: the run id of a build run and
 #            `reviewed_sums`, the digest the reviewer read after opening that run's sealed output on
-#            his own machine (docs/PUBLISHING.md, "Review"). Environment `publish`, which must have
-#            required reviewers: the job waits for approval before any step runs. The decrypt step
-#            holds AGE_IDENTITY only, the deliver step the GitHub App only; the code in this job is
-#            this repository's own. It refuses unless the decrypted output has exactly the reviewed
-#            digest. Never merges.
+#            his own machine (docs/PUBLISHING.md, "Review"). Environment `publish`, which has the
+#            owner as required reviewer: the job waits for his approval. It holds no secret and does
+#            nothing but check the inputs' format and that the environment really has a
+#            required-reviewers rule (publish/env-check.mjs).
+#   deliver  needs approve. Environment `loop` (the existing secrets; none is moved). The open step
+#            holds AGE_IDENTITY only and opens the archive only if its SHA256SUMS has exactly the
+#            reviewed digest; the deliver step holds the GitHub App only. The code in the job is this
+#            repository's own. Never merges.
 #
-# Fail closed: the deliver job stops at once unless the `publish` environment has the variable
-# PUBLISH_REVIEW_GATE set to "required-reviewers" (set only after the reviewers are configured).
-# GitHub creates an environment named in a workflow when it does not exist, with no protection, so
-# a missing environment is not enough to stop a run; an environment without that variable, and
-# without the App and key secrets, is.
+# Fail closed: GitHub creates an environment that a workflow names when it does not exist, with no
+# protection, and runs the job at once. So approve asks the API for the environment's protection
+# rules and fails unless there is a required-reviewers rule; deliver then never runs.
 
 on:
   schedule:
@@ -185,25 +186,44 @@ jobs:
           echo "::error title=publish-results::The build was not clean (a sealed file could not be read, a result was held for a coverage mismatch, or a re-read record differs from its published one). The details are in the sealed private report artifact."
           exit 1
 
-  deliver:
-    name: deliver
+  approve:
+    name: approve
     if: github.event_name == 'workflow_dispatch' && inputs.deliver_run_id != '' && inputs.reviewed_sums != ''
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    # Required reviewers: the job does not start until one approves it (docs/PUBLISHING.md).
+    timeout-minutes: 5
+    # Required reviewers: the job does not start until the owner approves it. No secret is used here.
     environment: publish
+    permissions:
+      contents: read # check out this repository
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: What is being approved
+        env:
+          RUN_ID: ${{ inputs.deliver_run_id }}
+          SUMS: ${{ inputs.reviewed_sums }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] && [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]]
+          echo "Approving delivery of the sealed output of run $RUN_ID, reviewed digest $SUMS"
+      # Reading an environment needs no more than read access to the repository.
+      - name: The publish environment has required reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh api "repos/$REPO/environments/publish" | node publish/env-check.mjs
+
+  deliver:
+    name: deliver
+    needs: approve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: loop
     permissions:
       contents: read # check out this repository
       actions: read # download the build run's sealed output
     steps:
-      - name: The review gate is set up
-        env:
-          PUBLISH_REVIEW_GATE: ${{ vars.PUBLISH_REVIEW_GATE }}
-        run: |
-          if [ "$PUBLISH_REVIEW_GATE" != "required-reviewers" ]; then
-            echo "::error title=publish-results::The publish environment is not set up: it needs required reviewers, and the variable PUBLISH_REVIEW_GATE set to required-reviewers after that (docs/PUBLISHING.md). Nothing was delivered."
-            exit 1
-          fi
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

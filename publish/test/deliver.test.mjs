@@ -30,6 +30,7 @@ test('R-PUB-09: the key, the checker and the App never share a step; only cipher
   assert.deepEqual(wf.permissions, {});
   assert.ok(!('pull_request' in wf.on) && !('push' in wf.on));
   const { build, deliver: del } = wf.jobs;
+  assert.equal(del.environment, 'loop', 'the existing secrets, not moved');
   assert.deepEqual(build.permissions, { contents: 'read', actions: 'read' });
   assert.equal(build.environment, 'loop');
   const holders = (job, name) => job.steps.filter((s) => JSON.stringify(s.env ?? {}).includes(name)).map((s) => s.name);
@@ -56,34 +57,55 @@ test('R-PUB-09: the key, the checker and the App never share a step; only cipher
   assert.equal(del.steps.find((st) => st.id === 'gate').env.RESULTS_PUBLISH_ENABLED, '${{ vars.RESULTS_PUBLISH_ENABLED }}', 'the deliver job checks the switch again');
 });
 
-test('R-PUB-22: nothing is delivered unreviewed: the schedule only builds, delivery is a manual dispatch with the reviewed digest, in an environment with required reviewers, and it fails closed without it', () => {
+test('R-PUB-22: nothing is delivered unreviewed: the schedule only builds; delivery needs a dispatch with the reviewed digest and the approve job, which holds no secret, so no approval means the open step never runs', () => {
   const wf = parseYaml(readFileSync(join(ROOT, '.github/workflows/publish-results.yml'), 'utf8'));
-  const { build, deliver: del } = wf.jobs;
+  const { build, approve, deliver: del } = wf.jobs;
   assert.ok(wf.on.schedule && wf.on.workflow_dispatch);
   assert.equal(wf.on.workflow_dispatch.inputs.deliver_run_id.default, '');
   assert.equal(wf.on.workflow_dispatch.inputs.reviewed_sums.default, '');
-  // delivery needs a dispatch, a run id and a digest; the schedule has none of them
-  assert.match(del.if, /github\.event_name == 'workflow_dispatch'/);
-  assert.match(del.if, /inputs\.deliver_run_id != ''/);
-  assert.match(del.if, /inputs\.reviewed_sums != ''/);
   assert.match(build.if, /schedule/);
   assert.match(build.if, /inputs\.deliver_run_id == ''/);
-  assert.ok(!del.needs, 'delivery does not follow a build in the same run');
-  // its own environment, which must hold required reviewers; not the loop's
-  assert.equal(del.environment, 'publish');
-  assert.notEqual(del.environment, build.environment);
-  const first = del.steps[0];
-  assert.equal(first.name, 'The review gate is set up', 'the very first step');
-  assert.match(first.run, /PUBLISH_REVIEW_GATE" != "required-reviewers"/);
-  assert.equal(first.env.PUBLISH_REVIEW_GATE, '${{ vars.PUBLISH_REVIEW_GATE }}');
-  const run = (v) => spawnSync('bash', ['-e', '-c', first.run], { encoding: 'utf8', env: { PATH: process.env.PATH, ...(v === undefined ? {} : { PUBLISH_REVIEW_GATE: v }) } }).status;
-  assert.equal(run(undefined), 1, 'an environment made on the fly, with no variable, stops');
+  // approve: a dispatch, a run id and a digest (the schedule has none), in the environment that has the reviewer
+  assert.match(approve.if, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(approve.if, /inputs\.deliver_run_id != ''/);
+  assert.match(approve.if, /inputs\.reviewed_sums != ''/);
+  assert.equal(approve.environment, 'publish');
+  assert.ok(!/secrets\./.test(JSON.stringify(approve)), 'the approval job holds no secret');
+  assert.ok(!/AGE_IDENTITY|APP_PRIVATE_KEY/.test(JSON.stringify(approve)));
+  // deliver: only after approve, in the loop's environment (the existing secrets, none moved)
+  assert.equal(del.needs, 'approve');
+  assert.equal(del.environment, 'loop');
+  assert.equal(del.if, undefined, 'it has no condition of its own that could let it run without approve');
+  assert.notEqual(approve.environment, del.environment);
+  // so the open step, and every step with a secret, is behind approve
+  const open = del.steps.find((st) => st.id === 'open');
+  assert.match(open.run, /seal\.mjs open .*--expect "\$SUMS"/);
+  assert.equal(open.env.SUMS, '${{ inputs.reviewed_sums }}');
+  // approve checks the environment through the API, with the job's own token, and fails closed
+  const check = approve.steps.find((st) => /required reviewers/.test(st.name));
+  assert.match(check.run, /environments\/publish" \| node publish\/env-check\.mjs/);
+  assert.equal(check.env.GH_TOKEN, '${{ github.token }}');
+  assert.deepEqual(approve.permissions, { contents: 'read' });
+  // no variable stands in for the check
+  assert.ok(!/PUBLISH_REVIEW_GATE/.test(readFileSync(join(ROOT, '.github/workflows/publish-results.yml'), 'utf8').replace(/#.*$/gm, '')));
+});
+
+test('R-PUB-22: a missing, unprotected or reviewer-less publish environment fails closed', async () => {
+  const { checkEnvironment } = await import('../env-check.mjs');
+  assert.deepEqual(checkEnvironment({ name: 'publish', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: { login: 'owner' } }] }] }), []);
+  assert.deepEqual(checkEnvironment({ name: 'publish', protection_rules: [{ type: 'wait_timer' }, { type: 'required_reviewers' }] }), [], 'a rule that does not list its reviewers to this reader still counts');
+  // made on the fly by a workflow that named it: no rules
+  assert.match(checkEnvironment({ name: 'publish', protection_rules: [] })[0], /no required-reviewers rule/);
+  assert.match(checkEnvironment({ name: 'publish' })[0], /no required-reviewers rule/);
+  assert.match(checkEnvironment({ name: 'publish', protection_rules: [{ type: 'wait_timer', wait_timer: 5 }] })[0], /no required-reviewers rule/);
+  assert.match(checkEnvironment({ name: 'publish', protection_rules: [{ type: 'required_reviewers', reviewers: [] }] })[0], /no reviewer/);
+  for (const bad of [null, undefined, [], 'x', 404]) assert.equal(checkEnvironment(bad).length, 1);
+  // the command line: a 404 body or no input is a failure, the protected answer a pass
+  const run = (input) => spawnSync(process.execPath, ['publish/env-check.mjs'], { cwd: ROOT, input, encoding: 'utf8' }).status;
+  assert.equal(run('{"message":"Not Found","status":"404"}'), 1);
   assert.equal(run(''), 1);
-  assert.equal(run('yes'), 1);
-  assert.equal(run('required-reviewers'), 0);
-  // the digest is what opens the archive
-  assert.match(del.steps.find((st) => st.id === 'open').run, /seal\.mjs open .*--expect "\$SUMS"/);
-  assert.equal(del.steps.find((st) => st.id === 'open').env.SUMS, '${{ inputs.reviewed_sums }}');
+  assert.equal(run('not json'), 1);
+  assert.equal(run(JSON.stringify({ name: 'publish', protection_rules: [{ type: 'required_reviewers', reviewers: [{}] }] })), 0);
 });
 
 test('R-PUB-17: the checker from mcp-results runs only if its files are the reviewed ones', async () => {

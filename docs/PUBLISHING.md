@@ -54,7 +54,8 @@ pushed to mcp-results, before a person has read it.**
 |---|---|---|---|---|
 | `build` | the schedule (04:41 UTC) and a manual dispatch with no inputs | `loop` | `AGE_IDENTITY`, in the build step only | Reads and decrypts in memory, builds the files, runs the pinned checker (no secret in that step or after it), seals the output to `worker-kit/ingest.pub`, uploads **ciphertext only**: the sealed output (14 days) and the sealed, padded private report (30 days). Never delivers. |
 | `not clean` | after `build`, only if it was not clean | none | none | Ends the run red. |
-| `deliver` | only a manual dispatch with a build run id and the reviewed digest | `publish` (required reviewers) | `AGE_IDENTITY` in the open step only, the App (`APP_ID`, `APP_INSTALLATION_ID`, `APP_PRIVATE_KEY`) in the deliver step only | Waits for approval; checks the review gate is set up; opens that run's sealed output only if its `SHA256SUMS` has exactly the digest given; opens the pull request. |
+| `approve` | only a manual dispatch with a build run id and the reviewed digest | `publish` (owner as required reviewer) | none | Waits for the owner's approval. Echoes the run id and digest, checks their format, and checks through the API that the `publish` environment really has a required-reviewers rule; fails otherwise. |
+| `deliver` | after `approve` | `loop` | `AGE_IDENTITY` in the open step only, the App (`APP_ID`, `APP_INSTALLATION_ID`, `APP_PRIVATE_KEY`) in the deliver step only | Opens that run's sealed output only if its `SHA256SUMS` has exactly the digest given; opens the pull request. |
 
 The key reads into memory and is dropped from the environment and scrubbed from logs. age
 needs it as a file, so it touches disk as a 0600 file in a fresh 0700 directory for the moment
@@ -74,7 +75,9 @@ written to disk: the output folder holds only the redacted plain files.
         |
         |   REVIEW, on the owner's machine (below), then a manual dispatch with run id + digest
         v
- deliver job (environment publish: approval first)
+ approve job (environment publish: the owner approves; no secret; checks the environment is protected)
+        v
+ deliver job (environment loop, needs approve)
         |  publish/seal.mjs open --expect <reviewed digest>   (AGE_IDENTITY, this step only)
         |  publish/deliver.mjs                                (the App, this step only)
         v
@@ -94,23 +97,32 @@ written to disk: the output folder holds only the redacted plain files.
    --base <that commit>`. Read the records in `out/data/results/` (the R3 fields and author
    text under R1 especially) and `out/report.json`.
 4. If it is right: dispatch `publish-results` with `deliver_run_id` (the build run id) and
-   `reviewed_sums` (the digest). The `deliver` job then waits for a required reviewer on the
-   `publish` environment, and delivers only a sealed output with exactly that digest. A
+   `reviewed_sums` (the digest). The `approve` job then waits for the owner's approval on the
+   `publish` environment; only after it does `deliver` start, and it delivers only a sealed
+   output with exactly that digest. A
    changed output has another digest, so an approval does not carry over to it.
 5. Optionally open the sealed private report the same way (`report.json.age`, fixed 16 KiB
    before encryption): what was held and why, and our own failures.
 
-### The `publish` environment (owner)
+### The `publish` environment (owner, one time)
+
+The owner creates the environment `publish` with himself as the required reviewer, and
+nothing else: no secret, no variable. No secret is moved: `AGE_IDENTITY` stays in `loop`
+(the pump needs it every tick) and so do the App settings; the deliver job uses `loop`, and
+only starts after `approve` has passed.
 
 GitHub creates an environment that a workflow names when it does not exist, with no
-protection. So a missing environment does not stop a run; the workflow fails closed another
-way. The owner creates `publish` with himself as a required reviewer, puts `AGE_IDENTITY`,
-`APP_PRIVATE_KEY`, `APP_ID` and `APP_INSTALLATION_ID` there (and removes the App secrets from
-`loop`, which only needs the key), and only then sets the variable `PUBLISH_REVIEW_GATE` to
-`required-reviewers` in that environment. The deliver job's first step stops unless that
-variable has that value, and the secrets it needs are not available without the
-environment. `RESULTS_PUBLISH_ENABLED`, `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` and the lane switch
-are repository variables (the deliver job, in `publish`, reads them too).
+protection, and runs the job at once. So the `approve` job asks the API
+(`GET /repos/isokron-ai/tool-qa/environments/publish`, which any reader of the repository may
+call, so the job's own token with `contents: read` is enough) and fails unless the
+environment has a required-reviewers rule (`publish/env-check.mjs`). That check replaces a
+marker variable: a variable can be set by anyone with write access without any reviewer
+existing, the rule cannot. If it fails, `deliver` never runs and nothing is delivered. A
+reader may not see who the reviewers are; a rule of that type cannot exist without one.
+
+Also one time: the App needs `contents: write` and `pull_requests: write` on `mcp-results`
+and an installation that includes it (below). `RESULTS_PUBLISH_ENABLED`, `LOOP_ENABLED`,
+`LOOP_PAUSE_UNTIL` and the lane switch are repository variables.
 
 ### What stays visible, and is accepted
 
@@ -222,10 +234,10 @@ the worker run (`provenance.workflow`), a public Actions run.
 1. Merge the mcp-results pull request (the data format and `verify.mjs`), then make sure
    `publish/verify-pin.json` matches the merged checker (`node publish/pin-check.mjs
    <checkout>`); the build fails otherwise.
-2. Create the `publish` environment with required reviewers and move the App and key
-   secrets there ("The `publish` environment"); the App needs `contents: write` and
-   `pull_requests: write` and an installation that includes `mcp-results` (today: Actions,
-   Issues, Metadata). Same App and key, a wider grant. Until then delivery fails with a
+2. Create the `publish` environment with yourself as required reviewer ("The `publish`
+   environment"), and give the App `contents: write` and `pull_requests: write` on
+   `mcp-results` with an installation that includes it (today: Actions, Issues, Metadata).
+   Same App and key, a wider grant. No secret is moved. Until then delivery fails with a
    message saying so and creates nothing; building and sealing work without any of it.
 3. Set `RESULTS_PUBLISH_ENABLED=true` (repository variable). The first scheduled or manual
    build only produces sealed artifacts. Review one ("Review"), then dispatch a delivery.
