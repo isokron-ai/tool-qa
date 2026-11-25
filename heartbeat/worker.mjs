@@ -17,9 +17,6 @@
 // Secret GH_TOKEN: a fine-grained token for isokron-ai/tool-qa only, with Actions read and write and Variables read.
 // It can start workflows in that one repository and read their runs; nothing else.
 
-import { report } from './report.mjs';
-export { report };
-
 export const REPO = 'isokron-ai/tool-qa';
 export const REF = 'main';
 // One entry per scheduled workflow that should keep running (publish-results.yml is left out: off by design, behind
@@ -167,7 +164,7 @@ export async function tick({ token, enabled, fetch: fetchImpl = globalThis.fetch
   let calls = 0; // the subrequest budget: never more than MAX_CALLS per tick
   const call = (method, path, body) => (calls++ >= MAX_CALLS ? Promise.resolve({ ok: false, status: 0, error: 'call budget' }) : gh(fetchImpl, token, method, path, body));
   const rv = await readVars(call);
-  if (!rv.ok) { log.push(`heartbeat: could not read the repository variables (HTTP ${rv.status || rv.error}); nothing done, next tick retries`); for (const w of watch) decided(w.label || w.workflow, 'failed', rv.status); return log; }
+  if (!rv.ok) { log.push(`heartbeat: could not read the repository variables (HTTP ${rv.status || rv.error}); nothing done, next tick retries`); decided('*', 'check_failed', rv.status); return log; }
   const vars = rv.vars;
   // The kill switch first: a missing or wrong LOOP_ENABLED ends the tick before any run is read.
   if (vars.LOOP_ENABLED !== 'true') { log.push('heartbeat: the loop kill switch is off (LOOP_ENABLED is not "true"); nothing done'); for (const w of watch) decided(w.label || w.workflow, 'skipped_switch'); return log; }
@@ -188,11 +185,11 @@ export async function tick({ token, enabled, fetch: fetchImpl = globalThis.fetch
       runs = runs.concat(w.match ? got.filter((x) => x && w.match(x)) : got);
       if (got.length < perPage || runs.length) break;
     }
-    if (failed) { log.push(`heartbeat: ${name}: could not list runs (HTTP ${failed.status || failed.error}); next tick retries`); decided(name, 'failed', failed.status); continue; }
+    if (failed) { log.push(`heartbeat: ${name}: could not list runs (HTTP ${failed.status || failed.error}); next tick retries`); decided(name, 'check_failed', failed.status); continue; }
     const d = decide(runs, { staleMin: w.staleMin, stuckMin: w.stuckMin, retryFailedAfterMin: w.retryFailedAfterMin, now });
     if (d.alert) log.push(`heartbeat: ALERT ${name}: ${d.alert}`);
     if (d.action === 'ok') { log.push(`heartbeat: ${name}: ok (${d.why})`); decided(name, 'ok'); continue; }
-    if (dispatched >= MAX_DISPATCHES) { log.push(`heartbeat: ${name}: needs a dispatch (${d.why}) but ${MAX_DISPATCHES} were already sent this tick; next tick retries`); continue; }
+    if (dispatched >= MAX_DISPATCHES) { log.push(`heartbeat: ${name}: needs a dispatch (${d.why}) but ${MAX_DISPATCHES} were already sent this tick; next tick retries`); decided(name, 'deferred'); continue; }
     dispatched++;
     const inputs = w.inputs ? w.inputs(now) : undefined;
     const p = await call('POST', `/repos/${REPO}/actions/workflows/${w.workflow}/dispatches`, inputs ? { ref: REF, inputs } : { ref: REF });
@@ -208,10 +205,11 @@ export default {
     ctx.waitUntil(ticked);
     // The report is its own waitUntil, off by default. Nothing it does (or throws) can reach the promise above.
     if (env.REPORT_ENABLED === 'true' && env.LIVE) {
+      // Loaded here, not at the top, so a problem in the report module can never stop the tick from starting.
       ctx.waitUntil(ticked
         .then((log) => log.decisions, () => [])
-        .then((decisions) => report({ env, decisions }))
-        .then((r) => console.log(`heartbeat report: ${r.written ? 'written' : 'not written' + (r.blocked ? ` (blocked by scan rule ${r.blocked})` : '')}`))
+        .then(async (decisions) => { const { report } = await import('./report.mjs'); return report({ env, decisions }); })
+        .then((r) => console.log(`heartbeat report: ${r.written ? 'written' + (r.degraded ? ` (${r.degraded} dropped by the scan)` : '') : 'not written' + (r.blocked ? ` (blocked by scan rule ${r.blocked})` : r.skipped ? ` (${r.skipped})` : '')}`))
         .catch((e) => console.log(`heartbeat report: failed (${e && e.name ? e.name : 'error'})`)));
     }
   },

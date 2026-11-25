@@ -32,6 +32,7 @@ export const RULES = Object.freeze([
     re: /\b(?:api[_-]?key|secret[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|secret|token|passw(?:or)?d)["']?\s{0,16}[:=]\s{0,16}["']([^"'\s]{16,1024})["']/gi,
     check: (m) => /\d/.test(m[1]) && entropy(m[1]) >= 3.5 && !/^(?:your|example|sample|dummy|xxx|changeme)/i.test(m[1]),
   },
+  { id: 'canary', re: /ISOKRON_CANARY_[A-Za-z0-9]{8,}/ },
   { id: 'email', re: /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]{1,64})@((?:[A-Za-z0-9-]{1,63}\.){1,16}[A-Za-z]{2,63})\b/g, check: (m) => !RESERVED_EMAIL_DOMAIN.test(m[2]) && !(m[1] === 'git' && SSH_HOSTS.has(m[2].toLowerCase())) },
 ]);
 
@@ -59,4 +60,13 @@ export function scanObject(value, path = '$', out = []) {
     }
   }
   return out;
+}
+
+/** Scan the exact text that will be written, plus each string by path (a serialized string has its quotes escaped, which
+ *  can hide an assignment pattern). Returns [{rule, path}]; path is '$' for a hit only the serialized text shows. */
+export function scanBody(body, doc) {
+  const hits = scanObject(doc);
+  const rule = ruleHit(String(body));
+  if (rule && !hits.some((h) => h.rule === rule)) hits.push({ rule, path: '$' });
+  return hits;
 }

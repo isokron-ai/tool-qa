@@ -88,15 +88,22 @@ What the file holds (schema `isokron-loop-heartbeat/1`):
 | Field | Content |
 |---|---|
 | `checked_at` | when this report ran |
-| `decisions` | the last 48 of `{at, workflow, action: ok / restarted / failed / skipped_switch, http?}` from the tick, kept in the same object (read, append, write). `ok` and `skipped_switch` are written when a workflow's state changes; `restarted` and `failed` every time, so a restart stays in the ring for hours instead of 20 minutes |
+| `heartbeat` | `on`, `off` (`HEARTBEAT_ENABLED` is not `true`) or `no_token` (no `GH_TOKEN`): a disabled heartbeat never reads as healthy |
+| `decisions` | the last 48 of `{at, workflow, action, http?}` from the tick, kept in the same object. `action` is `ok`, `restarted` (a dispatch the Worker sent), `failed` (a dispatch POST that failed), `check_failed` (a read failed: the variables list, as one entry with workflow `*`, or one workflow's run list), `deferred` (a dispatch held back by the per-tick cap) or `skipped_switch`. Everything except `restarted` is written when a workflow's state (action and http) changes, not every tick, so a restart stays in the ring through hours of outage |
 | `github` | `{checked_at, components: {actions, api, git, webhooks}}`: the status of "Actions", "API Requests", "Git Operations" and "Webhooks" from githubstatus.com `components.json` |
-| `health` | `{checked_at, updated, overall, checks: [{id, status, at?, summary?}]}` from the `loop-health:v1` block of issue #40, read with `GH_TOKEN` (retried once without it on 401, 403 or 404). Summary text only for `pump`, `slots`, `dispatches`, `history-*` and `sandbox-breaker`, with URLs removed; no links, no other fields |
+| `health` | `{checked_at, updated, overall, checks: [{id, status, at?, summary?}]}` from the `loop-health:v1` block of issue #40, read with `GH_TOKEN` (retried once without it on 401, 403 or 404). Summary text only for `pump`, `slots`, `dispatches`, `history-*` and `sandbox-breaker`, with URLs removed; no links, no other fields. Needs `GH_TOKEN` to have **Issues: read** for a reliable read; until it does, the 403 falls back to an unauthenticated read of the public issue (which can be rate limited) |
 
 A source that cannot be read becomes `{error: "unavailable", checked_at}` for that section only.
 
-**Scan before writing.** The whole document is scanned for token, key and email patterns (a minimal copy of `ingest/redact.mjs`,
-`heartbeat/scan.mjs`) and for AI vendor and model names (the R-PUB-08 word list). On a hit nothing is written and the log
-(`heartbeat report: scan hit, rule <rule> at <path>`) names the rule and path, never the text. The old file stays, so the page shows its age.
+**Scan before writing.** The document is serialized once, the serialized text is scanned (and each string by path) for token, key, email and canary
+patterns (a minimal copy of `ingest/redact.mjs`, `heartbeat/scan.mjs`) and for AI vendor and model names (the R-PUB-08 word list), and
+that same text is what is written. On a hit the log names the rule and path, never the text, and the report falls back in steps: drop every
+`health.checks[].summary` and rescan; if still dirty replace the `health` section with `{error: "unavailable"}` and rescan; only if still dirty write nothing.
+The old file stays, so the page shows its age.
+
+**Concurrent writers.** The read-append-write uses the object's etag (`onlyIf`): if another writer changed the file in between, this tick skips the write. An
+existing file over 64 KB or that does not parse is treated as empty (and logged). The two fetches time out after 5 s. The report module is loaded
+inside the report branch, so a load failure cannot stop the tick.
 
 **To stop it:** set `REPORT_ENABLED = "false"` and redeploy (the tick is unaffected). To remove what is already public, delete
 `v1/heartbeat.json` from the bucket. The first deploy with the report needs the bucket to exist and the `LIVE` binding in `wrangler.toml`
