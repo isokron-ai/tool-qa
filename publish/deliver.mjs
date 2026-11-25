@@ -130,6 +130,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--out') o.out = argv[++i];
     else if (a === '--base-sha') o.baseSha = argv[++i];
+    else if (a === '--base-sha-file') o.baseSha = readFileSync(argv[++i], 'utf8').trim();
     else if (a === '--dry-run') o.dryRun = true;
     else throw new Error(`unknown argument ${JSON.stringify(a)}`);
   }

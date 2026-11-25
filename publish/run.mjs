@@ -49,6 +49,7 @@ import { buildRecord } from './record.mjs';
 import { checkItem, entriesFromPlain, entriesFromSealed, itemsFromEntries, KEEP_FILE_RE, sealedFilesIn } from './read.mjs';
 import { auditStore, filesToWrite, loadStore, merge } from './store.mjs';
 import { sha256 } from './canonical.mjs';
+import { pad } from './seal.mjs';
 
 const USER_AGENT = 'isokron-tool-qa-publish-results';
 const KEEP_ARTIFACT = /^ingest-keep-\d+-\d+$/;
@@ -208,7 +209,8 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     writeFileSync(join(o.out, 'report.json'), `${JSON.stringify(pub, null, 2)}\n`);
     if (o.privateOut) {
       mkdirSync(o.privateOut, { recursive: true });
-      const text = `${JSON.stringify({ ...priv, clean }, null, 2)}\n`;
+      // Padded to a fixed size, so the size of the sealed report shows nothing about which keys it has.
+      const text = pad(JSON.stringify({ ...priv, clean }, null, 2));
       if (o.sealTo) {
         const box = ageEncrypt({ plaintext: Buffer.from(text), recipients: readSealRecipients(resolve(o.sealTo)), ageBin: env.AGE_BIN || 'age' });
         writeFileSync(join(o.privateOut, 'report.json.age'), box, { mode: 0o600 });

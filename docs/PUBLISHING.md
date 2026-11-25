@@ -43,54 +43,91 @@ repository.
 - A result whose every field was left out and that has no skip: it would read as a clean
   assessment of nothing.
 
-## Where it runs and where the key is
+## Where it runs, where the keys are, and what is public when
 
-The key that opens sealed results (`AGE_IDENTITY`) is in the `loop` environment and on
-the owner's Mac. The publisher therefore runs as a tool-qa workflow in that environment.
-Three jobs: **build** (the key, no App secret), **verify** (no secret at all, no
-environment) and **deliver** (the App, no key). The key goes to the build step only. The
-publisher reads it into memory, drops it from its environment and scrubs it from logs; age
-needs it as a file, so it touches disk as a 0600 file in a fresh 0700 directory for the
-moment of each decryption and is removed straight after (`ingest/age.mjs`). No decrypted
-result is written to disk: the only output is the redacted plain files in the job's temporary
-folder. Two things are uploaded as artifacts, because the jobs must hand files on: the
-redacted output (the files that would be in the pull request, nothing held; kept one day;
-artifacts of a public repository can be downloaded by any signed-in GitHub user, which is
-the same exposure as the pull request itself) and the sealed private report. The verify and
-deliver jobs check the files against one digest the build job gives them.
+Both repositories are public. A readable artifact here, or a branch or pull request on
+mcp-results, is public the moment it exists, and a commit and its blobs stay reachable even
+if the pull request is closed. So **nothing readable leaves the build job, and nothing is
+pushed to mcp-results, before a person has read it.**
+
+| Job | When | Environment | Secrets | Does |
+|---|---|---|---|---|
+| `build` | the schedule (04:41 UTC) and a manual dispatch with no inputs | `loop` | `AGE_IDENTITY`, in the build step only | Reads and decrypts in memory, builds the files, runs the pinned checker (no secret in that step or after it), seals the output to `worker-kit/ingest.pub`, uploads **ciphertext only**: the sealed output (14 days) and the sealed, padded private report (30 days). Never delivers. |
+| `not clean` | after `build`, only if it was not clean | none | none | Ends the run red. |
+| `deliver` | only a manual dispatch with a build run id and the reviewed digest | `publish` (required reviewers) | `AGE_IDENTITY` in the open step only, the App (`APP_ID`, `APP_INSTALLATION_ID`, `APP_PRIVATE_KEY`) in the deliver step only | Waits for approval; checks the review gate is set up; opens that run's sealed output only if its `SHA256SUMS` has exactly the digest given; opens the pull request. |
+
+The key reads into memory and is dropped from the environment and scrubbed from logs. age
+needs it as a file, so it touches disk as a 0600 file in a fresh 0700 directory for the moment
+of each decryption and is removed straight after (`ingest/age.mjs`). No decrypted result is
+written to disk: the output folder holds only the redacted plain files.
 
 ```
  ingest-keep-<run>-<attempt> artifacts (sealed keep-*.tar.age, this repository, 90 days)
         |  actions: read, the job's own token; each artifact checked to come from pump.yml on main
         v
- build job (AGE_IDENTITY)    publish/run.mjs
-        |  decrypt in memory -> accepted items only -> checks -> policy -> redaction -> records
-        |  merge with what is already in mcp-results/data (a public read of main)
-        |  -> publish-out (the changed files, SHA256SUMS), publish-private (sealed report)
+ build job (AGE_IDENTITY)    publish/run.mjs: decrypt in memory -> accepted items only -> checks ->
+        |                    policy -> redaction -> records; merge with mcp-results main (public read)
+        |                    publish/pin-check.mjs, then mcp-results' scripts/verify.mjs --base <commit>
+        |                    publish/seal.mjs seal: tar + age to ingest.pub, BASE_SHA, SHA256SUMS
         v
- verify job (no secret)      publish/pin-check.mjs, then mcp-results' scripts/verify.mjs
-        |                    --base <the commit the build job read> (append-only)
+ sealed artifact publish-out-<run>-<attempt>   (ciphertext)       sealed publish-private-... (ciphertext)
+        |
+        |   REVIEW, on the owner's machine (below), then a manual dispatch with run id + digest
         v
- deliver job (App, no key)   checks the digest, then publish/deliver.mjs
+ deliver job (environment publish: approval first)
+        |  publish/seal.mjs open --expect <reviewed digest>   (AGE_IDENTITY, this step only)
+        |  publish/deliver.mjs                                (the App, this step only)
         v
  one pull request on mcp-results (branch results/refresh), commit made through the API so
  GitHub signs it. A person merges it. The publisher never writes to main.
 ```
 
-Reading older results: the artifacts last 90 days. The keep-forever release holds the
-same sealed files for good, and the Mac's archive holds them too; `publish/run.mjs
---source-dir <folder>` reads either (the archive layout, or a keep-forever
-`keep-<YYYY-MM>-<id>.tar` part) on a machine that has the key, as a dry run, and the
-owner can review and commit that output by hand. The workflow itself reads the last
-`RESULTS_PUBLISH_LOOKBACK_DAYS` days (default 7). The branch `results/refresh` is ours to
-replace, but not over someone's own push: if its head is not a commit this publisher made
-(they carry the line `Published-by: tool-qa publish-results`), delivery stops.
+### Review (before any delivery)
+
+1. Open the build run's summary: it shows the digest of the output's `SHA256SUMS` and the
+   public report (records added, files).
+2. Download the artifact `publish-out-<run>-<attempt>` (GitHub gives a zip holding
+   `publish-out.tar.age`) and open it with the Mac's copy of the loop key:
+   `age -d -i ~/.isokron/loop-age-identity.key publish-out.tar.age | tar -x -C out`.
+3. `shasum -a 256 out/SHA256SUMS` must give the digest in the summary. Copy `out/data/` over a
+   checkout of mcp-results at the commit in `out/BASE_SHA` and run `node scripts/verify.mjs
+   --base <that commit>`. Read the records in `out/data/results/` (the R3 fields and author
+   text under R1 especially) and `out/report.json`.
+4. If it is right: dispatch `publish-results` with `deliver_run_id` (the build run id) and
+   `reviewed_sums` (the digest). The `deliver` job then waits for a required reviewer on the
+   `publish` environment, and delivers only a sealed output with exactly that digest. A
+   changed output has another digest, so an approval does not carry over to it.
+5. Optionally open the sealed private report the same way (`report.json.age`, fixed 16 KiB
+   before encryption): what was held and why, and our own failures.
+
+### The `publish` environment (owner)
+
+GitHub creates an environment that a workflow names when it does not exist, with no
+protection. So a missing environment does not stop a run; the workflow fails closed another
+way. The owner creates `publish` with himself as a required reviewer, puts `AGE_IDENTITY`,
+`APP_PRIVATE_KEY`, `APP_ID` and `APP_INSTALLATION_ID` there (and removes the App secrets from
+`loop`, which only needs the key), and only then sets the variable `PUBLISH_REVIEW_GATE` to
+`required-reviewers` in that environment. The deliver job's first step stops unless that
+variable has that value, and the secrets it needs are not available without the
+environment. `RESULTS_PUBLISH_ENABLED`, `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` and the lane switch
+are repository variables (the deliver job, in `publish`, reads them too).
+
+### What stays visible, and is accepted
+
+Ingest's public pump logs show how many results were accepted each day, and the public
+report shows how many records were added, so how many were held can be estimated per day by
+subtraction. That number is accepted; no identity, subject or finding comes with it. The
+`not clean` red run and its message say that a coverage mismatch, an unreadable sealed file
+or a skipped conflict happened. None of those is security class, so that is fine. The fence is
+not published: one counter is shared by every result, and its gaps would show where results
+were held. The position in the attempt is not published either, and the sealed private report
+has a fixed size.
 
 ## Cadence
 
-The workflow runs once a day (04:41 UTC) when switched on, and by hand
-(`workflow_dispatch`; `dry_run` defaults to true: build and verify, print the counts, open
-nothing). Each run starts from the current main of mcp-results and recomputes the whole
+The `build` job runs once a day (04:41 UTC) when switched on, and by hand
+(`workflow_dispatch` with no inputs). Neither delivers: delivery is a separate manual dispatch
+with the reviewed digest ("Review"). Each run starts from the current main of mcp-results and recomputes the whole
 difference, so the branch `results/refresh` is replaced each time and one pull request
 collects everything not yet merged.
 
@@ -182,26 +219,23 @@ the worker run (`provenance.workflow`), a public Actions run.
 
 ## Before the switch is flipped
 
-1. Merge the mcp-results pull request (the data format and `verify.mjs`); the workflow
-   runs that checker.
-2. The App needs `contents: write` and `pull_requests: write`, and an installation that
-   includes `mcp-results` (today: Actions, Issues, Metadata; `tool-qa` and the worker
-   repositories). The same App and key, a wider grant: it is an owner action in the App
-   and organisation settings. Until then the deliver step fails with a message saying so
-   and creates nothing. If widening the App is not wanted, the dry-run output can be
-   committed by hand.
-3. Set `RESULTS_PUBLISH_ENABLED=true` (repository or `loop` environment). Run the
-   workflow by hand with `dry_run` true and read the counts in the summary.
-4. First pull request: review it by hand. Look at the fields under R3 (`repo_core`,
-   `contributors_counts`, `owner_org_facts`: logins and organisation facts) and at author
-   text under R1 before merging; the publisher cannot tell a name from a login.
-5. After merging mcp-results#11, make sure `publish/verify-pin.json` matches the merged
-   checker (`node publish/pin-check.mjs <checkout>`); the verify job fails otherwise. And
-   after each merge of a data pull request, make a signed tag of the new manifest's digest:
+1. Merge the mcp-results pull request (the data format and `verify.mjs`), then make sure
+   `publish/verify-pin.json` matches the merged checker (`node publish/pin-check.mjs
+   <checkout>`); the build fails otherwise.
+2. Create the `publish` environment with required reviewers and move the App and key
+   secrets there ("The `publish` environment"); the App needs `contents: write` and
+   `pull_requests: write` and an installation that includes `mcp-results` (today: Actions,
+   Issues, Metadata). Same App and key, a wider grant. Until then delivery fails with a
+   message saying so and creates nothing; building and sealing work without any of it.
+3. Set `RESULTS_PUBLISH_ENABLED=true` (repository variable). The first scheduled or manual
+   build only produces sealed artifacts. Review one ("Review"), then dispatch a delivery.
+4. Look at the R3 fields (`repo_core`, `contributors_counts`, `owner_org_facts`) and author
+   text under R1 in the first batch; the publisher cannot tell a name from a login.
+5. After each merge of a data pull request, make a signed tag of the new manifest's digest:
    no step does that yet.
-6. Decide, as the owner: whether to auto-merge later batches once `verify.mjs` passes;
-   what to do with P-t text (a licence decision); a per-finding confirmation record for
-   class B and P-h; a release list for class S.
+6. Decide, as the owner: what to do with P-t text (a licence decision); a per-finding
+   confirmation record for class B and P-h; a release list for class S; whether later
+   batches may skip the manual digest.
 
 ## Stop it
 

@@ -139,7 +139,6 @@ export function buildRecord(item, registry) {
     provenance: {
       run_key: manifest.run_key,
       attempt_id: item.attempt_id,
-      fence: manifest.fence,
       workflow: {
         repo: manifest.workflow.repo,
         file: manifest.workflow.file,

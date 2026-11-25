@@ -24,40 +24,66 @@ test('R-PUB-09: publishing is off unless RESULTS_PUBLISH_ENABLED is exactly "tru
   assert.equal(evaluateGate(ON).proceed, true);
 });
 
-test('R-PUB-09: three jobs: the key, the checker and the App never share a job; only redacted output and a sealed report are uploaded; every later job waits for the gate', () => {
+test('R-PUB-09: the key, the checker and the App never share a step; only ciphertext is uploaded; every later step waits for the gate', () => {
   const file = readFileSync(join(ROOT, '.github/workflows/publish-results.yml'), 'utf8');
   const wf = parseYaml(file);
   assert.deepEqual(wf.permissions, {});
   assert.ok(!('pull_request' in wf.on) && !('push' in wf.on));
-  assert.equal(wf.on.workflow_dispatch.inputs.dry_run.default, 'true');
-  const { build, verify, deliver: del } = wf.jobs;
-  assert.equal(build.environment, 'loop');
-  assert.equal(del.environment, 'loop');
-  assert.equal(verify.environment, undefined, 'the checker job has no environment, so no secret');
+  const { build, deliver: del } = wf.jobs;
   assert.deepEqual(build.permissions, { contents: 'read', actions: 'read' });
-  assert.ok(!/secrets\./.test(JSON.stringify(verify)), 'no secret in the checker job');
+  assert.equal(build.environment, 'loop');
   const holders = (job, name) => job.steps.filter((s) => JSON.stringify(s.env ?? {}).includes(name)).map((s) => s.name);
   assert.deepEqual(holders(build, 'AGE_IDENTITY'), ['Build the files to publish']);
-  assert.deepEqual(holders(build, 'APP_PRIVATE_KEY'), []);
+  assert.deepEqual(holders(build, 'APP_PRIVATE_KEY'), [], 'the build job has no App secret');
+  assert.deepEqual(holders(del, 'AGE_IDENTITY'), ['Open the reviewed output']);
   assert.deepEqual(holders(del, 'APP_PRIVATE_KEY'), ['Open or update the pull request on mcp-results']);
-  assert.deepEqual(holders(del, 'AGE_IDENTITY'), []);
-  assert.deepEqual(holders(verify, 'APP_PRIVATE_KEY').concat(holders(verify, 'AGE_IDENTITY')), []);
-  assert.deepEqual([].concat(del.needs).sort(), ['build', 'verify']);
-  assert.match(del.if, /dry_run == false/);
-  assert.match(build.steps.find((s) => s.id === 'gate').env.RESULTS_PUBLISH_ENABLED, /vars\.RESULTS_PUBLISH_ENABLED/);
-  assert.equal(del.steps.find((s) => s.id === 'gate').env.RESULTS_PUBLISH_ENABLED, '${{ vars.RESULTS_PUBLISH_ENABLED }}', 'the deliver job checks the switch again');
-  for (const s of build.steps.filter((x) => x.id !== 'gate' && !/Check out/.test(x.name))) assert.match(s.if, /steps\.gate\.outputs\.proceed == 'true'/, s.name);
-  // uploads: the redacted output for one day, and a report that is age ciphertext
-  const ups = build.steps.filter((s) => /upload-artifact/.test(s.uses ?? ''));
-  assert.deepEqual(ups.map((u) => [u.with.name.split('-').slice(0, 2).join('-'), u.with['retention-days']]), [['publish-out', '1'], ['publish-private', '30']]);
-  assert.ok(!/upload-artifact/.test(JSON.stringify([verify, del])));
-  assert.match(build.steps.find((s) => s.id === 'build').run, /--seal-to worker-kit\/ingest\.pub/);
-  // the checker is the reviewed version before it runs, and runs against the base commit
-  const names = verify.steps.map((s) => s.name);
-  assert.ok(names.indexOf('The checker is the reviewed version') < names.findIndex((n) => /Verify with/.test(n)));
-  assert.match(verify.steps.find((s) => /Verify with/.test(s.name)).run, /--base "\$BASE"/);
+  // the third-party checker runs after the only step that holds the key, with nothing secret in or after it
+  const names = build.steps.map((s) => s.name);
+  const keyAt = names.indexOf('Build the files to publish');
+  assert.ok(names.indexOf('The checker is the reviewed version') > keyAt && names.findIndex((n) => /Verify with/.test(n)) > names.indexOf('The checker is the reviewed version'));
+  assert.ok(build.steps.slice(keyAt + 1).every((st) => !/secrets\./.test(JSON.stringify(st))), 'no secret after the build step');
+  assert.match(build.steps.find((st) => /Verify with/.test(st.name)).run, /--base "\$BASE"/);
+  for (const st of build.steps.filter((x) => x.id !== 'gate' && !/Check out/.test(x.name))) assert.match(st.if, /steps\.gate\.outputs\.proceed == 'true'/, st.name);
+  // uploads: ciphertext only (a sealed output, a sealed padded report), nothing readable
+  const ups = build.steps.filter((st) => /upload-artifact/.test(st.uses ?? ''));
+  assert.deepEqual(ups.map((u) => u.with.name.split('-').slice(0, 2).join('-')), ['publish-out', 'publish-private']);
+  assert.ok(!/upload-artifact/.test(JSON.stringify(del)));
+  assert.match(build.steps.find((st) => st.id === 'build').run, /--seal-to worker-kit\/ingest\.pub/);
+  assert.match(build.steps.find((st) => st.id === 'seal').run, /seal\.mjs seal .*--to worker-kit\/ingest\.pub/);
+  assert.deepEqual(holders(build, 'APP_ID'), []);
   // an unclean build ends the run red
   assert.match(wf.jobs['not-clean'].if, /outputs\.clean == 'false'/);
+  assert.equal(del.steps.find((st) => st.id === 'gate').env.RESULTS_PUBLISH_ENABLED, '${{ vars.RESULTS_PUBLISH_ENABLED }}', 'the deliver job checks the switch again');
+});
+
+test('R-PUB-22: nothing is delivered unreviewed: the schedule only builds, delivery is a manual dispatch with the reviewed digest, in an environment with required reviewers, and it fails closed without it', () => {
+  const wf = parseYaml(readFileSync(join(ROOT, '.github/workflows/publish-results.yml'), 'utf8'));
+  const { build, deliver: del } = wf.jobs;
+  assert.ok(wf.on.schedule && wf.on.workflow_dispatch);
+  assert.equal(wf.on.workflow_dispatch.inputs.deliver_run_id.default, '');
+  assert.equal(wf.on.workflow_dispatch.inputs.reviewed_sums.default, '');
+  // delivery needs a dispatch, a run id and a digest; the schedule has none of them
+  assert.match(del.if, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(del.if, /inputs\.deliver_run_id != ''/);
+  assert.match(del.if, /inputs\.reviewed_sums != ''/);
+  assert.match(build.if, /schedule/);
+  assert.match(build.if, /inputs\.deliver_run_id == ''/);
+  assert.ok(!del.needs, 'delivery does not follow a build in the same run');
+  // its own environment, which must hold required reviewers; not the loop's
+  assert.equal(del.environment, 'publish');
+  assert.notEqual(del.environment, build.environment);
+  const first = del.steps[0];
+  assert.equal(first.name, 'The review gate is set up', 'the very first step');
+  assert.match(first.run, /PUBLISH_REVIEW_GATE" != "required-reviewers"/);
+  assert.equal(first.env.PUBLISH_REVIEW_GATE, '${{ vars.PUBLISH_REVIEW_GATE }}');
+  const run = (v) => spawnSync('bash', ['-e', '-c', first.run], { encoding: 'utf8', env: { PATH: process.env.PATH, ...(v === undefined ? {} : { PUBLISH_REVIEW_GATE: v }) } }).status;
+  assert.equal(run(undefined), 1, 'an environment made on the fly, with no variable, stops');
+  assert.equal(run(''), 1);
+  assert.equal(run('yes'), 1);
+  assert.equal(run('required-reviewers'), 0);
+  // the digest is what opens the archive
+  assert.match(del.steps.find((st) => st.id === 'open').run, /seal\.mjs open .*--expect "\$SUMS"/);
+  assert.equal(del.steps.find((st) => st.id === 'open').env.SUMS, '${{ inputs.reviewed_sums }}');
 });
 
 test('R-PUB-17: the checker from mcp-results runs only if its files are the reviewed ones', async () => {

@@ -376,3 +376,50 @@ test('R-PUB-16: our own failures end the run not clean (exit 4) after the output
     assert.equal(p.clean, false);
   } finally { t.done(); }
 });
+
+test('R-PUB-19: the output leaves the build job sealed, and opens only with the reviewed digest, the loop key and untampered files', { skip: spawnSync('age', ['--version']).status !== 0 }, async () => {
+  const { seal, open } = await import('../seal.mjs');
+  const kg = spawnSync('age-keygen', [], { encoding: 'utf8' });
+  const identity = /AGE-SECRET-KEY-1[A-Z0-9]+/.exec(kg.stdout)[0];
+  const pub = /age1[a-z0-9]+/.exec(kg.stdout)[0];
+  const other = /AGE-SECRET-KEY-1[A-Z0-9]+/.exec(spawnSync('age-keygen', [], { encoding: 'utf8' }).stdout)[0];
+  const dir = mkdtempSync(join(tmpdir(), 'seal-'));
+  try {
+    mkdirSync(join(dir, 'in/data/results/live-probe'), { recursive: true });
+    writeFileSync(join(dir, 'in/data/results/live-probe/2026-11-24.jsonl'), '{"x":"READABLE-MARKER"}\n');
+    writeFileSync(join(dir, 'in/report.json'), '{}');
+    const base = 'a'.repeat(40);
+    const { sealed, sums } = seal({ dir: join(dir, 'in'), base, recipients: [pub], ageBin: 'age' });
+    assert.ok(!sealed.includes('READABLE-MARKER'), 'ciphertext holds nothing readable');
+    const outA = join(dir, 'out-a');
+    const r = open({ sealed, identity, expect: sums, dir: outA, ageBin: 'age' });
+    assert.deepEqual(r, { sums, base });
+    assert.equal(readFileSync(join(outA, 'data/results/live-probe/2026-11-24.jsonl'), 'utf8'), '{"x":"READABLE-MARKER"}\n');
+    // not the reviewed digest: nothing is written
+    const outB = join(dir, 'out-b');
+    assert.throws(() => open({ sealed, identity, expect: 'b'.repeat(64), dir: outB, ageBin: 'age' }), /not the reviewed/);
+    assert.ok(!existsSync(outB));
+    // not the loop's key
+    assert.throws(() => open({ sealed, identity: other, expect: sums, dir: join(dir, 'out-c'), ageBin: 'age' }));
+    // a different sealed output has a different digest, so an approval does not carry over
+    writeFileSync(join(dir, 'in/report.json'), '{"records_added":1}');
+    assert.notEqual(seal({ dir: join(dir, 'in'), base, recipients: [pub], ageBin: 'age' }).sums, sums);
+    assert.throws(() => seal({ dir: join(dir, 'in'), base: 'short', recipients: [pub], ageBin: 'age' }), /full commit id/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('R-PUB-20: the private report is padded to a fixed size, so its length shows nothing about its keys', async () => {
+  const { pad } = await import('../seal.mjs');
+  const small = pad(JSON.stringify({ a: 1 }));
+  const big = pad(JSON.stringify({ a: 1, held_other: { redaction_hit: 4, oversize: 2, empty_assessed: 9 }, conflicts_skipped: 3, files_changed: Array.from({ length: 20 }, (_, i) => `f${i}`) }, null, 2));
+  assert.equal(Buffer.byteLength(small), 16384);
+  assert.equal(Buffer.byteLength(big), 16384);
+  assert.deepEqual(JSON.parse(small), { a: 1 }, 'it is still JSON');
+  assert.equal(Buffer.byteLength(pad('x'.repeat(20000))) % 16384, 0, 'a larger report is padded to a whole block');
+});
+
+test('R-PUB-21: the fence is not published: a global counter whose gaps could show where a result was held', () => {
+  const { records, store } = build(item({ attempt: 'att-1', n: 1 }));
+  assert.ok(!('fence' in records[0].provenance));
+  assert.ok(!/"fence"/.test(allBytes(store)));
+});
