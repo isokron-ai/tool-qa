@@ -15,6 +15,8 @@ export const SCENARIOS = {
   // Scanning on three lanes at LOOP_SLOTS=2, two batches out.
   live: () => {
     const s = realisticState({ now: NOW });
+    // The live-probe re-sweep note, as the config picks it while one runs.
+    s.cfg.lane_notes = { 'live-probe': 're_sweep' };
     return { ...s, retry: null };
   },
   // LOOP_SLOTS=0 for the last six hours: the pump runs housekeeping ticks, nothing is out.

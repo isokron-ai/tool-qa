@@ -15,7 +15,8 @@ const { snapshot, hourEvents, problems } = buildLiveSnapshot(db, { now, config, 
 - `config`: `pump/workflows.json` plus `switches` (the values the run read:
   `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL`, `LOOP_SLOTS`, `RESULTS_PUBLISH_ENABLED`,
   `LANE_HISTORY_*_ENABLED`) and optionally `history`
-  (`[{kind, last_capture_at, versions, registry_size}]`).
+  (`[{kind, last_capture_at, versions, registry_size}]`) and `lane_notes`
+  (`{lane: key of LANE_NOTES | null}`).
 - `retry`: the open retry, `{call, status, attempt, of, next_at, since}`, or
   null. `call` is `github_api`, `state_asset` or `app_token`; anything else
   (a raw `METHOD /path`) is mapped to one of them, never copied.
@@ -40,7 +41,13 @@ The snapshot's fields (design: PHASE-1-BUILD-PLAN.md section 3): `schema`,
 live", "scanning paused by us", "loop paused by us", "loop switched off by us",
 "retrying a GitHub call"), `pump`, `retry`, `breaker` (`{state, checked_at, lanes}`),
 `lanes[]`, `history[]`, `edges[]`, `publish`, `counts`, `now_checking[]` and
-`recent[]`. Public events have only the keys `seq, type, occurred_at,
+`recent[]`. `pump.registry_delta` is `{at, w24h}` (the last registry delta the
+pump dispatched, and how many in 24 h). Each lane has a `note`, one of the
+fixed wordings in `LANE_NOTES` or null: by default "not built yet", "built,
+switching on next" for a lane that is off, and writecheck's "most servers
+skipped: npm and PyPI only for now"; `config.lane_notes` (`{lane: key}`) can
+pick another key from that list, or null, and never carries text itself. The
+`registry-full` history entry has `registry_size` and `full_at`. Public events have only the keys `seq, type, occurred_at,
 recorded_at, lane, n, accepted, not_used, subject, side, label, status, state, lanes`;
 the uploader adds `published_at`.
 

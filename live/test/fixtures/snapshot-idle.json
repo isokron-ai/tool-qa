@@ -25,6 +25,10 @@
         12,
         15
       ]
+    },
+    "registry_delta": {
+      "at": "2026-11-25T21:00:00.000Z",
+      "w24h": 32
     }
   },
   "retry": null,
@@ -39,6 +43,7 @@
       "state": "on",
       "tool": "mcp-check",
       "pin": "75503c1",
+      "note": null,
       "w1h": 0,
       "w24h": 572,
       "spark24": [
@@ -91,6 +96,7 @@
       "state": "on",
       "tool": "mcp-check",
       "pin": "116b0ca",
+      "note": null,
       "w1h": 0,
       "w24h": 359,
       "spark24": [
@@ -143,6 +149,7 @@
       "state": "not_built",
       "tool": null,
       "pin": null,
+      "note": "not built yet",
       "w1h": null,
       "w24h": null,
       "spark24": null,
@@ -156,6 +163,7 @@
       "state": "not_built",
       "tool": null,
       "pin": null,
+      "note": "not built yet",
       "w1h": null,
       "w24h": null,
       "spark24": null,
@@ -169,6 +177,7 @@
       "state": "on",
       "tool": "mcp-writecheck-action",
       "pin": "54d4541",
+      "note": "most servers skipped: npm and PyPI only for now",
       "w1h": 0,
       "w24h": 83,
       "spark24": [
@@ -221,6 +230,7 @@
       "state": "off",
       "tool": "meta-github",
       "pin": "1.2.0",
+      "note": "built, switching on next",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -273,6 +283,7 @@
       "state": "off",
       "tool": "meta-registry",
       "pin": "1.2.0",
+      "note": "built, switching on next",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -325,6 +336,7 @@
       "state": "off",
       "tool": "release-diff",
       "pin": "1.1.0",
+      "note": "built, switching on next",
       "w1h": 0,
       "w24h": 0,
       "spark24": [
@@ -384,7 +396,8 @@
       "kind": "registry-full",
       "state": "on",
       "last_capture_at": "2026-11-25T12:46:00.000Z",
-      "registry_size": 73655
+      "registry_size": 73655,
+      "full_at": "2026-11-25T12:46:00.000Z"
     },
     {
       "kind": "packages",

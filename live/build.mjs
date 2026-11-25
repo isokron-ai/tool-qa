@@ -72,6 +72,13 @@ export const RING_DAILY_KEYS = CLASSES;
 /** The fixed list a retry's call label comes from. */
 export const RETRY_CALLS = Object.freeze(['github_api', 'state_asset', 'app_token']);
 export const BATCH_LABELS = Object.freeze(['GitHub error', 'refused', 'withdrawn']);
+/** Fixed lane notes; a lane shows one of these or none. */
+export const LANE_NOTES = Object.freeze({
+  not_built: 'not built yet',
+  switching_on: 'built, switching on next',
+  npm_pypi_only: 'most servers skipped: npm and PyPI only for now',
+  re_sweep: 're-checking every server after a fix to our PyPI launcher',
+});
 export const HISTORY_KINDS = Object.freeze(['registry-delta', 'registry-full', 'packages', 'popularity']);
 /** Public event types. */
 export const PUBLIC_TYPES = Object.freeze([
@@ -533,6 +540,10 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
     if (s && at) successor = { state: s.value?.ok === true ? 'ok' : 'failed', at };
   }
   const lastTick = kv(r, 'pump.last_tick');
+  const lastDelta = events ? isoOrNull(r.get(`
+    SELECT occurred_at FROM events WHERE type = 'registry_delta' AND occurred_at <= ? AND json_valid(data)
+      AND json_extract(data, '$.action') = 'dispatched' ORDER BY occurred_at DESC, id DESC LIMIT 1
+  `, nowIso)?.occurred_at) : null;
   const open = count(r.get('SELECT COUNT(*) AS n FROM slot_ledger WHERE released IS NULL AND expires > ?', nowIso).n);
 
   // ---- breaker ----
@@ -565,6 +576,7 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
       state,
       tool: typeof tool === 'string' && TOOL_RE.test(tool) && !hasVendorName(tool) ? tool : null,
       pin: typeof pin === 'string' && PIN_RE.test(pin) && !hasVendorName(pin) ? pin : null,
+      note: laneNote(id, state, config?.lane_notes),
     };
     if (notBuilt) return { ...lane, w1h: null, w24h: null, spark24: null, fault: null, ring: null, ring_daily: null, t0_w24h: null };
     const st = laneStats.get(id);
@@ -634,6 +646,7 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
       runs_24h: runs24h,
       successor,
       slots: { budget, open, max: MAX_SLOTS, ramp: [...RAMP] },
+      registry_delta: { at: lastDelta, w24h: historyTriggered.w24h },
     },
     retry: retryBlock,
     breaker,
@@ -685,6 +698,24 @@ function recentEvents(r, ctx, nowMs) {
   return out;
 }
 
+/**
+ * A lane's note, a fixed wording (LANE_NOTES) or null. config.lane_notes may
+ * pick one per lane by key ({lane: key}, or null for none); a key not on the
+ * list is ignored. Otherwise: not built, off ("switching on next"), and
+ * writecheck's registry limit.
+ */
+function laneNote(id, state, chosen) {
+  if (chosen && typeof chosen === 'object' && Object.hasOwn(chosen, id)) {
+    const k = chosen[id];
+    if (k === null) return null;
+    if (typeof k === 'string' && Object.hasOwn(LANE_NOTES, k)) return LANE_NOTES[k];
+  }
+  if (state === 'not_built') return LANE_NOTES.not_built;
+  if (state === 'off') return LANE_NOTES.switching_on;
+  if (id === 'writecheck') return LANE_NOTES.npm_pypi_only;
+  return null;
+}
+
 /** The open retry as its public block, or null. */
 function publicRetry(retry) {
   if (!retry || typeof retry !== 'object') return null;
@@ -719,7 +750,10 @@ function publicHistory(list, switches, delta) {
     if (last === null && kind === 'registry-delta') last = isoOrNull(delta?.value?.captureAt);
     const out = { kind, state: switchOn(sw[kind]) ? 'on' : 'off', last_capture_at: last };
     if (kind === 'registry-delta') out.versions = intIn(h.versions, 0, 10_000_000);
-    if (kind === 'registry-full') out.registry_size = intIn(h.registry_size, 0, 100_000_000);
+    if (kind === 'registry-full') {
+      out.registry_size = intIn(h.registry_size, 0, 100_000_000);
+      out.full_at = last;
+    }
     return out;
   });
 }

@@ -117,16 +117,17 @@ test('allowlist: every public event has only the public keys and types; the snap
     assert.ok(!('published_at' in e), 'the uploader adds published_at');
   }
   assert.deepEqual(Object.keys(snapshot), ['schema', 'seq', 'generated_at', 'version', 'mode', 'mode_reason', 'pump', 'retry', 'breaker', 'lanes', 'history', 'edges', 'publish', 'counts', 'now_checking', 'recent']);
-  assert.deepEqual(Object.keys(snapshot.pump), ['run_started_at', 'tick_at', 'tick_s', 'runs_24h', 'successor', 'slots']);
+  assert.deepEqual(Object.keys(snapshot.pump), ['run_started_at', 'tick_at', 'tick_s', 'runs_24h', 'successor', 'slots', 'registry_delta']);
+  assert.deepEqual(Object.keys(snapshot.pump.registry_delta), ['at', 'w24h']);
   assert.deepEqual(Object.keys(snapshot.pump.slots), ['budget', 'open', 'max', 'ramp']);
   assert.deepEqual(snapshot.retry, { call: 'state_asset', status: 502, attempt: 3, of: 6, next_at: new Date(NOW + 4000).toISOString(), since: new Date(NOW - 60_000).toISOString() });
   assert.deepEqual(Object.keys(snapshot.breaker), ['state', 'checked_at', 'lanes']);
-  for (const l of snapshot.lanes) assert.deepEqual(Object.keys(l), ['id', 'state', 'tool', 'pin', 'w1h', 'w24h', 'spark24', 'fault', 'ring', 'ring_daily', 't0_w24h']);
+  for (const l of snapshot.lanes) assert.deepEqual(Object.keys(l), ['id', 'state', 'tool', 'pin', 'note', 'w1h', 'w24h', 'spark24', 'fault', 'ring', 'ring_daily', 't0_w24h']);
   for (const l of snapshot.lanes.filter((x) => x.ring)) {
     assert.deepEqual(Object.keys(l.ring), ['accepted', 'not_used']);
     assert.deepEqual(Object.keys(l.ring_daily), ['lease', 'integrity', 'worker_output', 'infra']);
   }
-  for (const h of snapshot.history) assert.ok(Object.keys(h).every((k) => ['kind', 'state', 'last_capture_at', 'versions', 'registry_size'].includes(k)));
+  for (const h of snapshot.history) assert.ok(Object.keys(h).every((k) => ['kind', 'state', 'last_capture_at', 'versions', 'registry_size', 'full_at'].includes(k)));
   assert.deepEqual(snapshot.history.map((h) => h.kind), ['registry-delta', 'registry-full', 'packages', 'popularity']);
   assert.equal(snapshot.history[0].versions, null);
   for (const e of snapshot.edges) assert.deepEqual(Object.keys(e), ['from', 'to', 'w1h', 'w24h', 'w7d']);
@@ -354,7 +355,7 @@ test('lane states: on, off, not_built, and held while the breaker holds the lane
   assert.deepEqual(states(snap), { 'scan-static': 'on', 'live-probe': 'on', 'scan-deep': 'not_built', 'build-probe': 'not_built', writecheck: 'on', 'meta-github': 'off', 'meta-registry': 'off', 'release-diff': 'off' });
   assert.equal(snap.breaker, null);
   const nb = snap.lanes.find((l) => l.id === 'scan-deep');
-  assert.deepEqual(nb, { id: 'scan-deep', state: 'not_built', tool: null, pin: null, w1h: null, w24h: null, spark24: null, fault: null, ring: null, ring_daily: null, t0_w24h: null });
+  assert.deepEqual(nb, { id: 'scan-deep', state: 'not_built', tool: null, pin: null, note: 'not built yet', w1h: null, w24h: null, spark24: null, fault: null, ring: null, ring_daily: null, t0_w24h: null });
   assert.ok(!snap.edges.some((e) => e.to === 'scan-deep' || e.from === 'build-probe'), 'not built: no edges');
   assert.deepEqual(snap.lanes.find((l) => l.id === 'live-probe').spark24.length, 24);
   db.setKv('pump.breaker', { tripped: true, reason: 'stale', held: ['live-probe', 'writecheck'], checked_at: '2026-11-24T06:00:00.000Z' }, { now: NOW });
@@ -455,6 +456,7 @@ test('counts and edges follow the events: results, batch ends and batches sent p
   assert.deepEqual(edge('pump', 'writecheck'), { from: 'pump', to: 'writecheck', w1h: 3, w24h: 3, w7d: 8 });
   assert.deepEqual(edge('writecheck', 'ingest'), { from: 'writecheck', to: 'ingest', w1h: 3, w24h: 5, w7d: 5 });
   assert.deepEqual(edge('pump', 'history'), { from: 'pump', to: 'history', w1h: 1, w24h: 1, w7d: 1 });
+  assert.deepEqual(snapshot.pump.registry_delta, { at: new Date(NOW - 10 * 60_000).toISOString(), w24h: 1 });
   assert.deepEqual(snapshot.counts, { subjects_in_seed: 2, checked: { w24h: 2, w7d: 2, all: 1 }, assessed: { w24h: 2, all: 1 } });
   const ends = snapshot.recent.filter((e) => e.type === 'batch_closed' || e.type === 'batch_expired').map((e) => [e.type, e.n, e.accepted, e.not_used]);
   assert.deepEqual(ends, [['batch_expired', 2, 1, 1], ['batch_closed', 3, 1, 2]], 'newest written first');
@@ -488,4 +490,25 @@ test('with the store\'s own event writers: sent, accepted, rejected and quaranti
   const text = JSON.stringify(snapshot);
   assert.ok(!text.includes('b-org/two') && !text.includes('c-org/three'), 'the batch is closed: no rejected or quarantined server is named');
   assert.deepEqual(snapshot.lanes.find((l) => l.id === 'live-probe').ring, { accepted: 1, not_used: 2 });
+});
+
+test('lane notes are fixed wordings: defaults by state and lane, a config key picks one, anything else is ignored', () => {
+  const db = emptyState();
+  const notes = (laneNotes) => {
+    const cfg = config();
+    if (laneNotes !== undefined) cfg.lane_notes = laneNotes;
+    return Object.fromEntries(buildLiveSnapshot(db, { now: NOW, config: cfg }).snapshot.lanes.map((l) => [l.id, l.note]));
+  };
+  assert.deepEqual(notes(), {
+    'scan-static': null, 'live-probe': null, 'scan-deep': 'not built yet', 'build-probe': 'not built yet',
+    writecheck: 'most servers skipped: npm and PyPI only for now', 'meta-github': 'built, switching on next',
+    'meta-registry': 'built, switching on next', 'release-diff': 'built, switching on next',
+  });
+  const n = notes({ 'live-probe': 're_sweep', writecheck: null, 'scan-static': `free text ${FAKE_GH}`, 'meta-github': 'toString' });
+  assert.equal(n['live-probe'], 're-checking every server after a fix to our PyPI launcher');
+  assert.equal(n.writecheck, null);
+  assert.equal(n['scan-static'], null, 'free text is never copied');
+  assert.equal(n['meta-github'], 'built, switching on next');
+  const full = buildLiveSnapshot(db, { now: NOW, config: config() }).snapshot.history.find((h) => h.kind === 'registry-full');
+  assert.deepEqual(full, { kind: 'registry-full', state: 'on', last_capture_at: '2026-11-25T12:46:00.000Z', registry_size: 73655, full_at: '2026-11-25T12:46:00.000Z' });
 });
