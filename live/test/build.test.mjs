@@ -398,3 +398,31 @@ test('counts and edges follow the events: results, rejections and batches per la
   assert.deepEqual(edge('pump', 'history'), { from: 'pump', to: 'history', w1h: 1, w24h: 1, w7d: 1 });
   assert.deepEqual(snapshot.counts, { subjects_in_seed: 1, checked: { w24h: 2, w7d: 2, all: 1 }, assessed: { w24h: 1, all: 1 }, quarantined_daily: null });
 });
+
+test('with the store\'s own event writers: sent, accepted, rejected and quarantined results come out as the plan says', async () => {
+  const { openState } = await import('../../state/db.mjs');
+  const db = openState(':memory:');
+  const t = NOW - 10 * 60_000;
+  const names = ['a-org/one', 'b-org/two', 'c-org/three'];
+  for (const id of names) db.setSubjectVersion({ id, kind: 'github', source: 'seed-v3', tier: 1, name: id, now: t });
+  const items = names.map((subject, i) => {
+    const runKey = String(i + 1).repeat(64);
+    const l = db.acquireLease(runKey, 'att-1', { ttlMs: 3_600_000, now: t });
+    return { run_key: runKey, subject, subject_name: subject, fence: l.fence };
+  });
+  db.createDispatch({ attemptId: 'att-1', shardId: 's-1', workflow: 'live-probe', repo: 'example-org/worker', workflowFile: 'w.yml', ref: 'main', expires: t + 3_600_000, items, now: t });
+  db.markDispatched('att-1', { runId: 77, runUrl: RUN_URL, now: t + 1000 });
+  db.recordResult({ run_key: items[0].run_key, attempt_id: 'att-1', fence: items[0].fence, verdict: 'accepted', outcome: 'accepted', fault: null, coverage: 'assessed', digest: DIGEST, now: t + 60_000 });
+  db.recordResult({ run_key: items[1].run_key, attempt_id: 'att-1', fence: items[1].fence, verdict: 'rejected', outcome: 'quarantined', reason: 'secret_scan', now: t + 61_000 });
+  db.recordResult({ run_key: items[2].run_key, attempt_id: 'att-1', fence: items[2].fence, verdict: 'rejected', outcome: 'rejected', reason: 'digest_mismatch', now: t + 62_000 });
+  const { snapshot, hourEvents, problems } = buildLiveSnapshot(db, { now: NOW, config: config() });
+  assert.deepEqual(problems, []);
+  assert.deepEqual(hourEvents.map((e) => [e.type, e.lane, e.n, e.subject ?? e.class ?? null, e.side ?? null]), [
+    ['batch_sent', 'live-probe', 3, null, null],
+    ['result', 'live-probe', 1, 'a-org/one', 'assessed'],
+    ['rejected', 'live-probe', 1, 'integrity', null],
+  ]);
+  const text = JSON.stringify(snapshot);
+  assert.ok(!text.includes('b-org/two') && !text.includes('c-org/three'), 'the batch is closed: no rejected or quarantined server is named');
+  assert.deepEqual(snapshot.lanes.find((l) => l.id === 'live-probe').ring, { accepted: 1, lease: 0, integrity: 1, worker_output: 0, infra: 0 });
+});
