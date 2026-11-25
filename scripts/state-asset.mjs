@@ -356,11 +356,11 @@ function assertUnchanged(release, expected, ignoreId = null) {
  * `crypto` defaults to stateCrypto({ identity, ageBin, keygenBin, tmpDir }).
  */
 export async function pullState({
-  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs,
+  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, requestTimeoutMs,
   identity, ageBin, keygenBin, tmpDir, crypto, allowPlaintext = false,
 } = {}) {
   const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
-  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs });
+  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs, ...(requestTimeoutMs ? { requestTimeoutMs } : {}) });
   const release = await gh.getRelease();
   const asset = release && pickAsset(release);
   if (!asset) {
@@ -407,12 +407,12 @@ export async function pullState({
  * Never uploads anything that is not age ciphertext.
  */
 export async function pushState({
-  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, now = Date.now(), expected, force = false,
+  repo, token, file = DEFAULT_FILE, fetch = globalThis.fetch, apiUrl, log = console.error, sleep, random, clock, retryUntil, retryTotalMs, requestTimeoutMs, now = Date.now(), expected, force = false,
   identity, ageBin, keygenBin, tmpDir, crypto, compress = true,
 } = {}) {
   if (!token) throw new Error('GITHUB_TOKEN is required to push the state asset');
   const box = crypto ?? stateCrypto({ identity, ageBin, keygenBin, tmpDir });
-  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs });
+  const gh = makeClient({ repo, token, fetch, apiUrl, sleep, log, random, now: clock, retryUntil, retryTotalMs, ...(requestTimeoutMs ? { requestTimeoutMs } : {}) });
   expected = expected ?? readRecord(file);
   if (!expected && !force) {
     throw new Error(`no pull record for ${file}; pull first, or pass --force to overwrite whatever is on the release`);

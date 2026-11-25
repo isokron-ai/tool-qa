@@ -187,3 +187,55 @@ test('R-HIST-05: history-registry.yml keeps its */15 cron as a fallback, takes m
   const pump = readFileSync(new URL('../../.github/workflows/pump.yml', import.meta.url), 'utf8');
   assert.match(pump, /LANE_HISTORY_REGISTRY_ENABLED: \$\{\{ vars\.LANE_HISTORY_REGISTRY_ENABLED \}\}/, 'the pump step passes the lane switch');
 });
+
+function pagedWorld(artifacts) {
+  const api = fakeApi([
+    ['GET', `/repos/${REPO}/actions/artifacts`, (req) => {
+      const page = Number(req.query.get('page') ?? 1);
+      return { body: { artifacts: artifacts.slice((page - 1) * 100, page * 100) } };
+    }],
+    ['GET', `/repos/${REPO}/actions/workflows/history-registry.yml/runs`, () => ({ body: { workflow_runs: [] } })],
+    ['POST', `/repos/${REPO}/actions/workflows/history-registry.yml/dispatches`, () => ({ status: 204 })],
+  ]);
+  const c = fakeClock(NOW);
+  const client = createClient({ token: 'ghs_synthetic_registry', fetch: api.fetch, apiUrl: API, sleep: c.sleep, now: c.now, random: () => 0.5 });
+  return { api, client };
+}
+const filler = (n) => Array.from({ length: n }, (_, i) => ({ name: `ingest-${i}-1`, created_at: ago(1 + i / 10), expired: false }));
+
+test('R-HIST-06: with more than 100 newer artifacts of other kinds the stall is still found by paging, and the gap is named in `since`', async () => {
+  const w = pagedWorld([...filler(250), delta(5 * 60)]);
+  const r = await ensureRegistryDelta({ client: w.client, repo: REPO, now: NOW });
+  assert.equal(r.action, 'dispatched');
+  assert.equal(r.since, new Date(NOW - 5 * 60 * MIN - 10 * MIN).toISOString().replace(/\.\d+Z$/, 'Z'), 'the delta artifact on page 3 was found');
+  assert.equal(w.api.calls.filter((c) => c.path.endsWith('/artifacts')).length, 3);
+});
+
+test('R-HIST-06: past the pages read, the capture time kept from earlier runs still sets `since`; with nothing known there is none', async () => {
+  const w = pagedWorld(filler(700));
+  const known = NOW - 9 * 60 * MIN;
+  const r = await ensureRegistryDelta({ client: w.client, repo: REPO, now: NOW, lastCaptureAt: known });
+  assert.equal(r.action, 'dispatched');
+  assert.equal(r.since, new Date(known - 10 * MIN).toISOString().replace(/\.\d+Z$/, 'Z'));
+  assert.equal(r.captureAt, new Date(known).toISOString().replace(/\.\d+Z$/, 'Z'));
+  assert.equal(w.api.calls.filter((c) => c.path.endsWith('/artifacts')).length, 5, 'at most 5 pages');
+  const none = pagedWorld(filler(700));
+  assert.equal((await ensureRegistryDelta({ client: none.client, repo: REPO, now: NOW })).since, undefined);
+});
+
+test('R-HIST-07: a registry outage cannot hold the tick past its 60 second window, and the rest of the run goes on', async () => {
+  const api = fakeApi([['*', /.*/, () => ({ status: 503, headers: { 'retry-after': '30' }, body: { message: 'Unavailable' } })]]);
+  const w = pumpWorld({ GITHUB_API_URL: API }, {
+    registryDelta: undefined, fetch: api.fetch,
+    mintToken: async () => ({ token: 'ghs_synthetic_actions', expiresAt: NOW + 3_600_000 }),
+  });
+  const out = await w.run();
+  assert.equal(out.ok, true);
+  assert.equal(out.ticks, 1, 'the tick ran');
+  assert.ok(w.c.t - NOW <= 60_000 + 1000, `the check used ${(w.c.t - NOW) / 1000} s`);
+  const db = openState(w.stateFile);
+  assert.equal(db.getKv('pump.registry_delta').action, 'failed');
+  assert.ok(db.getKv('pump.last_tick'), 'the tick finished and recorded itself');
+  db.close();
+  w.cleanup();
+});

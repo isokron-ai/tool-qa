@@ -27,6 +27,7 @@ export const MIN_DISPATCH_GAP_MS = 10 * 60_000;
 // The workflow's own default window is 90 minutes; past this age the dispatch
 // names the start of the gap itself, so a long stall leaves no hole.
 export const DEFAULT_SINCE_LIMIT_MS = 75 * 60_000;
+export const ARTIFACT_PAGES = 5;
 const SINCE_MARGIN_MS = 10 * 60_000;
 
 const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z');
@@ -50,26 +51,36 @@ function runMode(run) {
  * @returns {Promise<{ action: 'fresh'|'running'|'spaced'|'dispatched'|'failed', at: string,
  *   ageMinutes?: number, runId?: number, since?: string, error?: string }>}
  */
-export async function ensureRegistryDelta({ client, repo, ref = 'main', now = Date.now(), lastDispatchAt = null, log = () => {} }) {
+export async function ensureRegistryDelta({ client, repo, ref = 'main', now = Date.now(), lastDispatchAt = null, lastCaptureAt = null, log = () => {} }) {
   const at = isoSeconds(now);
   try {
-    const arts = await client.request('GET', `/repos/${repo}/actions/artifacts`, { family: 'actions', query: { per_page: 100 } });
-    const newest = (arts.data?.artifacts ?? [])
-      .filter((a) => String(a.name).startsWith(DELTA_PREFIX) && !a.expired)
-      .map((a) => Date.parse(a.created_at))
-      .filter(Number.isFinite)
-      .reduce((m, t) => Math.max(m, t), -Infinity);
+    // Newest first. The pump adds 3 or 4 artifacts every ~12 minutes, so after a
+    // stall the delta artifacts sit far down: page until one shows (at most
+    // ARTIFACT_PAGES pages), and fall back to the capture time kept from earlier.
+    let found = -Infinity;
+    for (let page = 1; page <= ARTIFACT_PAGES && found === -Infinity; page++) {
+      const arts = await client.request('GET', `/repos/${repo}/actions/artifacts`, { family: 'actions', query: { per_page: 100, page } });
+      const list = arts.data?.artifacts ?? [];
+      found = list
+        .filter((a) => String(a.name).startsWith(DELTA_PREFIX) && !a.expired)
+        .map((a) => Date.parse(a.created_at))
+        .filter(Number.isFinite)
+        .reduce((m, t) => Math.max(m, t), -Infinity);
+      if (list.length < 100) break;
+    }
+    const newest = Math.max(found, Number.isFinite(lastCaptureAt) ? lastCaptureAt : -Infinity);
+    const captureAt = Number.isFinite(newest) ? isoSeconds(newest) : undefined;
     const age = Number.isFinite(newest) ? now - newest : Infinity;
     const ageMinutes = Number.isFinite(age) ? Math.round(age / 60_000) : undefined;
-    if (age < DELTA_STALE_MS) return { action: 'fresh', at, ageMinutes };
+    if (age < DELTA_STALE_MS) return { action: 'fresh', at, ageMinutes, captureAt };
 
     const runs = await client.request('GET', `/repos/${repo}/actions/workflows/${REGISTRY_WORKFLOW}/runs`, {
       family: 'actions', allow: [404], query: { per_page: 30, exclude_pull_requests: true },
     });
     const active = (runs.data?.workflow_runs ?? []).filter((r) => r.status !== 'completed'
       && runMode(r) !== 'full' && now - Date.parse(r.created_at) < ACTIVE_DELTA_MS);
-    if (active.length) return { action: 'running', at, ageMinutes, runId: Number(active[0].id) };
-    if (lastDispatchAt !== null && now - lastDispatchAt < MIN_DISPATCH_GAP_MS) return { action: 'spaced', at, ageMinutes };
+    if (active.length) return { action: 'running', at, ageMinutes, captureAt, runId: Number(active[0].id) };
+    if (lastDispatchAt !== null && now - lastDispatchAt < MIN_DISPATCH_GAP_MS) return { action: 'spaced', at, ageMinutes, captureAt };
 
     const inputs = { mode: 'delta' };
     if (Number.isFinite(newest) && age > DEFAULT_SINCE_LIMIT_MS) inputs.since = isoSeconds(newest - SINCE_MARGIN_MS);
@@ -79,7 +90,7 @@ export async function ensureRegistryDelta({ client, repo, ref = 'main', now = Da
     });
     const runId = res.status === 200 && res.data?.workflow_run_id ? Number(res.data.workflow_run_id) : undefined;
     log(`registry delta: newest capture ${ageMinutes === undefined ? 'not found' : `${ageMinutes} minutes old`}; dispatched ${REGISTRY_WORKFLOW} (delta${inputs.since ? `, since ${inputs.since}` : ''})`);
-    return { action: 'dispatched', at, ageMinutes, ...(runId ? { runId } : {}), ...(inputs.since ? { since: inputs.since } : {}) };
+    return { action: 'dispatched', at, ageMinutes, captureAt, ...(runId ? { runId } : {}), ...(inputs.since ? { since: inputs.since } : {}) };
   } catch (err) {
     const error = String(err?.message ?? err).slice(0, 300);
     log(`registry delta: could not check or dispatch: ${error}`);

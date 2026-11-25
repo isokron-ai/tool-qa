@@ -59,7 +59,7 @@ export async function dispatchSuccessor({
   const secrets = [env.APP_PRIVATE_KEY, env.GITHUB_TOKEN];
   const budget = new ApiBudget({ now, sleep });
   // Each phase (dispatch, then the health report) gets its own window.
-  const window = () => ({ random, retryUntil: now() + SUCCESSOR_RETRY_MS, retryTotalMs: SUCCESSOR_RETRY_MS, log });
+  const window = () => ({ random, retryUntil: now() + SUCCESSOR_RETRY_MS, retryTotalMs: SUCCESSOR_RETRY_MS, requestTimeoutMs: 30_000, log });
   const mint = async (permissions, retry) => {
     const minter = mintToken ?? appTokenMinter({ env, fetch, apiUrl, now, sleep, budget, ...retry });
     const { token } = await minter({ repositories: [name], permissions });
