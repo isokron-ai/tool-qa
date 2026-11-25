@@ -20,7 +20,8 @@ test('pump/workflows.json dispatches these files with a shard no larger than the
     assert.equal(wf[lane].file, `${lane}.yml`);
     assert.ok(wf[lane].shard_size <= LANE_SLOTS[lane], `${lane} shard_size ${wf[lane].shard_size} > ${LANE_SLOTS[lane]} slots`);
   }
-  assert.equal(wf['release-diff'].enabled, false, 'release-diff is off until it is switched on by review');
+  // Switched on by review on 25 Nov 2026 (all three lanes); pinned so a change needs a reviewed test change.
+  for (const lane of ['meta-github', 'meta-registry', 'release-diff']) assert.equal(wf[lane].enabled, true, `${lane} is on`);
 });
 
 for (const lane of ['meta-github', 'meta-registry', 'release-diff']) {

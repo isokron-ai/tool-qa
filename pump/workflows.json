@@ -24,11 +24,11 @@
       "repo": "isokron-ai/mcp-check",
       "file": "live-probe.yml",
       "ref": "main",
-      "shard_size": 10,
+      "shard_size": 8,
       "setup_minutes": 8,
-      "minutes_per_subject": 2,
+      "minutes_per_subject": 3,
       "slots_max": 12,
-      "versions": { "tool": { "mcp-check": "116b0ca" }, "oracle": { "conformance": "0.2.0-alpha.12+f44482b", "sdk-typescript": "1.32.2", "client-typescript": "2.4.0", "sdk-python": "2.3.0", "sdk-go": "v1.8.0" }, "probe": { "mcp-surface-corpus": "4c16b58" } },
+      "versions": { "tool": { "mcp-check": "d4a373a" }, "oracle": { "conformance": "0.2.0-alpha.12+f44482b", "sdk-typescript": "1.32.2", "client-typescript": "2.4.0", "sdk-python": "2.3.0", "sdk-go": "v1.8.0" }, "probe": { "mcp-surface-corpus": "4c16b58", "fuzz": "d4a373a" } },
       "image_digest": null,
       "settings_state": "default"
     },
@@ -78,7 +78,7 @@
       "settings_state": "default"
     },
     "meta-github": {
-      "enabled": false,
+      "enabled": true,
       "runs_untrusted": false,
       "repo": "isokron-ai/tool-qa",
       "file": "meta-github.yml",
@@ -93,7 +93,7 @@
       "settings_state": "default"
     },
     "meta-registry": {
-      "enabled": false,
+      "enabled": true,
       "runs_untrusted": false,
       "repo": "isokron-ai/tool-qa",
       "file": "meta-registry.yml",
@@ -108,7 +108,7 @@
       "settings_state": "default"
     },
     "release-diff": {
-      "enabled": false,
+      "enabled": true,
       "runs_untrusted": false,
       "repo": "isokron-ai/tool-qa",
       "file": "release-diff.yml",
