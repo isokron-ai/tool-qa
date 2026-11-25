@@ -1,0 +1,121 @@
+name: publish-results
+
+# Publishes the loop's accepted results to isokron-ai/mcp-results as redacted plain
+# files, as one pull request that a person merges. OFF by default: it does nothing
+# unless the variable RESULTS_PUBLISH_ENABLED is exactly "true" (and the loop is on:
+# LOOP_ENABLED, LOOP_PAUSE_UNTIL, LANE_PUBLISH_RESULTS_ENABLED, as for every loop job).
+# Design, redaction and the security hold: docs/PUBLISHING.md.
+#
+# It runs in the `loop` environment because the key that opens the sealed results
+# (AGE_IDENTITY) lives only there. The key is given to the build step alone. The
+# deliver step gets the GitHub App settings and no key, and the files it sends are
+# the redacted plain output of the build step; nothing decrypted is uploaded as an
+# artifact (a public repository's artifacts are public).
+#
+#   gate     the switch
+#   build    reads the sealed `ingest-keep-*` artifacts of the last
+#            RESULTS_PUBLISH_LOOKBACK_DAYS days (default 7), keeps only what ingest
+#            accepted, applies the publish policy and the redaction rules, and
+#            writes the files that would change (publish/run.mjs)
+#   verify   runs mcp-results' own scripts/verify.mjs on the result
+#   deliver  one pull request on isokron-ai/mcp-results, through the existing GitHub
+#            App (publish/deliver.mjs). Never merges. Needs the App to have
+#            contents: write and pull_requests: write on mcp-results.
+#
+# workflow_dispatch has dry_run (default true): it builds and verifies, prints the
+# counts to the run summary, and delivers nothing.
+
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and verify only; open no pull request
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: publish-results
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: loop
+    permissions:
+      contents: read # check out this repository
+      actions: read # list and download the ingest-keep artifacts of this repository
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish gate
+        id: gate
+        env:
+          RESULTS_PUBLISH_ENABLED: ${{ vars.RESULTS_PUBLISH_ENABLED }}
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_PUBLISH_RESULTS_ENABLED: ${{ vars.LANE_PUBLISH_RESULTS_ENABLED }}
+        run: node publish/gate.mjs
+      - name: Set up Node
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install age (pinned version, sha256 checked)
+        if: steps.gate.outputs.proceed == 'true'
+        run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
+      # Public repository, read without a credential.
+      - name: Read isokron-ai/mcp-results (main)
+        id: results
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch main https://github.com/isokron-ai/mcp-results.git "$RUNNER_TEMP/mcp-results"
+          echo "base=$(git -C "$RUNNER_TEMP/mcp-results" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # AGE_IDENTITY goes to this step only. The script drops it from its environment at start.
+      - name: Build the files to publish
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
+          GITHUB_TOKEN: ${{ github.token }}
+          LOOKBACK_DAYS: ${{ vars.RESULTS_PUBLISH_LOOKBACK_DAYS }}
+        run: >-
+          node publish/run.mjs
+          --results "$RUNNER_TEMP/mcp-results"
+          --out "$RUNNER_TEMP/publish-out"
+          --source-artifacts
+          --since-days "${LOOKBACK_DAYS:-7}"
+      - name: Verify with mcp-results' own checker
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          if [ -d "$RUNNER_TEMP/publish-out/data" ]; then
+            mkdir -p "$RUNNER_TEMP/mcp-results/data"
+            cp -R "$RUNNER_TEMP/publish-out/data/." "$RUNNER_TEMP/mcp-results/data/"
+          fi
+          node "$RUNNER_TEMP/mcp-results/scripts/verify.mjs" "$RUNNER_TEMP/mcp-results"
+          {
+            echo '## Publish results'
+            echo '```json'
+            cat "$RUNNER_TEMP/publish-out/report.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Open or update the pull request on mcp-results
+        if: steps.gate.outputs.proceed == 'true' && (github.event_name == 'schedule' || inputs.dry_run == false)
+        env:
+          APP_ID: ${{ vars.APP_ID }}
+          APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          BASE_SHA: ${{ steps.results.outputs.base }}
+        run: node publish/deliver.mjs --out "$RUNNER_TEMP/publish-out" --base-sha "$BASE_SHA"

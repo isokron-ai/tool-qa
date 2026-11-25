@@ -133,7 +133,8 @@ A few from this repo's [REGRESSIONS.md](REGRESSIONS.md):
 | `scan-deep`, `build-probe` | Deeper scans and builds, in the sandbox | Planned; their workers are not built yet |
 | `meta-github`, `meta-registry`, `release-diff` | Public metadata, and published packages compared with their source | Built, switched off for now |
 
-Results go public later, through [isokron-ai/mcp-results](https://github.com/isokron-ai/mcp-results).
+Results go public through [isokron-ai/mcp-results](https://github.com/isokron-ai/mcp-results), by the
+publish workflow ([docs/PUBLISHING.md](docs/PUBLISHING.md)), which is built and switched off.
 Security findings are never published before their disclosure window.
 
 ## How to stop it

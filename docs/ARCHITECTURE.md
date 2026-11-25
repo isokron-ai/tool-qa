@@ -276,5 +276,5 @@ state store, and the archive is the only complete history. See
   outputs.
 - Counting other running jobs (`nonLoopRunning` in the slot formula is 0).
 - Sandboxed workers.
-- Any scanning, and any publishing to `mcp-results`.
+- Any scanning, and switching on the publishing to `mcp-results` (built, off: [PUBLISHING.md](PUBLISHING.md)).
 - Hourly versioned snapshots of the state asset.
