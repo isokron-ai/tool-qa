@@ -572,7 +572,7 @@ old, never in T2 to T4. Results recorded before state schema 7 have no
 coverage: they get no `our_limit` boost, and one that was not `skips_only`
 counts as assessed.
 
-**Oracle disagreement (loop upgrade 7, R-ORD-01..15).** Where our reader
+**Oracle disagreement (loop upgrade 7, R-ORD-01..18).** Where our reader
 (scan-static), the live tool list (live-probe) and the official SDK clients
 or conformance suite disagree, our tools are weakest there, so those subjects
 are looked at sooner and their fingerprints weigh more. The pieces:
@@ -594,7 +594,18 @@ are looked at sooner and their fingerprints weigh more. The pieces:
   source, so a different hash alone says nothing. **Lanes are compared on one
   subject version only** (R-ORD-12): facts of an older version are stale and
   left out, and a lane's row is dropped when a newer-version result of that
-  lane has no facts. Counts moving does not change the signature. Until
+  lane has no facts. **A subject with no version** (neither sha nor artifact
+  digest) has nothing to tell its lanes' versions apart, so its two lanes are
+  compared only when observed within `ORACLE_UNVERSIONED_WINDOW_MS` of each
+  other (12 hours, `state/oracle.mjs`; R-ORD-16): a due re-check sends both
+  lanes within a pump pass or two, while a server with no pinned version can
+  change at any deploy. Outside the window nothing is compared across lanes
+  (the live lane's own SDK and worker comparisons still count) and it is
+  compared again when the lanes next report close together. **A late result
+  is refused** (R-ORD-17): one observed before its lane's stored facts (the
+  run's completion time, else the receive time) changes neither the facts nor
+  the record, so an older version cannot overwrite a newer one. Counts moving
+  does not change the signature. Until
   live-probe is switched on only the reader side exists, so there is nothing
   to disagree with and no row; it fills in as results arrive.
 - *Fault side.* A disagreement is evidence about our tool, never the
@@ -629,7 +640,7 @@ are looked at sooner and their fingerprints weigh more. The pieces:
   A rolling budget stops flapping: at most `ORACLE_BUDGET_MAX` (6) cycles with
   a disagreement, counting each reopening, per `ORACLE_BUDGET_DAYS` (30) per
   subject, however often it clears; beyond that it is `settled` with reason
-  `recheck_budget`.
+  `recheck_budget`, which a settled record keeps (R-ORD-18).
 - *Check-in* (`longitudinal/checkin.mjs`). It derives the same signal from
   each subject's latest facts in the archive. A subject with an open
   disagreement counts `oracle_multiplier` (1.5) times as much in every
