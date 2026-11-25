@@ -9,21 +9,49 @@
 //
 // It respects the loop's switches, read the way scripts/guard.mjs reads them: it dispatches nothing while tool-qa's
 // LOOP_ENABLED variable is not "true", or while the Worker's own HEARTBEAT_ENABLED is not "true". It also leaves a
-// workflow alone while LOOP_PAUSE_UNTIL is in the future (or unreadable) or that workflow's LANE_<JOB>_ENABLED is set
+// workflow alone while LOOP_PAUSE_UNTIL is in the future (or unreadable) or that workflow's own lane variable (the one its guard step reads; see WATCH) is set
 // and not "true"; and the pump alone while LOOP_SLOTS is set to 0 (a pump with no slots does not chain itself).
-// A variable that is not set (404) is the guard's default; one that cannot be read (401, 5xx, network) means no dispatch.
+// All variables are read in one call. One that is not set is the guard's default; if the list cannot be read (401, 5xx,
+// network) nothing is dispatched. At most MAX_DISPATCHES dispatches and MAX_CALLS GitHub calls per tick.
 //
 // Secret GH_TOKEN: a fine-grained token for isokron-ai/tool-qa only, with Actions read and write and Variables read.
 // It can start workflows in that one repository and read their runs; nothing else.
 
 export const REPO = 'isokron-ai/tool-qa';
 export const REF = 'main';
-// minutes since the newest run started after which a workflow with nothing queued or running is restarted
-// stuckMin: twice the workflow's timeout-minutes (pump 20, watchdog 10); a run still waiting to start after that is stuck.
+// One entry per scheduled workflow that should keep running (publish-results.yml is left out: off by design, behind
+// RESULTS_PUBLISH_ENABLED). Fields:
+//   staleMin   minutes since the newest run started after which a workflow with nothing queued or running is restarted;
+//              about 1.5 to 2 times its schedule, because GitHub's scheduler fires late. A newest run counts whatever its
+//              conclusion, so a run that keeps failing is retried only after staleMin ...
+//   retryFailedAfterMin   ... unless this is set: then a failed newest run is retried after this many minutes (a stale
+//              backup is the risk, so state-snapshot retries after 30).
+//   stuckMin   twice the workflow's largest timeout-minutes; a run still waiting to start after that is stuck.
+//   lane       the repository variable the workflow's own kill-switch step reads (null: the workflow has no guard step).
+//   usesSlots  the pump alone stops chaining at LOOP_SLOTS=0.
+//   match      which runs count (history-registry: only the full capture; the pump dispatches a delta every ~15 min).
+//   inputs     workflow_dispatch inputs to send.
+//   perPage    runs to list (one call per workflow).
 export const WATCH = [
-  { workflow: 'pump.yml', job: 'pump', staleMin: 15, stuckMin: 40, usesSlots: true },
-  { workflow: 'watchdog.yml', job: 'watchdog', staleMin: 40, stuckMin: 20, usesSlots: false },
+  { workflow: 'pump.yml', lane: 'LANE_PUMP_ENABLED', staleMin: 15, stuckMin: 40, usesSlots: true },
+  { workflow: 'watchdog.yml', lane: 'LANE_WATCHDOG_ENABLED', staleMin: 40, stuckMin: 20 },
+  { workflow: 'state-snapshot.yml', lane: 'LANE_STATE_SNAPSHOT_ENABLED', staleMin: 90, stuckMin: 20, retryFailedAfterMin: 30 },
+  { workflow: 'keep-forever.yml', lane: 'LANE_KEEP_FOREVER_ENABLED', staleMin: 420, stuckMin: 80 },
+  { workflow: 'offsite-backup.yml', lane: 'LANE_OFFSITE_ENABLED', staleMin: 420, stuckMin: 80 },
+  { workflow: 'ledger.yml', lane: 'LANE_LEDGER_ENABLED', staleMin: 1560, stuckMin: 20 },
+  { workflow: 'history-packages.yml', lane: 'LANE_HISTORY_PACKAGES_ENABLED', staleMin: 1560, stuckMin: 180 },
+  // Weekly downloads and stars on Monday (UTC), stars only on other days, as its own schedule.
+  { workflow: 'history-popularity.yml', lane: 'LANE_HISTORY_POPULARITY_ENABLED', staleMin: 1560, stuckMin: 90, inputs: (now) => ({ mode: new Date(now).getUTCDay() === 1 ? 'all' : 'stars' }) },
+  // The run name carries the mode ("history-registry full" / "history-registry delta"); 100 runs cover over a day of deltas.
+  { workflow: 'history-registry.yml', label: 'history-registry.yml (full)', lane: 'LANE_HISTORY_REGISTRY_ENABLED', staleMin: 1560, stuckMin: 60, perPage: 100, match: (r) => /^history-registry full$/.test(String(r.display_title ?? r.name ?? '').trim()), inputs: () => ({ mode: 'full' }) },
+  { workflow: 'perf-baselines.yml', lane: 'LANE_PERF_ENABLED', staleMin: 11520, stuckMin: 40 },
+  // chaos-soak.yml is meant to run weekly; it plays an in-memory simulation only and has no guard step or lane variable.
+  { workflow: 'chaos-soak.yml', lane: null, staleMin: 11520, stuckMin: 120 },
 ];
+export const MAX_DISPATCHES = 4; // per tick, so recovering from an outage does not burst
+const MAX_CALLS = 40; // Workers free plan: 50 subrequests per invocation
+const MAX_VAR_PAGES = 5;
+const FAILED = new Set(['failure', 'timed_out', 'startup_failure', 'cancelled']);
 const RUNNING = new Set(['in_progress']);
 const WAITING = new Set(['queued', 'waiting', 'pending', 'requested']); // action_required counts as neither
 const API = 'https://api.github.com';
@@ -51,7 +79,7 @@ function runTime(r) {
 }
 
 /** What to do for one watched workflow, from its newest runs. Pure. */
-export function decide(runs, { staleMin, stuckMin = Infinity, now }) {
+export function decide(runs, { staleMin, stuckMin = Infinity, retryFailedAfterMin, now }) {
   const list = Array.isArray(runs) ? runs : [];
   if (list.some((r) => r && RUNNING.has(r.status))) return { action: 'ok', why: 'a run is running' };
   const waiting = list.filter((r) => r && WAITING.has(r.status));
@@ -60,7 +88,11 @@ export function decide(runs, { staleMin, stuckMin = Infinity, now }) {
     if (now - since < stuckMin * 60_000) return { action: 'ok', why: 'a run is queued' };
     return { action: 'dispatch', warn: true, why: `a run has waited ${Math.round((now - since) / 60_000)} min without starting (stuck after ${stuckMin} min)` };
   }
-  const newest = list.map(runTime).filter((t) => t !== undefined).sort((a, b) => b - a)[0];
+  const timed = list.filter((r) => r && runTime(r) !== undefined).sort((a, b) => runTime(b) - runTime(a));
+  const newest = timed.length ? runTime(timed[0]) : undefined;
+  if (newest !== undefined && retryFailedAfterMin !== undefined && FAILED.has(timed[0].conclusion) && now - newest >= retryFailedAfterMin * 60_000) {
+    return { action: 'dispatch', why: `the newest run ${timed[0].conclusion} ${Math.round((now - newest) / 60_000)} min ago (retry after ${retryFailedAfterMin} min)` };
+  }
   if (newest !== undefined && now - newest < staleMin * 60_000) return { action: 'ok', why: `newest run was active ${Math.round((now - newest) / 60_000)} min ago` };
   return { action: 'dispatch', why: newest === undefined ? 'no runs found' : `nothing running and the newest run was active ${Math.round((now - newest) / 60_000)} min ago` };
 }
@@ -84,26 +116,31 @@ export function parseSlots(raw) {
   return Math.max(0, Math.min(Number(text), 15));
 }
 /** Why a workflow must not be started now, from the repository variables, or null. vars: name -> value, absent when unset. */
-export function pausedBy(vars, { job, usesSlots, now }) {
+export function pausedBy(vars, { lane, usesSlots, now }) {
   const pause = vars.LOOP_PAUSE_UNTIL;
   if (pause !== undefined && String(pause).trim() !== '') {
     const until = parseIsoTime(pause);
     if (Number.isNaN(until)) return 'LOOP_PAUSE_UNTIL cannot be read, so the loop stays paused';
     if (until > now) return `the loop is paused until ${new Date(until).toISOString()} (LOOP_PAUSE_UNTIL)`;
   }
-  const lane = `LANE_${String(job).toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}_ENABLED`;
-  const l = vars[lane];
+  const l = lane ? vars[lane] : undefined;
   if (l !== undefined && l !== '' && l !== 'true') return `this lane is off (${lane} is not "true")`;
   if (usesSlots && String(vars.LOOP_SLOTS ?? '').trim() !== '' && parseSlots(vars.LOOP_SLOTS) === 0) return 'LOOP_SLOTS is 0, so the pump does not chain';
   return null;
 }
 
-/** Read one repository variable: { ok, value } (value undefined when it is not set: 404). */
-async function readVar(fetchImpl, token, name) {
-  const v = await gh(fetchImpl, token, 'GET', `/repos/${REPO}/actions/variables/${name}`);
-  if (v.status === 404) return { ok: true, value: undefined };
-  if (!v.ok) return { ok: false, status: v.status, error: v.error };
-  return { ok: true, value: v.json && typeof v.json.value === 'string' ? v.json.value : undefined };
+/** Read all repository variables in as few calls as possible: { ok, vars } (name -> value; unset names are absent). */
+async function readVars(call) {
+  const vars = {};
+  for (let page = 1; page <= MAX_VAR_PAGES; page++) {
+    const v = await call('GET', `/repos/${REPO}/actions/variables?per_page=100&page=${page}`);
+    if (!v.ok) return { ok: false, status: v.status, error: v.error };
+    const list = v.json && Array.isArray(v.json.variables) ? v.json.variables : [];
+    for (const x of list) if (x && typeof x.name === 'string' && typeof x.value === 'string') vars[x.name] = x.value;
+    const total = v.json && Number.isFinite(v.json.total_count) ? v.json.total_count : list.length;
+    if (list.length === 0 || page * 100 >= total) return { ok: true, vars };
+  }
+  return { ok: false, error: 'more variable pages than expected' };
 }
 
 /** One heartbeat tick. Returns a log of what it saw and did; never throws. */
@@ -111,23 +148,29 @@ export async function tick({ token, enabled, fetch: fetchImpl = globalThis.fetch
   const log = [];
   if (enabled !== 'true') { log.push('heartbeat: HEARTBEAT_ENABLED is not "true"; nothing done'); return log; }
   if (!token) { log.push('heartbeat: no GH_TOKEN; nothing done'); return log; }
-  const vars = {};
-  for (const name of ['LOOP_ENABLED', 'LOOP_PAUSE_UNTIL', 'LOOP_SLOTS', ...watch.map((w) => `LANE_${w.job.toUpperCase()}_ENABLED`)]) {
-    const v = await readVar(fetchImpl, token, name);
-    if (!v.ok) { log.push(`heartbeat: could not read ${name} (HTTP ${v.status || v.error}); nothing done, next tick retries`); return log; }
-    vars[name] = v.value;
-    // The kill switch first: a missing or wrong LOOP_ENABLED ends the tick before any other read.
-    if (name === 'LOOP_ENABLED' && v.value !== 'true') { log.push('heartbeat: the loop kill switch is off (LOOP_ENABLED is not "true"); nothing done'); return log; }
-  }
+  let calls = 0; // the subrequest budget: never more than MAX_CALLS per tick
+  const call = (method, path, body) => (calls++ >= MAX_CALLS ? Promise.resolve({ ok: false, status: 0, error: 'call budget' }) : gh(fetchImpl, token, method, path, body));
+  const rv = await readVars(call);
+  if (!rv.ok) { log.push(`heartbeat: could not read the repository variables (HTTP ${rv.status || rv.error}); nothing done, next tick retries`); return log; }
+  const vars = rv.vars;
+  // The kill switch first: a missing or wrong LOOP_ENABLED ends the tick before any run is read.
+  if (vars.LOOP_ENABLED !== 'true') { log.push('heartbeat: the loop kill switch is off (LOOP_ENABLED is not "true"); nothing done'); return log; }
+  let dispatched = 0;
   for (const w of watch) {
-    const why = pausedBy(vars, { job: w.job, usesSlots: w.usesSlots, now });
-    if (why) { log.push(`heartbeat: ${w.workflow}: not started: ${why}`); continue; }
-    const r = await gh(fetchImpl, token, 'GET', `/repos/${REPO}/actions/workflows/${w.workflow}/runs?per_page=5&exclude_pull_requests=true`);
-    if (!r.ok) { log.push(`heartbeat: ${w.workflow}: could not list runs (HTTP ${r.status || r.error}); next tick retries`); continue; }
-    const d = decide(r.json && r.json.workflow_runs, { staleMin: w.staleMin, stuckMin: w.stuckMin, now });
-    if (d.action === 'ok') { log.push(`heartbeat: ${w.workflow}: ok (${d.why})`); continue; }
-    const p = await gh(fetchImpl, token, 'POST', `/repos/${REPO}/actions/workflows/${w.workflow}/dispatches`, { ref: REF });
-    log.push(p.ok ? `heartbeat: ${w.workflow}: ${d.warn ? 'WARNING stuck run; ' : ''}dispatched (${d.why})` : `heartbeat: ${w.workflow}: dispatch failed (HTTP ${p.status || p.error}; ${d.why}); next tick retries`);
+    const name = w.label || w.workflow;
+    const why = pausedBy(vars, { lane: w.lane, usesSlots: w.usesSlots, now });
+    if (why) { log.push(`heartbeat: ${name}: not started: ${why}`); continue; }
+    const r = await call('GET', `/repos/${REPO}/actions/workflows/${w.workflow}/runs?per_page=${w.perPage || 5}&exclude_pull_requests=true`);
+    if (!r.ok) { log.push(`heartbeat: ${name}: could not list runs (HTTP ${r.status || r.error}); next tick retries`); continue; }
+    let runs = r.json && r.json.workflow_runs;
+    if (w.match && Array.isArray(runs)) runs = runs.filter((x) => x && w.match(x));
+    const d = decide(runs, { staleMin: w.staleMin, stuckMin: w.stuckMin, retryFailedAfterMin: w.retryFailedAfterMin, now });
+    if (d.action === 'ok') { log.push(`heartbeat: ${name}: ok (${d.why})`); continue; }
+    if (dispatched >= MAX_DISPATCHES) { log.push(`heartbeat: ${name}: needs a dispatch (${d.why}) but ${MAX_DISPATCHES} were already sent this tick; next tick retries`); continue; }
+    dispatched++;
+    const inputs = w.inputs ? w.inputs(now) : undefined;
+    const p = await call('POST', `/repos/${REPO}/actions/workflows/${w.workflow}/dispatches`, inputs ? { ref: REF, inputs } : { ref: REF });
+    log.push(p.ok ? `heartbeat: ${name}: ${d.warn ? 'WARNING stuck run; ' : ''}dispatched (${d.why})` : `heartbeat: ${name}: dispatch failed (HTTP ${p.status || p.error}; ${d.why}); next tick retries`);
   }
   return log;
 }
