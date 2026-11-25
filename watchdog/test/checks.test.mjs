@@ -244,3 +244,15 @@ test('live-snapshot: off unless the switch is exactly true; green, amber over 20
   assert.equal(item('true', null).status, 'amber', 'on, nothing uploaded yet');
   assert.match(item('true', { ok: false, blocked: 'scan', at: ago(MIN) }).summary, /scan/);
 });
+
+test('live-snapshot: no builder is red; a scan block stays red through later failures; never uploaded is red 40 minutes after the first attempt', () => {
+  const kv = (v) => ({ openSlots: [], openDispatches: [], kv: { 'live.last_upload': v } });
+  const item = (v) => byId(evaluate(base({ liveSwitch: 'true', state: kv(v) })))['live-snapshot'];
+  assert.equal(item({ ok: false, error: 'build', at: ago(MIN), last_ok_at: ago(2 * MIN) }).status, 'red', 'error build is red at once');
+  assert.match(item({ ok: false, error: 'build', at: ago(MIN) }).summary, /builder/);
+  assert.equal(item({ ok: false, error: 'put', at: ago(MIN), last_ok_at: ago(2 * MIN), blocked_at: ago(10 * MIN) }).status, 'red', 'the scan block is carried by blocked_at');
+  assert.equal(item({ ok: true, at: ago(MIN), last_ok_at: ago(MIN), blocked_at: null }).status, 'green', 'cleared by a good upload');
+  assert.equal(item({ ok: false, error: 'credentials', at: ago(MIN), first_at: ago(30 * MIN) }).status, 'amber');
+  assert.equal(item({ ok: false, error: 'credentials', at: ago(MIN), first_at: ago(45 * MIN) }).status, 'red');
+  assert.match(item({ ok: false, error: 'credentials', at: ago(MIN), first_at: ago(45 * MIN) }).summary, /credentials/);
+});

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { createHash } from 'node:crypto';
 
-import { liveEnabled, publishLive } from '../publish.mjs';
+import { liveEnabled, publishLive, publishRetry } from '../publish.mjs';
 
 const NOW = Date.parse('2026-11-25T13:30:05Z');
 const ENV = { LANE_LIVE_SNAPSHOT_ENABLED: 'true', LIVE_R2_ACCESS_KEY_ID: 'AKIA_SYN', LIVE_R2_SECRET_ACCESS_KEY: 'syn-secret-xyz', R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef' };
@@ -75,24 +75,38 @@ test('a scan hit uploads nothing, logs rule and path only, and records the block
   assert.ok(!log.includes('SECRET-TEXT-VALUE'));
 });
 
-test('switch: anything but the exact value true, or a missing credential, makes no call at all', async () => {
-  const variants = [
-    { LANE_LIVE_SNAPSHOT_ENABLED: undefined }, { LANE_LIVE_SNAPSHOT_ENABLED: '' }, { LANE_LIVE_SNAPSHOT_ENABLED: 'TRUE' },
-    { LANE_LIVE_SNAPSHOT_ENABLED: '1' }, { LANE_LIVE_SNAPSHOT_ENABLED: 'true ' }, { LANE_LIVE_SNAPSHOT_ENABLED: 'yes' },
-    { LIVE_R2_ACCESS_KEY_ID: '' }, { LIVE_R2_SECRET_ACCESS_KEY: undefined }, { R2_ACCOUNT_ID: '' },
-  ];
-  for (const v of variants) {
-    const env = { ...ENV, ...v };
-    assert.equal(liveEnabled(env), false, JSON.stringify(v));
+test('switch: anything but the exact value true makes no call at all and records nothing', async () => {
+  for (const v of [undefined, '', 'TRUE', '1', 'true ', 'yes', 'false']) {
+    const env = { ...ENV, LANE_LIVE_SNAPSHOT_ENABLED: v };
+    assert.equal(liveEnabled(env), false, String(v));
     let fetches = 0;
     let builds = 0;
+    const db = fakeDb();
     const fetch = async () => { fetches += 1; return new Response('', { status: 200 }); };
-    const r = await publishLive({ db: fakeDb(), build: async () => { builds += 1; return good(); }, env, fetch, now: () => NOW, deadlineMs: 500 });
+    const r = await publishLive({ db, build: async () => { builds += 1; return good(); }, env, fetch, now: () => NOW, deadlineMs: 500 });
     assert.deepEqual(r, { ok: false, skipped: 'off' });
-    assert.equal(fetches, 0, `fetch called with ${JSON.stringify(v)}`);
+    assert.equal(fetches, 0, `fetch called with ${v}`);
     assert.equal(builds, 0);
+    assert.equal(db.kv.size, 0);
+    const rr = await publishRetry({ retry: null, env, fetch, now: () => NOW, scan: () => ({ ok: true, hits: [] }) });
+    assert.deepEqual(rr, { ok: false, skipped: 'off' });
+    assert.equal(fetches, 0);
   }
   assert.equal(liveEnabled(ENV), true);
+});
+
+test('switch on but a credential missing: no build and no network call, recorded as error credentials', async () => {
+  for (const v of [{ LIVE_R2_ACCESS_KEY_ID: '' }, { LIVE_R2_SECRET_ACCESS_KEY: undefined }, { R2_ACCOUNT_ID: '' }]) {
+    let calls = 0;
+    const db = fakeDb();
+    const r = await publishLive({ db, build: async () => { calls += 1; return good(); }, env: { ...ENV, ...v }, fetch: async () => { calls += 1; }, now: () => NOW, deadlineMs: 500, log: () => {} });
+    assert.deepEqual(r, { ok: false, error: 'credentials' });
+    assert.equal(calls, 0);
+    const last = db.getKv('live.last_upload');
+    assert.equal(last.ok, false);
+    assert.equal(last.error, 'credentials');
+    assert.equal(last.first_at, '2026-11-25T13:30:05.000Z');
+  }
 });
 
 test('with the real R2 writer the same order goes over fetch', async () => {
@@ -220,4 +234,117 @@ test('hour rollover: the closing file is sent with immutable caching through the
   const r = await publishLive({ db: db2, build: async () => { if (++n === 2) throw new Error('x'); return good(); }, env: ENV, fetch, now: () => t, deadlineMs: 2000, log: () => {} });
   assert.equal(r.ok, true);
   assert.ok(!sent.some((s) => s.path.endsWith('/13.ndjson')));
+});
+
+test('R-LIVE-40: a builder module that cannot be imported is recorded as error build (the real dynamic import path)', async () => {
+  const db = fakeDb();
+  let putCalls = 0;
+  const lines = [];
+  const r = await publishLive({ db, buildModule: './no-such-builder.mjs', put: async () => { putCalls += 1; }, env: ENV, now: () => NOW, deadlineMs: 2000, log: (l) => lines.push(l) });
+  assert.deepEqual(r, { ok: false, error: 'build' });
+  assert.equal(putCalls, 0);
+  const last = db.getKv('live.last_upload');
+  assert.equal(last.ok, false);
+  assert.equal(last.error, 'build');
+  assert.equal(last.at, '2026-11-25T13:30:05.000Z');
+  assert.ok(lines.some((l) => /upload failed \(build\)/.test(l)));
+});
+
+test('R-LIVE-43: never alongside a transaction: inside one, publishLive neither builds nor uploads; a zero budget skips too', async () => {
+  const db = { ...fakeDb(), inTx: true };
+  let builds = 0;
+  let puts = 0;
+  const args = { db, build: async () => { builds += 1; return good(); }, put: async () => { puts += 1; return { status: 200 }; }, env: ENV, now: () => NOW, deadlineMs: 500 };
+  assert.deepEqual(await publishLive(args), { ok: false, skipped: 'in_tx' });
+  db.inTx = false;
+  assert.deepEqual(await publishLive({ ...args, deadlineMs: 0 }), { ok: false, skipped: 'no_time' });
+  assert.deepEqual([builds, puts], [0, 0]);
+  assert.equal((await publishLive(args)).ok, true);
+});
+
+test('a deadline is logged once', async () => {
+  const lines = [];
+  await run({ put: () => new Promise(() => {}), deadlineMs: 40, log: (l) => lines.push(l) });
+  assert.equal(lines.filter((l) => /deadline/.test(l)).length, 1);
+});
+
+test('R-LIVE-45: a snapshot last sent over 24 hours ago is sent again, even when its body is unchanged', async () => {
+  const db = fakeDb();
+  let t = NOW;
+  const plain = async () => ({ ...good(), snapshot: { schema: 'isokron-loop-live/1', seq: 42, generated_at: '2026-11-25T13:30:00.000Z' } });
+  const go = async () => { const keys = []; await publishLive({ db, build: plain, put: async (k) => { keys.push(k); return { status: 200 }; }, env: ENV, now: () => t, deadlineMs: 2000, log: () => {} }); return keys.filter((k) => k.startsWith('v1/snap/')).length; };
+  assert.equal(await go(), 1);
+  t = NOW + 23 * 3_600_000;
+  assert.equal(await go(), 0, 'under 24 h: skipped');
+  t = NOW + 25 * 3_600_000;
+  assert.equal(await go(), 1, 'over 24 h: sent again');
+  t += 60_000;
+  assert.equal(await go(), 0, 'and the clock restarts');
+});
+
+test('R-LIVE-44: a scan block stays on record (blocked_at) through later failed attempts until a good upload', async () => {
+  const db = fakeDb();
+  const blocked = async () => ({ ...good(), problems: [{ rule: 'x', path: '$' }] });
+  await run({ db, build: blocked, log: () => {} });
+  const t1 = db.getKv('live.last_upload').blocked_at;
+  assert.equal(t1, '2026-11-25T13:30:05.000Z');
+  await run({ db, now: () => NOW + 150_000, put: async () => { throw new Error('x'); }, log: () => {} });
+  let last = db.getKv('live.last_upload');
+  assert.equal(last.error, 'put');
+  assert.equal(last.blocked_at, t1, 'carried');
+  await run({ db, now: () => NOW + 300_000, build: blocked, log: () => {} });
+  assert.equal(db.getKv('live.last_upload').blocked_at, t1, 'a second block keeps the first time');
+  await run({ db, now: () => NOW + 450_000 });
+  last = db.getKv('live.last_upload');
+  assert.equal(last.ok, true);
+  assert.equal(last.blocked_at, null);
+});
+
+test('R-LIVE-41: a run that straddles the hour names its files and caches them by the time it started', async () => {
+  const db = fakeDb();
+  let t = Date.parse('2026-11-25T13:59:58Z');
+  const seen = [];
+  const put = async (key, body, o) => { seen.push({ key, cc: o.cacheControl }); t += 1500; return { status: 200 }; };
+  await publishLive({ db, build: async () => good(), put, env: ENV, now: () => t, deadlineMs: 5000, log: () => {} });
+  assert.ok(t >= Date.parse('2026-11-25T14:00:00Z'), 'the clock crossed the hour during the run');
+  const hour = seen.find((x) => x.key.includes('/events/'));
+  assert.equal(hour.key, 'v1/events/2026-11-25/13.ndjson', 'keyed by the time it started');
+  assert.equal(hour.cc, 'public, max-age=60', 'still the open hour when the upload began');
+  assert.equal(db.getKv('live.last_upload').last_ok_hour, 'v1/events/2026-11-25/13.ndjson');
+  // the next upload (now in hour 14) closes hour 13 exactly once
+  const next = [];
+  await publishLive({ db, build: async () => good(), put: async (k, b, o) => { next.push({ k, cc: o.cacheControl }); return { status: 200 }; }, env: ENV, now: () => t + 1000, deadlineMs: 5000, log: () => {} });
+  assert.deepEqual(next.filter((x) => x.k.includes('/events/')).map((x) => [x.k, x.cc]), [
+    ['v1/events/2026-11-25/14.ndjson', 'public, max-age=60'],
+    ['v1/events/2026-11-25/13.ndjson', 'public, max-age=31536000, immutable'],
+  ]);
+});
+
+test('publishRetry: a small body from memory, fixed shape, scanned, uploaded with a 5 s cache; null when cleared', async () => {
+  const puts = [];
+  const put = async (key, body, o) => { puts.push({ key, body: JSON.parse(body), cc: o.cacheControl }); return { status: 200 }; };
+  const scanned = [];
+  const scan = (v) => { scanned.push(v); return { ok: true, hits: [] }; };
+  const open = { call: 'state_asset', status: 503, attempt: 2, of: 6, next_at: '2026-11-25T13:30:09.000Z', since: '2026-11-25T13:30:01.000Z', extra: 'no', url: 'https://x' };
+  assert.equal((await publishRetry({ retry: open, put, scan, env: ENV, now: () => NOW })).ok, true);
+  await publishRetry({ retry: null, put, scan, env: ENV, now: () => NOW });
+  await publishRetry({ retry: { call: 'GET /repos/o/r/secret/path', status: 500, attempt: 1, of: 3 }, put, scan, env: ENV, now: () => NOW });
+  assert.deepEqual(puts[0], { key: 'v1/retry.json', cc: 'public, max-age=5', body: { schema: 'isokron-loop-retry/1', at: '2026-11-25T13:30:05.000Z', retry: { call: 'state_asset', status: 503, attempt: 2, of: 6, next_at: '2026-11-25T13:30:09.000Z', since: '2026-11-25T13:30:01.000Z' } } });
+  assert.deepEqual(puts[1].body, { schema: 'isokron-loop-retry/1', at: '2026-11-25T13:30:05.000Z', retry: null });
+  assert.equal(puts[2].body.retry.call, 'github_api', 'an unknown label never goes out');
+  assert.equal(scanned.length, 3, 'every body is scanned');
+});
+
+test('publishRetry: a scan hit, a missing scanner or a hang uploads nothing or is cut; it never reads a state', async () => {
+  let puts = 0;
+  const put = async () => { puts += 1; return { status: 200 }; };
+  const lines = [];
+  assert.deepEqual(await publishRetry({ retry: null, put, scan: () => ({ ok: false, hits: [{ rule: 'r', path: '$.retry' }] }), env: ENV, now: () => NOW, log: (l) => lines.push(l) }), { ok: false, blocked: 'scan' });
+  assert.match(lines.join(), /rule r at \$\.retry/);
+  assert.equal((await publishRetry({ retry: null, put, scanModule: './no-such-scan.mjs', env: ENV, now: () => NOW, log: () => {} })).error, 'scan_unavailable');
+  assert.equal(puts, 0);
+  const t0 = Date.now();
+  const r = await publishRetry({ retry: null, put: () => new Promise(() => {}), scan: () => ({ ok: true, hits: [] }), env: ENV, now: () => NOW, deadlineMs: 40 });
+  assert.equal(r.error, 'deadline');
+  assert.ok(Date.now() - t0 < 1500);
 });

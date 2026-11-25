@@ -75,6 +75,7 @@ test('Cache-Control and Content-Type per key follow the R2 layout', () => {
   assert.equal(cacheControlFor('v1/heartbeat.json'), 'public, max-age=30');
   assert.equal(cacheControlFor('v1/events/2026-11-25/13.ndjson', { now: NOW }), 'public, max-age=60', 'the open hour');
   assert.equal(cacheControlFor('v1/events/2026-11-25/12.ndjson', { now: NOW }), 'public, max-age=31536000, immutable', 'a past hour');
+  assert.equal(cacheControlFor('v1/retry.json'), 'public, max-age=5');
   assert.throws(() => cacheControlFor('v1/other.json'));
   assert.throws(() => cacheControlFor('v1/snap/42.json'), /no cache policy/, 'snapshots are keyed by content hash, not seq');
   assert.equal(contentTypeFor('v1/events/2026-11-25/13.ndjson'), 'application/x-ndjson; charset=utf-8');
@@ -95,4 +96,19 @@ test('5xx and network errors are retried with the pump policy; a 4xx is final; m
 test('createR2Putter refuses a malformed account id or missing credentials', () => {
   assert.throws(() => createR2Putter({ accountId: 'nope', bucket: 'isokron-loop-live', accessKeyId: 'a', secretAccessKey: 'b' }));
   assert.throws(() => createR2Putter({ accountId: ACCOUNT, bucket: 'isokron-loop-live', accessKeyId: '', secretAccessKey: 'b' }));
+});
+
+test('one strict encoder: the URL path and the signed canonical path agree for awkward keys', async () => {
+  const f = fakeFetch();
+  const key = "v1/we ird/it's (a) b*c!~.json";
+  await putter(f)(key, '{}', { cacheControl: 'x', contentType: 'application/json' });
+  const { url, init } = f.calls[0];
+  const strict = (t) => [...Buffer.from(t)].map((b) => (/[A-Za-z0-9\-._~]/.test(String.fromCharCode(b)) ? String.fromCharCode(b) : `%${b.toString(16).toUpperCase().padStart(2, '0')}`)).join('');
+  assert.equal(new URL(url).pathname, `/isokron-loop-live/${key.split('/').map(strict).join('/')}`);
+  // recompute the signature from the sent headers and the URL: it must match
+  const { host } = new URL(url);
+  const h = { host, 'cache-control': 'x', 'content-type': 'application/json', 'x-amz-content-sha256': init.headers['x-amz-content-sha256'], 'x-amz-date': init.headers['x-amz-date'] };
+  const again = signV4({ method: 'PUT', url, headers: h, payloadHash: h['x-amz-content-sha256'], region: 'auto', service: 's3', accessKeyId: KEY_ID, secretAccessKey: SECRET, amzDate: h['x-amz-date'] });
+  assert.equal(again.authorization, init.headers.authorization);
+  assert.ok(again.canonicalRequest.split('\n')[1].includes("it%27s%20%28a%29%20b%2Ac%21~.json"));
 });

@@ -103,7 +103,7 @@ import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
 import { planShards, runTick } from './tick.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
-import { liveEnabled, publishLive } from '../live/publish.mjs';
+import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
 // How long the first pull may keep retrying, and how long past its deadline the
@@ -121,6 +121,9 @@ export const CONFORMANCE_KEY = 'pump.conformance';
 // While a retry is open the live snapshot is uploaded at once, at most this often.
 export const LIVE_RETRY_UPLOAD_MS = 20_000;
 export const LIVE_DEADLINE_MS = 20_000;
+export const LIVE_FINAL_DEADLINE_MS = 5_000;
+// The values the run read that the snapshot builder shows (build plan section 3).
+export const LIVE_SWITCH_VARS = ['LOOP_ENABLED', 'LOOP_PAUSE_UNTIL', 'LOOP_SLOTS', 'RESULTS_PUBLISH_ENABLED', 'LANE_HISTORY_REGISTRY_ENABLED', 'LANE_HISTORY_PACKAGES_ENABLED', 'LANE_HISTORY_POPULARITY_ENABLED'];
 // What the secrets scrub list covers beyond the GitHub ones (also used by tests).
 export const secretValues = (env) => [env.GITHUB_TOKEN, env.APP_PRIVATE_KEY, env.AGE_IDENTITY, env.LIVE_R2_ACCESS_KEY_ID, env.LIVE_R2_SECRET_ACCESS_KEY, env.R2_ACCOUNT_ID];
 
@@ -137,9 +140,9 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
  * with `ingestOptions`), null for none, a function (called as collect()), or an
  * object with collect() and optionally check().
  *
- * live: the live snapshot step (live/publish.mjs): `build` (default
- * live/build.mjs, loaded when the switch is on), `put` (default R2), `publish`
- * (default publishLive) and `deadlineMs`, for tests.
+ * live: the live snapshot step (live/publish.mjs), for tests: `build` (default
+ * live/build.mjs, loaded by publishLive), `put` (default R2), `publish`,
+ * `publishRetry`, `scan`, `deadlineMs`, `finalDeadlineMs`.
  *
  * @returns {Promise<{ ok: boolean, ticks: number, dispatched: number, failed: number,
  *   workerSlots: number, loopBudget: number }>}
@@ -210,7 +213,7 @@ export async function runPump({
     t.gave_up = t.gave_up || info.gaveUp === true;
     tickRetries.set(source, t);
     if (!info.gaveUp) {
-      openRetry = { call: source, status: info.status, attempt: info.attempt, of: POLICY.attempts, next_at: new Date(now() + (info.delayMs ?? 0)).toISOString(), since: openRetry?.since ?? new Date(now()).toISOString() };
+      openRetry = { call: source, status: info.status, attempt: info.attempt, of: info.of ?? POLICY.attempts, next_at: new Date(now() + (info.delayMs ?? 0)).toISOString(), since: openRetry?.since ?? new Date(now()).toISOString() };
     }
     liveHook();
   };
@@ -317,41 +320,47 @@ export async function runPump({
   // The live loop snapshot (live/publish.mjs). Off unless LANE_LIVE_SNAPSHOT_ENABLED
   // is exactly "true" and the credentials exist; never throws, never holds the
   // run past its deadline.
-  let liveBuild = live.build ?? null;
-  let liveInflight = null;
-  let lastLiveAt = -Infinity;
-  const livePublish = (reason) => {
-    if (!liveEnabled(env)) return Promise.resolve(null);
-    lastLiveAt = now();
-    const run = (async () => {
+  //
+  // Two uploads, kept apart on purpose:
+  //   - the snapshot (reads the state): only at a tick boundary and once at the
+  //     end of the run, awaited right there, so it never overlaps ingest, the
+  //     identity step or a transaction (publishLive also refuses inside one);
+  //   - v1/retry.json (the open retry, from memory, never touches the state):
+  //     while a retry is open, at most once per 20 s, and once when it clears.
+  //     Not awaited by the run.
+  const liveCap = () => Math.max(0, Math.min(live.deadlineMs ?? LIVE_DEADLINE_MS, deadline - now()));
+  const liveCommon = () => ({
+    ...(live.put ? { put: live.put } : {}), env, fetch: live.fetch ?? fetch, now, log: say,
+  });
+  const liveSwitches = () => Object.fromEntries(LIVE_SWITCH_VARS.filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
+  let retryChain = Promise.resolve();
+  let lastRetryUpload = -Infinity;
+  let retryShown = false;
+  const uploadRetry = (value) => {
+    const body = value ? { ...value } : null;
+    retryChain = retryChain.then(async () => {
       try {
-        liveBuild = liveBuild ?? (await import('../live/build.mjs')).buildLiveSnapshot;
-        const left = Math.max(1, Math.min(live.deadlineMs ?? LIVE_DEADLINE_MS, deadline + FINAL_PUSH_GRACE_MS - now()));
-        const r = await (live.publish ?? publishLive)({
-          db, build: liveBuild, ...(live.put ? { put: live.put } : {}), env, fetch: live.fetch ?? fetch, now, config: cfg, retry: openRetry, version: env.GITHUB_SHA ? String(env.GITHUB_SHA).slice(0, 7) : undefined,
-          deadlineMs: left, log: say,
-        });
-        return r;
+        await (live.publishRetry ?? publishRetry)({ retry: body, ...liveCommon(), ...(live.scan ? { scan: live.scan } : {}), deadlineMs: liveCap() });
       } catch (err) {
-        say(`pump: live snapshot (${reason}) failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
-        return null;
-      } finally {
-        if (liveInflight === run) liveInflight = null;
+        say(`pump: live retry upload failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
       }
-    })();
-    liveInflight = run;
-    return run;
+    });
   };
-  // While a retry is open: an upload at once, at most one per 20 s, never two at a time.
   liveHook = () => {
-    if (!openRetry || liveInflight || now() - lastLiveAt < LIVE_RETRY_UPLOAD_MS) return;
-    void livePublish('retry');
+    if (!openRetry || !liveEnabled(env) || now() - lastRetryUpload < LIVE_RETRY_UPLOAD_MS) return;
+    lastRetryUpload = now();
+    retryShown = true;
+    uploadRetry(openRetry);
   };
   // End of a tick: the tick's retries become `retry` events, the open one closes.
   const flushRetries = () => {
     const rows = [...tickRetries.values()];
     tickRetries.clear();
     openRetry = null;
+    if (retryShown) {
+      retryShown = false;
+      uploadRetry(null);
+    }
     if (!rows.length) return;
     try {
       db.tx(() => {
@@ -361,10 +370,14 @@ export async function runPump({
       say(`pump: could not record retry events (continuing): ${err?.message ?? err}`);
     }
   };
-  const liveStep = async (reason) => {
+  // The snapshot at a tick boundary, or the last one of the run (capped at 5 s).
+  const liveStep = async (reason, { final = false } = {}) => {
     try {
-      if (liveInflight) await liveInflight;
-      await livePublish(reason);
+      const deadlineMs = final ? Math.min(live.finalDeadlineMs ?? LIVE_FINAL_DEADLINE_MS, live.deadlineMs ?? LIVE_DEADLINE_MS) : liveCap();
+      await (live.publish ?? publishLive)({
+        db, ...(live.build ? { build: live.build } : {}), ...liveCommon(), config: { ...cfg, switches: liveSwitches(), history: [] }, retry: openRetry,
+        version: env.GITHUB_SHA ? String(env.GITHUB_SHA).slice(0, 7) : undefined, deadlineMs,
+      });
     } catch (err) {
       say(`pump: live snapshot (${reason}) failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
     }
@@ -382,7 +395,7 @@ export async function runPump({
       // Retries (pump/retry.mjs) stop at the run's deadline, so a tick's push
       // cannot hold the run past it; the push at the end of the run may go on a
       // little longer, still inside the job's timeout (R-CHAOS-13).
-      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), clock: now, retryUntil: open ? deadline : deadline + FINAL_PUSH_GRACE_MS, onRetry: retryHook('state_asset'), ...(open ? {} : { requestTimeoutMs: FINAL_REQUEST_TIMEOUT_MS }), ...stateKeys });
+      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), clock: now, retryUntil: open ? deadline : Math.max(deadline, now()) + FINAL_PUSH_GRACE_MS, onRetry: retryHook('state_asset'), ...(open ? {} : { requestTimeoutMs: FINAL_REQUEST_TIMEOUT_MS }), ...stateKeys });
       return true;
     } catch (err) {
       ok = false;
@@ -546,7 +559,7 @@ export async function runPump({
     keepBudget();
     db.notePumpRun('finished', { ticks, dispatched, lastRun: { started: new Date(start).toISOString(), finished: new Date(now()).toISOString(), ticks, dispatched, failed, workerSlots, loopBudget } }, { now: now() });
     flushRetries();
-    await liveStep('end of run');
+    await liveStep('end of run', { final: true });
   } finally {
     liveHook = () => {};
     db.close();

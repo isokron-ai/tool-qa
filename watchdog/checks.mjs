@@ -118,11 +118,24 @@ function minutes(ms) {
 export function liveSnapshotCheck({ now, on, last }) {
   const id = 'live-snapshot';
   if (!on) return { id, status: 'off', summary: 'the live snapshot is switched off (LANE_LIVE_SNAPSHOT_ENABLED is not "true")' };
-  if (last?.blocked === 'scan') return { id, status: 'red', summary: 'the last live snapshot was held back by the pre-upload scan: nothing is published until it passes (see the pump log for the rule and path)', at: last.at };
-  const okAt = last && typeof last === 'object' ? (last.ok ? last.at : last.last_ok_at) : null;
+  const rec = last && typeof last === 'object' ? last : null;
+  // A scan block stays red until a good upload (blocked_at is carried until then).
+  if (rec && !rec.ok && (rec.blocked === 'scan' || rec.blocked_at)) {
+    return { id, status: 'red', summary: 'a live snapshot was held back by the pre-upload scan and none has passed since: nothing is published until it does (see the pump log for the rule and path)', at: rec.blocked_at ?? rec.at };
+  }
+  // No builder (live/build.mjs missing or failing): nothing can be published.
+  if (rec && !rec.ok && rec.error === 'build') {
+    return { id, status: 'red', summary: 'the live snapshot builder could not run (live/build.mjs missing or failing): nothing is published', at: rec.at };
+  }
+  const okAt = rec ? (rec.ok ? rec.at : rec.last_ok_at) : null;
+  const why = rec && !rec.ok ? `; the latest attempt failed (${String(rec.error ?? 'unknown').slice(0, 40)})` : '';
+  if (!okAt || !Number.isFinite(Date.parse(okAt))) {
+    // Never a good upload: red 40 minutes after the first attempt (a missing credential included).
+    const a0 = age(now, rec?.first_at);
+    if (!Number.isFinite(a0)) return { id, status: 'amber', summary: 'no live snapshot has been uploaded yet' };
+    return { id, status: a0 > THRESHOLDS.liveRedMs ? 'red' : 'amber', summary: `no live snapshot has ever been uploaded (first attempt ${minutes(a0)})${why}`, at: rec.first_at };
+  }
   const a = age(now, okAt);
-  if (!Number.isFinite(a)) return { id, status: 'amber', summary: 'no live snapshot has been uploaded yet' };
-  const why = last.ok ? '' : `; the latest attempt failed (${String(last.error ?? 'unknown').slice(0, 40)})`;
   if (a > THRESHOLDS.liveRedMs) return { id, status: 'red', summary: `last good live snapshot upload ${minutes(a)}${why}`, at: okAt };
   if (a > THRESHOLDS.liveAmberMs) return { id, status: 'amber', summary: `last good live snapshot upload ${minutes(a)}${why}`, at: okAt };
   return { id, status: 'green', summary: `last live snapshot upload ${minutes(a)}${why}`, at: okAt };

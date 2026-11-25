@@ -99,9 +99,9 @@ test('onRetry fires for each repeated attempt and once when the retrier gives up
   const failing = () => Object.assign(new Error('HTTP 503'), { retryable: true, reason: 'HTTP 503' });
   await assert.rejects(r.run('GET /x', async () => { throw failing(); }));
   assert.deepEqual(seen, [
-    { label: 'GET /x', attempt: 1, status: 503, delayMs: 1999, gaveUp: false },
-    { label: 'GET /x', attempt: 2, status: 503, delayMs: 3999, gaveUp: false },
-    { label: 'GET /x', attempt: 3, status: 503, delayMs: 0, gaveUp: true },
+    { label: 'GET /x', attempt: 1, of: 3, status: 503, delayMs: 1999, gaveUp: false },
+    { label: 'GET /x', attempt: 2, of: 3, status: 503, delayMs: 3999, gaveUp: false },
+    { label: 'GET /x', attempt: 3, of: 3, status: 503, delayMs: 0, gaveUp: true },
   ]);
 });
 

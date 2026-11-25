@@ -87,10 +87,12 @@ const IMMUTABLE = 'public, max-age=31536000, immutable';
  *   v1/snap/<16 hex of the body's sha256>.json  immutable
  *   v1/events/<date>/<HH>.ndjson        max-age=60 for the open hour, immutable once it is past
  *   v1/heartbeat.json                   max-age=30
+ *   v1/retry.json                       max-age=5 (the open retry, from memory)
  */
 export function cacheControlFor(key, { now = Date.now() } = {}) {
   if (key === 'v1/latest.json') return 'public, max-age=5, s-maxage=10';
   if (key === 'v1/heartbeat.json') return 'public, max-age=30';
+  if (key === 'v1/retry.json') return 'public, max-age=5';
   if (/^v1\/snap\/[0-9a-f]{16}\.json$/.test(key)) return IMMUTABLE;
   const m = /^v1\/events\/(\d{4}-\d{2}-\d{2})\/(\d{2})\.ndjson$/.exec(key);
   if (m) {
@@ -133,7 +135,8 @@ export function createR2Putter({
 
   return async function put(key, body, { contentType = contentTypeFor(key), cacheControl = cacheControlFor(key, { now: now() }), signal } = {}) {
     const data = typeof body === 'string' ? Buffer.from(body, 'utf8') : Buffer.from(body);
-    const url = new URL(`${base}/${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`);
+    // One strict encoder for the URL path and the signed canonical path (signV4 re-derives it from the URL).
+    const url = new URL(`${base}/${bucket}/${key.split('/').map((seg) => uriEncode(seg)).join('/')}`);
     return retrier.run(`PUT ${key}`, async () => {
       const amzDate = amzDateOf(now());
       const payloadHash = sha256hex(data);

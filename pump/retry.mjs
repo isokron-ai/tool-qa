@@ -87,8 +87,8 @@ export function statusOf(err) {
  * in ms, or a function returning one) stops retries that could not finish
  * before it. Both keep the caller inside its own deadline.
  *
- * `onRetry` (optional) is called as onRetry({ label, attempt, status, delayMs,
- * gaveUp }) where the retry is logged: once per attempt that will be repeated
+ * `onRetry` (optional) is called as onRetry({ label, attempt, of, status,
+ * delayMs, gaveUp }) where the retry is logged: once per attempt that will be repeated
  * and once when the retrier gives up (gaveUp: true). `status` is 0 for a
  * network error or timeout.
  */
@@ -105,7 +105,7 @@ export function createRetrier({
   onRetry = null,
 } = {}) {
   let waited = 0;
-  // onRetry({ label, attempt, status, delayMs, gaveUp }): told about every
+  // onRetry({ label, attempt, of, status, delayMs, gaveUp }): told about every
   // failed attempt that is retried and about the one that gives up. A hook
   // that throws never changes the retry (it is a view of the retry, nothing more).
   const tell = (info) => {
@@ -125,12 +125,12 @@ export function createRetrier({
           const limit = typeof until === 'function' ? until() : until;
           const outOfTime = waited + delay > totalMs || (limit !== null && limit !== undefined && now() + delay > limit);
           if (lastAttempt || outOfTime) {
-            tell({ label, attempt: n, status: statusOf(err), delayMs: 0, gaveUp: true });
+            tell({ label, attempt: n, of: attempts, status: statusOf(err), delayMs: 0, gaveUp: true });
             log(`retry: ${label}: ${err.reason ?? 'failed'}; giving up after ${n} attempt${n === 1 ? '' : 's'} (${lastAttempt ? 'attempt limit' : 'time limit'}, waited ${Math.round(waited / 1000)}s)`);
             throw err;
           }
           waited += delay;
-          tell({ label, attempt: n, status: statusOf(err), delayMs: delay, gaveUp: false });
+          tell({ label, attempt: n, of: attempts, status: statusOf(err), delayMs: delay, gaveUp: false });
           log(`retry: ${label}: ${err.reason ?? 'failed'}; attempt ${n}/${attempts} failed, next in ${(delay / 1000).toFixed(1)}s`);
           if (delay > 0) await sleep(delay);
         }
