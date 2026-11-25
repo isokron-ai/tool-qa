@@ -1,0 +1,14 @@
+# Deploy: see heartbeat/README.md. No routes: the Worker only runs on its cron trigger.
+name = "isokron-loop-heartbeat"
+main = "worker.mjs"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+HEARTBEAT_ENABLED = "true"
+
+[observability]
+enabled = true
