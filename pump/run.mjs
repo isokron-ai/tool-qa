@@ -89,6 +89,7 @@ import { ApiBudget, budgetedFetch } from './budgets.mjs';
 import { allowedWorkflows, judgeConformance, pinMismatches, readConformance as readConformanceStatus, untrustedWorkflows, verifyRun } from './breaker.mjs';
 import { createDispatcher } from './dispatch.mjs';
 import { dueFromState, isEnabled, loadConfig } from './due.mjs';
+import { lanePinModes } from './pins.mjs';
 import { createClient, scrub } from './github.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.mjs';
@@ -199,7 +200,11 @@ export async function runPump({
   const apiUrl = env.GITHUB_API_URL || 'https://api.github.com';
   let collector;
   if (ingest === undefined) {
-    collector = createCollector({ env, fetch: budgetedFetch(fetch, bud, { apiUrl }), apiUrl, sleep, ...ingestOptions });
+    // Ingest holds each lane to the pin_check of the config the pump dispatched with (R-PIN-01).
+    collector = createCollector({
+      env, fetch: budgetedFetch(fetch, bud, { apiUrl }), apiUrl, sleep, ...ingestOptions,
+      judge: { pinModes: lanePinModes(cfg.workflows), ...(ingestOptions.judge ?? {}) },
+    });
   } else if (typeof ingest === 'function') {
     collector = { collect: ingest };
   } else {
@@ -414,7 +419,11 @@ export async function runPump({
         for (const p of db.pausedWorkflows({ now: now() })) {
           if (warnedPaused.has(p.workflow)) continue;
           warnedPaused.add(p.workflow);
-          say(`pump: ${p.workflow} is paused until ${p.until}: ${p.count} dispatches in a row ran at another commit than the one recorded at dispatch (run_sha_mismatch). Check that its worker branch is not moving and that no one else dispatches its workflow; the pause ends on its own`);
+          if (p.reason === 'pin_mismatch' || p.reason === 'pin_unverified') {
+            say(`pump: ${p.workflow} is paused until ${p.until}: a result was refused for its version pins (${p.reason}; R-PIN-01): the worker ran${p.reason === 'pin_unverified' ? ', or did not prove it ran,' : ''} other code than the versions in pump/workflows.json. Bump the pin to what the worker runs, or make the worker run and report the pin; the pause ends on its own`);
+          } else {
+            say(`pump: ${p.workflow} is paused until ${p.until}: ${p.count} dispatches in a row ran at another commit than the one recorded at dispatch (run_sha_mismatch). Check that its worker branch is not moving and that no one else dispatches its workflow; the pause ends on its own`);
+          }
         }
       }
       const ingestNote = ingested

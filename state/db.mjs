@@ -38,6 +38,8 @@ export const MAX_SLOTS = 15;
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
 /** How far apart one tick's dispatches may be created and still count as one burst (R-ING-26). */
 export const SHA_BURST_MS = 30_000;
+/** How long a lane is paused after a result was refused for its version pins (R-PIN-01). */
+export const PIN_PAUSE_MS = 3_600_000;
 
 const MIGRATIONS = [
   { version: 1, sql: () => readFileSync(new URL('./schema.sql', import.meta.url), 'utf8') },
@@ -90,8 +92,11 @@ function checkTtl(ttlMs) {
 // (R-ING-18): the run was at another commit than the one recorded at dispatch,
 // because the worker branch moved between the pump reading it and GitHub
 // starting the run, or because someone else's run took the shard's run name.
-// Neither says anything about the run_key's own work.
-export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch']);
+// Neither says anything about the run_key's own work. Nor do pin_mismatch and
+// pin_unverified (R-PIN-01): our worker ran, or did not prove it ran, other
+// code than the run_key is filed under; that is our side, and the lane is
+// paused instead (pausePinRefused), so a fixed worker never finds its work parked.
+export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch', 'pin_mismatch', 'pin_unverified']);
 const NOT_COUNTED = NOT_COUNTED_REASONS.map((r) => `'${r}'`).join(', ');
 
 /** Event data strings are bounded (reasons, URLs, lane names). */
@@ -717,6 +722,20 @@ export class StateDb {
   }
 
   /**
+   * The tool and probe versions a run_key is filed under, from the fields it
+   * was computed from: {tool, probe}, or null when the run_key or its fields
+   * are not recorded (R-PIN-01; ingest checks the result against them).
+   */
+  runKeyPins(runKey) {
+    const row = this.raw.prepare('SELECT fields FROM run_keys WHERE run_key = ?').get(runKey);
+    if (!row || typeof row.fields !== 'string') return null;
+    let f;
+    try { f = JSON.parse(row.fields); } catch { return null; }
+    if (f === null || typeof f !== 'object' || Array.isArray(f)) return null;
+    return { tool: f.tool_versions ?? {}, probe: f.probe_versions ?? {} };
+  }
+
+  /**
    * Record a dispatch before it is sent. `items` are [{run_key, subject, fence}]
    * in the order the worker receives them; each item's position is stored as its
    * item_index. Their leases (keyed by run_key, held by attemptId) must already
@@ -942,6 +961,7 @@ export class StateDb {
         resolved: it.resolved,
         retries: this.retryLaterCount(it.run_key),
         ...this.retryThrottled(it.run_key),
+        pins: this.runKeyPins(it.run_key),
       };
     });
     const file = String(d.workflow_file);
@@ -1325,6 +1345,29 @@ export class StateDb {
       this.recordEvent({ type: 'workflow_paused', lane: workflow, data: { until } }, now);
     });
     return { count, paused: true };
+  }
+
+  /**
+   * Pause `workflow` after a result was refused for its version pins
+   * (pin_mismatch or pin_unverified; R-PIN-01): the same pause as the
+   * run_sha_mismatch alarm (pump.paused:<workflow>, the pump dispatches none
+   * of it and fails its runs until `until`), set at the first refusal because
+   * a pin refusal is not a race: every shard would be refused the same way
+   * until a pin or the worker changes. It is not counted towards parking, so
+   * when the pause ends the work is due again. An existing longer pause is
+   * kept. Returns {until}.
+   */
+  pausePinRefused(workflow, { reason, now, pauseMs = PIN_PAUSE_MS } = {}) {
+    const key = `pump.paused:${workflow}`;
+    const prev = this.getKv(key);
+    const until = iso(toMs(now) + pauseMs);
+    if (prev?.until && Date.parse(prev.until) >= Date.parse(until)) return { until: prev.until };
+    const same = prev?.reason === reason && Date.parse(prev.until) > toMs(now);
+    this.tx(() => {
+      this.setKv(key, { reason, count: (same && Number.isSafeInteger(prev.count) ? prev.count : 0) + 1, since: same ? prev.since : iso(now), until }, { now });
+      this.recordEvent({ type: 'workflow_paused', lane: workflow, data: { until } }, now);
+    });
+    return { until };
   }
 
   /**

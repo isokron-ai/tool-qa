@@ -46,6 +46,12 @@ that result is older than the tier allows. Pairs already in flight, on a
 disabled workflow, or whose run_key was rejected too often are left out. The
 list is sorted by tier weight plus reason and age points.
 
+The tool and probe versions in a run_key are a claim about which code ran, so
+they are checked (R-PIN-01, [`pump/pins.mjs`](../pump/pins.mjs)): the pump
+sends a lane's own pinned commit to its worker (`tool_sha`), and ingest
+refuses a result whose manifest reports other versions, or, on a lane whose
+`pin_check` is `enforce`, does not prove them.
+
 ## Leases, fencing and attempts
 
 Before work is sent out, the pump takes a **lease** on the subject. Each lease

@@ -67,6 +67,7 @@ inputs, all strings:
 |---|---|
 | `shard_id` | The shard's id, such as `scan-static-3f2a9c01b7d4`. Unique per dispatch. |
 | `attempt_id` | The dispatch's id in the state store. Results must quote it. |
+| `tool_sha` | Only on a lane whose `pin_check` is `enforce` and whose `versions.tool` pins a commit of the worker repository itself (the entry named after the repository): that commit in full, 40 hex. The worker runs that commit of its own code, not the branch head (R-PIN-01, below). Never sent otherwise, so a worker that does not declare it is not refused by GitHub. |
 | `items` | JSON array, one entry per piece of work: `[{"subject": "...", "run_key": "<64 hex>", "fence": 17}, ...]`. `subject` is the repository's current owner/name (for a GitHub subject); the result is recorded under the subject key by `run_key`, so a rename before ingest changes nothing. At most 60,000 characters. |
 
 A worker workflow must:
@@ -94,6 +95,23 @@ permission on a public repository). Ingest rejects a run at any other commit
 a claim, so its own `head_sha` is never what it is checked against. If the
 ref moves between that read and GitHub starting the run, the run is
 rejected and the work is due again.
+
+**Version pins (R-PIN-01).** A lane's `versions.tool` and `versions.probe`
+go into every run_key, so they are the label each result is filed under, and
+ingest makes the label true or refuses the result. Each pinned component must
+be reported in the manifest's `tools` (worker-kit/README.md, "Reporting what
+ran"); one reported at another version is refused as `pin_mismatch` on every
+lane. On a lane whose `pin_check` is `enforce` a component not proven (a
+commit pin needs the full commit; any other pin the same string) is refused
+as `pin_unverified`; on a `label` lane it is accepted and listed as unverified
+in the item's report. A lane without `pin_check` is held to `enforce`.
+Ingest takes each lane's mode from the config the pump dispatched with.
+Before sending on an `enforce` lane, the pump resolves the lane's own commit
+pin (`GET /repos/{repo}/commits/{sha}`, readable with the dispatch token on a
+public repository) and sends it as `tool_sha`; a pin it cannot resolve is not
+dispatched. Pin refusals are the tool side's fault, are not counted towards
+parking, and pause the lane for an hour (`pump.paused:<workflow>` below).
+OPERATIONS.md, "Version pins", has the rollout.
 
 Dispatch inputs show up in the worker repositories' public run pages and
 logs, so they carry only the shard and attempt ids, subject ids and opaque
@@ -213,7 +231,10 @@ such attempt: `attempt_id`, `workflow`, `repo`, `workflow_file` (a path under
 `workflow_sha`, `canaries` (always empty for now: none are injected yet),
 `status`, `shard_id`, `created`, `expires`, and `items`, one per dispatched
 item in dispatch order:
-`{ index, run_key, fence, subject, subject_name, repo_id, name, current_fence, outcome, resolved }`.
+`{ index, run_key, fence, subject, subject_name, repo_id, name, current_fence, outcome, resolved, pins }`.
+`pins` is `{ tool, probe }`, the versions the item's run_key was computed
+from (`db.runKeyPins`), or `null` when the run_key's fields are not recorded
+(then there is no label to check); ingest checks the bundle against it (R-PIN-01).
 `subject` is the subject key the result is recorded under; `subject_name`
 the owner/name the worker was sent (null for dispatches from before schema
 v8); `repo_id` and `name` the subject's repository id (null until looked up)
@@ -312,6 +333,7 @@ an earlier rejection into an acceptance.
 | `stale_fence` | A newer lease exists; the work was sent out again. | no |
 | `retry_throttled` | Every skip in the bundle is a retryable `rate_limited` or `upstream_unavailable` from a stage the lane declares in `throttle_stages` (`pump/workflows.json`; never the subject's own fetch or probe, R-SUB-09): the item is sent out again after the same backoff, capped at `retry_backoff_max_minutes`, for as long as 7 days after its run_key's first throttled retry (ingest `RETRY_WINDOW_MS`); not counted towards the three `retry_later` retries, which since R-SUB-04 are for other retryable skips only. Then the bundle is accepted with its skips. | no |
 | `lease_expired`, `lease_released`, `no_lease`, `unknown_fence`, `holder_mismatch` | The lease is not live any more. | yes |
+| `pin_mismatch`, `pin_unverified` | Ingest refused the result for its version pins (R-PIN-01, "Worker dispatch" above): our worker ran, or did not prove it ran, other code than the run_key is filed under. The lane is paused for an hour (`pausePinRefused`). | no |
 | `run_sha_mismatch` | The worker run was at another commit than the one recorded at dispatch: the worker branch moved between the pump reading it and GitHub starting the run, or someone else's run took the shard's run name. The work is due again. Three such dispatches of one workflow in a row pause that workflow for six hours (`pump.paused:<workflow>` below). | no |
 | `retry_later` | Every skip in the bundle is retryable (a rate limit, an upstream outage): the item is sent out again after a backoff (`retry_backoff_minutes` in `pump/tiers.json`, doubled for each retry), at most three times per run_key, then the bundle is accepted with its skips. | no |
 | ingest's `reason`, or `rejected_by_ingest` | Ingest rejected the result. | yes |
@@ -401,7 +423,7 @@ State calls:
 | `pump.conformance` | What the breaker remembers across runs: `{ newest, verified }`, each `{ run_id, run_attempt, checked_at, started_at, updated_at }`: the newest run verified against the Actions API (an older status is a rollback) and the verified green (not looked up again; aged by its `started_at`). Nothing is written before a run is verified. Reset: OPERATIONS.md, "The sandbox breaker". |
 | `pump.last_run` | Start, finish, ticks, dispatched, failed and slot numbers of the last pump run. |
 | `pump.sha_mismatch:<workflow>` | `{ count, first, last, last_sha, burst_created }`: dispatches of that workflow in a row whose run was at another commit than the one recorded at dispatch (`run_sha_mismatch`). Mismatches with the same recorded commit whose dispatches were made within 30 s of the burst's first one are one burst and count once (`last_sha`, `burst_created`), so the shards of one tick that a merge overtook count as one; the same commit in a later tick counts again. The pump also reads the ref again just before each send. Removed when a run passes the checks. |
-| `pump.paused:<workflow>` | `{ reason: 'run_sha_mismatch', count, since, until }`: set when that count reaches 3. Until `until` (6 hours) the pump dispatches none of the workflow and every pump run fails, so the health issue shows it red; the pause ends on its own. |
+| `pump.paused:<workflow>` | `{ reason, count, since, until }`. `reason: 'run_sha_mismatch'`: set when that count reaches 3. `reason: 'pin_mismatch'` or `'pin_unverified'`: set by ingest at a result refused for its version pins (`db.pausePinRefused`, one hour, never shortening a longer pause; R-PIN-01). Until `until` the pump dispatches none of the workflow and every pump run fails, so the health issue shows it red; the pause ends on its own. |
 | `pump.api_budget` | The pump's API budget (`ApiBudget.snapshot()`): the time of every API call in the last hour, per endpoint family, and any rate-limit block still in force. Saved before every push and restored at the start of the next run, so the hourly caps hold across runs rather than per run. |
 | `ingest.failures:<attempt_id>:<index>` | `{ count, first, last, error }`: how often the pump failed to judge that item (not counting transient errors). Removed when the item is decided; at 3 it is recorded as `ingest_error`. |
 

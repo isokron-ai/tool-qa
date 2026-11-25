@@ -424,7 +424,7 @@ export function createCollector({
         // is retried forever (R-ING-05).
         let decided = 0;
         let stopped = false;
-        const reasons = []; // of the items decided now, for the run_sha_mismatch alarm
+        const reasons = []; // of the items decided now, for the run_sha_mismatch alarm and the pin pause
         const failures = new Map(); // log line -> item indexes
         const decide = async (item, abandon) => {
           let sealed = false;
@@ -488,6 +488,14 @@ export function createCollector({
           log(`ingest: ${label}: run at another commit than recorded at dispatch (${alarm.count} dispatch${alarm.count === 1 ? '' : 'es'} in a row)${alarm.paused ? `; ${d.workflow} is paused` : ''}`);
         } else if (reasons.some((x) => x === null || !(/^run_/.test(x) || x === 'stale_fence' || x === 'ingest_error'))) {
           db.clearShaMismatch(d.workflow);
+        }
+        // R-PIN-01: a result refused for its version pins pauses the lane; every
+        // other shard would be refused the same way until a pin or the worker changes.
+        const pinRefused = reasons.find((x) => x === 'pin_mismatch' || x === 'pin_unverified');
+        if (pinRefused) {
+          const p = db.pausePinRefused(d.workflow, { reason: pinRefused, now: now() });
+          summary.changed = true;
+          log(`ingest: ${label}: refused for its version pins (${pinRefused}); ${d.workflow} is paused until ${p.until}`);
         }
         for (const [line, indexes] of failures) {
           const which = indexes.length === 1 ? `item ${indexes[0]}` : `items ${indexes.join(', ')}`;

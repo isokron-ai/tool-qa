@@ -229,6 +229,40 @@ The worker workflow must be started by `workflow_dispatch` from tool-qa, with
 the file name and commit the dispatch recorded; ingest rejects runs from any
 other event, file or commit.
 
+### Reporting what ran (version pins, R-PIN-01)
+
+The lane's `versions.tool` and `versions.probe` in `pump/workflows.json` are
+what each result is filed under, so `tools` in the meta file must say what
+actually ran: one entry per pinned tool and probe component, named as the pin
+key (`mcp-check`), under a scope or owner (`@isokron/mcp-check`,
+`isokron-ai/mcp-surface-corpus`), or `tool-qa-<lane>` for tool-qa's own
+lanes. For a commit pin the `version` is the full 40-character commit that
+ran (`git rev-parse HEAD` of that checkout), not a package version; for any
+other pin, the same version string. Ingest refuses a bundle that reports a
+pinned component at another version (`pin_mismatch`), and on a lane whose
+`pin_check` is `enforce` one that does not prove every pin
+(`pin_unverified`).
+
+On an `enforce` lane whose `versions.tool` pins a commit of the worker
+repository itself, the pump also sends a fourth input, `tool_sha` (a full
+commit SHA). The workflow declares it as optional and, when it is set,
+checks out and runs that commit of its own code (not the branch head), checks
+that `git rev-parse HEAD` equals it (failing the run otherwise), and reports
+that commit for itself in `tools`:
+
+```yaml
+    inputs:
+      tool_sha: { description: 'Commit of this repository to run (tool-qa R-PIN-01)', type: string, required: false, default: '' }
+...
+      - uses: actions/checkout@<sha>
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tool_sha || github.sha }}
+```
+
+GitHub refuses a dispatch with an input the workflow does not declare, so a
+worker declares `tool_sha` before its lane is switched to `enforce`.
+
 ## Limits
 
 | What | Limit |

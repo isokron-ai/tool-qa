@@ -773,6 +773,14 @@ export class Sim {
       ...this.worker(ctx),
     };
     run.plan = plan;
+    // What the worker runs, as an honest worker reports it in manifest tools
+    // (R-PIN-01): each pinned tool and probe at its pin, but its own code (the
+    // tool named after the worker repository) at the commit it checked out:
+    // tool_sha when the pump sent one, else its branch head.
+    const wf = this.config.workflows[WORKFLOW];
+    const own = WORKER.split('/')[1];
+    run.ran = Object.entries({ ...wf.versions?.tool, ...wf.versions?.probe })
+      .map(([name, pin]) => ({ name, version: name === own && /^[0-9a-f]{7,40}$/.test(pin) ? (inputs.tool_sha ?? run.head_sha) : pin }));
     this.workerRuns.push(run);
     this.log('worker', `run ${run.id} for ${inputs.shard_id} (${items.length} item(s))${plan.hold ? ', held' : ''}`);
     if (plan.hold) return;
@@ -804,6 +812,7 @@ export class Sim {
           subject: { id: it.subject, repo: it.subject, sha: 'c'.repeat(40) },
           started_at: iso(Date.parse(run.run_started_at ?? run.created_at)).replace(/\.\d{3}Z$/, 'Z'),
           finished_at: iso(this.t).replace(/\.\d{3}Z$/, 'Z'),
+          ...(run.ran?.length ? { tools: run.ran } : {}),
           ...p.meta,
         },
       });

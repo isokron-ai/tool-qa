@@ -142,7 +142,9 @@ or quarantined bundle is kept only as ciphertext.
 ledger row (this item's run_key and fences, the number of items, canaries only
 as a count), the run, the artifact (id, name, sizes, sha256 of the download and of
 the ciphertext, `raw` or `zip`), bundle counts, the registry digest, problems
-and secret-scan hits. Problems and hits carry reason or rule codes, paths,
+and secret-scan hits, and `pins`: the version-pin check (R-PIN-01; mode,
+and which pinned components were verified, unverified or mismatched, each with
+the version the bundle reported). Problems and hits carry reason or rule codes, paths,
 lines, JSON paths and offsets, never file contents; any name that reaches the
 report is masked if it looks like a secret or a canary.
 
@@ -172,6 +174,7 @@ Recorded rejections and quarantine:
 | controls and claims | `forgery_control_injected`, `forgery_marker_leaked`, `foreign_identity_claim`, `control_output_in_raw`, `control_failed`, `control_missing`, `forgery_control_unverified` |
 | registry | `observation_format`, `undeclared_field`, `deprecated_field`, `field_type` |
 | secrets (quarantined) | `secret_scan` |
+| version pins (R-PIN-01) | `pin_mismatch` (the manifest's `tools` report a pinned tool or probe component at another version than the run_key is filed under; every lane), `pin_unverified` (a pinned component is not proven: a commit pin needs the full 40-character commit; only on a lane whose `pin_check` is `enforce`). Both are the tool side's fault (`fault: "tool"` in the problem and in the report's `pins`), are not counted towards parking, and pause the lane for an hour. Checked last, so they only ever turn what would be accepted into a refusal. |
 | retry | `retry_later` (every skip is retryable; sent out again after a backoff; not counted towards parking), `retry_throttled` (every skip is a retryable rate limit or upstream outage from a declared third-party stage; sent out again for up to 7 days; not counted towards parking or the three retries) |
 | judging | `ingest_timeout` (judging or decrypting ran past its time limit), `ingest_error` (judging failed on this bundle, or the pump failed to judge the item three times; see "Ingest in the pump" in docs/INTERFACES.md) |
 

@@ -14,8 +14,11 @@
 //   actions               workflow_dispatch (with return_run_details), runs and
 //                         their filters (event, created, status), run artifacts,
 //                         artifact downloads (302 to blob storage), the
-//                         workflow list and enable, the repository artifact list
+//                         workflow list and enable, the repository artifact list;
+//                         a workflow given `inputs` refuses any other (422)
 //   branches              GET /branches/{ref}
+//   commits               GET /commits/{sha}: an abbreviated SHA to the full
+//                         one among the repository's known commits
 //   variables             environment and repository variables, org variables
 //   issues                list, create, edit, comment; /graphql pinIssue
 //   public repositories   the subjects' repositories as /graphql answers them
@@ -136,6 +139,7 @@ export class FakeGitHub {
     const r = {
       fullName,
       branches: { ...branches },
+      commits: new Set(Object.values(branches)), // every commit GET /commits/{sha} knows (R-PIN-01)
       workflows: new Map(),
       runs: [],
       artifacts: [],
@@ -157,9 +161,10 @@ export class FakeGitHub {
     return r;
   }
 
-  addWorkflow(fullName, file, { state = 'active' } = {}) {
+  addWorkflow(fullName, file, { state = 'active', inputs = null } = {}) {
     const r = this.repo(fullName);
-    const w = { id: this.id(), name: file.replace(/\.ya?ml$/, ''), path: `.github/workflows/${file}`, state };
+    // inputs: the workflow_dispatch inputs it declares; GitHub refuses a dispatch with any other (422). null: any.
+    const w = { id: this.id(), name: file.replace(/\.ya?ml$/, ''), path: `.github/workflows/${file}`, state, inputs };
     r.workflows.set(file, w);
     return w;
   }
@@ -413,6 +418,13 @@ export class FakeGitHub {
         return { body: { ...f.a } };
       }
     }
+    // commits (R-PIN-01): an abbreviated SHA resolves to the one known commit it starts; none 404, several 422
+    if (method === 'GET' && (m = /^\/commits\/([0-9a-f]{4,40})$/.exec(rest))) {
+      const hits = [...r.commits].filter((c) => c.startsWith(m[1]));
+      if (hits.length === 0) return notFound();
+      if (hits.length > 1) return { status: 422, body: { message: `The SHA ${m[1]} is ambiguous` } };
+      return { body: { sha: hits[0] } };
+    }
     // branches
     if (method === 'GET' && (m = /^\/branches\/([^/]+)$/.exec(rest))) {
       const sha = r.branches[decodeURIComponent(m[1])];
@@ -437,6 +449,8 @@ export class FakeGitHub {
       const ref = req.json?.ref ?? 'main';
       if (!r.branches[ref]) return { status: 422, body: { message: `No ref found for: ${ref}` } };
       const inputs = req.json?.inputs ?? {};
+      const unexpected = Array.isArray(w.inputs) ? Object.keys(inputs).filter((k) => !w.inputs.includes(k)) : [];
+      if (unexpected.length) return { status: 422, body: { message: `Unexpected inputs provided: ${JSON.stringify(unexpected)}` } };
       const title = inputs.shard_id ? `shard ${inputs.shard_id}` : undefined;
       const run = this.createRun(r.fullName, file, { event: 'workflow_dispatch', title, ref });
       run.inputs = inputs;

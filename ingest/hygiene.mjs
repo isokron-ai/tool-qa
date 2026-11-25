@@ -9,7 +9,7 @@ import { maskText, scanText } from './redact.mjs';
 
 /** How many problems or hits a report lists (the total is always given). */
 export const MAX_LISTED = 50;
-export const PROBLEM_KEYS = ['reason', 'field', 'path', 'line', 'json_path', 'key', 'index', 'kind', 'how', 'expected', 'got', 'detail'];
+export const PROBLEM_KEYS = ['reason', 'field', 'path', 'line', 'json_path', 'key', 'index', 'kind', 'how', 'expected', 'got', 'detail', 'fault'];
 
 /** Printable ASCII only, secret and canary spans masked, length capped. */
 export function makeLabeler(canaries) {

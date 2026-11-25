@@ -1235,3 +1235,35 @@ test('R-WD-14: the seal record notes each keep-forever file that failed with the
     }
   }
 });
+
+test('R-PIN-01: in the pump, a result refused for its version pins pauses its lane and parks nothing; a proven one is recorded as usual', async () => {
+  const pin = '116b0ca';
+  const fields = { subject_id: 'repo:1', workflow: 'qa', tool_versions: { 'mcp-check': pin }, oracle_versions: {}, probe_versions: {} };
+  const go = async (version, mode) => {
+    const { db, fence } = setup();
+    db.recordRunKey(RUN_KEY, { subject: 'repo:1', workflow: 'qa', fields, now: T0 });
+    const h = harness({ api: worker({ bundle: makeBundle({ identity: { fence }, meta: { tools: [{ name: 'mcp-check', version }] } }) }), judge: { pinModes: { qa: mode } } });
+    try {
+      const s = await h.collect(db);
+      return { db, s, lines: h.lines, report: JSON.parse(h.opened().get(`${s.outcomes.accepted ? 'accepted' : 'rejected'}/att-1/0/ingest.json`)) };
+    } finally {
+      h.cleanup();
+    }
+  };
+  const bad = await go('d4a373a'.padEnd(40, '0'), 'label');
+  assert.deepEqual(bad.s.outcomes, { rejected: 1 });
+  assert.equal(bad.report.reason, 'pin_mismatch');
+  assert.equal(bad.db.getDispatch('att-1').status, 'done', 'the dispatch is closed');
+  const [p] = bad.db.pausedWorkflows({ now: T0 + 6 * MIN });
+  assert.equal(p.workflow, 'qa');
+  assert.equal(p.reason, 'pin_mismatch');
+  assert.deepEqual(bad.db.rejectedRunKeys(1), [], 'not counted towards parking');
+  assert.ok(bad.lines.some((l) => /refused for its version pins \(pin_mismatch\); qa is paused until /.test(l)), bad.lines.join('\n'));
+  bad.db.close();
+
+  const good = await go(pin.padEnd(40, '7'), 'enforce');
+  assert.deepEqual(good.s.outcomes, { accepted: 1 });
+  assert.equal(good.report.pins.verified.length, 1);
+  assert.deepEqual(good.db.pausedWorkflows({ now: T0 + 6 * MIN }), []);
+  good.db.close();
+});

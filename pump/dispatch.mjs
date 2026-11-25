@@ -15,6 +15,7 @@ import { ApiBudget } from './budgets.mjs';
 import { createClient } from './github.mjs';
 
 const MAX_ITEMS_CHARS = 60_000;
+const FULL_SHA_RE = /^[0-9a-f]{40}$/;
 const TOKEN_MARGIN_MS = 5 * 60_000;
 
 /**
@@ -23,11 +24,18 @@ const TOKEN_MARGIN_MS = 5 * 60_000;
  * worker clones or reads what the repository is called now; the result is
  * still recorded under the subject key, by run_key (state schema v8).
  */
-export function workerInputs({ shardId, attemptId, items }) {
+export function workerInputs({ shardId, attemptId, items, toolSha = null }) {
   const list = items.map(({ subject, subject_name: name, run_key, fence }) => ({ subject: name ?? subject, run_key, fence }));
   const json = JSON.stringify(list);
   if (json.length > MAX_ITEMS_CHARS) throw new Error(`shard ${shardId}: items input is too large (${json.length} characters); use a smaller shard_size`);
-  return { shard_id: String(shardId), attempt_id: String(attemptId), items: json };
+  const inputs = { shard_id: String(shardId), attempt_id: String(attemptId), items: json };
+  // R-PIN-01: only on a pin_check "enforce" lane with a commit pin of its own
+  // code; a worker that does not declare the input would refuse the dispatch.
+  if (toolSha !== null && toolSha !== undefined) {
+    if (!FULL_SHA_RE.test(toolSha)) throw new TypeError(`shard ${shardId}: tool_sha must be a full commit SHA`);
+    inputs.tool_sha = toolSha;
+  }
+  return inputs;
 }
 
 function splitRepo(repo) {
@@ -110,6 +118,36 @@ export async function resolveRef(client, { repo, ref }) {
 }
 
 /**
+ * The full commit a commit pin names in a worker repository (R-PIN-01): what
+ * the pump sends as `tool_sha` on a pin_check "enforce" lane. A full SHA is
+ * taken as it is (the worker's checkout fails if it does not exist); an
+ * abbreviated one is looked up (GET /repos/{repo}/commits/{sha}, readable with
+ * the actions-only dispatch token because worker repositories are public, as
+ * for resolveRef). A pin GitHub cannot find, or finds ambiguous, throws: the
+ * lane is not dispatched (fails closed).
+ */
+export async function resolveCommit(client, { repo, sha }) {
+  splitRepo(repo);
+  const pin = String(sha);
+  if (!/^[0-9a-f]{7,40}$/.test(pin)) throw new TypeError(`${repo}: "${pin.slice(0, 60)}" is not a commit pin`);
+  if (FULL_SHA_RE.test(pin)) return pin;
+  let res;
+  try {
+    res = await client.request('GET', `/repos/${repo}/commits/${pin}`, { family: 'contents' });
+  } catch (err) {
+    if (err?.status === 404 || err?.status === 422) {
+      const e = new Error(`${repo}: cannot resolve the pinned commit ${pin} (HTTP ${err.status}): it does not exist, or is ambiguous; pin the full commit SHA in pump/workflows.json`);
+      e.status = err.status;
+      throw e;
+    }
+    throw err;
+  }
+  const full = res.data?.sha;
+  if (typeof full !== 'string' || !FULL_SHA_RE.test(full) || !full.startsWith(pin)) throw new Error(`${repo}: the commit GitHub returned for ${pin} does not match it`);
+  return full;
+}
+
+/**
  * A dispatcher that mints an installation token per worker repository, narrowed
  * to { actions: write } on that repository alone, and reuses it until five
  * minutes before it expires. All its calls share one API budget.
@@ -130,6 +168,7 @@ export function createDispatcher({
   if (typeof mintToken !== 'function') throw new TypeError('createDispatcher: mintToken is required');
   const bud = budget ?? new ApiBudget({ now, sleep });
   const cache = new Map(); // repo -> { token, expiresAt, client }
+  const commits = new Map(); // `${repo}@${pin}` -> full commit SHA (a commit never moves)
 
   async function clientFor(repo) {
     const hit = cache.get(repo);
@@ -152,6 +191,15 @@ export function createDispatcher({
     async resolveRef({ repo, ref }) {
       const client = await clientFor(repo);
       return resolveRef(client, { repo, ref });
+    },
+    /** The full commit a commit pin names (resolveCommit), looked up once per pin. */
+    async resolveCommit({ repo, sha }) {
+      const key = `${String(repo).toLowerCase()}@${sha}`;
+      if (!commits.has(key)) {
+        const full = FULL_SHA_RE.test(String(sha)) ? String(sha) : await resolveCommit(await clientFor(repo), { repo, sha });
+        commits.set(key, full);
+      }
+      return commits.get(key);
     },
   };
 }
