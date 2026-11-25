@@ -800,3 +800,15 @@ test('live: the R2 credentials and account id are scrubbed from the log', async 
   for (const v of Object.values(LIVE_ENV).slice(1)) assert.ok(!log.includes(v), `log contains ${v}`);
   h.cleanup();
 });
+
+test('live: the builder gets the switches the run read (RESULTS_PUBLISH_ENABLED among them) and an empty history list', async () => {
+  const { h } = liveHarness({ env: { RESULTS_PUBLISH_ENABLED: 'true', LOOP_SLOTS: '3' } });
+  const seen = [];
+  h.opts.live.build = async (db, a) => { seen.push(a.config); return { snapshot: { schema: 'isokron-loop-live/1', seq: 1, generated_at: new Date(a.now).toISOString(), recent: [] }, hourEvents: [], problems: [] }; };
+  await runPump(h.opts);
+  assert.equal(seen[0].switches.RESULTS_PUBLISH_ENABLED, 'true');
+  assert.equal(seen[0].switches.LOOP_SLOTS, '3');
+  assert.deepEqual(seen[0].history, []);
+  assert.ok(seen[0].workflows, 'the pump config is passed as is');
+  h.cleanup();
+});

@@ -18,6 +18,7 @@ test('pump.yml: the live R2 settings are on the Pump step only; the watchdog rea
   assert.match(pump, /R2_ACCOUNT_ID: \$\{\{ secrets\.R2_ACCOUNT_ID \}\}/);
   assert.match(pump, /LANE_LIVE_SNAPSHOT_ENABLED: \$\{\{ vars\.LANE_LIVE_SNAPSHOT_ENABLED \}\}/);
   assert.match(pump, /LIVE_R2_BUCKET: isokron-loop-live/);
+  assert.match(pump, /RESULTS_PUBLISH_ENABLED: \$\{\{ vars\.RESULTS_PUBLISH_ENABLED \}\}/);
   assert.equal((yml.match(/secrets\.LIVE_R2_SECRET_ACCESS_KEY/g) ?? []).length, 1, 'the secret appears in one step only');
   assert.match(read('.github/workflows/watchdog.yml'), /LANE_LIVE_SNAPSHOT_ENABLED: \$\{\{ vars\.LANE_LIVE_SNAPSHOT_ENABLED \}\}/);
 });
