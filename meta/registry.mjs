@@ -30,7 +30,7 @@ import { OCI_HOSTS, ociTarget, resolveTags } from './lib/oci.mjs';
 import { bool, githubRepoOf, int, record, skipFor, str, textDigest, time, toolErrorSkip } from './lib/common.mjs';
 
 export const LANE = 'meta-registry';
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 export const MCP_REGISTRY = 'https://registry.modelcontextprotocol.io/v0.1/servers';
 const NPM = 'https://registry.npmjs.org';
 const PYPI = 'https://pypi.org';

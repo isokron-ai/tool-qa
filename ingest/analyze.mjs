@@ -32,11 +32,18 @@ export const THROTTLE_SKIPS = Object.freeze(['rate_limited', 'upstream_unavailab
  * Whether a skip is throttling by a third party (R-SUB-09): a retryable
  * rate_limited or upstream_unavailable skip from a stage the lane declares in
  * pump/workflows.json `throttle_stages`, as "stage" (both reasons) or
- * "stage:reason" (that reason only). A subject's own fetch or probe is never
- * declared, so its failures stay counted retries.
+ * "stage:reason" (that reason only); reader_limit only as "stage:reader_limit".
+ * A subject's own fetch or probe is never declared, so its failures stay
+ * counted retries. A skip whose fault side is the tool is never throttling.
  */
 export function isThrottleSkip(skip, stages = []) {
-  if (skip?.retryable !== true || !THROTTLE_SKIPS.includes(skip.reason)) return false;
+  if (skip?.retryable !== true) return false;
+  // Our own shard deadline (collect:reader_limit of meta-github and meta-registry, meta/run.mjs): the
+  // subject was never read, so a later shard may read it. Only when a lane names that exact reason.
+  if (skip.reason === 'reader_limit') return stages.includes(`${skip.stage}:reader_limit`);
+  if (!THROTTLE_SKIPS.includes(skip.reason)) return false;
+  // A tool-side retryable skip (a redirect we do not follow, which the subject steers) is never throttling.
+  if (skip.fault === 'tool') return false;
   return stages.includes(skip.stage) || stages.includes(`${skip.stage}:${skip.reason}`);
 }
 

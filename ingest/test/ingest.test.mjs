@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { crc32 } from 'node:zlib';
+import { readFileSync } from 'node:fs';
+
+import * as gh from '../../meta/github.mjs';
+import * as reg from '../../meta/registry.mjs';
+import * as rd from '../../meta/release-diff.mjs';
 
 import { ingestAttempt, laneThrottleStages, openAttempt } from '../ingest.mjs';
 import { parseRegistry } from '../registry.mjs';
@@ -688,6 +693,54 @@ test('R-SUB-09: only declared third-party stages are throttling; a subject\'s ow
   const shipped = laneThrottleStages();
   assert.deepEqual(shipped['scan-static'], ['static:rate_limited']);
   for (const lane of ['live-probe', 'scan-deep', 'build-probe', 'writecheck']) assert.deepEqual(shipped[lane], [], lane);
+});
+
+test('R-SUB-12: a meta lane\'s rate_limited, outage and shard-deadline skips are throttling: retried after the backoff, not counted towards the 3 retries', async () => {
+  const shipped = laneThrottleStages(); // the committed pump/workflows.json
+  const sixDays = new Date(NOW().getTime() - 6 * 86_400_000).toISOString();
+  const spent = (workflow) => fakeLedger([expectedRow({ workflow, retries: 3, throttled: 4, throttled_since: sixDays })]); // the 3 counted retries are used up
+  const cases = [
+    ['meta-github', { stage: 'graphql', reason: 'rate_limited', fault: 'infra', retryable: true }],
+    ['meta-github', { stage: 'scorecard', reason: 'upstream_unavailable', fault: 'infra', retryable: true }],
+    ['meta-github', { stage: 'known_answer', reason: 'rate_limited', fault: 'infra', retryable: true }],
+    ['meta-github', { stage: 'collect', reason: 'reader_limit', fault: 'tool', retryable: true }],
+    ['meta-registry', { stage: 'npm', reason: 'rate_limited', fault: 'infra', retryable: true }],
+    ['meta-registry', { stage: 'mcp_registry', reason: 'upstream_unavailable', fault: 'infra', retryable: true }],
+    ['meta-registry', { stage: 'collect', reason: 'reader_limit', fault: 'tool', retryable: true }],
+    ['release-diff', { stage: 'source', reason: 'rate_limited', fault: 'infra', retryable: true }],
+    ['release-diff', { stage: 'pypi', reason: 'upstream_unavailable', fault: 'infra', retryable: true }],
+  ];
+  for (const [lane, skip] of cases) {
+    const r = (await run({ bundle: makeBundle({ meta: retryMeta([skip]) }), ledger: spent(lane), throttleStages: shipped })).r;
+    assert.equal(r.reason, 'retry_throttled', `${lane} ${skip.stage}:${skip.reason} is waited out`);
+  }
+  // Not throttling: a tool-side retryable skip (a redirect we do not follow), a stage the lane does not declare, a
+  // subject budget that is release-diff's own (collect:reader_limit is not declared there).
+  const counted = [
+    ['meta-github', { stage: 'graphql', reason: 'upstream_unavailable', fault: 'tool', retryable: true }],
+    ['meta-github', { stage: 'mystery', reason: 'rate_limited', fault: 'infra', retryable: true }],
+    ['release-diff', { stage: 'collect', reason: 'reader_limit', fault: 'tool', retryable: true }],
+    ['release-diff', { stage: 'git_refs', reason: 'upstream_unavailable', fault: 'tool', retryable: true }],
+  ];
+  for (const [lane, skip] of counted) {
+    const r = (await run({ bundle: makeBundle({ meta: retryMeta([skip]) }), ledger: spent(lane), throttleStages: shipped })).r;
+    assert.equal(r.outcome, 'accepted', `${lane} ${skip.stage}:${skip.reason} is a counted retry, out of retries here`);
+  }
+  // The window still ends it: eight days after the first throttled retry the skips are accepted as they are.
+  const eightDays = new Date(NOW().getTime() - 8 * 86_400_000).toISOString();
+  const late = await run({ bundle: makeBundle({ meta: retryMeta([cases[0][1]]) }), ledger: fakeLedger([expectedRow({ workflow: 'meta-github', retries: 0, throttled: 30, throttled_since: eightDays })]), throttleStages: shipped });
+  assert.equal(late.r.outcome, 'accepted');
+});
+
+test('R-SUB-13: the lane versions in pump/workflows.json are the versions the meta lanes report, so a change of skip semantics moves the run keys', async () => {
+  const wf = JSON.parse(readFileSync(new URL('../../pump/workflows.json', import.meta.url), 'utf8')).workflows;
+  const code = { 'meta-github': gh.VERSION, 'meta-registry': reg.VERSION, 'release-diff': rd.VERSION };
+  for (const [lane, version] of Object.entries(code)) {
+    assert.deepEqual(wf[lane].versions.tool, { [lane]: version }, `${lane}: bump VERSION in meta/ and the pin together`);
+    assert.ok(wf[lane].throttle_stages.length > 0, `${lane} declares throttle_stages`);
+  }
+  assert.equal(wf['meta-github'].throttle_stages.includes('collect:reader_limit'), true);
+  assert.equal(wf['release-diff'].throttle_stages.includes('collect:reader_limit'), false, 'its collect:reader_limit is the subject\'s own budget');
 });
 
 test('R-SUB-10: skips_only needs nothing measured: null observations and a skip\'s own evidence file do not count; other results/ data or a value does', async () => {

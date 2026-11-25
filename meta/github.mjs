@@ -33,7 +33,7 @@ import { FetchProblem, mapLimit, readJsonCapped } from './lib/http.mjs';
 import { bool, daysBetween, int, median, record, sanitize, sha256Hex, skipFor, stableJson, str, textDigest, time, toolErrorSkip } from './lib/common.mjs';
 
 export const LANE = 'meta-github';
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 const API = 'https://api.github.com';
 const SCORECARD = 'https://api.scorecard.dev/projects/github.com';
 export const GRAPHQL_BATCH = 10;
