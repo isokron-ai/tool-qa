@@ -24,7 +24,7 @@
       "repo": "isokron-ai/mcp-check",
       "file": "live-probe.yml",
       "ref": "main",
-      "shard_size": 8,
+      "shard_size": 10,
       "setup_minutes": 8,
       "minutes_per_subject": 3,
       "slots_max": 12,

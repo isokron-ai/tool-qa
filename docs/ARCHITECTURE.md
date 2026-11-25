@@ -2,9 +2,10 @@
 
 A short overview of how the loop is put together. Status: P1 in progress. The
 pump, dispatch, ingest (inside the pump) and the watchdog are built, and
-`worker-kit/ingest.pub` holds the real ingest key; every worker workflow is
-still switched off (`enabled: false` in `pump/workflows.json`), so nothing
-scans servers yet.
+`worker-kit/ingest.pub` holds the real ingest key. Which worker workflows are
+switched on is `enabled` in `pump/workflows.json` (since 25 Nov 2026:
+scan-static, live-probe, writecheck, meta-github, meta-registry and
+release-diff; scan-deep and build-probe are not built).
 
 ## Repositories and roles
 
@@ -267,7 +268,7 @@ state store, and the archive is the only complete history. See
 
 ## Not done yet
 
-- Worker workflows in the tool repos. All are switched off in
+- The scan-deep and build-probe workers. They are switched off in
   `pump/workflows.json` until they exist.
 - Canaries. Ingest scans for the canaries of an attempt, but the pump does not
   inject any yet, so that list is always empty.
