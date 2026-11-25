@@ -23,6 +23,10 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 export const KEEP_THRESHOLDS = Object.freeze({ greenMs: 12 * HOUR, redMs: 24 * HOUR, waitAmberMs: 30 * DAY, waitRedMs: 60 * DAY, futureMs: 10 * 60_000 });
 export const SEAL_RED_STREAK = 3;
+/** A gap marker is uploaded when the pump run that sealed the item ends; give it this long before it counts as missing. */
+export const MARKER_GRACE_MS = HOUR;
+/** Failed seals older than this are no longer judged (the issue would otherwise keep a red for ever). */
+export const MARKER_WINDOW_MS = 2 * DAY;
 
 const ago = (ms) => (ms < 2 * HOUR ? `${Math.round(ms / 60_000)} minutes` : ms < 3 * DAY ? `${(ms / HOUR).toFixed(1)} hours` : `${Math.round(ms / DAY)} days`);
 
@@ -91,5 +95,47 @@ export function sealCheck(seal) {
     return { id, status: 'green', summary: base, at: seal.at };
   } catch (err) {
     return { id, status: 'amber', summary: `could not judge the seal record: ${String(err?.message ?? err).slice(0, 200)}` };
+  }
+}
+
+/**
+ * The `keep-markers` item: every seal whose keep-forever file could not be written (kv `retention.seal`, `keep_gaps`)
+ * must have its gap marker artifact `ingest-keepgap-<run>-<attempt>` on GitHub (R-WD-14).
+ *   red    a failed seal older than an hour has no marker artifact among the newest artifacts, which reach back
+ *          past it: the marker was lost, and only the off-site prune's own check of every item keeps that run's
+ *          full bundles from expiring without a keep copy
+ *   amber  a failed seal that cannot be matched (no run id recorded), or one the artifact listing does not reach
+ *          back to; or the seal record or artifact list cannot be read
+ *   green  every failed seal of the last 2 days has its marker, or there is none
+ * Pure and never throws.
+ * @param {{ now: number, seal: object|null, artifacts: {name: string, created_at?: string, expired?: boolean}[] }} input
+ */
+export function markerCheck({ now, seal, artifacts = [] }) {
+  const id = 'keep-markers';
+  try {
+    const gaps = (Array.isArray(seal?.keep_gaps) ? seal.keep_gaps : []).filter((g) => g && typeof g === 'object' && now - Date.parse(g.at) <= MARKER_WINDOW_MS);
+    if (!gaps.length) return { id, status: 'green', summary: 'no keep-forever file has failed to be written in the last 2 days' };
+    const live = new Set((Array.isArray(artifacts) ? artifacts : []).filter((a) => a && !a.expired).map((a) => String(a.name)));
+    const reach = Math.min(...(Array.isArray(artifacts) ? artifacts : []).map((a) => Date.parse(a?.created_at ?? '')).filter(Number.isFinite));
+    const missing = [];
+    const unmatched = [];
+    const unreached = [];
+    let waiting = 0;
+    let matched = 0;
+    for (const g of gaps) {
+      const at = Date.parse(g.at);
+      if (!Number.isFinite(at)) { unmatched.push(String(g.attempt ?? '?')); continue; }
+      if (now - at < MARKER_GRACE_MS) { waiting += 1; continue; }
+      if (typeof g.run !== 'string' || !/^\d+-\d+$/.test(g.run)) { unmatched.push(String(g.attempt ?? '?')); continue; }
+      if (live.has(`ingest-keepgap-${g.run}`)) { matched += 1; continue; }
+      if (!Number.isFinite(reach) || reach > at) { unreached.push(String(g.attempt ?? '?')); continue; }
+      missing.push(`${g.attempt} (run ${g.run})`);
+    }
+    const tail = `${gaps.length} failed keep-forever file(s) in the last 2 days: ${matched} with a marker, ${waiting} waiting for the run to end`;
+    if (missing.length) return { id, status: 'red', summary: `no gap marker artifact for ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ` and ${missing.length - 5} more` : ''}: the marker was lost; ${tail}`, at: seal?.at };
+    if (unmatched.length || unreached.length) return { id, status: 'amber', summary: `${unmatched.length ? `${unmatched.length} failed keep-forever file(s) cannot be matched to a run` : ''}${unmatched.length && unreached.length ? '; ' : ''}${unreached.length ? `${unreached.length} are older than the artifact list reaches` : ''}; ${tail}`, at: seal?.at };
+    return { id, status: 'green', summary: tail, at: seal?.at };
+  } catch (err) {
+    return { id, status: 'amber', summary: `could not judge the gap markers: ${String(err?.message ?? err).slice(0, 200)}` };
   }
 }

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { fakeGh } from '../../snapshot/test/fake-github.mjs';
-import { keepCheck, readKeepStatus, sealCheck } from '../health.mjs';
+import { keepCheck, markerCheck, MARKER_GRACE_MS, readKeepStatus, sealCheck } from '../health.mjs';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -63,4 +63,35 @@ test('R-RET-18: the seal item is amber after one failed compression or keep-fore
   assert.equal(sealCheck(seal({ streak: 3, last_failure: { kind: 'keep', error: 'disk full' } })).status, 'red');
   assert.equal(sealCheck('garbage').status, 'green', 'a record that is not an object is no record');
   assert.equal(sealCheck({ get streak() { throw new Error('boom'); } }).status, 'amber');
+});
+
+test('R-WD-14: every failed keep-forever file has its gap marker artifact: a lost marker is red, one that cannot be matched amber, a matched or recent one green', () => {
+  const gap = (attempt, run, agoMs) => ({ attempt, run, at: iso(NOW - agoMs) });
+  const seal = (...keep_gaps) => ({ at: iso(NOW), sealed: 9, failures: { compress: 0, keep: keep_gaps.length }, streak: 0, keep_gaps });
+  const art = (name, agoMs = 10 * HOUR) => ({ name, created_at: iso(NOW - agoMs), expired: false });
+  const reach = art('ingest-1-1', 20 * HOUR); // the list reaches back 20 hours
+  const judge2 = (s, artifacts) => markerCheck({ now: NOW, seal: s, artifacts });
+  assert.equal(judge2(null, []).status, 'green', 'no record: nothing failed');
+  assert.equal(judge2(seal(), [reach]).status, 'green');
+  // Matched: the marker artifact of the run is there.
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', 5 * HOUR)), [reach, art('ingest-keepgap-77-1', 5 * HOUR)]).status, 'green');
+  // Lost: an hour on, and the list reaches back past the seal: red, and it names the item.
+  const lost = judge2(seal(gap('att-1-0', '77-1', 5 * HOUR)), [reach]);
+  assert.equal(lost.status, 'red');
+  assert.match(lost.summary, /att-1-0 \(run 77-1\)/);
+  // An expired marker artifact is no marker.
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', 5 * HOUR)), [reach, { ...art('ingest-keepgap-77-1'), expired: true }]).status, 'red');
+  // A marker of another run does not count.
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', 5 * HOUR)), [reach, art('ingest-keepgap-77-2')]).status, 'red');
+  // The pump run is still going (the marker uploads when it ends): waiting, not red.
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', MARKER_GRACE_MS - 60_000)), [reach]).status, 'green');
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', MARKER_GRACE_MS + 60_000)), [reach]).status, 'red');
+  // No run id recorded: cannot be matched, amber. A seal older than the list reaches: amber.
+  assert.equal(judge2(seal(gap('att-1-0', null, 5 * HOUR)), [reach]).status, 'amber');
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', 30 * HOUR)), [reach]).status, 'amber');
+  assert.equal(judge2(seal(gap('att-1-0', '77-1', 5 * HOUR)), []).status, 'amber', 'an empty artifact list proves nothing');
+  // Red beats amber when both are there; old failures (over 2 days) are no longer judged; a broken record is amber, never a throw.
+  assert.equal(judge2(seal(gap('a', null, 5 * HOUR), gap('b', '77-1', 5 * HOUR)), [reach]).status, 'red');
+  assert.equal(judge2(seal(gap('a', '77-1', 3 * DAY)), [reach]).status, 'green');
+  assert.equal(markerCheck({ now: NOW, seal: { get keep_gaps() { throw new Error('boom'); } }, artifacts: [] }).status, 'amber');
 });

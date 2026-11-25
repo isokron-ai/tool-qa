@@ -228,6 +228,7 @@ export function meter(store, { maxClassA = DEFAULTS.maxClassA, maxClassB = DEFAU
     head: (k, essential) => call('head', essential, () => store.head(k)),
     put: (k, b, o) => call('put', o?.essential, () => store.put(k, b, o)),
     get: (k) => call('get', false, () => store.get(k)),
+    getRange: (k, r) => call('get', false, () => store.getRange(k, r)),
     delete: (k) => call('delete', false, () => store.delete(k)),
   };
 }

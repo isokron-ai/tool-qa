@@ -62,7 +62,7 @@ const TOKEN_MARGIN_MS = 5 * MINUTE;
  * compression, and any failure. `streak` counts seals in a row with a failure
  * (the watchdog's amber at one, red at three). Never throws into the seal.
  */
-export function noteSeal(db, { bytesIn, bytesOut, keptBytes = 0, failures = [], at }) {
+export function noteSeal(db, { bytesIn, bytesOut, keptBytes = 0, failures = [], gaps = [], at }) {
   try {
     const prev = db.getKv(SEAL_KEY) ?? {};
     const failed = failures.length > 0;
@@ -74,6 +74,9 @@ export function noteSeal(db, { bytesIn, bytesOut, keptBytes = 0, failures = [], 
       kept_bytes: (prev.kept_bytes ?? 0) + keptBytes,
       failures: { compress: (prev.failures?.compress ?? 0) + failures.filter((f) => f.kind === 'compress').length, keep: (prev.failures?.keep ?? 0) + failures.filter((f) => f.kind === 'keep').length },
       streak: failed ? (prev.streak ?? 0) + 1 : 0,
+      // Each keep-forever file that could not be written and the pump run whose gap marker artifact (ingest-keepgap-<run>) must
+      // exist for it: the watchdog checks the marker is there (keep/health.mjs markerCheck, R-WD-14). The last 20.
+      keep_gaps: [...(Array.isArray(prev.keep_gaps) ? prev.keep_gaps : []), ...gaps.map((g) => ({ ...g, at: new Date(at).toISOString() }))].slice(-20),
       last_failure: failed ? { at: new Date(at).toISOString(), kind: failures[0].kind, what: failures[0].what, error: failures[0].error } : prev.last_failure ?? null,
     };
     db.setKv(SEAL_KEY, next, { now: at });
@@ -252,6 +255,7 @@ export function createCollector({
    */
   function seal(attemptId, outputs, recipients, db, at) {
     const failures = [];
+    const gaps = [];
     const tar = writeTar([...outputs].map(([path, data]) => ({ path, data })));
     const body = pack(tar, failures, `ingest-${attemptId}`);
     const file = writeSealed(outDir, `ingest-${attemptId}.tar.age`, encrypt(body, recipients));
@@ -273,6 +277,7 @@ export function createCollector({
       }
     } catch (err) {
       failures.push({ kind: 'keep', what: `keep-${attemptId}`, error: String(err?.message ?? err).slice(0, 200) });
+      gaps.push({ attempt: attemptId, run: env.GITHUB_RUN_ID && env.GITHUB_RUN_ATTEMPT ? `${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}` : null });
       // The artifact of keep files may still exist, so the prune cannot tell from it that this item has no
       // keep-forever file. The marker (uploaded as ingest-keepgap-<run>-<attempt>) tells it to keep this run's
       // full bundles. If even the marker cannot be written the item is not recorded: it is judged again next tick.
@@ -283,7 +288,7 @@ export function createCollector({
         throw new Error(`the keep-forever file of ${attemptId} could not be written (${failures.at(-1).error}) and neither could its gap marker (${String(gapErr?.message ?? gapErr).slice(0, 120)}); not recorded`);
       }
     }
-    if (db) noteSeal(db, { bytesIn: tar.length, bytesOut: body.length, keptBytes, failures, at });
+    if (db) noteSeal(db, { bytesIn: tar.length, bytesOut: body.length, keptBytes, failures, gaps, at });
     return file;
   }
 

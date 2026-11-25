@@ -65,6 +65,11 @@ export function fakeS3({ now = Date.now, pageSize = 1000, lockDays = 30 } = {}) 
       calls.push({ op: 'get', key });
       return objects.get(key)?.data ?? null;
     },
+    async getRange(key, { start, end }) {
+      calls.push({ op: 'get', key, range: `${start}-${end}` });
+      const o = objects.get(key);
+      return o ? o.data.subarray(start, end + 1) : null;
+    },
     async delete(key) {
       calls.push({ op: 'delete', key });
       const o = objects.get(key);

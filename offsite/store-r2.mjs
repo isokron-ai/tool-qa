@@ -15,6 +15,7 @@
 //                            a new object only (If-None-Match: *): { etag }, or
 //                            throws an error with code 'exists' if the key is taken
 //   get(key)                 the bytes, or null
+//   getRange(key, {start, end})  the bytes start..end (inclusive), or null; the prune reads a zip's member names this way
 //   delete(key)              removes one object (R2 refuses while the bucket lock holds it)
 //
 // `md5` and `sha256` are the body's digests in hex. The PUT carries
@@ -124,6 +125,16 @@ export async function createR2Store({ accountId, bucket, accessKeyId, secretAcce
       } catch (err) {
         if (statusOf(err) === 404 || err?.name === 'NoSuchKey' || err?.name === 'NotFound') return null;
         throw fail(`GET ${key}`, err);
+      }
+    },
+    async getRange(key, { start, end }) {
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) throw new StoreError(`R2 GET ${key}: bad range ${start}-${end}`);
+      try {
+        const res = await client.send(new S3.GetObjectCommand({ Bucket: bucket, Key: key, Range: `bytes=${start}-${end}` }));
+        return Buffer.from(await res.Body.transformToByteArray());
+      } catch (err) {
+        if (statusOf(err) === 404 || err?.name === 'NoSuchKey' || err?.name === 'NotFound') return null;
+        throw fail(`GET ${key} bytes ${start}-${end}`, err);
       }
     },
     async delete(key) {
