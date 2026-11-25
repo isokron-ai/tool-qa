@@ -113,12 +113,6 @@ const RELEASE_DIFF = {
     return output.skips.find((sk) => sk.retryable === true)?.reason ?? null;
   },
   minIntervalMs: {},
-  // Skips run.mjs records for this lane, in the fault-side vocabulary (worker-kit/contract.mjs SKIP_FAULTS):
-  // a subject we cannot read (not a GitHub repository) and the shard deadline are our own limits.
-  runSkips: Object.freeze({
-    notGithub: { stage: 'collect', reason: 'unsupported_layout', fault: 'tool' },
-    deadline: { stage: 'collect', reason: 'upstream_unavailable', fault: 'tool', retryable: true },
-  }),
   async collect({ http, repos, deadline = () => false, log = () => {}, seed = new Map(), pins = {}, concurrency = 2, clock = () => Date.now() }) {
     const out = new Map();
     await mapLimit(repos, concurrency, async (repo, i) => {

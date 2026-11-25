@@ -334,7 +334,7 @@ export function oracleDisagreements(items) {
     if (!ORACLE_LANES.includes(it.lane)) continue;
     const facts = oracleFacts(it.lane, (k) => it.fields?.get(k) ?? null, it.results.get(it.lane) ?? null);
     if (facts) {
-      latest.set(`${it.subject}\u0000${it.lane}`, { ...facts, version: it.version ?? null });
+      latest.set(`${it.subject}\u0000${it.lane}`, { ...facts, version: it.version ?? null, at: Date.parse(it.observed_at) });
       newest.set(it.subject, it.version ?? null);
     }
   }

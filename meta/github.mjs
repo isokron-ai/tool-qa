@@ -23,14 +23,14 @@
 // pump, ingest, the watchdog and history-popularity use the same job token in
 // this repository, so they draw on the same hourly bucket; the reserve is
 // what leaves them room. What did not run is recorded as a retryable
-// `rate_limited` skip for that stage, so ingest sends the item back for a
+// `rate_limited` skip (fault infra) for that stage, so ingest sends the item back for a
 // later try (worker-kit README, "skips").
 //
 // A subject whose data makes the lane throw is recorded as that subject's own
 // skip, never a failed shard (R-META-01).
 
 import { FetchProblem, mapLimit, readJsonCapped } from './lib/http.mjs';
-import { bool, daysBetween, int, median, record, sanitize, sha256Hex, skipFor, stableJson, str, textDigest, time } from './lib/common.mjs';
+import { bool, daysBetween, int, median, record, sanitize, sha256Hex, skipFor, stableJson, str, textDigest, time, toolErrorSkip } from './lib/common.mjs';
 
 export const LANE = 'meta-github';
 export const VERSION = '1.1.0';
@@ -476,7 +476,7 @@ export const FIELDS = Object.freeze(['repo_core', 'repo_owner_type', 'repo_popul
 export function subjectErrorOutput(stage = 'collect') {
   return {
     records: FIELDS.map((f) => record(f, null, 'this subject\'s data could not be read (the lane failed on it)')),
-    skips: [{ stage, reason: 'upstream_unavailable', retryable: false }],
+    skips: [toolErrorSkip(stage)],
     stages: { [stage]: 'subject_error' },
     sha: null,
   };
@@ -493,7 +493,7 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }
       : graph.problem ? `GitHub GraphQL did not answer for this shard (${graph.problem})` : 'GitHub GraphQL returned an error for this repository';
     for (const f of FIELDS) records.push(record(f, null, why));
     if (graph.problem) skips.push(skipFor('graphql', graph.problem));
-    else if (graph.status === 'error') skips.push({ stage: 'graphql', reason: 'upstream_unavailable', retryable: true });
+    else if (graph.status === 'error') skips.push({ stage: 'graphql', reason: 'upstream_unavailable', fault: 'infra', retryable: true });
   } else {
     const g = graphFacts(graph.node, observedAt);
     records.push(record('repo_core', g.repo_core));
@@ -507,7 +507,7 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }
     if (Array.isArray(graph.fieldErrors) && graph.fieldErrors.includes('tagRefs')) {
       // An error is not "no tags": it is a read that failed, tried again later (R-DRIFT-21).
       stages.tag_refs = 'error';
-      skips.push({ stage: 'tag_refs', reason: 'upstream_unavailable', retryable: true });
+      skips.push({ stage: 'tag_refs', reason: 'upstream_unavailable', fault: 'infra', retryable: true });
       records.push(record('git_tag_targets', null, 'GitHub GraphQL returned an error for the tag refs'));
       records.push(record('git_tag_map_sha256', null, 'GitHub GraphQL returned an error for the tag refs'));
     } else {

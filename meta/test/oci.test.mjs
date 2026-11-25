@@ -101,7 +101,7 @@ test('R-DRIFT-10: an OCI rate limit or outage is a retryable skip of the oci sta
   const c = { repo: 'acme/img', stages: {}, registry: { servers: new Map(), truncated: false }, npm: [], pypi: [], crates: [], go: { status: 'not_found', module: 'github.com/acme/img' }, depsdev: { project: null, packages: [] },
     oci: [{ reference: 'ghcr.io/a/b', tag: '1.0.0', server_name: 's', registry_version: '1.0.0', ...r[0] }] };
   const o = subjectOutput(c, '2026-11-24T00:00:00Z');
-  assert.deepEqual(o.skips.filter((s) => s.stage === 'oci'), [{ stage: 'oci', reason: 'rate_limited', retryable: true }]);
+  assert.deepEqual(o.skips.filter((s) => s.stage === 'oci'), [{ stage: 'oci', reason: 'rate_limited', fault: 'infra', retryable: true }]);
   assert.equal(o.records.find((x) => x.field === 'oci_tag_digests').value[0].status, 'rate_limited');
 });
 

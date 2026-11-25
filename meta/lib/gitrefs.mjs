@@ -11,7 +11,7 @@
 // An annotated tag's own object is `object`; the commit it points at is its
 // `peeled` oid. Nothing is cloned and no object is fetched.
 
-import { FetchProblem, readBytesCapped } from './http.mjs';
+import { FetchProblem, forbiddenKind, readBytesCapped } from './http.mjs';
 
 export const MAX_REFS_BYTES = 8 * 1024 ** 2;
 const OID_RE = /^[0-9a-f]{40}$/;
@@ -88,10 +88,12 @@ export function movedTo(location, from) {
  * guard) and the result says where it went (`moved_to`).
  * @returns {Promise<{status: 'ok', head, head_ref, tags, unreadable, moved_to: string|null}
  *   | {status: 'not_found'}
+ *   | {status: 'gone', why: 'dmca'|'disabled'}
  *   | {status: 'moved', to: string|null}>}
  *   not_found: the repository answered 401 or 404 (GitHub says 401 for one that is gone or private).
+ *   gone: a 403 or 451 whose body says GitHub took the repository down (DMCA, disabled); throttling is not this.
  *   moved: a redirect we could not follow (another host, a loop, too many hops).
- *   Throws FetchProblem for 403 and 429 (a rate limit), an outage, any other status or an answer over the cap.
+ *   Throws FetchProblem for 429 and a 403 that is throttling (a rate limit), an outage, any other status or an answer over the cap.
  */
 export async function readGitRefs(http, repo) {
   let at = repo;
@@ -116,10 +118,16 @@ export async function readGitRefs(http, repo) {
         throw new FetchProblem('upstream_unavailable', 'github.com: the refs answer could not be read');
       }
     }
+    // A 403 for a repository GitHub took down (DMCA, disabled) is the repository's: gone, settled. Throttling is not.
+    if (res.status === 403 || res.status === 451) {
+      const k = await forbiddenKind(res);
+      if (k.kind === 'gone') return { status: 'gone', why: k.why };
+      throw new FetchProblem('rate_limited', `github.com: HTTP ${res.status}`, { status: res.status });
+    }
     await res.body?.cancel?.().catch(() => {});
     // GitHub answers a repository that does not exist, or is private, with 401 (it asks for credentials).
     if (res.status === 401 || res.status === 404) return { status: 'not_found' };
-    if (res.status === 403 || res.status === 429) throw new FetchProblem('rate_limited', `github.com: HTTP ${res.status}`, { status: res.status });
+    if (res.status === 429) throw new FetchProblem('rate_limited', `github.com: HTTP ${res.status}`, { status: res.status });
     if (res.status >= 300 && res.status < 400) {
       const next = movedTo(res.headers.get('location') ?? '', at);
       if (next === null || seen.has(next.toLowerCase()) || hop >= MAX_HOPS) return { status: 'moved', to: next };

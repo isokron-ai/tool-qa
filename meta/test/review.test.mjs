@@ -40,7 +40,7 @@ test('R-META-01: an npm package over the cap is a skip that is not retried; the 
   routes['https://registry.npmjs.org/@isokron%2Fmcp-check'] = () => new Response(bigBody(3 * 1024 * 1024), { status: 200 });
   const http = createHttp({ fetch: registryFetch(routes), sleep: async () => {}, maxBodyBytes: 1024 * 1024 });
   const o = subjectOutput(await collectSubject(http, 'isokron-ai/mcp-check'), '2026-11-24T00:00:00Z');
-  assert.deepEqual(o.skips, [{ stage: 'npm', reason: 'policy_excluded' }]);
+  assert.deepEqual(o.skips, [{ stage: 'npm', reason: 'too_large', fault: 'tool' }]);
   assert.equal(o.records.find((r) => r.field === 'registry_entry_history').value.length, 1);
 });
 
@@ -91,14 +91,14 @@ test('R-META-01: an error thrown while reading one subject is recorded as its no
   const real = http.getSummary;
   http.getSummary = (url, o) => (url.includes('bad%2Fone') ? Promise.reject(new TypeError('boom')) : real(url, o));
   const out = await lane.collect({ http, repos: ['bad/one', 'isokron-ai/mcp-check'] });
-  assert.deepEqual(out.get('bad/one').skips, [{ stage: 'collect', reason: 'upstream_unavailable', retryable: false }]);
+  assert.deepEqual(out.get('bad/one').skips, [{ stage: 'collect', reason: 'tool_error', fault: 'tool' }]);
   assert.deepEqual(out.get('isokron-ai/mcp-check').skips, []);
   const gl = laneOf('meta-github');
   const h2 = createHttp({ fetch: githubFetch({ repos: { 'bad/one': ghNode({ nameWithOwner: 'bad/one' }), 'a/b': ghNode() } }), sleep: async () => {} });
   const r2 = h2.getSummary;
   h2.getSummary = (url, o) => (url.includes('/bad/one/') ? Promise.reject(new TypeError('boom')) : r2(url, o));
   const o2 = await gl.collect({ http: h2, repos: ['bad/one', 'a/b'], token: 't', budget: createBudget() });
-  assert.deepEqual(o2.get('bad/one').skips, [{ stage: 'collect', reason: 'upstream_unavailable', retryable: false }]);
+  assert.deepEqual(o2.get('bad/one').skips, [{ stage: 'collect', reason: 'tool_error', fault: 'tool' }]);
   assert.ok(o2.get('a/b').records.find((x) => x.field === 'repo_core').value);
 });
 
@@ -113,7 +113,7 @@ test('R-META-02: a known-answer read stopped by an outage reads no subject; ever
     for (const o of r.outputs) {
       assert.equal(o.outcome, 'known_answer_unavailable');
       const meta = JSON.parse(readFileSync(join(out, String(o.index), 'meta.json'), 'utf8'));
-      assert.deepEqual(meta.skips, [{ stage: 'known_answer', reason: 'upstream_unavailable', retryable: true }]);
+      assert.deepEqual(meta.skips, [{ stage: 'known_answer', reason: 'upstream_unavailable', fault: 'infra', retryable: true }]);
       assert.deepEqual(meta.controls.map((c) => [c.kind, c.observed]), [['forgery', 'contained']]);
       const v = judgeItem(join(out, String(o.index)), { attemptId: 'att-42', fence: o.fence, runKey: o.run_key });
       assert.equal(v.outcome, 'accepted');
@@ -285,7 +285,7 @@ test('R-META-07: a search crowded past three pages, or failing, still finds the 
   const http = createHttp({ fetch: registryFetch(routes, { fallback: failing }), sleep: async () => {}, retries: 0 });
   const c = await collectSubject(http, 'isokron-ai/mcp-check');
   const o = subjectOutput(c, '2026-11-24T00:00:00Z');
-  assert.deepEqual(o.skips, [{ stage: 'mcp_registry_search', reason: 'upstream_unavailable', retryable: true }]);
+  assert.deepEqual(o.skips, [{ stage: 'mcp_registry_search', reason: 'upstream_unavailable', fault: 'infra', retryable: true }]);
   assert.equal(o.records.find((x) => x.field === 'registry_entry_history').value[0].server_name, 'io.github.isokron-ai/mcp-check');
   assert.equal((await knownAnswerControl(laneOf('meta-registry'), { http: createHttp({ fetch: registryFetch(routes, { fallback: failing }), sleep: async () => {}, retries: 0 }) })).control.observed, 'match');
 });
@@ -307,7 +307,7 @@ test('R-META-09: only a 404 on the exact-name read means no own entry; any other
     const f = registryFetch(routes);
     const c = await collectSubject(createHttp({ fetch: f, sleep: async () => {}, retries: 0 }), 'isokron-ai/mcp-check');
     const o = subjectOutput(c, '2026-11-24T00:00:00Z');
-    assert.deepEqual(o.skips.filter((x) => x.stage === 'mcp_registry'), [{ stage: 'mcp_registry', reason: 'upstream_unavailable', retryable: true }], `HTTP ${status}`);
+    assert.deepEqual(o.skips.filter((x) => x.stage === 'mcp_registry'), [{ stage: 'mcp_registry', reason: 'upstream_unavailable', fault: 'infra', retryable: true }], `HTTP ${status}`);
     assert.ok(!f.calls.some((x) => x.url.includes('?search=')), `HTTP ${status}: no search fallback`);
     const r = await knownAnswerControl(laneOf('meta-registry'), { http: createHttp({ fetch: registryFetch(routes), sleep: async () => {}, retries: 0 }) });
     assert.equal(r.unavailable, 'upstream_unavailable', `HTTP ${status}: the known answer is retried, not failed`);
@@ -317,4 +317,45 @@ test('R-META-09: only a 404 on the exact-name read means no own entry; any other
   const c = await collectSubject(createHttp({ fetch: registryFetch(routes), sleep: async () => {} }), 'isokron-ai/mcp-check');
   assert.equal(c.stages.mcp_registry, 'ok', 'a 404 is "no entry of that name", and the search still runs');
   assert.equal(subjectOutput(c, '2026-11-24T00:00:00Z').records.find((x) => x.field === 'registry_entry_history').value.length, 1);
+});
+
+// ---------------------------------------------------------------- explicit reasons and fault sides (gate B)
+
+test("R-META-10: our own limits are recorded with their honest reason and fault tool (too_large, tool_error, unsupported_layout, reader_limit), never as excluded or infra; passing problems say infra", async () => {
+  const { SKIP_FAULTS, SKIP_REASONS } = await import('../../worker-kit/contract.mjs');
+  const { skipFor, toolErrorSkip } = await import('../lib/common.mjs');
+  const { RUN_SKIPS } = await import('../run.mjs');
+  const gh = await import('../github.mjs');
+  const reg = await import('../registry.mjs');
+  const rd = await import('../release-diff.mjs');
+
+  // What each own limit is recorded as.
+  assert.deepEqual(skipFor('npm', 'too_large'), { stage: 'npm', reason: 'too_large', fault: 'tool' });
+  assert.deepEqual(toolErrorSkip('collect'), { stage: 'collect', reason: 'tool_error', fault: 'tool' });
+  assert.deepEqual(gh.subjectErrorOutput().skips, [{ stage: 'collect', reason: 'tool_error', fault: 'tool' }]);
+  assert.deepEqual(reg.subjectErrorOutput().skips, [{ stage: 'collect', reason: 'tool_error', fault: 'tool' }]);
+  assert.deepEqual(rd.subjectErrorOutput().skips, [{ stage: 'collect', reason: 'tool_error', fault: 'tool' }]);
+  assert.deepEqual(RUN_SKIPS.notGithub, { stage: 'collect', reason: 'unsupported_layout', fault: 'tool' });
+  assert.deepEqual(RUN_SKIPS.deadline, { stage: 'collect', reason: 'reader_limit', fault: 'tool', retryable: true });
+  // Passing conditions stay retryable, and now say that they are outside both sides.
+  assert.deepEqual(skipFor('graphql', 'rate_limited'), { stage: 'graphql', reason: 'rate_limited', fault: 'infra', retryable: true });
+  assert.deepEqual(skipFor('graphql', 'upstream_unavailable'), { stage: 'graphql', reason: 'upstream_unavailable', fault: 'infra', retryable: true });
+
+  // Every one is a reason the contract has, with a fault it allows.
+  for (const s of [skipFor('x', 'too_large'), skipFor('x', 'rate_limited'), skipFor('x', 'upstream_unavailable'), toolErrorSkip(), RUN_SKIPS.notGithub, RUN_SKIPS.deadline]) {
+    assert.ok(SKIP_REASONS.includes(s.reason), s.reason);
+    assert.ok(SKIP_FAULTS[s.reason].allowed.includes(s.fault), `${s.reason}/${s.fault}`);
+  }
+
+  // No skip written in the meta lanes' sources lacks a fault, or uses the reasons that mean "we chose" or "an outage" for our own limits.
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const dir = new URL('../', import.meta.url);
+  const files = [...readdirSync(dir).filter((f) => f.endsWith('.mjs')).map((f) => new URL(f, dir)), ...readdirSync(new URL('lib/', dir)).map((f) => new URL(`lib/${f}`, dir))];
+  for (const u of files) {
+    const src = readFileSync(u, 'utf8');
+    for (const m of src.matchAll(/\{[^{}]*\bstage\b[^{}]*\breason: '([a-z_]+)'[^{}]*\}/g)) {
+      assert.match(m[0], /\bfault: '/, `${u.pathname.split('/meta/')[1]}: skip without a fault side: ${m[0]}`);
+      assert.notEqual(m[1], 'policy_excluded', `${u.pathname}: policy_excluded is for what we chose not to run, not our limits`);
+    }
+  }
 });

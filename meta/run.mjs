@@ -40,6 +40,17 @@ import { loadSeedPackages } from './registry.mjs';
 import { laneOf } from './lanes.mjs';
 import { forgeryControl, knownAnswerControl, newMarker } from './controls.mjs';
 
+/**
+ * The skips this runner records itself, for every lane, with their fault side (worker-kit/contract.mjs
+ * SKIP_FAULTS, R-META-10). Both are our own limits, never the subject's and never "excluded":
+ *   notGithub  the lane reads GitHub only; a subject hosted elsewhere is not a layout we read (unsupported_layout)
+ *   deadline   the shard ran out of time before the subject; a later shard has time (reader_limit, retried)
+ */
+export const RUN_SKIPS = Object.freeze({
+  notGithub: Object.freeze({ stage: 'collect', reason: 'unsupported_layout', fault: 'tool' }),
+  deadline: Object.freeze({ stage: 'collect', reason: 'reader_limit', fault: 'tool', retryable: true }),
+});
+
 export const RESULT_FORMAT = 'isokron-tool-qa-meta-result/1';
 const DEFAULT_DEADLINE_MIN = 22;
 
@@ -114,13 +125,13 @@ export async function runShard({
     let o;
     let outcome;
     if (known.unavailable) {
-      o = { records: [], skips: [{ stage: 'known_answer', reason: known.unavailable, retryable: true }], stages: { known_answer: known.unavailable }, sha: null };
+      o = { records: [], skips: [{ stage: 'known_answer', reason: known.unavailable, fault: 'infra', retryable: true }], stages: { known_answer: known.unavailable }, sha: null };
       outcome = 'known_answer_unavailable';
     } else if (!item.repo) {
-      o = { records: [], skips: [lane.runSkips?.notGithub ?? { stage: 'collect', reason: 'policy_excluded' }], stages: { collect: 'not_a_github_repository' }, sha: null };
+      o = { records: [], skips: [RUN_SKIPS.notGithub], stages: { collect: 'not_a_github_repository' }, sha: null };
       outcome = 'not_a_github_repository';
     } else if (!results.has(item.repo)) {
-      o = { records: [], skips: [lane.runSkips?.deadline ?? { stage: 'collect', reason: 'upstream_unavailable', retryable: true }], stages: { collect: 'shard_deadline' }, sha: null };
+      o = { records: [], skips: [RUN_SKIPS.deadline], stages: { collect: 'shard_deadline' }, sha: null };
       outcome = 'shard_deadline';
     } else {
       o = results.get(item.repo);

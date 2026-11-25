@@ -36,8 +36,8 @@ export class InputError extends Error {
 
 /**
  * Check the dispatch inputs as a whole (docs/INTERFACES.md, "Worker dispatch").
- * A subject that is not a GitHub owner/name is kept (it reports a
- * policy_excluded skip); a subject the manifest cannot hold (whitespace,
+ * A subject that is not a GitHub owner/name is kept (it reports an
+ * unsupported_layout skip, fault tool); a subject the manifest cannot hold (whitespace,
  * control characters, over 512 characters) refuses the whole run, since the
  * pump never sends one.
  * @returns {{shardId: string, attemptId: string, items: {index: number, subject: string, run_key: string, fence: number, repo: string|null}[]}}
@@ -175,10 +175,17 @@ export function record(field, value, why) {
 }
 
 /**
- * The skip for a stage that did not run: an answer over the size cap is not
- * retried (policy_excluded); a rate limit or an outage is (R-META-01).
+ * The skip for a stage that did not run, with the side it is down to
+ * (worker-kit/contract.mjs SKIP_FAULTS, R-META-10): an answer over our size
+ * cap is `too_large`, fault tool, not retried (R-META-01); a rate limit or an
+ * outage is a passing condition (fault infra) and is retried.
  */
 export function skipFor(stage, code) {
-  if (code === 'too_large') return { stage, reason: 'policy_excluded' };
-  return { stage, reason: code === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', retryable: true };
+  if (code === 'too_large') return { stage, reason: 'too_large', fault: 'tool' };
+  return { stage, reason: code === 'rate_limited' ? 'rate_limited' : 'upstream_unavailable', fault: 'infra', retryable: true };
+}
+
+/** The skip for a subject whose data made the lane throw: our own failure (tool_error), not retried. */
+export function toolErrorSkip(stage = 'collect') {
+  return { stage, reason: 'tool_error', fault: 'tool' };
 }
