@@ -23,13 +23,16 @@
 // Schema v8 keys subject identity by GitHub's numeric repository id
 // (repo_id) while subjects.id stays the frozen subject key that run_keys name:
 // see state/schema-v8.sql and pump/identity.mjs.
+//
+// Schema v10 adds the append-only events table (state/schema-v10.sql): each
+// event is written in the same transaction as the fact it describes.
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { deriveDisagreements, foldDisagreement, ORACLE_BUDGET_DAYS, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_LANES } from './oracle.mjs';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -46,6 +49,7 @@ const MIGRATIONS = [
   { version: 7, sql: () => readFileSync(new URL('./schema-v7.sql', import.meta.url), 'utf8') },
   { version: 8, sql: () => readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8') },
   { version: 9, sql: () => readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8') },
+  { version: 10, sql: () => readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -1316,6 +1320,29 @@ export class StateDb {
 
   clearIngestFailures(attemptId, index) {
     this.deleteKv(StateDb.ingestFailureKey(attemptId, index));
+  }
+
+  // ---- events (schema v10) ----
+
+  /**
+   * Append one event. Call it inside the transaction that writes the fact it
+   * describes, so the two commit or roll back together. occurredAt defaults to
+   * now; data is stored as JSON. Returns the new id.
+   */
+  recordEvent({ type, occurredAt, lane = null, n = 1, subject = null, data = {} } = {}, now) {
+    if (typeof type !== 'string' || type === '') throw new TypeError('recordEvent needs a type');
+    if (!Number.isSafeInteger(n) || n < 0) throw new TypeError(`recordEvent n must be a whole number >= 0, got ${n}`);
+    const recorded = iso(now);
+    const r = this.raw.prepare(`
+      INSERT INTO events (type, occurred_at, recorded_at, lane, n, subject, data) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(type, occurredAt === undefined || occurredAt === null ? recorded : iso(occurredAt), recorded, lane ?? null, n, subject ?? null, JSON.stringify(data ?? {}));
+    return Number(r.lastInsertRowid);
+  }
+
+  /** Events with id > sinceId, oldest first, at most `limit`; data parsed. */
+  listEvents({ sinceId = 0, limit = 1000 } = {}) {
+    return this.raw.prepare('SELECT * FROM events WHERE id > ? ORDER BY id LIMIT ?').all(sinceId, limit)
+      .map((row) => ({ ...row, data: JSON.parse(row.data) }));
   }
 
   // ---- kv ----
