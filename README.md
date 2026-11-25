@@ -129,7 +129,8 @@ A few from this repo's [REGRESSIONS.md](REGRESSIONS.md):
 | `scan-static` ([mcp-check](https://github.com/isokron-ai/mcp-check)) | Reads each server's source and grades its tool definitions, without running it | **On** |
 | History capture | Official MCP registry, package releases, downloads and stars | **On** |
 | Backups and retention | Snapshots, off-site backup, keep-forever copies | **On** |
-| `live-probe`, `scan-deep`, `build-probe`, `writecheck` | Run server code in the sandbox: protocol conformance, deeper scans, builds, write safety | Built, switched off for now |
+| `live-probe`, `writecheck` | Run server code in the sandbox: protocol conformance and live tool lists, write safety | Built, switched off until their safety gates are done |
+| `scan-deep`, `build-probe` | Deeper scans and builds, in the sandbox | Planned; their workers are not built yet |
 | `meta-github`, `meta-registry`, `release-diff` | Public metadata, and published packages compared with their source | Built, switched off for now |
 
 Results go public later, through [isokron-ai/mcp-results](https://github.com/isokron-ai/mcp-results).
