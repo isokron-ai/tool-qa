@@ -239,7 +239,8 @@ key (`mcp-check`), under a scope or owner (`@isokron/mcp-check`,
 lanes. For a commit pin the `version` is the full 40-character commit that
 ran (`git rev-parse HEAD` of that checkout), not a package version; for any
 other pin, the same version string. Ingest refuses a bundle that reports a
-pinned component at another version (`pin_mismatch`), and on a lane whose
+pinned component at another version (`pin_mismatch`; on a `label` lane the
+worker repository's own commit pin is only noted, R-PIN-02), and on a lane whose
 `pin_check` is `enforce` one that does not prove every pin
 (`pin_unverified`).
 

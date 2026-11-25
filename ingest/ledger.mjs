@@ -94,9 +94,11 @@ function normalizeItem(it, position, bad) {
   const repoIdRaw = pick(it, 'repo_id');
   const repoId = Number.isSafeInteger(repoIdRaw) && repoIdRaw > 0 ? repoIdRaw : null;
   // The tool and probe versions the run_key is filed under (R-PIN-01): null
-  // when the store has no label for it, left out when the ledger does not say
-  // (a hand-made ledger); ingest checks the bundle against them.
-  const pins = Object.prototype.hasOwnProperty.call(it, 'pins') ? { pins: expectedPins(it.pins) } : {};
+  // when the store has no label for it, false when it has one that cannot be
+  // read (R-PIN-02), left out when the ledger does not say (a hand-made
+  // ledger); ingest checks the bundle against them.
+  const has = Object.prototype.hasOwnProperty.call(it, 'pins');
+  const pins = !has ? {} : { pins: it.pins === null ? null : (expectedPins(it.pins) ?? false) };
   return {
     index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries,
     throttled, throttled_since: since, ...pins,

@@ -101,7 +101,11 @@ go into every run_key, so they are the label each result is filed under, and
 ingest makes the label true or refuses the result. Each pinned component must
 be reported in the manifest's `tools` (worker-kit/README.md, "Reporting what
 ran"); one reported at another version is refused as `pin_mismatch` on every
-lane. On a lane whose `pin_check` is `enforce` a component not proven (a
+lane, except the lane's own commit pin (the `versions.tool` entry named after
+the worker repository) on a `label` lane, which is listed as unverified with
+a `self_pin_moved` note and accepted (R-PIN-02). Pins recorded for the
+run_key that cannot be read are refused as `pin_unverified` on `enforce`
+(`getAttempt` gives `pins: 'malformed'`). On a lane whose `pin_check` is `enforce` a component not proven (a
 commit pin needs the full commit; any other pin the same string) is refused
 as `pin_unverified`; on a `label` lane it is accepted and listed as unverified
 in the item's report. A lane without `pin_check` is held to `enforce`.

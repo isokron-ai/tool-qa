@@ -11,8 +11,8 @@ const OLD = 'c0ffee1'.padEnd(40, '5'); // an older commit of the worker reposito
 const HEAD = 'b'.repeat(40); // the simulated worker repository's main
 const CONTRACT = ['shard_id', 'attempt_id', 'items'];
 
-const pinTo = (sim, sha, mode) => {
-  sim.config.workflows[WORKFLOW] = { ...sim.config.workflows[WORKFLOW], pin_check: mode, versions: { tool: { worker: sha.slice(0, 7) }, oracle: {}, probe: {} } };
+const pinTo = (sim, sha, mode, probe = {}) => {
+  sim.config.workflows[WORKFLOW] = { ...sim.config.workflows[WORKFLOW], pin_check: mode, versions: { tool: { worker: sha.slice(0, 7) }, oracle: {}, probe } };
 };
 const parked = (s) => s.attempts.filter((a) => a.accepted === 0 && !['pin_mismatch', 'pin_unverified', 'stale_fence'].includes(a.reason));
 
@@ -53,10 +53,25 @@ test('R-PIN-01: an enforce lane whose worker does not take tool_sha yet is refus
   });
 });
 
-test('R-PIN-01: a label lane whose branch moved past its pin: the results are refused (pin_mismatch), the lane pauses, nothing is parked, and a pin bump brings it back', CHAOS, async () => {
+test('R-PIN-02: a label lane whose branch moved past its own pin: accepted with the pin listed unverified (self_pin_moved), no pause', CHAOS, async () => {
   await withSim({}, async (sim) => {
     sim.gh.repo(WORKER).commits.add(OLD);
     pinTo(sim, OLD, 'label'); // the worker runs its branch head and says so
+    startPump(sim);
+    await sim.runFor(45 * MIN);
+    const s = sim.readLive();
+    assert.equal(sim.missing().length, 0, 'every subject has a result');
+    assert.equal(s.attempts.filter((a) => /^pin_/.test(a.reason ?? '')).length, 0, 'nothing refused for its pins');
+    assert.equal(s.kv[`pump.paused:${WORKFLOW}`], undefined, 'no pause');
+    assert.ok(sim.workerRuns.every((r) => !('tool_sha' in r.inputs)), 'a label lane sends no tool_sha');
+  });
+});
+
+test('R-PIN-01: a label lane whose worker runs another version of a pin that is not its own: refused (pin_mismatch), the lane pauses, nothing is parked, and a pin bump brings it back', CHAOS, async () => {
+  await withSim({}, async (sim) => {
+    pinTo(sim, HEAD, 'label', { corpus: 'c1' });
+    // The worker runs its head (its own pin holds) but another version of the probe.
+    sim.worker = () => ({ item: () => ({ meta: { tools: [{ name: 'worker', version: HEAD }, { name: 'corpus', version: 'c2' }] } }) });
     startPump(sim);
     await sim.runFor(40 * MIN);
     let s = sim.readLive();
@@ -64,7 +79,6 @@ test('R-PIN-01: a label lane whose branch moved past its pin: the results are re
     assert.ok(refused.length >= 1, 'refused for its pins');
     assert.equal(s.results.length, 0, 'nothing filed under a pin the worker did not run');
     assert.equal(s.kv[`pump.paused:${WORKFLOW}`]?.reason, 'pin_mismatch');
-    assert.ok(sim.workerRuns.every((r) => !('tool_sha' in r.inputs)), 'a label lane sends no tool_sha');
     const pause = s.kv[`pump.paused:${WORKFLOW}`];
     await sim.runFor(30 * MIN);
     const during = sim.workerRuns.filter((r) => Date.parse(r.created_at) > Date.parse(pause.since) && Date.parse(r.created_at) < Date.parse(pause.until));
@@ -72,7 +86,7 @@ test('R-PIN-01: a label lane whose branch moved past its pin: the results are re
     assert.ok(logLines(sim, /refused for its version pins \(pin_mismatch\)/).length >= 1);
     assert.deepEqual(parked(sim.readLive()), [], 'no rejection that counts towards parking');
 
-    pinTo(sim, HEAD, 'label'); // the pin bumped to what the worker runs
+    pinTo(sim, HEAD, 'label', { corpus: 'c2' }); // the pin bumped to what the worker runs
     await sim.runFor(2 * HOUR);
     s = sim.readLive();
     assert.equal(sim.missing().length, 0, 'every subject has a result under the new pin');

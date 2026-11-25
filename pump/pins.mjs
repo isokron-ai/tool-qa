@@ -134,17 +134,41 @@ export function checkPins(expected, tools) {
  * The ingest decision for one bundle that would otherwise be accepted.
  * `expected` undefined: the ledger carries no pins (a hand-made ledger), not
  * checked. null: no label was recorded for the run_key, nothing to make true,
- * not checked either. Otherwise a contradiction is refused on every lane and
- * an unproven pin on an "enforce" lane.
+ * not checked either. false: pins were recorded but cannot be read; refused
+ * as pin_unverified on an "enforce" lane (R-PIN-02). Otherwise a contradiction
+ * is refused on every lane and an unproven pin on an "enforce" lane, with one
+ * exception on a "label" lane (R-PIN-02): the lane's own commit pin (`self`,
+ * the versions.tool entry named after the worker repository). Until its worker
+ * takes tool_sha, a "label" worker runs its branch head and may report that
+ * commit honestly; every merge there would otherwise pause the lane until a
+ * pin bump. That one contradiction is listed as unverified with a note
+ * (`self_pin_moved`) instead. Every other pin stays a hard pin_mismatch.
+ * @param {{mode: string, expected: object|null|false|undefined, tools: object[], self?: string|null}} args
  * @returns {{reason: null|'pin_mismatch'|'pin_unverified', problems: object[], report: object}}
  */
-export function pinDecision({ mode, expected, tools }) {
+export function pinDecision({ mode, expected, tools, self = null }) {
   const m = mode === 'label' ? 'label' : 'enforce';
   if (expected === undefined || expected === null) {
     return { reason: null, problems: [], report: { mode: m, checked: false, why: expected === null ? 'no_label' : 'not_in_ledger' } };
   }
+  if (expected === false) {
+    const report = { mode: m, checked: false, why: 'malformed_label' };
+    if (m === 'label') return { reason: null, problems: [], report };
+    report.fault = 'tool';
+    return {
+      reason: 'pin_unverified',
+      problems: [{ reason: 'pin_unverified', fault: 'tool', key: 'run_key_fields', detail: 'the pins recorded for the run_key cannot be read, so nothing can be proven' }],
+      report,
+    };
+  }
   const r = checkPins(expected, tools);
-  const entry = (e) => ({ kind: e.kind, name: e.name, pin: e.pin, got: e.got });
+  if (m === 'label' && self) {
+    // R-PIN-02: the lane's own commit pin moved on a label lane: a note, not a refusal.
+    const own = (e) => e.kind === 'tool' && e.name === self && COMMIT_PIN_RE.test(e.pin);
+    for (const e of r.mismatched.filter(own)) r.unverified.push({ ...e, note: `self_pin_moved: reported ${e.got}, pinned ${e.pin}` });
+    r.mismatched = r.mismatched.filter((e) => !own(e));
+  }
+  const entry = (e) => ({ kind: e.kind, name: e.name, pin: e.pin, got: e.got, ...(e.note ? { note: e.note } : {}) });
   const report = {
     mode: m,
     checked: true,

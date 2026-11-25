@@ -439,7 +439,7 @@ export async function openAttempt(input, deps) {
     // The lane's pin_check mode; a lane the config does not name is held to
     // "enforce" (R-PIN-01). item.pins: the run_key's pinned versions.
     const pinMode = row.workflow_name && pinModes?.[row.workflow_name] === 'label' ? 'label' : 'enforce';
-    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes, maxFileBytes, throttleStages: stages, pins: { mode: pinMode, expected: item.pins } };
+    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes, maxFileBytes, throttleStages: stages, pins: { mode: pinMode, expected: item.pins, self: row.repo.split('/')[1] ?? null } };
     const verdict = await analyze(plaintext, ctx, { timeoutMs: judgeTimeoutMs });
     if (verdict?.timedOut) {
       return reject('ingest_timeout', [{ reason: 'ingest_timeout', detail: `judging took longer than ${judgeTimeoutMs / 1000} s and was stopped` }]);

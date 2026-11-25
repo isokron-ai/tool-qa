@@ -724,14 +724,17 @@ export class StateDb {
   /**
    * The tool and probe versions a run_key is filed under, from the fields it
    * was computed from: {tool, probe}, or null when the run_key or its fields
-   * are not recorded (R-PIN-01; ingest checks the result against them).
+   * are not recorded (R-PIN-01; ingest checks the result against them), or
+   * 'malformed' when they are recorded but cannot be read (R-PIN-02: refused
+   * on an enforce lane, never taken as no label).
    */
   runKeyPins(runKey) {
     const row = this.raw.prepare('SELECT fields FROM run_keys WHERE run_key = ?').get(runKey);
-    if (!row || typeof row.fields !== 'string') return null;
+    if (!row || row.fields === null || row.fields === undefined) return null;
+    if (typeof row.fields !== 'string') return 'malformed';
     let f;
-    try { f = JSON.parse(row.fields); } catch { return null; }
-    if (f === null || typeof f !== 'object' || Array.isArray(f)) return null;
+    try { f = JSON.parse(row.fields); } catch { return 'malformed'; }
+    if (f === null || typeof f !== 'object' || Array.isArray(f)) return 'malformed';
     return { tool: f.tool_versions ?? {}, probe: f.probe_versions ?? {} };
   }
 

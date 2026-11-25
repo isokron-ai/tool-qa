@@ -45,7 +45,7 @@ test('R-PIN-01: pin match accepted: a bundle that reports the full pinned commit
 });
 
 test('R-PIN-01: mismatch refused with a reason and the tool fault side, on every lane: the worker ran another commit than the run_key is filed under', async () => {
-  for (const mode of ['enforce', 'label']) {
+  for (const mode of ['enforce']) { // on a label lane the worker repository's own pin is the R-PIN-02 exception
     const { r, ledger, report } = await judge({ mode, tools: [{ name: 'mcp-check', version: HEAD }, CORPUS] });
     assert.equal(r.outcome, 'rejected', mode);
     assert.equal(r.reason, 'pin_mismatch');
@@ -171,5 +171,51 @@ test('R-PIN-01: pausePinRefused pauses the lane for an hour, says why, records t
   assert.deepEqual(db.getKv('pump.paused:writecheck'), long);
   const events = db.raw.prepare("SELECT type, lane FROM events WHERE type = 'workflow_paused' ORDER BY id").all().map((e) => [e.type, e.lane]);
   assert.deepEqual(events, [['workflow_paused', 'live-probe'], ['workflow_paused', 'live-probe']]);
+  db.close();
+});
+
+// ---- R-PIN-02: the review's should-fix and nit ----
+
+test('R-PIN-02: label lane, its own worker-repository pin moved: accepted, listed unverified with a self_pin_moved note, no refusal', async () => {
+  // The default ledger row's worker repository is isokron-ai/mcp-check: "mcp-check" is the lane's own pin.
+  const { r, ledger, report } = await judge({ mode: 'label', tools: [{ name: '@isokron/mcp-check', version: HEAD }, CORPUS] });
+  assert.equal(r.outcome, 'accepted');
+  assert.equal(ledger.records[0].accepted, true);
+  assert.deepEqual(report.pins.mismatched, []);
+  assert.deepEqual(report.pins.unverified, [{ kind: 'tool', name: 'mcp-check', pin: PIN, got: HEAD, note: `self_pin_moved: reported ${HEAD}, pinned ${PIN}` }]);
+  assert.equal(report.pins.fault, undefined);
+});
+
+test('R-PIN-02: label lane, a pin that is not its own moved: still refused as pin_mismatch', async () => {
+  const probe = await judge({ mode: 'label', tools: [{ name: 'mcp-check', version: HEAD }, { ...CORPUS, version: HEAD }] });
+  assert.equal(probe.r.reason, 'pin_mismatch', 'the probe is not the worker repository');
+  assert.deepEqual(probe.report.problems.map((p) => p.key), ['mcp-surface-corpus']);
+  assert.equal(probe.report.pins.unverified[0].note, `self_pin_moved: reported ${HEAD}, pinned ${PIN}`, 'its own pin is still only a note');
+  // Another tool of the same lane (writecheck's mcp-writecheck CLI next to mcp-writecheck-action).
+  const other = await judge({ mode: 'label', pins: { tool: { 'mcp-check': PIN, 'mcp-writecheck': '3af41c6' }, probe: {} }, tools: [{ name: 'mcp-check', version: FULL }, { name: 'mcp-writecheck', version: HEAD }] });
+  assert.equal(other.r.reason, 'pin_mismatch');
+  assert.deepEqual(other.report.problems.map((p) => p.key), ['mcp-writecheck']);
+});
+
+test('R-PIN-02: enforce lane, its own worker-repository pin moved: still refused as pin_mismatch', async () => {
+  const { r, report } = await judge({ mode: 'enforce', tools: [{ name: 'mcp-check', version: HEAD }, CORPUS] });
+  assert.equal(r.reason, 'pin_mismatch');
+  assert.deepEqual(report.problems.map((p) => [p.fault, p.key]), [['tool', 'mcp-check']]);
+});
+
+test('R-PIN-02: pins recorded but unreadable are refused (pin_unverified) on an enforce lane, never taken as no label', async () => {
+  const enforce = await judge({ mode: 'enforce', pins: 'malformed', tools: [{ name: 'mcp-check', version: FULL }, CORPUS] });
+  assert.equal(enforce.r.reason, 'pin_unverified');
+  assert.deepEqual(enforce.report.pins, { mode: 'enforce', checked: false, why: 'malformed_label', fault: 'tool' });
+  assert.equal(enforce.report.problems[0].fault, 'tool');
+  const label = await judge({ mode: 'label', pins: { tool: ['x'] }, tools: [CORPUS] });
+  assert.equal(label.r.outcome, 'accepted');
+  assert.equal(label.report.pins.why, 'malformed_label');
+  assert.equal(normalizeAttempt(expectedRow({ pins: 'malformed' })).items[0].pins, false);
+  // In the store: fields that are not JSON, or not an object.
+  const db = openState(':memory:');
+  dispatchOne(db, { fields: '{not json' });
+  assert.equal(db.getAttempt('att-1').items[0].pins, 'malformed');
+  assert.equal(normalizeAttempt(db.getAttempt('att-1')).items[0].pins, false);
   db.close();
 });

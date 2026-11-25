@@ -1820,7 +1820,7 @@ each lane says how the label is made true:
 | `pin_check` | Pump | Ingest |
 |---|---|---|
 | `enforce` | When `versions.tool` pins a commit of the worker repository itself (the entry named after the repository, such as `mcp-check` for isokron-ai/mcp-check), resolves it to the full commit (`GET /repos/{repo}/commits/{sha}`, once per run) and sends it as the `tool_sha` dispatch input; the worker checks out and runs that commit. A pin that cannot be resolved is not dispatched (`cannot resolve <lane>'s pinned commit ...`). | Refuses a result unless its manifest `tools` prove every pinned tool and probe component: a commit pin by the full commit it starts, any other pin by the same version string (`pin_unverified`), and refuses any that reports another version (`pin_mismatch`). |
-| `label` | Sends nothing new. Says once a tick when the worker branch head is not the pin (`pin_check is "label" and ... is at ..., not the pinned ...`): those results run the head. | Refuses a contradiction (`pin_mismatch`), accepts an unproven pin with it listed under `pins.unverified` in the item's `ingest.json`. |
+| `label` | Sends nothing new. Says once a tick when the worker branch head is not the pin (`pin_check is "label" and ... is at ..., not the pinned ...`): those results run the head. | Refuses a contradiction (`pin_mismatch`), except on the lane's own commit pin (the worker repository's entry), which a `label` worker runs at its branch head: that one is listed under `pins.unverified` with a note `self_pin_moved: reported <x>, pinned <y>` and accepted (R-PIN-02). Accepts an unproven pin with it listed under `pins.unverified` in the item's `ingest.json`. Pins recorded for the run_key that cannot be read are refused (`pin_unverified`) on `enforce` only. |
 
 A lane without `pin_check` is held to `enforce`. `label` is the rollout
 setting for a worker repository that does not take `tool_sha` and report its
@@ -1837,9 +1837,20 @@ is their pin. scan-static, live-probe and writecheck are `label` until
 isokron-ai/mcp-check and isokron-ai/mcp-writecheck-action take `tool_sha`
 and report what they ran (live-probe also pins its `fuzz` probe stage, which
 its bundles must then report at the full mcp-check commit).
-On a `label` lane a worker that already reports a commit (writecheck reports
-`mcp-writecheck-action` at the commit it runs) is refused as soon as its
-branch moves past the pin: bump the pin with every worker merge.
+On a `label` lane, a worker repository that merges without a pin bump does
+not stop its lane: writecheck reports `mcp-writecheck-action` at the commit
+it runs (its branch head), and that contradiction of the lane's own pin is
+only a `self_pin_moved` note (R-PIN-02). Every other pin is still refused
+when contradicted on a `label` lane: writecheck's `mcp-writecheck` (CLI_REF),
+`mcp-surface-corpus`, live-probe's corpus commit.
+
+A lane `VERSION` bump (tool-qa's meta lanes, and any lane whose pin is a
+version string) must merge in the same commit as its pin change in
+`pump/workflows.json` (R-SUB-13 checks they agree). Even so, shards
+dispatched by a pump run that started before such a merge carry the old pin
+while their worker runs the new code: expect a one-off `pin_mismatch` and a
+one-hour pause of that lane right after the merge. It ends on its own and
+loses no work.
 
 A refusal pauses the lane for an hour (above, "The pump"); pin refusals are
 not counted towards parking, so a fixed pin or worker loses no work.

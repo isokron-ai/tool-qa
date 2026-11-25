@@ -196,7 +196,7 @@ export function analyzeBundle(plaintext, ctx) {
   // filed under must be what ran, or the result is refused (pump/pins.mjs).
   // Last, so it only ever turns what would be accepted into a refusal.
   if (pins) {
-    const d = pinDecision({ mode: pins.mode, expected: pins.expected, tools: manifest.tools });
+    const d = pinDecision({ mode: pins.mode, expected: pins.expected, tools: manifest.tools, self: pins.self ?? null });
     report.pins = labelPins(d.report, label);
     if (d.reason) return reject(d.reason, d.problems);
   }
@@ -206,7 +206,7 @@ export function analyzeBundle(plaintext, ctx) {
 
 /** The pins section of the report, with every string from the bundle through the labeler. */
 function labelPins(r, label) {
-  const entry = (e) => ({ kind: e.kind, name: label(e.name), pin: label(e.pin), got: e.got === null ? null : label(e.got) });
+  const entry = (e) => ({ kind: e.kind, name: label(e.name), pin: label(e.pin), got: e.got === null ? null : label(e.got), ...(e.note ? { note: label(e.note, 200) } : {}) });
   const out = { ...r };
   for (const k of ['verified', 'unverified', 'mismatched']) if (Array.isArray(r[k])) out[k] = r[k].slice(0, MAX_LISTED).map(entry);
   return out;
