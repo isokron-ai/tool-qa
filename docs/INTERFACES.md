@@ -404,3 +404,15 @@ State calls:
 | `pump.paused:<workflow>` | `{ reason: 'run_sha_mismatch', count, since, until }`: set when that count reaches 3. Until `until` (6 hours) the pump dispatches none of the workflow and every pump run fails, so the health issue shows it red; the pause ends on its own. |
 | `pump.api_budget` | The pump's API budget (`ApiBudget.snapshot()`): the time of every API call in the last hour, per endpoint family, and any rate-limit block still in force. Saved before every push and restored at the start of the next run, so the hourly caps hold across runs rather than per run. |
 | `ingest.failures:<attempt_id>:<index>` | `{ count, first, last, error }`: how often the pump failed to judge that item (not counting transient errors). Removed when the item is decided; at 3 it is recorded as `ingest_error`. |
+
+## Public live snapshot (`live/`)
+
+`buildLiveSnapshot(db, { now, config, retry, version })` (`live/build.mjs`)
+returns `{ snapshot, hourEvents, problems }`: the `isokron-loop-live/1`
+snapshot, the public events recorded in the current UTC hour, and the scan
+and size problems (`[{rule, path}]`; any problem means nothing is uploaded).
+It is pure and read-only: it reads `events`, `results`, `dispatches`,
+`dispatch_items`, `slot_ledger`, `subjects` and `kv`, never `attempts`,
+`leases`, `run_keys` or a digest. `toPublicEvent(row)` maps one internal
+event to its public shape, or null. Public `seq` numbers are not event ids.
+What is public and what never is: `live/README.md`.

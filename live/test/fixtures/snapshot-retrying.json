@@ -1,0 +1,792 @@
+{
+  "schema": "isokron-loop-live/1",
+  "seq": 1795642800,
+  "generated_at": "2026-11-25T21:40:00.000Z",
+  "version": "0f1e2d3",
+  "mode": "retrying",
+  "mode_reason": "retrying a GitHub call",
+  "pump": {
+    "run_started_at": "2026-11-25T21:37:00.000Z",
+    "tick_at": "2026-11-25T21:39:30.000Z",
+    "tick_s": 150,
+    "runs_24h": 137,
+    "successor": {
+      "state": "ok",
+      "at": "2026-11-25T21:37:04.000Z"
+    },
+    "slots": {
+      "budget": 2,
+      "open": 2,
+      "max": 15,
+      "ramp": [
+        2,
+        5,
+        8,
+        12,
+        15
+      ]
+    }
+  },
+  "retry": {
+    "call": "state_asset",
+    "status": 502,
+    "attempt": 3,
+    "of": 6,
+    "next_at": "2026-11-25T21:40:07.400Z",
+    "since": "2026-11-25T21:38:25.000Z"
+  },
+  "breaker": {
+    "state": "closed",
+    "checked_at": "2026-11-25T13:52:10.000Z",
+    "lanes": []
+  },
+  "lanes": [
+    {
+      "id": "scan-static",
+      "state": "on",
+      "tool": "mcp-check",
+      "pin": "75503c1",
+      "w1h": 22,
+      "w24h": 829,
+      "spark24": [
+        33,
+        40,
+        29,
+        39,
+        28,
+        40,
+        30,
+        39,
+        31,
+        40,
+        30,
+        38,
+        32,
+        39,
+        33,
+        38,
+        30,
+        41,
+        32,
+        39,
+        31,
+        37,
+        30,
+        15
+      ],
+      "fault": {
+        "subject": 76,
+        "tool": 53,
+        "infra": 26,
+        "policy": 38,
+        "unknown": 29
+      },
+      "ring": {
+        "accepted": 829,
+        "lease": 18,
+        "integrity": 12,
+        "worker_output": 8,
+        "infra": 24
+      },
+      "t0_w24h": 32
+    },
+    {
+      "id": "live-probe",
+      "state": "on",
+      "tool": "mcp-check",
+      "pin": "116b0ca",
+      "w1h": 9,
+      "w24h": 518,
+      "spark24": [
+        20,
+        25,
+        22,
+        19,
+        27,
+        20,
+        25,
+        23,
+        17,
+        28,
+        19,
+        26,
+        23,
+        20,
+        27,
+        19,
+        22,
+        23,
+        20,
+        27,
+        20,
+        16,
+        20,
+        0
+      ],
+      "fault": {
+        "subject": 47,
+        "tool": 25,
+        "infra": 21,
+        "policy": 23,
+        "unknown": 24
+      },
+      "ring": {
+        "accepted": 518,
+        "lease": 5,
+        "integrity": 5,
+        "worker_output": 5,
+        "infra": 17
+      },
+      "t0_w24h": 20
+    },
+    {
+      "id": "scan-deep",
+      "state": "not_built",
+      "tool": null,
+      "pin": null,
+      "w1h": null,
+      "w24h": null,
+      "spark24": null,
+      "fault": null,
+      "ring": null,
+      "t0_w24h": null
+    },
+    {
+      "id": "build-probe",
+      "state": "not_built",
+      "tool": null,
+      "pin": null,
+      "w1h": null,
+      "w24h": null,
+      "spark24": null,
+      "fault": null,
+      "ring": null,
+      "t0_w24h": null
+    },
+    {
+      "id": "writecheck",
+      "state": "on",
+      "tool": "mcp-writecheck-action",
+      "pin": "54d4541",
+      "w1h": 9,
+      "w24h": 112,
+      "spark24": [
+        7,
+        2,
+        7,
+        1,
+        5,
+        2,
+        7,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        7,
+        2
+      ],
+      "fault": {
+        "subject": 5,
+        "tool": 4,
+        "infra": 3,
+        "policy": 3,
+        "unknown": 64
+      },
+      "ring": {
+        "accepted": 112,
+        "lease": 2,
+        "integrity": 2,
+        "worker_output": 1,
+        "infra": 3
+      },
+      "t0_w24h": 0
+    },
+    {
+      "id": "meta-github",
+      "state": "off",
+      "tool": "meta-github",
+      "pin": "1.2.0",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0,
+        "lease": 0,
+        "integrity": 0,
+        "worker_output": 0,
+        "infra": 0
+      },
+      "t0_w24h": 0
+    },
+    {
+      "id": "meta-registry",
+      "state": "off",
+      "tool": "meta-registry",
+      "pin": "1.2.0",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0,
+        "lease": 0,
+        "integrity": 0,
+        "worker_output": 0,
+        "infra": 0
+      },
+      "t0_w24h": 0
+    },
+    {
+      "id": "release-diff",
+      "state": "off",
+      "tool": "release-diff",
+      "pin": "1.1.0",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0,
+        "lease": 0,
+        "integrity": 0,
+        "worker_output": 0,
+        "infra": 0
+      },
+      "t0_w24h": 0
+    }
+  ],
+  "history": [
+    {
+      "kind": "registry-delta",
+      "state": "on",
+      "last_capture_at": "2026-11-25T21:31:02.000Z",
+      "versions": 37
+    },
+    {
+      "kind": "registry-full",
+      "state": "on",
+      "last_capture_at": "2026-11-25T12:46:00.000Z",
+      "registry_size": 73655
+    },
+    {
+      "kind": "packages",
+      "state": "on",
+      "last_capture_at": "2026-11-25T03:12:40.000Z"
+    },
+    {
+      "kind": "popularity",
+      "state": "on",
+      "last_capture_at": "2026-11-23T04:05:11.000Z"
+    }
+  ],
+  "edges": [
+    {
+      "from": "pump",
+      "to": "scan-static",
+      "w1h": 50,
+      "w24h": 900,
+      "w7d": 1800
+    },
+    {
+      "from": "scan-static",
+      "to": "ingest",
+      "w1h": 25,
+      "w24h": 891,
+      "w7d": 1744
+    },
+    {
+      "from": "pump",
+      "to": "live-probe",
+      "w1h": 10,
+      "w24h": 560,
+      "w7d": 1140
+    },
+    {
+      "from": "live-probe",
+      "to": "ingest",
+      "w1h": 10,
+      "w24h": 550,
+      "w7d": 1110
+    },
+    {
+      "from": "pump",
+      "to": "writecheck",
+      "w1h": 10,
+      "w24h": 120,
+      "w7d": 240
+    },
+    {
+      "from": "writecheck",
+      "to": "ingest",
+      "w1h": 10,
+      "w24h": 120,
+      "w7d": 220
+    },
+    {
+      "from": "pump",
+      "to": "meta-github",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "meta-github",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "meta-registry",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "meta-registry",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "release-diff",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "release-diff",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "history",
+      "w1h": 1,
+      "w24h": 32,
+      "w7d": 64
+    }
+  ],
+  "publish": {
+    "state": "off"
+  },
+  "counts": {
+    "subjects_in_seed": 140,
+    "checked": {
+      "w24h": 140,
+      "w7d": 140,
+      "all": 140
+    },
+    "assessed": {
+      "w24h": 140,
+      "all": 140
+    },
+    "quarantined_daily": 6
+  },
+  "now_checking": [
+    {
+      "subject": "acme-labs/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "acme-labs/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "contoso-dev/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "contoso-dev/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "fabrikam/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "fabrikam/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "globex-oss/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "globex-oss/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "hooli-xyz/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "hooli-xyz/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "initech/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "initech/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "northwind-io/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "northwind-io/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "piedpiper-net/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "piedpiper-net/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "tailspin-tools/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "tailspin-tools/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "umbrella-data/files-mcp",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "subject": "umbrella-data/mcp-postgres",
+      "lane": "scan-static",
+      "since": "2026-11-25T21:36:00.000Z"
+    }
+  ],
+  "recent": [
+    {
+      "seq": 49878900036,
+      "type": "retry",
+      "occurred_at": "2026-11-25T21:39:20.000Z",
+      "recorded_at": "2026-11-25T21:39:20.000Z",
+      "lane": null,
+      "n": 2,
+      "label": "state_asset",
+      "status": 502,
+      "state": "retrying"
+    },
+    {
+      "seq": 49878900035,
+      "type": "retry",
+      "occurred_at": "2026-11-25T21:38:25.000Z",
+      "recorded_at": "2026-11-25T21:38:25.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "state_asset",
+      "status": 502,
+      "state": "retrying"
+    },
+    {
+      "seq": 49878900034,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:37:04.000Z",
+      "recorded_at": "2026-11-25T21:37:04.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "successor",
+      "state": "ok"
+    },
+    {
+      "seq": 49878900033,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:37:00.000Z",
+      "recorded_at": "2026-11-25T21:37:00.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900032,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:36:50.000Z",
+      "recorded_at": "2026-11-25T21:36:50.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900031,
+      "type": "batch_sent",
+      "occurred_at": "2026-11-25T21:36:02.000Z",
+      "recorded_at": "2026-11-25T21:36:02.000Z",
+      "lane": "scan-static",
+      "n": 25
+    },
+    {
+      "seq": 49878900030,
+      "type": "batch_sent",
+      "occurred_at": "2026-11-25T21:31:02.000Z",
+      "recorded_at": "2026-11-25T21:31:02.000Z",
+      "lane": "live-probe",
+      "n": 10
+    },
+    {
+      "seq": 49878900029,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:26:34.000Z",
+      "recorded_at": "2026-11-25T21:26:34.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "successor",
+      "state": "ok"
+    },
+    {
+      "seq": 49878900028,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:26:30.000Z",
+      "recorded_at": "2026-11-25T21:26:30.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900027,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:26:20.000Z",
+      "recorded_at": "2026-11-25T21:26:20.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900026,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:16:04.000Z",
+      "recorded_at": "2026-11-25T21:16:04.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "successor",
+      "state": "ok"
+    },
+    {
+      "seq": 49878900025,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:16:00.000Z",
+      "recorded_at": "2026-11-25T21:16:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "piedpiper-net/notes-mcp",
+      "side": "assessed"
+    },
+    {
+      "seq": 49878900024,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:16:00.000Z",
+      "recorded_at": "2026-11-25T21:16:00.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900023,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:15:50.000Z",
+      "recorded_at": "2026-11-25T21:15:50.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900022,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:15:00.000Z",
+      "recorded_at": "2026-11-25T21:15:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "hooli-xyz/notes-mcp",
+      "side": "assessed"
+    },
+    {
+      "seq": 49878900021,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:14:00.000Z",
+      "recorded_at": "2026-11-25T21:14:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "umbrella-data/notes-mcp",
+      "side": "policy"
+    },
+    {
+      "seq": 49878900020,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:13:00.000Z",
+      "recorded_at": "2026-11-25T21:13:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "initech/notes-mcp",
+      "side": "tool"
+    },
+    {
+      "seq": 49878900019,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:12:00.000Z",
+      "recorded_at": "2026-11-25T21:12:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "globex-oss/notes-mcp",
+      "side": "tool"
+    },
+    {
+      "seq": 49878900018,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:11:00.000Z",
+      "recorded_at": "2026-11-25T21:11:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "tailspin-tools/notes-mcp",
+      "side": "assessed"
+    },
+    {
+      "seq": 49878900017,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:10:00.000Z",
+      "recorded_at": "2026-11-25T21:10:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "fabrikam/notes-mcp",
+      "side": "assessed"
+    }
+  ]
+}

@@ -1,0 +1,672 @@
+{
+  "schema": "isokron-loop-live/1",
+  "seq": 1795642800,
+  "generated_at": "2026-11-25T21:40:00.000Z",
+  "version": "0f1e2d3",
+  "mode": "idle",
+  "mode_reason": "scanning paused by us",
+  "pump": {
+    "run_started_at": "2026-11-25T21:30:41.000Z",
+    "tick_at": "2026-11-25T21:31:41.000Z",
+    "tick_s": 150,
+    "runs_24h": 115,
+    "successor": {
+      "state": "ok",
+      "at": "2026-11-25T15:29:34.000Z"
+    },
+    "slots": {
+      "budget": 0,
+      "open": 0,
+      "max": 15,
+      "ramp": [
+        2,
+        5,
+        8,
+        12,
+        15
+      ]
+    }
+  },
+  "retry": null,
+  "breaker": {
+    "state": "closed",
+    "checked_at": "2026-11-25T13:52:10.000Z",
+    "lanes": []
+  },
+  "lanes": [
+    {
+      "id": "scan-static",
+      "state": "on",
+      "tool": "mcp-check",
+      "pin": "75503c1",
+      "w1h": 0,
+      "w24h": 621,
+      "spark24": [
+        33,
+        40,
+        29,
+        39,
+        28,
+        40,
+        30,
+        39,
+        31,
+        40,
+        30,
+        38,
+        32,
+        39,
+        33,
+        38,
+        30,
+        17,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 63,
+        "tool": 39,
+        "infra": 20,
+        "policy": 31,
+        "unknown": 22
+      },
+      "ring": {
+        "accepted": 621,
+        "lease": 16,
+        "integrity": 7,
+        "worker_output": 3,
+        "infra": 19
+      },
+      "t0_w24h": 23
+    },
+    {
+      "id": "live-probe",
+      "state": "on",
+      "tool": "mcp-check",
+      "pin": "116b0ca",
+      "w1h": 0,
+      "w24h": 382,
+      "spark24": [
+        17,
+        25,
+        23,
+        17,
+        24,
+        19,
+        24,
+        22,
+        20,
+        28,
+        16,
+        24,
+        23,
+        17,
+        28,
+        19,
+        24,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 37,
+        "tool": 16,
+        "infra": 18,
+        "policy": 21,
+        "unknown": 19
+      },
+      "ring": {
+        "accepted": 382,
+        "lease": 10,
+        "integrity": 8,
+        "worker_output": 2,
+        "infra": 18
+      },
+      "t0_w24h": 15
+    },
+    {
+      "id": "scan-deep",
+      "state": "not_built",
+      "tool": null,
+      "pin": null,
+      "w1h": null,
+      "w24h": null,
+      "spark24": null,
+      "fault": null,
+      "ring": null,
+      "t0_w24h": null
+    },
+    {
+      "id": "build-probe",
+      "state": "not_built",
+      "tool": null,
+      "pin": null,
+      "w1h": null,
+      "w24h": null,
+      "spark24": null,
+      "fault": null,
+      "ring": null,
+      "t0_w24h": null
+    },
+    {
+      "id": "writecheck",
+      "state": "on",
+      "tool": "mcp-writecheck-action",
+      "pin": "54d4541",
+      "w1h": 0,
+      "w24h": 85,
+      "spark24": [
+        8,
+        2,
+        7,
+        2,
+        8,
+        1,
+        7,
+        2,
+        8,
+        2,
+        7,
+        2,
+        8,
+        2,
+        7,
+        2,
+        8,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 2,
+        "tool": 1,
+        "infra": 2,
+        "policy": 1,
+        "unknown": 57
+      },
+      "ring": {
+        "accepted": 85,
+        "lease": 1,
+        "integrity": 0,
+        "worker_output": 0,
+        "infra": 4
+      },
+      "t0_w24h": 5
+    },
+    {
+      "id": "meta-github",
+      "state": "off",
+      "tool": "meta-github",
+      "pin": "1.2.0",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0,
+        "lease": 0,
+        "integrity": 0,
+        "worker_output": 0,
+        "infra": 0
+      },
+      "t0_w24h": 0
+    },
+    {
+      "id": "meta-registry",
+      "state": "off",
+      "tool": "meta-registry",
+      "pin": "1.2.0",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0,
+        "lease": 0,
+        "integrity": 0,
+        "worker_output": 0,
+        "infra": 0
+      },
+      "t0_w24h": 0
+    },
+    {
+      "id": "release-diff",
+      "state": "off",
+      "tool": "release-diff",
+      "pin": "1.1.0",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0,
+        "lease": 0,
+        "integrity": 0,
+        "worker_output": 0,
+        "infra": 0
+      },
+      "t0_w24h": 0
+    }
+  ],
+  "history": [
+    {
+      "kind": "registry-delta",
+      "state": "on",
+      "last_capture_at": "2026-11-25T21:31:02.000Z",
+      "versions": 37
+    },
+    {
+      "kind": "registry-full",
+      "state": "on",
+      "last_capture_at": "2026-11-25T12:46:00.000Z",
+      "registry_size": 73655
+    },
+    {
+      "kind": "packages",
+      "state": "on",
+      "last_capture_at": "2026-11-25T03:12:40.000Z"
+    },
+    {
+      "kind": "popularity",
+      "state": "on",
+      "last_capture_at": "2026-11-23T04:05:11.000Z"
+    }
+  ],
+  "edges": [
+    {
+      "from": "pump",
+      "to": "scan-static",
+      "w1h": 0,
+      "w24h": 650,
+      "w7d": 1550
+    },
+    {
+      "from": "scan-static",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 666,
+      "w7d": 1519
+    },
+    {
+      "from": "pump",
+      "to": "live-probe",
+      "w1h": 0,
+      "w24h": 410,
+      "w7d": 990
+    },
+    {
+      "from": "live-probe",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 420,
+      "w7d": 980
+    },
+    {
+      "from": "pump",
+      "to": "writecheck",
+      "w1h": 0,
+      "w24h": 90,
+      "w7d": 210
+    },
+    {
+      "from": "writecheck",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 90,
+      "w7d": 200
+    },
+    {
+      "from": "pump",
+      "to": "meta-github",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "meta-github",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "meta-registry",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "meta-registry",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "release-diff",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "release-diff",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "history",
+      "w1h": 1,
+      "w24h": 32,
+      "w7d": 64
+    }
+  ],
+  "publish": {
+    "state": "off"
+  },
+  "counts": {
+    "subjects_in_seed": 140,
+    "checked": {
+      "w24h": 140,
+      "w7d": 140,
+      "all": 140
+    },
+    "assessed": {
+      "w24h": 140,
+      "all": 140
+    },
+    "quarantined_daily": 6
+  },
+  "now_checking": [],
+  "recent": [
+    {
+      "seq": 49878900005,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:31:51.000Z",
+      "recorded_at": "2026-11-25T21:31:51.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900004,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:30:41.000Z",
+      "recorded_at": "2026-11-25T21:30:41.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900003,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:01:51.000Z",
+      "recorded_at": "2026-11-25T21:01:51.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900002,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:00:41.000Z",
+      "recorded_at": "2026-11-25T21:00:41.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900001,
+      "type": "history_triggered",
+      "occurred_at": "2026-11-25T21:00:00.000Z",
+      "recorded_at": "2026-11-25T21:00:00.000Z",
+      "lane": null,
+      "n": 1,
+      "state": "dispatched"
+    },
+    {
+      "seq": 49878800005,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T20:31:51.000Z",
+      "recorded_at": "2026-11-25T20:31:51.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878800004,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T20:30:41.000Z",
+      "recorded_at": "2026-11-25T20:30:41.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878800003,
+      "type": "history_triggered",
+      "occurred_at": "2026-11-25T20:15:00.000Z",
+      "recorded_at": "2026-11-25T20:15:00.000Z",
+      "lane": null,
+      "n": 1,
+      "state": "dispatched"
+    },
+    {
+      "seq": 49878800002,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T20:01:51.000Z",
+      "recorded_at": "2026-11-25T20:01:51.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878800001,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T20:00:41.000Z",
+      "recorded_at": "2026-11-25T20:00:41.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878700005,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T19:31:51.000Z",
+      "recorded_at": "2026-11-25T19:31:51.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878700004,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T19:30:41.000Z",
+      "recorded_at": "2026-11-25T19:30:41.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878700003,
+      "type": "history_triggered",
+      "occurred_at": "2026-11-25T19:30:00.000Z",
+      "recorded_at": "2026-11-25T19:30:00.000Z",
+      "lane": null,
+      "n": 1,
+      "state": "dispatched"
+    },
+    {
+      "seq": 49878700002,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T19:01:51.000Z",
+      "recorded_at": "2026-11-25T19:01:51.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878700001,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T19:00:41.000Z",
+      "recorded_at": "2026-11-25T19:00:41.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878600006,
+      "type": "history_triggered",
+      "occurred_at": "2026-11-25T18:45:00.000Z",
+      "recorded_at": "2026-11-25T18:45:00.000Z",
+      "lane": null,
+      "n": 1,
+      "state": "dispatched"
+    },
+    {
+      "seq": 49878600005,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T18:31:51.000Z",
+      "recorded_at": "2026-11-25T18:31:51.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878600004,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T18:30:41.000Z",
+      "recorded_at": "2026-11-25T18:30:41.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878600003,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T18:01:51.000Z",
+      "recorded_at": "2026-11-25T18:01:51.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878600002,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T18:00:41.000Z",
+      "recorded_at": "2026-11-25T18:00:41.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    }
+  ]
+}
