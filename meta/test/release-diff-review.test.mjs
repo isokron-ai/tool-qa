@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
 import { makeTgz, makeZip } from '../../test/archive-fixtures.mjs';
-import { createCache, createHttp } from '../lib/http.mjs';
+import { createCache, createHttp, forbiddenKind } from '../lib/http.mjs';
 import { movedTo, readGitRefs } from '../lib/gitrefs.mjs';
 import { compareArtifact, ComputeBudget, indexByBase, MAX_HELD, onlyVersionLines } from '../lib/diff.mjs';
 import { createSourceIndex } from '../lib/indicators.mjs';
@@ -427,4 +427,35 @@ test('R-RD-19: an artifact whose bytes do not match the registry\'s digest is a 
   const pub = JSON.stringify([c.findings, c.summaries, c.artifacts, c.stages, c.skips]);
   assert.ok(!/integrity|mismatch|held/i.test(pub), pub);
   assert.equal(c.findings.length, 0);
+});
+
+test('R-RD-20: forbiddenKind reads only GitHub\'s own repository-level messages (start of a line or of the JSON message) as a repository taken down; the same words inside other text are not', async () => {
+  const res = (status, body, headers = {}) => new Response(body, { status, headers });
+  const kind = async (status, body, headers) => forbiddenKind(res(status, body, headers));
+
+  // GitHub's real shapes: REST JSON (451 and 403), git over HTTP, the staff notice.
+  const dmcaJson = JSON.stringify({ message: 'Repository access blocked', block: { reason: 'dmca', created_at: '2026-11-01T10:00:00Z', html_url: 'https://github.com/github/dmca/blob/master/2026/11/2026-11-01-example.md' }, documentation_url: 'https://docs.github.com/rest' });
+  assert.deepEqual([(await kind(451, dmcaJson)).kind, (await kind(451, dmcaJson)).why], ['gone', 'dmca']);
+  assert.equal((await kind(403, dmcaJson)).why, 'dmca');
+  const tosJson = JSON.stringify({ message: 'Repository access blocked', block: { reason: 'tos', created_at: '2026-11-01T10:00:00Z' } });
+  assert.deepEqual([(await kind(403, tosJson)).kind, (await kind(403, tosJson)).why], ['gone', 'disabled']);
+  assert.equal((await kind(403, JSON.stringify({ message: 'Access to this repository has been disabled by GitHub Staff due to a violation of GitHub\'s terms of service.' }))).why, 'disabled');
+  assert.equal((await kind(403, 'remote: This repository has been disabled.\nfatal: unable to access')).kind, 'gone');
+  assert.equal((await kind(403, 'remote: Repository access blocked\nremote: This repository has been disabled due to a DMCA takedown notice.')).why, 'dmca');
+  assert.equal((await kind(403, 'Repository access blocked: DMCA takedown')).kind, 'gone');
+
+  // The same words in the middle of other text: a release note, a package text, an error that is not about the repository. Not gone.
+  for (const body of [
+    JSON.stringify({ message: 'Resource not accessible by integration', note: 'v2.3.0: access blocked for anonymous callers; the legacy endpoint has been disabled' }),
+    'Release v1.4.2\n- fix: the proxy has been disabled by default; repository access blocked errors are now retried',
+    JSON.stringify({ message: 'Forbidden', documentation_url: 'https://docs.github.com/rest', detail: 'Do not say "This repository has been disabled" unless GitHub does' }),
+    '<html>Repository access blocked pages are documented under Settings</html>',
+    'Contributor list: alice, bob. Access to this repository has been disabled by GitHub is what the DMCA bot would say',
+  ]) {
+    assert.equal((await kind(403, body)).kind, 'throttled', body);
+    assert.equal((await forbiddenKind(res(403, body), { unknown: 'unknown' })).kind, 'unknown', body);
+  }
+  // Throttling still wins over a body that also names the repository.
+  assert.equal((await kind(403, dmcaJson, { 'x-ratelimit-remaining': '0' })).kind, 'throttled');
+  assert.equal((await kind(403, 'You have exceeded a secondary rate limit. Repository access blocked.')).kind, 'throttled');
 });
