@@ -122,6 +122,7 @@ export const CONFORMANCE_KEY = 'pump.conformance';
 export const LIVE_RETRY_UPLOAD_MS = 20_000;
 export const LIVE_DEADLINE_MS = 20_000;
 export const LIVE_FINAL_DEADLINE_MS = 5_000;
+export const LANE_NOTES_FILE = fileURLToPath(new URL('../live/lane-notes.json', import.meta.url));
 // The values the run read that the snapshot builder shows (build plan section 3).
 export const LIVE_SWITCH_VARS = ['LOOP_ENABLED', 'LOOP_PAUSE_UNTIL', 'LOOP_SLOTS', 'RESULTS_PUBLISH_ENABLED', 'LANE_HISTORY_REGISTRY_ENABLED', 'LANE_HISTORY_PACKAGES_ENABLED', 'LANE_HISTORY_POPULARITY_ENABLED'];
 // What the secrets scrub list covers beyond the GitHub ones (also used by tests).
@@ -332,6 +333,18 @@ export async function runPump({
   const liveCommon = () => ({
     ...(live.put ? { put: live.put } : {}), env, fetch: live.fetch ?? fetch, now, log: say,
   });
+  // Short notes the builder may show per lane ({lane: noteKey|null}), from a
+  // committed file read at publish time; missing or invalid means none.
+  const laneNotes = () => {
+    try {
+      const v = JSON.parse(readFileSync(live.laneNotesFile ?? LANE_NOTES_FILE, 'utf8'));
+      if (!v || typeof v !== 'object' || Array.isArray(v) || Object.values(v).some((x) => x !== null && typeof x !== 'string')) throw new TypeError('not a {lane: key|null} object');
+      return v;
+    } catch (err) {
+      say(`pump: live lane notes unavailable (${String(err?.code ?? err?.name ?? 'error').slice(0, 40)}); publishing without them`);
+      return {};
+    }
+  };
   const liveSwitches = () => Object.fromEntries(LIVE_SWITCH_VARS.filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
   let retryChain = Promise.resolve();
   let lastRetryUpload = -Infinity;
@@ -375,7 +388,7 @@ export async function runPump({
     try {
       const deadlineMs = final ? Math.min(live.finalDeadlineMs ?? LIVE_FINAL_DEADLINE_MS, live.deadlineMs ?? LIVE_DEADLINE_MS) : liveCap();
       await (live.publish ?? publishLive)({
-        db, ...(live.build ? { build: live.build } : {}), ...liveCommon(), config: { ...cfg, switches: liveSwitches(), history: [] }, retry: openRetry,
+        db, ...(live.build ? { build: live.build } : {}), ...liveCommon(), config: { ...cfg, switches: liveSwitches(), history: [], lane_notes: laneNotes() }, retry: openRetry,
         version: env.GITHUB_SHA ? String(env.GITHUB_SHA).slice(0, 7) : undefined, deadlineMs,
       });
     } catch (err) {

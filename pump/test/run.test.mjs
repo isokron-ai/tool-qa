@@ -812,3 +812,32 @@ test('live: the builder gets the switches the run read (RESULTS_PUBLISH_ENABLED 
   assert.ok(seen[0].workflows, 'the pump config is passed as is');
   h.cleanup();
 });
+
+test('live: lane notes come from the committed file; a missing or invalid file gives {} and a log line', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lane-notes-'));
+  const seenWith = async (file) => {
+    const { h } = liveHarness();
+    const seen = [];
+    h.opts.live.laneNotesFile = file;
+    h.opts.live.build = async (db, a) => { seen.push(a.config.lane_notes); return { snapshot: { schema: 'isokron-loop-live/1', seq: 1, generated_at: new Date(a.now).toISOString(), recent: [] }, hourEvents: [], problems: [] }; };
+    await runPump(h.opts);
+    const logged = h.lines.some((l) => /lane notes unavailable/.test(l));
+    h.cleanup();
+    return { seen, logged };
+  };
+  const real = await seenWith(undefined);
+  assert.deepEqual(real.seen[0], { 'live-probe': 're_sweep' });
+  assert.equal(real.logged, false);
+  const bad = join(dir, 'bad.json');
+  writeFileSync(bad, '{"a": 3}');
+  let r = await seenWith(bad);
+  assert.deepEqual(r.seen[0], {});
+  assert.equal(r.logged, true);
+  writeFileSync(bad, 'not json');
+  r = await seenWith(bad);
+  assert.deepEqual(r.seen[0], {});
+  r = await seenWith(join(dir, 'missing.json'));
+  assert.deepEqual(r.seen[0], {});
+  assert.equal(r.logged, true);
+  rmSync(dir, { recursive: true, force: true });
+});
