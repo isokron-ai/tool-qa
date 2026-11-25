@@ -1,7 +1,7 @@
 // Rejection reason codes, in four plain classes for the public ingest ring.
 //
-// The raw codes never leave the pump: the live snapshot shows a rejection only
-// as one of CLASSES, and never against a server (live/build.mjs). Unknown
+// The raw codes never leave the pump: the live snapshot shows rejections only
+// as daily per-lane totals of CLASSES, never per item or per server. Unknown
 // codes fall into worker_output, so a new code can never be published raw.
 //
 // Every code the source can record is listed here explicitly;
@@ -9,8 +9,9 @@
 // any code that is missing, so a new reason has to be placed on purpose.
 //
 // Quarantines (secret_scan, and any result whose outcome is 'quarantined')
-// are not a class: they emit no public event of any kind and count only in
-// the snapshot's quarantined_daily total (live/build.mjs).
+// have no class of their own: like every rejection they emit no public event,
+// and in the daily totals they count as integrity (dailyClassOf), so nothing
+// public tells them apart (live/build.mjs, R-LIVE-25).
 
 export const CLASSES = Object.freeze(['lease', 'integrity', 'worker_output', 'infra']);
 
@@ -104,4 +105,13 @@ export function classOf(reason) {
 /** Whether a recorded result is a quarantine (never public). */
 export function isQuarantine({ reason = null, outcome = null } = {}) {
   return outcome === 'quarantined' || (typeof reason === 'string' && QUARANTINE_REASONS.includes(reason));
+}
+
+/**
+ * The class a rejection counts in for the public daily totals (ring_daily):
+ * its class, and integrity for a quarantine, so no public count tells a
+ * quarantine apart from another rejection (R-LIVE-25).
+ */
+export function dailyClassOf({ reason = null, outcome = null } = {}) {
+  return isQuarantine({ reason, outcome }) ? 'integrity' : classOf(reason);
 }

@@ -413,6 +413,9 @@ snapshot, the public events recorded in the current UTC hour, and the scan
 and size problems (`[{rule, path}]`; any problem means nothing is uploaded).
 It is pure and read-only: it reads `events`, `results`, `dispatches`,
 `dispatch_items`, `slot_ledger`, `subjects` and `kv`, never `attempts`,
-`leases`, `run_keys` or a digest. `toPublicEvent(row)` maps one internal
+`leases`, `run_keys` or a digest. `toPublicEvent(row, opts)` maps one internal
 event to its public shape, or null. Public `seq` numbers are not event ids.
+No rejection or quarantine is published per item: each batch ends with a
+`batch_closed` or `batch_expired` event carrying `accepted` and `not_used`,
+and rejection classes are only daily per-lane totals (`ring_daily`).
 What is public and what never is: `live/README.md`.

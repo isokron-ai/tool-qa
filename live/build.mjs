@@ -18,10 +18,16 @@
 //   - Public seq numbers never expose internal event ids: a public event's seq
 //     is its hour (UTC, by recorded_at) times 100000 plus its position among
 //     that hour's public events, and the snapshot's seq is generated_at in
-//     whole seconds. Internal ids have gaps where a quarantined result was
-//     recorded, so publishing them would place each quarantine (R-LIVE-21).
-//   - quarantined_daily is the previous complete UTC day's total, so it never
-//     moves while a day runs and cannot be matched to one tick (R-LIVE-20).
+//     whole seconds. Internal ids have gaps where a result was not published
+//     (rejected or quarantined), so publishing them would place it (R-LIVE-21).
+//   - Rejections and quarantines pool (R-LIVE-25): no per-item public event
+//     for either. Each batch ends with one batch_closed (or batch_expired)
+//     event carrying `accepted` and `not_used` (every item without an accepted
+//     result: rejected for any reason, quarantined or lost). The 24 h lane ring
+//     is {accepted, not_used}; the class breakdown is ring_daily, for the
+//     previous complete UTC day only, quarantines counted in integrity, each
+//     class null below 5 (R-LIVE-20). Nothing public tells a quarantine from
+//     any other rejection.
 //   - now_checking lists the servers of every batch still out, including ones
 //     whose result is already in: a server leaves only when its whole batch
 //     closes, so no single server can be seen to drop out (R-LIVE-22).
@@ -31,7 +37,7 @@
 //   - The retry call label comes from a fixed list; the pump's own labels are
 //     "METHOD /path" and are mapped, never copied (R-LIVE-24).
 
-import { classOf, isQuarantine } from './classes.mjs';
+import { CLASSES, dailyClassOf, isQuarantine, QUARANTINE_REASONS } from './classes.mjs';
 import { scanPublic } from './scan.mjs';
 import { hasVendorName } from './vendor-names.mjs';
 import { scanText } from '../ingest/redact.mjs';
@@ -45,8 +51,8 @@ export const RETRY_ATTEMPTS = 6;
 export const MAX_SNAPSHOT_BYTES = 20 * 1024;
 export const MAX_NOW_CHECKING = 20;
 export const MAX_RECENT = 20;
-/** A day's quarantine total below this is shown as null. */
-export const QUARANTINE_MIN = 5;
+/** A daily class count below this is shown as null. */
+export const DAILY_MIN = 5;
 /** Lanes that exist in the config but have no worker yet: drawn as "not built". */
 export const NOT_BUILT_LANES = Object.freeze(['scan-deep', 'build-probe']);
 export const LANE_STATES = Object.freeze(['on', 'off', 'not_built', 'held']);
@@ -61,21 +67,23 @@ export const MODE_REASONS = Object.freeze({
 });
 export const SIDES = Object.freeze(['assessed', 'subject', 'tool', 'infra', 'policy', 'unknown']);
 export const FAULT_SIDES = Object.freeze(['subject', 'tool', 'infra', 'policy', 'unknown']);
-export const RING_KEYS = Object.freeze(['accepted', 'lease', 'integrity', 'worker_output', 'infra']);
+export const RING_KEYS = Object.freeze(['accepted', 'not_used']);
+export const RING_DAILY_KEYS = CLASSES;
 /** The fixed list a retry's call label comes from. */
 export const RETRY_CALLS = Object.freeze(['github_api', 'state_asset', 'app_token']);
 export const BATCH_LABELS = Object.freeze(['GitHub error', 'refused', 'withdrawn']);
 export const HISTORY_KINDS = Object.freeze(['registry-delta', 'registry-full', 'packages', 'popularity']);
 /** Public event types. */
 export const PUBLIC_TYPES = Object.freeze([
-  'batch_sent', 'batch_not_sent', 'batch_expired', 'result', 'rejected', 'pump_run',
+  'batch_sent', 'batch_not_sent', 'batch_closed', 'batch_expired', 'result', 'pump_run',
   'history_triggered', 'sandbox_check', 'lane_paused', 'retry',
 ]);
 /** Every key a public event may have, in output order. */
 export const PUBLIC_EVENT_KEYS = Object.freeze([
-  'seq', 'type', 'occurred_at', 'recorded_at', 'lane', 'n', 'subject', 'side', 'class', 'label', 'status', 'state', 'lanes',
+  'seq', 'type', 'occurred_at', 'recorded_at', 'lane', 'n', 'accepted', 'not_used', 'subject', 'side', 'label', 'status', 'state', 'lanes',
 ]);
 
+const QUARANTINE_SQL = QUARANTINE_REASONS.map((x) => `'${x}'`).join(', ');
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const LANE_RE = /^[a-z][a-z0-9-]{0,63}$/;
@@ -196,15 +204,17 @@ export function publicSeq(recordedMs, ordinal) {
 /**
  * One internal event row ({id, type, occurred_at, recorded_at, lane, n,
  * subject, data}) as its public event, or null when nothing of it is public
- * (a quarantine, an internal-only type, an unreadable row).
+ * (any result that was not accepted, an internal-only type, an unreadable row).
  *
  * @param {object} row
- * @param {{seq?: number|null, subjectName?: string|null, lanes?: Iterable<string>|null}} [opts]
+ * @param {{seq?: number|null, subjectName?: string|null, lanes?: Iterable<string>|null, accepted?: number|null}} [opts]
  *   seq: the public seq to give it (the builder numbers them; null otherwise);
  *   subjectName: the server's current owner/name, for an accepted result;
- *   lanes: the lane ids of the config (others are left out).
+ *   lanes: the lane ids of the config (others are left out);
+ *   accepted: for a closing batch (dispatch_closed, dispatch_expired), how
+ *     many of its items had an accepted result; null when not known.
  */
-export function toPublicEvent(row, { seq = null, subjectName = null, lanes = null } = {}) {
+export function toPublicEvent(row, { seq = null, subjectName = null, lanes = null, accepted = null } = {}) {
   if (!row || typeof row !== 'object') return null;
   const occurred = isoOrNull(row.occurred_at);
   const recorded = isoOrNull(row.recorded_at);
@@ -225,19 +235,19 @@ export function toPublicEvent(row, { seq = null, subjectName = null, lanes = nul
     case 'dispatch_failed':
     case 'dispatch_unconfirmed':
       return ev('batch_not_sent', { label: batchLabel(row.type, d) });
-    case 'dispatch_expired':
-      return ev('batch_expired');
-    case 'result_recorded': {
-      const reason = typeof d.reason === 'string' ? d.reason : null;
-      const outcome = typeof d.outcome === 'string' ? d.outcome : null;
-      // A quarantine emits nothing, in any form.
-      if (isQuarantine({ reason, outcome })) return null;
-      if (verdictOf(d) === 'accepted') {
-        return ev('result', { subject: publicName(subjectName), side: sideOf(d.fault, d.coverage) });
-      }
-      // A rejection: its class only, never the server (plan update section 6).
-      return ev('rejected', { class: classOf(reason) });
+    case 'dispatch_closed':
+    case 'dispatch_expired': {
+      // The batch's end: how many items had an accepted result, and how many
+      // did not, whatever the reason (R-LIVE-25). Both keys are always there.
+      const a = intIn(accepted, 0, n);
+      const e = ev(row.type === 'dispatch_expired' ? 'batch_expired' : 'batch_closed');
+      return { ...e, accepted: a, not_used: a === null ? null : n - a };
     }
+    case 'result_recorded':
+      // Only an accepted result is public; a rejection or a quarantine is only
+      // a not_used count on its batch (R-LIVE-25).
+      if (verdictOf(d) !== 'accepted' || isQuarantine({ reason: d.reason ?? null, outcome: d.outcome ?? null })) return null;
+      return ev('result', { subject: publicName(subjectName), side: sideOf(d.fault, d.coverage) });
     case 'pump_run_started':
       return ev('pump_run', { label: 'started' });
     case 'pump_run_finished':
@@ -301,6 +311,51 @@ function kv(r, key) {
   }
 }
 
+/**
+ * For a dispatch_closed or dispatch_expired event, how many of its batch's
+ * items had an accepted result before it closed; null for other rows or when
+ * the batch cannot be found. Events carry no dispatch id, so the batch is the
+ * dispatch of that lane closed at that exact time (the event is written in the
+ * closing transaction, with the same clock); several closed together are
+ * matched in id order to dispatches in attempt order, preferring the same item
+ * count. Accepted results are counted from the events, so the number never
+ * changes after the batch closed.
+ */
+function batchMatcher(r) {
+  const groups = new Map();
+  const acceptedOf = (d) => count(r.get(`
+    SELECT COUNT(DISTINCT e.subject) AS n FROM events e
+    WHERE e.type = 'result_recorded' AND e.lane = ? AND e.recorded_at >= ? AND e.recorded_at <= ? AND json_valid(e.data)
+      AND (json_extract(e.data, '$.verdict') = 'accepted' OR json_extract(e.data, '$.accepted') = 1)
+      AND COALESCE(json_extract(e.data, '$.outcome'), '') <> 'quarantined' AND COALESCE(json_extract(e.data, '$.reason'), '') NOT IN (${QUARANTINE_SQL})
+      AND e.subject IN (SELECT i.subject FROM dispatch_items i WHERE i.attempt_id = ?)
+  `, d.workflow, d.created, d.closed, d.attempt_id)?.n);
+  return (row) => {
+    if (row.type !== 'dispatch_closed' && row.type !== 'dispatch_expired') return null;
+    const key = `${row.lane}\u0000${row.recorded_at}`;
+    if (!groups.has(key)) {
+      const evs = r.all(`
+        SELECT id, n FROM events WHERE type IN ('dispatch_closed', 'dispatch_expired') AND lane IS ? AND recorded_at = ? ORDER BY id
+      `, row.lane, row.recorded_at);
+      const ds = r.all(`
+        SELECT d.attempt_id AS attempt_id, d.workflow AS workflow, d.created AS created, d.closed AS closed,
+          (SELECT COUNT(*) FROM dispatch_items i WHERE i.attempt_id = d.attempt_id) AS items
+        FROM dispatches d WHERE d.workflow IS ? AND d.closed = ? AND d.status IN ('done', 'expired') ORDER BY d.attempt_id
+      `, row.lane, row.recorded_at);
+      const used = new Set();
+      const map = new Map();
+      for (const ev of evs) {
+        const d = ds.find((x) => !used.has(x.attempt_id) && x.items === ev.n) ?? ds.find((x) => !used.has(x.attempt_id));
+        if (!d) continue;
+        used.add(d.attempt_id);
+        map.set(ev.id, Math.min(acceptedOf(d), count(ev.n)));
+      }
+      groups.set(key, map);
+    }
+    return groups.get(key).get(row.id) ?? null;
+  };
+}
+
 function hasEvents(r) {
   return r.get("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'events'").n > 0;
 }
@@ -315,7 +370,7 @@ function hourEventsAt(r, fromMs, ctx) {
   `, lo, hi, ctx.nowIso);
   const out = [];
   for (const row of rows) {
-    const e = toPublicEvent(row, { subjectName: ctx.name(row.subject), lanes: ctx.lanes });
+    const e = toPublicEvent(row, { subjectName: ctx.name(row.subject), lanes: ctx.lanes, accepted: ctx.batchAccepted(row) });
     if (e === null) continue;
     // Bucketed by the row's own recorded_at, which isoOrNull has normalised.
     e.seq = publicSeq(fromMs, out.length + 1);
@@ -357,7 +412,7 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
     if (!nameCache.has(key)) nameCache.set(key, r.get('SELECT name FROM subjects WHERE id = ?', key)?.name ?? null);
     return nameCache.get(key);
   };
-  const ctx = { name, lanes: laneIds, nowIso };
+  const ctx = { name, lanes: laneIds, nowIso, batchAccepted: events ? batchMatcher(r) : () => null };
 
   const since1h = new Date(nowMs - HOUR).toISOString();
   const since24h = new Date(nowMs - DAY).toISOString();
@@ -365,60 +420,71 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
   const hourStartMs = Math.floor(nowMs / HOUR) * HOUR;
   const dayStartMs = Math.floor(nowMs / DAY) * DAY;
 
-  // ---- results per lane (accepted and rejected), from result_recorded events ----
+  // ---- per lane: accepted results, batch ends, daily rejection classes ----
   const laneStats = new Map(laneIds.map((id) => [id, {
     w1h: 0, w24h: 0, spark: new Array(24).fill(0), t0: 0,
     fault: Object.fromEntries(FAULT_SIDES.map((s) => [s, 0])),
     ring: Object.fromEntries(RING_KEYS.map((k) => [k, 0])),
+    daily: Object.fromEntries(RING_DAILY_KEYS.map((k) => [k, 0])),
     sent: { w1h: 0, w24h: 0, w7d: 0 }, back: { w1h: 0, w24h: 0, w7d: 0 },
   }]));
-  let quarantinedYesterday = 0;
   const historyTriggered = { w1h: 0, w24h: 0, w7d: 0 };
   if (events) {
+    // Accepted results only: a rejection and a quarantine look the same here (nothing).
     const rows = r.all(`
-      SELECT e.lane AS lane, substr(e.occurred_at, 1, 13) AS hr,
-        e.occurred_at > ? AS in1h, e.occurred_at > ? AS in24h,
-        json_extract(e.data, '$.verdict') AS verdict, json_extract(e.data, '$.accepted') AS accepted_flag,
-        json_extract(e.data, '$.reason') AS reason, json_extract(e.data, '$.outcome') AS outcome,
+      SELECT e.lane AS lane, substr(e.occurred_at, 1, 13) AS hr, e.occurred_at > ? AS in1h,
         json_extract(e.data, '$.fault') AS fault, json_extract(e.data, '$.coverage') AS coverage,
         COALESCE((SELECT s.tier FROM subjects s WHERE s.id = e.subject), 4) = 0 AS t0,
         SUM(e.n) AS n
       FROM events e
       WHERE e.type = 'result_recorded' AND e.occurred_at > ? AND e.occurred_at <= ? AND json_valid(e.data)
-      GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
-      ORDER BY 1, 2, 5, 7, 8, 9, 10, 11
-    `, since1h, since24h, since7d, nowIso);
+        AND (json_extract(e.data, '$.verdict') = 'accepted' OR json_extract(e.data, '$.accepted') = 1)
+        AND COALESCE(json_extract(e.data, '$.outcome'), '') <> 'quarantined' AND COALESCE(json_extract(e.data, '$.reason'), '') NOT IN (${QUARANTINE_SQL})
+      GROUP BY 1, 2, 3, 4, 5, 6 ORDER BY 1, 2, 3, 4, 5, 6
+    `, since1h, since24h, nowIso);
     const hourIndex = new Map();
     for (let i = 0; i < 24; i++) hourIndex.set(new Date(hourStartMs - (23 - i) * HOUR).toISOString().slice(0, 13), i);
     for (const row of rows) {
       const st = laneStats.get(row.lane);
       if (!st) continue;
       const n = count(row.n);
-      if (isQuarantine({ reason: row.reason, outcome: row.outcome })) continue; // counted per day below
-      const accepted = row.verdict === 'accepted' || row.accepted_flag === 1;
+      st.w24h += n;
+      if (row.in1h) st.w1h += n;
+      if (hourIndex.has(row.hr)) st.spark[hourIndex.get(row.hr)] += n;
+      if (row.t0) st.t0 += n;
+      st.ring.accepted += n;
+      const side = sideOf(row.fault, row.coverage);
+      if (side !== 'assessed') st.fault[side] += n;
+    }
+    // Batch ends: every item of a closed or expired batch goes back to ingest;
+    // those without an accepted result are not_used (R-LIVE-25).
+    const ends = r.all(`
+      SELECT id, type, lane, n, recorded_at, occurred_at > ? AS in1h, occurred_at > ? AS in24h FROM events
+      WHERE type IN ('dispatch_closed', 'dispatch_expired') AND occurred_at > ? AND occurred_at <= ? ORDER BY id
+    `, since1h, since24h, since7d, nowIso);
+    for (const row of ends) {
+      const st = laneStats.get(row.lane);
+      if (!st) continue;
+      const n = count(row.n);
       st.back.w7d += n;
       if (row.in24h) st.back.w24h += n;
       if (row.in1h) st.back.w1h += n;
       if (!row.in24h) continue;
-      if (accepted) {
-        st.w24h += n;
-        if (row.in1h) st.w1h += n;
-        if (hourIndex.has(row.hr)) st.spark[hourIndex.get(row.hr)] += n;
-        if (row.t0) st.t0 += n;
-        st.ring.accepted += n;
-        const side = sideOf(row.fault, row.coverage);
-        if (side !== 'assessed') st.fault[side] += n;
-      } else {
-        st.ring[classOf(row.reason)] += n;
-      }
+      const accepted = ctx.batchAccepted(row);
+      st.ring.not_used += accepted === null ? 0 : Math.max(0, n - Math.min(accepted, n));
     }
-    // Quarantines: one total, for the previous complete UTC day only (R-LIVE-20).
+    // Rejection classes for the previous complete UTC day; a quarantine counts
+    // as integrity, so no class tells it apart (R-LIVE-20, R-LIVE-25).
     const q = r.all(`
-      SELECT json_extract(data, '$.reason') AS reason, json_extract(data, '$.outcome') AS outcome, SUM(n) AS n
+      SELECT lane, json_extract(data, '$.reason') AS reason, json_extract(data, '$.outcome') AS outcome, SUM(n) AS n
       FROM events WHERE type = 'result_recorded' AND occurred_at >= ? AND occurred_at < ? AND json_valid(data)
-      GROUP BY 1, 2 ORDER BY 1, 2
+        AND NOT (json_extract(data, '$.verdict') IS 'accepted' OR json_extract(data, '$.accepted') IS 1)
+      GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
     `, new Date(dayStartMs - DAY).toISOString(), new Date(dayStartMs).toISOString());
-    for (const row of q) if (isQuarantine(row)) quarantinedYesterday += count(row.n);
+    for (const row of q) {
+      const st = laneStats.get(row.lane);
+      if (st) st.daily[dailyClassOf(row)] += count(row.n);
+    }
 
     // Batches sent per lane, and registry deltas triggered.
     const sent = r.all(`
@@ -500,9 +566,10 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
       tool: typeof tool === 'string' && TOOL_RE.test(tool) && !hasVendorName(tool) ? tool : null,
       pin: typeof pin === 'string' && PIN_RE.test(pin) && !hasVendorName(pin) ? pin : null,
     };
-    if (notBuilt) return { ...lane, w1h: null, w24h: null, spark24: null, fault: null, ring: null, t0_w24h: null };
+    if (notBuilt) return { ...lane, w1h: null, w24h: null, spark24: null, fault: null, ring: null, ring_daily: null, t0_w24h: null };
     const st = laneStats.get(id);
-    return { ...lane, w1h: st.w1h, w24h: st.w24h, spark24: st.spark, fault: st.fault, ring: st.ring, t0_w24h: st.t0 };
+    const ringDaily = Object.fromEntries(RING_DAILY_KEYS.map((k) => [k, st.daily[k] >= DAILY_MIN ? st.daily[k] : null]));
+    return { ...lane, w1h: st.w1h, w24h: st.w24h, spark24: st.spark, fault: st.fault, ring: st.ring, ring_daily: ringDaily, t0_w24h: st.t0 };
   });
 
   // ---- history ----
@@ -531,7 +598,6 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
       w24h: events ? one("SELECT COUNT(DISTINCT subject) AS n FROM events WHERE type = 'result_recorded' AND occurred_at > ? AND occurred_at <= ? AND json_valid(data) AND (json_extract(data, '$.verdict') = 'accepted' OR json_extract(data, '$.accepted') = 1) AND json_extract(data, '$.coverage') = 'assessed' AND subject IS NOT NULL", since24h, nowIso) : 0,
       all: one('SELECT COUNT(DISTINCT subject) AS n FROM results WHERE assessed_at IS NOT NULL'),
     },
-    quarantined_daily: quarantinedYesterday >= QUARANTINE_MIN ? quarantinedYesterday : null,
   };
 
   // ---- now checking: every server of a batch still out (R-LIVE-22) ----

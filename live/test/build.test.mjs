@@ -100,10 +100,8 @@ test('allowlist: a state seeded with every never-public thing produces output wi
   for (const bad of NEVER()) assert.ok(!text.includes(String(bad).toLowerCase()), `the output contains ${JSON.stringify(bad)}`);
   const keys = deepKeys(out.snapshot).concat(deepKeys(out.hourEvents));
   assert.deepEqual(keys.filter((x) => /^held/i.test(x)), [], 'no key named held*');
-  // The rejections are there, as classes only.
-  const rejected = out.hourEvents.filter((e) => e.type === 'rejected');
-  assert.equal(rejected.length, Object.keys(REASON_CLASSES).length);
-  assert.ok(rejected.every((e) => !('subject' in e)), 'a rejection never names the server');
+  // No rejection or quarantine is an event of its own (R-LIVE-25).
+  assert.equal(out.hourEvents.filter((e) => e.type === 'rejected').length, 0);
   // The vendor- and email-named servers lose their name, not their result.
   const results = out.hourEvents.filter((e) => e.type === 'result');
   assert.deepEqual(results.map((e) => e.subject ?? null), ['acme-labs/files-mcp', null, null]);
@@ -123,12 +121,16 @@ test('allowlist: every public event has only the public keys and types; the snap
   assert.deepEqual(Object.keys(snapshot.pump.slots), ['budget', 'open', 'max', 'ramp']);
   assert.deepEqual(snapshot.retry, { call: 'state_asset', status: 502, attempt: 3, of: 6, next_at: new Date(NOW + 4000).toISOString(), since: new Date(NOW - 60_000).toISOString() });
   assert.deepEqual(Object.keys(snapshot.breaker), ['state', 'checked_at', 'lanes']);
-  for (const l of snapshot.lanes) assert.deepEqual(Object.keys(l), ['id', 'state', 'tool', 'pin', 'w1h', 'w24h', 'spark24', 'fault', 'ring', 't0_w24h']);
+  for (const l of snapshot.lanes) assert.deepEqual(Object.keys(l), ['id', 'state', 'tool', 'pin', 'w1h', 'w24h', 'spark24', 'fault', 'ring', 'ring_daily', 't0_w24h']);
+  for (const l of snapshot.lanes.filter((x) => x.ring)) {
+    assert.deepEqual(Object.keys(l.ring), ['accepted', 'not_used']);
+    assert.deepEqual(Object.keys(l.ring_daily), ['lease', 'integrity', 'worker_output', 'infra']);
+  }
   for (const h of snapshot.history) assert.ok(Object.keys(h).every((k) => ['kind', 'state', 'last_capture_at', 'versions', 'registry_size'].includes(k)));
   assert.deepEqual(snapshot.history.map((h) => h.kind), ['registry-delta', 'registry-full', 'packages', 'popularity']);
   assert.equal(snapshot.history[0].versions, null);
   for (const e of snapshot.edges) assert.deepEqual(Object.keys(e), ['from', 'to', 'w1h', 'w24h', 'w7d']);
-  assert.deepEqual(Object.keys(snapshot.counts), ['subjects_in_seed', 'checked', 'assessed', 'quarantined_daily']);
+  assert.deepEqual(Object.keys(snapshot.counts), ['subjects_in_seed', 'checked', 'assessed']);
   for (const c of snapshot.now_checking) assert.deepEqual(Object.keys(c), ['subject', 'lane', 'since']);
   assert.deepEqual(snapshot.publish, { state: 'off' });
   assert.equal(snapshot.schema, SCHEMA);
@@ -174,7 +176,7 @@ test('size: under 20 KB at 15 slots with full lists and long names', () => {
   assert.deepEqual(problems, []);
 });
 
-test('quarantine rule: quarantined results emit nothing and count only in quarantined_daily, null below 5', () => {
+test('quarantine rule: a quarantined result emits nothing and counts only inside integrity of the next day\'s ring_daily, null below 5', () => {
   const day = Date.UTC(2026, 10, 25);
   const build = (yesterday, today) => {
     const db = emptyState();
@@ -185,25 +187,72 @@ test('quarantine rule: quarantined results emit nothing and count only in quaran
   };
   for (const [y, t, want] of [[0, 0, null], [4, 0, null], [4, 9, null], [5, 0, 5], [7, 2, 7]]) {
     const { snapshot, hourEvents } = build(y, t);
-    assert.equal(snapshot.counts.quarantined_daily, want, `${y} yesterday, ${t} today`);
+    const lp = snapshot.lanes.find((l) => l.id === 'live-probe');
+    assert.deepEqual(lp.ring_daily, { lease: null, integrity: want, worker_output: null, infra: null }, `${y} yesterday, ${t} today`);
     assert.deepEqual(hourEvents, [], 'no public event of any kind');
     assert.deepEqual(snapshot.recent, []);
-    for (const l of snapshot.lanes.filter((x) => x.ring)) assert.deepEqual(Object.values(l.ring), [0, 0, 0, 0, 0], l.id);
+    for (const l of snapshot.lanes.filter((x) => x.ring)) assert.deepEqual(l.ring, { accepted: 0, not_used: 0 }, l.id);
     for (const e of snapshot.edges) assert.equal(e.w7d, 0, `${e.from}->${e.to}`);
     assert.equal(snapshot.counts.checked.w24h, 0);
+    assert.ok(!/quarantin/i.test(JSON.stringify(snapshot)), 'no key or word names a quarantine');
   }
 });
 
-test('R-LIVE-20: quarantined_daily is the previous complete UTC day, so it never moves while a day runs', () => {
+test('R-LIVE-20: ring_daily is the previous complete UTC day per class, null below 5, and never moves while a day runs', () => {
   const db = emptyState();
   const day = Date.UTC(2026, 10, 25);
-  for (let i = 0; i < 6; i++) addEvent(db, { type: 'result_recorded', at: day - 7_200_000 * (i + 1), lane: 'live-probe', data: { verdict: 'rejected', reason: 'secret_scan', outcome: 'quarantined' } });
-  const before = buildLiveSnapshot(db, { now: NOW, config: config() }).snapshot.counts.quarantined_daily;
-  for (let i = 0; i < 6; i++) addEvent(db, { type: 'result_recorded', at: NOW - 60_000 * (i + 1), lane: 'live-probe', data: { verdict: 'rejected', reason: 'secret_scan', outcome: 'quarantined' } });
-  const after = buildLiveSnapshot(db, { now: NOW, config: config() }).snapshot.counts.quarantined_daily;
-  assert.equal(before, 6);
-  assert.equal(after, 6, 'today\'s quarantines do not show until the day is over');
-  assert.equal(buildLiveSnapshot(db, { now: day + 86_400_000 + 60_000, config: config() }).snapshot.counts.quarantined_daily, 6);
+  const rej = (at, reason) => addEvent(db, { type: 'result_recorded', at, lane: 'live-probe', data: { verdict: 'rejected', reason } });
+  for (let i = 0; i < 6; i++) rej(day - 7_200_000 * (i + 1), 'stale_fence');
+  for (let i = 0; i < 4; i++) rej(day - 7_100_000 * (i + 1), 'retry_later');
+  const daily = (now) => buildLiveSnapshot(db, { now, config: config() }).snapshot.lanes.find((l) => l.id === 'live-probe').ring_daily;
+  assert.deepEqual(daily(NOW), { lease: 6, integrity: null, worker_output: null, infra: null });
+  for (let i = 0; i < 6; i++) rej(NOW - 60_000 * (i + 1), 'stale_fence');
+  assert.deepEqual(daily(NOW), { lease: 6, integrity: null, worker_output: null, infra: null }, 'today\'s rejections do not show until the day is over');
+  assert.deepEqual(daily(day + 86_400_000 + 60_000), { lease: 6, integrity: null, worker_output: null, infra: null });
+});
+
+test('R-LIVE-25: a quarantined item and an item rejected for its lease give the same public output, but for the next day\'s ring_daily', () => {
+  const state = (secondReason, secondOutcome) => {
+    const db = emptyState();
+    const names = ['a-org/one', 'b-org/two', 'c-org/three'];
+    for (const id of names) addSubject(db, { id, at: NOW - 3 * 86_400_000 });
+    const t = NOW - 30 * 60_000;
+    // Five of each class earlier the same day, so the next day's counts show.
+    for (const reason of ['stale_fence', 'digest_mismatch', 'no_artifact', 'ingest_timeout']) {
+      for (let i = 0; i < 5; i++) addEvent(db, { type: 'result_recorded', at: Date.UTC(2026, 10, 25, 10, i), lane: 'live-probe', data: { verdict: 'rejected', reason } });
+    }
+    addDispatch(db, { attemptId: 'b1', workflow: 'live-probe', created: t, expires: t + 3_600_000, status: 'done', closed: t + 3 * 60_000, items: names.map((subject) => ({ subject, resolved: true })) });
+    addEvent(db, { type: 'dispatch_sent', at: t + 1000, lane: 'live-probe', n: 3, data: { run_id: '1' } });
+    addEvent(db, { type: 'result_recorded', at: t + 60_000, lane: 'live-probe', subject: names[0], data: { verdict: 'accepted', outcome: 'accepted', coverage: 'assessed' } });
+    addEvent(db, { type: 'result_recorded', at: t + 120_000, lane: 'live-probe', subject: names[1], data: { verdict: 'rejected', reason: secondReason, outcome: secondOutcome } });
+    addEvent(db, { type: 'result_recorded', at: t + 180_000, lane: 'live-probe', subject: names[2], data: { verdict: 'rejected', reason: 'no_artifact', outcome: 'rejected' } });
+    addEvent(db, { type: 'dispatch_closed', at: t + 180_000, lane: 'live-probe', n: 3, data: { close_reason: 'results_in' } });
+    return db;
+  };
+  const quarantined = state('secret_scan', 'quarantined');
+  const lease = state('stale_fence', 'rejected');
+  const strip = ({ snapshot, hourEvents, problems }) => {
+    const { generated_at: _g, seq: _s, ...rest } = snapshot;
+    return { rest, hourEvents, problems };
+  };
+  // The same day: identical in every byte.
+  const q = buildLiveSnapshot(quarantined, { now: NOW, config: config() });
+  const l = buildLiveSnapshot(lease, { now: NOW, config: config() });
+  assert.deepEqual(strip(q), strip(l));
+  assert.equal(JSON.stringify(q), JSON.stringify(l));
+  const closed = q.hourEvents.find((e) => e.type === 'batch_closed');
+  assert.deepEqual([closed.n, closed.accepted, closed.not_used], [3, 1, 2]);
+  assert.deepEqual(q.snapshot.lanes.find((x) => x.id === 'live-probe').ring, { accepted: 1, not_used: 2 });
+  // The next day: only ring_daily differs, and only by one between lease and integrity.
+  const next = NOW + 86_400_000;
+  const qn = strip(buildLiveSnapshot(quarantined, { now: next, config: config() }));
+  const ln = strip(buildLiveSnapshot(lease, { now: next, config: config() }));
+  const qd = qn.rest.lanes.find((x) => x.id === 'live-probe').ring_daily;
+  const ld = ln.rest.lanes.find((x) => x.id === 'live-probe').ring_daily;
+  assert.deepEqual(qd, { lease: 5, integrity: 6, worker_output: 6, infra: 5 });
+  assert.deepEqual(ld, { lease: 6, integrity: 5, worker_output: 6, infra: 5 });
+  const blank = (o) => ({ ...o, rest: { ...o.rest, lanes: o.rest.lanes.map((x) => ({ ...x, ring_daily: null })) } });
+  assert.deepEqual(blank(qn), blank(ln));
 });
 
 test('R-LIVE-21: public seq numbers leave no gap where a quarantine was recorded; the snapshot seq is not an event id', () => {
@@ -271,13 +320,15 @@ test('toPublicEvent maps each internal type to its public shape, and nothing els
   assert.deepEqual(pub('dispatch_failed', { status: 422 }), { ...head, type: 'batch_not_sent', label: 'refused' });
   assert.deepEqual(pub('dispatch_failed', { withdrawn: true }), { ...head, type: 'batch_not_sent', label: 'withdrawn' });
   assert.deepEqual(pub('dispatch_unconfirmed', { status: 504 }), { ...head, type: 'batch_not_sent', label: 'GitHub error' });
-  assert.deepEqual(pub('dispatch_expired', { count: 1 }), { ...head, type: 'batch_expired' });
   assert.deepEqual(pub('result_recorded', { verdict: 'accepted', coverage: 'assessed' }, { n: 1 }), { ...head, n: 1, type: 'result', subject: 'acme-labs/files-mcp', side: 'assessed' });
   assert.deepEqual(pub('result_recorded', { verdict: 'accepted', fault: 'subject', coverage: 'subject' }, { n: 1 }), { ...head, n: 1, type: 'result', subject: 'acme-labs/files-mcp', side: 'subject' });
   assert.deepEqual(pub('result_recorded', { verdict: 'accepted', fault: null, coverage: 'excluded' }, { n: 1 }), { ...head, n: 1, type: 'result', subject: 'acme-labs/files-mcp', side: 'policy' });
   assert.deepEqual(pub('result_recorded', { verdict: 'accepted' }, { n: 1 }).side, 'unknown');
-  assert.deepEqual(pub('result_recorded', { verdict: 'rejected', reason: 'stale_fence' }, { n: 1 }), { ...head, n: 1, type: 'rejected', class: 'lease' });
-  assert.deepEqual(pub('result_recorded', { verdict: 'rejected', reason: 'brand_new' }, { n: 1 }).class, 'worker_output');
+  assert.equal(pub('result_recorded', { verdict: 'rejected', reason: 'stale_fence' }, { n: 1 }), null, 'a rejection is no event');
+  assert.equal(pub('result_recorded', { verdict: 'rejected', reason: 'brand_new' }, { n: 1 }), null);
+  assert.deepEqual(toPublicEvent({ ...base, type: 'dispatch_closed', data: '{}' }, { lanes, accepted: 7 }), { ...head, type: 'batch_closed', accepted: 7, not_used: 3 });
+  assert.deepEqual(toPublicEvent({ ...base, type: 'dispatch_expired', data: '{}' }, { lanes, accepted: 0 }), { ...head, type: 'batch_expired', accepted: 0, not_used: 10 });
+  assert.deepEqual(toPublicEvent({ ...base, type: 'dispatch_closed', data: '{}' }, { lanes }), { ...head, type: 'batch_closed', accepted: null, not_used: null }, 'an unmatched batch: both counts null');
   assert.equal(pub('result_recorded', { verdict: 'rejected', reason: 'secret_scan', outcome: 'quarantined' }), null);
   assert.equal(pub('result_recorded', { verdict: 'accepted', reason: 'secret_scan' }), null);
   assert.equal(pub('result_recorded', { verdict: 'rejected', reason: 'x', outcome: 'quarantined' }), null);
@@ -291,7 +342,7 @@ test('toPublicEvent maps each internal type to its public shape, and nothing els
   assert.deepEqual(pub('breaker_changed', { tripped: true, reason: 'red', held: ['writecheck', 'live-probe', 'nope'] }, loop), { ...head, ...loop, type: 'sandbox_check', state: 'held', lanes: ['live-probe', 'writecheck'] });
   assert.deepEqual(pub('breaker_changed', { tripped: false, held: [] }, loop), { ...head, ...loop, type: 'sandbox_check', state: 'closed', lanes: [] });
   assert.deepEqual(pub('workflow_paused', { until: 'x' }, { n: 1 }), { ...head, n: 1, type: 'lane_paused' });
-  for (const t of ['dispatch_created', 'dispatch_closed', 'something_new']) assert.equal(pub(t, {}), null, t);
+  for (const t of ['dispatch_created', 'something_new']) assert.equal(pub(t, {}), null, t);
   assert.equal(toPublicEvent({ ...base, type: 'dispatch_sent', occurred_at: 'yesterday', data: '{}' }), null, 'an unreadable time drops the event');
   assert.equal(toPublicEvent({ ...base, type: 'dispatch_sent', lane: 'not-a-lane', data: '{}' }, { lanes }).lane, null, 'an unknown lane is left out');
 });
@@ -303,7 +354,7 @@ test('lane states: on, off, not_built, and held while the breaker holds the lane
   assert.deepEqual(states(snap), { 'scan-static': 'on', 'live-probe': 'on', 'scan-deep': 'not_built', 'build-probe': 'not_built', writecheck: 'on', 'meta-github': 'off', 'meta-registry': 'off', 'release-diff': 'off' });
   assert.equal(snap.breaker, null);
   const nb = snap.lanes.find((l) => l.id === 'scan-deep');
-  assert.deepEqual(nb, { id: 'scan-deep', state: 'not_built', tool: null, pin: null, w1h: null, w24h: null, spark24: null, fault: null, ring: null, t0_w24h: null });
+  assert.deepEqual(nb, { id: 'scan-deep', state: 'not_built', tool: null, pin: null, w1h: null, w24h: null, spark24: null, fault: null, ring: null, ring_daily: null, t0_w24h: null });
   assert.ok(!snap.edges.some((e) => e.to === 'scan-deep' || e.from === 'build-probe'), 'not built: no edges');
   assert.deepEqual(snap.lanes.find((l) => l.id === 'live-probe').spark24.length, 24);
   db.setKv('pump.breaker', { tripped: true, reason: 'stale', held: ['live-probe', 'writecheck'], checked_at: '2026-11-24T06:00:00.000Z' }, { now: NOW });
@@ -372,31 +423,42 @@ test('deterministic: the same state and clock give the same bytes; epoch ms, Dat
   assert.throws(() => buildLiveSnapshot(a.db, { now: 'nope', config: a.cfg }), TypeError);
 });
 
-test('counts and edges follow the events: results, rejections and batches per lane and window', () => {
+test('counts and edges follow the events: results, batch ends and batches sent per lane and window', () => {
   const db = emptyState();
   addSubject(db, { id: 'a-org/one', at: NOW - 86_400_000, tier: 0 });
   addSubject(db, { id: 'b-org/two', at: NOW - 86_400_000, tier: 2, retired: true });
-  addEvent(db, { type: 'dispatch_sent', at: NOW - 30 * 60_000, lane: 'writecheck', n: 2 });
+  addSubject(db, { id: 'c-org/three', at: NOW - 86_400_000, tier: 2 });
+  const t = NOW - 30 * 60_000;
+  addEvent(db, { type: 'dispatch_sent', at: t, lane: 'writecheck', n: 3 });
   addEvent(db, { type: 'dispatch_sent', at: NOW - 3 * 86_400_000, lane: 'writecheck', n: 5 });
-  addEvent(db, { type: 'result_recorded', at: NOW - 20 * 60_000, lane: 'writecheck', subject: 'a-org/one', data: { verdict: 'accepted', coverage: 'assessed' } });
   addEvent(db, { type: 'result_recorded', at: NOW - 2 * 3_600_000, lane: 'writecheck', subject: 'b-org/two', data: { verdict: 'accepted', fault: 'infra', coverage: 'unassessed_infra' } });
+  addEvent(db, { type: 'result_recorded', at: NOW - 20 * 60_000, lane: 'writecheck', subject: 'a-org/one', data: { verdict: 'accepted', coverage: 'assessed' } });
   addEvent(db, { type: 'result_recorded', at: NOW - 19 * 60_000, lane: 'writecheck', subject: 'b-org/two', data: { verdict: 'rejected', reason: 'ingest_timeout' } });
-  addEvent(db, { type: 'result_recorded', at: NOW - 18 * 60_000, lane: 'writecheck', subject: 'b-org/two', data: { verdict: 'rejected', reason: 'secret_scan', outcome: 'quarantined' } });
+  addEvent(db, { type: 'result_recorded', at: NOW - 18 * 60_000, lane: 'writecheck', subject: 'c-org/three', data: { verdict: 'rejected', reason: 'secret_scan', outcome: 'quarantined' } });
+  addDispatch(db, { attemptId: 'w1', workflow: 'writecheck', created: t, expires: t + 3_600_000, status: 'done', closed: NOW - 18 * 60_000, items: ['a-org/one', 'b-org/two', 'c-org/three'].map((subject) => ({ subject, resolved: true })) });
+  addEvent(db, { type: 'dispatch_closed', at: NOW - 18 * 60_000, lane: 'writecheck', n: 3, data: { close_reason: 'results_in' } });
+  // An expired batch of two, one of them reported in time.
+  addDispatch(db, { attemptId: 'w0', workflow: 'writecheck', created: NOW - 5 * 3_600_000, expires: NOW - 3 * 3_600_000, status: 'expired', closed: NOW - 3 * 3_600_000, items: [{ subject: 'b-org/two', resolved: true }, { subject: 'c-org/three' }] });
+  addEvent(db, { type: 'result_recorded', at: NOW - 4 * 3_600_000, lane: 'writecheck', subject: 'b-org/two', data: { verdict: 'accepted', coverage: 'assessed' } });
+  addEvent(db, { type: 'dispatch_expired', at: NOW - 3 * 3_600_000, lane: 'writecheck', n: 2, data: { count: 2 } });
   addEvent(db, { type: 'registry_delta', at: NOW - 10 * 60_000, data: { action: 'dispatched' } });
   addEvent(db, { type: 'registry_delta', at: NOW - 9 * 60_000, data: { action: 'failed' } });
   addResult(db, { subject: 'a-org/one', workflow: 'writecheck', at: NOW - 20 * 60_000, runKey: '1'.repeat(64) });
-  const { snapshot } = buildLiveSnapshot(db, { now: NOW, config: config() });
+  const { snapshot, hourEvents } = buildLiveSnapshot(db, { now: NOW, config: config() });
   const wc = snapshot.lanes.find((l) => l.id === 'writecheck');
-  assert.deepEqual([wc.w1h, wc.w24h, wc.t0_w24h], [1, 2, 1]);
-  assert.deepEqual(wc.ring, { accepted: 2, lease: 0, integrity: 0, worker_output: 0, infra: 1 });
+  assert.deepEqual([wc.w1h, wc.w24h, wc.t0_w24h], [1, 3, 1]);
+  assert.deepEqual(wc.ring, { accepted: 3, not_used: 3 });
   assert.deepEqual(wc.fault, { subject: 0, tool: 0, infra: 1, policy: 0, unknown: 0 });
-  assert.equal(wc.spark24.reduce((x, y) => x + y, 0), 2);
+  assert.equal(wc.spark24.reduce((x, y) => x + y, 0), 3);
   assert.equal(wc.spark24[23], 1);
   const edge = (from, to) => snapshot.edges.find((e) => e.from === from && e.to === to);
-  assert.deepEqual(edge('pump', 'writecheck'), { from: 'pump', to: 'writecheck', w1h: 2, w24h: 2, w7d: 7 });
-  assert.deepEqual(edge('writecheck', 'ingest'), { from: 'writecheck', to: 'ingest', w1h: 2, w24h: 3, w7d: 3 });
+  assert.deepEqual(edge('pump', 'writecheck'), { from: 'pump', to: 'writecheck', w1h: 3, w24h: 3, w7d: 8 });
+  assert.deepEqual(edge('writecheck', 'ingest'), { from: 'writecheck', to: 'ingest', w1h: 3, w24h: 5, w7d: 5 });
   assert.deepEqual(edge('pump', 'history'), { from: 'pump', to: 'history', w1h: 1, w24h: 1, w7d: 1 });
-  assert.deepEqual(snapshot.counts, { subjects_in_seed: 1, checked: { w24h: 2, w7d: 2, all: 1 }, assessed: { w24h: 1, all: 1 }, quarantined_daily: null });
+  assert.deepEqual(snapshot.counts, { subjects_in_seed: 2, checked: { w24h: 2, w7d: 2, all: 1 }, assessed: { w24h: 2, all: 1 } });
+  const ends = snapshot.recent.filter((e) => e.type === 'batch_closed' || e.type === 'batch_expired').map((e) => [e.type, e.n, e.accepted, e.not_used]);
+  assert.deepEqual(ends, [['batch_expired', 2, 1, 1], ['batch_closed', 3, 1, 2]], 'newest written first');
+  assert.deepEqual(hourEvents.map((e) => e.type), ['batch_sent', 'result', 'batch_closed', 'history_triggered', 'history_triggered']);
 });
 
 test('with the store\'s own event writers: sent, accepted, rejected and quarantined results come out as the plan says', async () => {
@@ -420,9 +482,10 @@ test('with the store\'s own event writers: sent, accepted, rejected and quaranti
   assert.deepEqual(hourEvents.map((e) => [e.type, e.lane, e.n, e.subject ?? e.class ?? null, e.side ?? null]), [
     ['batch_sent', 'live-probe', 3, null, null],
     ['result', 'live-probe', 1, 'a-org/one', 'assessed'],
-    ['rejected', 'live-probe', 1, 'integrity', null],
+    ['batch_closed', 'live-probe', 3, null, null],
   ]);
+  assert.deepEqual([hourEvents[2].accepted, hourEvents[2].not_used], [1, 2]);
   const text = JSON.stringify(snapshot);
   assert.ok(!text.includes('b-org/two') && !text.includes('c-org/three'), 'the batch is closed: no rejected or quarantined server is named');
-  assert.deepEqual(snapshot.lanes.find((l) => l.id === 'live-probe').ring, { accepted: 1, lease: 0, integrity: 1, worker_output: 0, infra: 0 });
+  assert.deepEqual(snapshot.lanes.find((l) => l.id === 'live-probe').ring, { accepted: 1, not_used: 2 });
 });

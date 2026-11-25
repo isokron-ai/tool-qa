@@ -48,10 +48,10 @@ export function addResult(db, { subject, workflow, at, coverage = 'assessed', fa
 }
 
 /** A dispatch with its items; status 'dispatched' and live unless told otherwise. */
-export function addDispatch(db, { attemptId, workflow, created, expires, status = 'dispatched', items, shardId = `shard-${attemptId}`, runUrl = null, error = null }) {
-  db.raw.prepare(`INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status, run_id, run_url, error)
-    VALUES (?, ?, ?, 'example-org/worker', 'w.yml', 'main', ?, ?, ?, '1234567', ?, ?)`)
-    .run(attemptId, shardId, workflow, iso(created), iso(expires), status, runUrl, error);
+export function addDispatch(db, { attemptId, workflow, created, expires, status = 'dispatched', items, shardId = `shard-${attemptId}`, runUrl = null, error = null, closed = null }) {
+  db.raw.prepare(`INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status, run_id, run_url, error, closed)
+    VALUES (?, ?, ?, 'example-org/worker', 'w.yml', 'main', ?, ?, ?, '1234567', ?, ?, ?)`)
+    .run(attemptId, shardId, workflow, iso(created), iso(expires), status, runUrl, error, closed === null ? null : iso(closed));
   items.forEach((it, i) => {
     db.raw.prepare('INSERT INTO dispatch_items (attempt_id, run_key, subject, workflow, fence, item_index, subject_name, resolved) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(attemptId, it.runKey ?? `${attemptId}-rk-${i}`, it.subject, workflow, it.fence ?? 1, i, it.name ?? it.subject, it.resolved ? iso(created) : null);
@@ -147,12 +147,16 @@ export function realisticState({ now = Date.parse('2026-11-25T21:40:00.000Z'), s
       const attemptId = `${lane}-${t}`;
       addEvent(db, { type: 'dispatch_created', at: t, lane, n, data: { shard_id: `shard-${t}`, items: n } });
       addEvent(db, { type: 'dispatch_sent', at: t + 2_000, lane, n, data: { run_id: '9200000001', run_url: 'https://github.com/example-org/worker/actions/runs/9200000001' } });
+      const batch = Array.from({ length: n }, () => subs[si++ % subs.length]);
       if (rand() < 0.03) {
-        addEvent(db, { type: 'dispatch_expired', at: t + 40 * 60_000, lane, n, data: { count: 1 } });
+        addDispatch(real, { attemptId, workflow: lane, created: t, expires: t + 40 * 60_000, status: 'expired', closed: t + 40 * 60_000, items: batch.map((x) => ({ subject: x.key, name: x.name })) });
+        addEvent(db, { type: 'dispatch_expired', at: t + 40 * 60_000, lane, n, data: { count: n } });
         continue;
       }
-      for (let i = 0; i < n; i++) {
-        const s = subs[si++ % subs.length];
+      // Now and then a worker run ends early and its last items are lost.
+      const lost = rand() < 0.05 ? 1 + Math.floor(rand() * 3) : 0;
+      for (let i = 0; i < n - lost; i++) {
+        const s = batch[i];
         const at = t + (12 + i) * 60_000;
         const inYesterday = at >= dayStart - 86_400_000 && at < dayStart;
         if (qLeft > 0 && inYesterday && rand() < 0.05) {
@@ -169,7 +173,9 @@ export function realisticState({ now = Date.parse('2026-11-25T21:40:00.000Z'), s
         addEvent(db, { type: 'result_recorded', at, lane, subject: s.key, data: { verdict: 'accepted', reason: null, outcome: 'accepted', fault, coverage } });
         addResult(db, { subject: s.key, workflow: lane, at, coverage, fault, runKey: runKey() });
       }
-      addEvent(db, { type: 'dispatch_closed', at: t + (12 + n) * 60_000, lane, data: { close_reason: 'results_in' } });
+      const closed = t + (12 + n - lost - 1) * 60_000 + (lost ? 30_000 : 0);
+      addDispatch(real, { attemptId, workflow: lane, created: t, expires: t + 60 * 60_000, status: 'done', closed, items: batch.map((x) => ({ subject: x.key, name: x.name, resolved: true })) });
+      addEvent(db, { type: 'dispatch_closed', at: closed, lane, n, data: { close_reason: lost ? 'run_completed' : 'results_in' } });
     }
   }
 

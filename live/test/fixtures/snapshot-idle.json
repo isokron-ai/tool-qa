@@ -40,26 +40,26 @@
       "tool": "mcp-check",
       "pin": "75503c1",
       "w1h": 0,
-      "w24h": 621,
+      "w24h": 572,
       "spark24": [
-        33,
+        32,
         40,
         29,
         39,
-        28,
-        40,
+        29,
+        36,
         30,
-        39,
-        31,
-        40,
-        30,
-        38,
-        32,
-        39,
+        37,
         33,
-        38,
-        30,
-        17,
+        39,
+        32,
+        40,
+        8,
+        40,
+        29,
+        41,
+        23,
+        0,
         0,
         0,
         0,
@@ -68,20 +68,23 @@
         0
       ],
       "fault": {
-        "subject": 63,
-        "tool": 39,
-        "infra": 20,
-        "policy": 31,
-        "unknown": 22
+        "subject": 51,
+        "tool": 36,
+        "infra": 23,
+        "policy": 28,
+        "unknown": 21
       },
       "ring": {
-        "accepted": 621,
-        "lease": 16,
-        "integrity": 7,
-        "worker_output": 3,
-        "infra": 19
+        "accepted": 572,
+        "not_used": 94
       },
-      "t0_w24h": 23
+      "ring_daily": {
+        "lease": 21,
+        "integrity": 14,
+        "worker_output": null,
+        "infra": 22
+      },
+      "t0_w24h": 20
     },
     {
       "id": "live-probe",
@@ -89,25 +92,25 @@
       "tool": "mcp-check",
       "pin": "116b0ca",
       "w1h": 0,
-      "w24h": 382,
+      "w24h": 359,
       "spark24": [
-        17,
-        25,
+        20,
         23,
-        17,
-        24,
-        19,
-        24,
-        22,
+        21,
         20,
         28,
-        16,
-        24,
-        23,
-        17,
-        28,
         19,
+        23,
+        14,
+        21,
         24,
+        19,
+        25,
+        20,
+        20,
+        18,
+        17,
+        15,
         4,
         0,
         0,
@@ -117,20 +120,23 @@
         0
       ],
       "fault": {
-        "subject": 37,
-        "tool": 16,
-        "infra": 18,
-        "policy": 21,
-        "unknown": 19
+        "subject": 39,
+        "tool": 22,
+        "infra": 17,
+        "policy": 14,
+        "unknown": 18
       },
       "ring": {
-        "accepted": 382,
-        "lease": 10,
-        "integrity": 8,
-        "worker_output": 2,
-        "infra": 18
+        "accepted": 359,
+        "not_used": 61
       },
-      "t0_w24h": 15
+      "ring_daily": {
+        "lease": 7,
+        "integrity": 6,
+        "worker_output": 6,
+        "infra": 16
+      },
+      "t0_w24h": 17
     },
     {
       "id": "scan-deep",
@@ -142,6 +148,7 @@
       "spark24": null,
       "fault": null,
       "ring": null,
+      "ring_daily": null,
       "t0_w24h": null
     },
     {
@@ -154,6 +161,7 @@
       "spark24": null,
       "fault": null,
       "ring": null,
+      "ring_daily": null,
       "t0_w24h": null
     },
     {
@@ -162,25 +170,25 @@
       "tool": "mcp-writecheck-action",
       "pin": "54d4541",
       "w1h": 0,
-      "w24h": 85,
+      "w24h": 83,
       "spark24": [
-        8,
-        2,
-        7,
-        2,
-        8,
-        1,
-        7,
+        6,
         2,
         8,
         2,
-        7,
+        6,
         2,
         8,
         2,
         7,
         2,
         8,
+        2,
+        8,
+        2,
+        7,
+        2,
+        7,
         2,
         0,
         0,
@@ -190,20 +198,23 @@
         0
       ],
       "fault": {
-        "subject": 2,
-        "tool": 1,
-        "infra": 2,
-        "policy": 1,
+        "subject": 3,
+        "tool": 0,
+        "infra": 1,
+        "policy": 4,
         "unknown": 57
       },
       "ring": {
-        "accepted": 85,
-        "lease": 1,
-        "integrity": 0,
-        "worker_output": 0,
-        "infra": 4
+        "accepted": 83,
+        "not_used": 7
       },
-      "t0_w24h": 5
+      "ring_daily": {
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
+      },
+      "t0_w24h": 4
     },
     {
       "id": "meta-github",
@@ -247,10 +258,13 @@
       },
       "ring": {
         "accepted": 0,
-        "lease": 0,
-        "integrity": 0,
-        "worker_output": 0,
-        "infra": 0
+        "not_used": 0
+      },
+      "ring_daily": {
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
       },
       "t0_w24h": 0
     },
@@ -296,10 +310,13 @@
       },
       "ring": {
         "accepted": 0,
-        "lease": 0,
-        "integrity": 0,
-        "worker_output": 0,
-        "infra": 0
+        "not_used": 0
+      },
+      "ring_daily": {
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
       },
       "t0_w24h": 0
     },
@@ -345,10 +362,13 @@
       },
       "ring": {
         "accepted": 0,
-        "lease": 0,
-        "integrity": 0,
-        "worker_output": 0,
-        "infra": 0
+        "not_used": 0
+      },
+      "ring_daily": {
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
       },
       "t0_w24h": 0
     }
@@ -389,8 +409,8 @@
       "from": "scan-static",
       "to": "ingest",
       "w1h": 0,
-      "w24h": 666,
-      "w7d": 1519
+      "w24h": 675,
+      "w7d": 1550
     },
     {
       "from": "pump",
@@ -404,7 +424,7 @@
       "to": "ingest",
       "w1h": 0,
       "w24h": 420,
-      "w7d": 980
+      "w7d": 990
     },
     {
       "from": "pump",
@@ -418,7 +438,7 @@
       "to": "ingest",
       "w1h": 0,
       "w24h": 90,
-      "w7d": 200
+      "w7d": 210
     },
     {
       "from": "pump",
@@ -483,8 +503,7 @@
     "assessed": {
       "w24h": 140,
       "all": 140
-    },
-    "quarantined_daily": 6
+    }
   },
   "now_checking": [],
   "recent": [

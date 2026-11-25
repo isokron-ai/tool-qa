@@ -39,98 +39,104 @@
       "state": "on",
       "tool": "mcp-check",
       "pin": "75503c1",
-      "w1h": 22,
-      "w24h": 829,
+      "w1h": 23,
+      "w24h": 783,
       "spark24": [
-        33,
+        32,
         40,
         29,
         39,
-        28,
-        40,
+        29,
+        36,
         30,
-        39,
-        31,
-        40,
-        30,
-        38,
-        32,
-        39,
+        37,
         33,
-        38,
+        39,
+        32,
+        40,
+        8,
+        40,
+        29,
+        41,
+        23,
+        24,
         30,
         41,
-        32,
-        39,
-        31,
-        37,
-        30,
-        15
+        33,
+        38,
+        29,
+        16
       ],
       "fault": {
-        "subject": 76,
-        "tool": 53,
-        "infra": 26,
+        "subject": 73,
+        "tool": 46,
+        "infra": 29,
         "policy": 38,
-        "unknown": 29
+        "unknown": 38
       },
       "ring": {
-        "accepted": 829,
-        "lease": 18,
-        "integrity": 12,
-        "worker_output": 8,
-        "infra": 24
+        "accepted": 783,
+        "not_used": 108
       },
-      "t0_w24h": 32
+      "ring_daily": {
+        "lease": 21,
+        "integrity": 14,
+        "worker_output": null,
+        "infra": 22
+      },
+      "t0_w24h": 25
     },
     {
       "id": "live-probe",
       "state": "on",
       "tool": "mcp-check",
       "pin": "116b0ca",
-      "w1h": 9,
-      "w24h": 518,
+      "w1h": 8,
+      "w24h": 465,
       "spark24": [
-        20,
-        25,
-        22,
         19,
-        27,
+        24,
+        21,
         20,
-        25,
-        23,
+        18,
         17,
-        28,
-        19,
-        26,
+        15,
         23,
         20,
-        27,
         19,
+        18,
+        15,
         22,
+        19,
+        19,
+        18,
+        25,
         23,
-        20,
-        27,
-        20,
-        16,
-        20,
+        10,
+        26,
+        18,
+        25,
+        22,
         0
       ],
       "fault": {
-        "subject": 47,
+        "subject": 41,
         "tool": 25,
-        "infra": 21,
-        "policy": 23,
-        "unknown": 24
+        "infra": 23,
+        "policy": 18,
+        "unknown": 27
       },
       "ring": {
-        "accepted": 518,
-        "lease": 5,
-        "integrity": 5,
-        "worker_output": 5,
-        "infra": 17
+        "accepted": 465,
+        "not_used": 95
       },
-      "t0_w24h": 20
+      "ring_daily": {
+        "lease": 15,
+        "integrity": 5,
+        "worker_output": null,
+        "infra": 20
+      },
+      "t0_w24h": 23
     },
     {
       "id": "scan-deep",
@@ -142,6 +148,7 @@
       "spark24": null,
       "fault": null,
       "ring": null,
+      "ring_daily": null,
       "t0_w24h": null
     },
     {
@@ -154,6 +161,7 @@
       "spark24": null,
       "fault": null,
       "ring": null,
+      "ring_daily": null,
       "t0_w24h": null
     },
     {
@@ -161,15 +169,23 @@
       "state": "on",
       "tool": "mcp-writecheck-action",
       "pin": "54d4541",
-      "w1h": 9,
+      "w1h": 8,
       "w24h": 112,
       "spark24": [
-        7,
+        8,
         2,
-        7,
+        6,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        6,
         1,
-        5,
-        2,
         7,
         2,
         8,
@@ -179,31 +195,26 @@
         8,
         2,
         8,
-        2,
-        8,
-        2,
-        8,
-        2,
-        8,
-        2,
-        7,
-        2
+        0
       ],
       "fault": {
-        "subject": 5,
-        "tool": 4,
-        "infra": 3,
-        "policy": 3,
-        "unknown": 64
+        "subject": 4,
+        "tool": 1,
+        "infra": 2,
+        "policy": 4,
+        "unknown": 72
       },
       "ring": {
         "accepted": 112,
-        "lease": 2,
-        "integrity": 2,
-        "worker_output": 1,
-        "infra": 3
+        "not_used": 8
       },
-      "t0_w24h": 0
+      "ring_daily": {
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
+      },
+      "t0_w24h": 5
     },
     {
       "id": "meta-github",
@@ -247,10 +258,13 @@
       },
       "ring": {
         "accepted": 0,
-        "lease": 0,
-        "integrity": 0,
-        "worker_output": 0,
-        "infra": 0
+        "not_used": 0
+      },
+      "ring_daily": {
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
       },
       "t0_w24h": 0
     },
@@ -296,10 +310,13 @@
       },
       "ring": {
         "accepted": 0,
-        "lease": 0,
-        "integrity": 0,
-        "worker_output": 0,
-        "infra": 0
+        "not_used": 0
+      },
+      "ring_daily": {
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
       },
       "t0_w24h": 0
     },
@@ -345,10 +362,13 @@
       },
       "ring": {
         "accepted": 0,
-        "lease": 0,
-        "integrity": 0,
-        "worker_output": 0,
-        "infra": 0
+        "not_used": 0
+      },
+      "ring_daily": {
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
       },
       "t0_w24h": 0
     }
@@ -389,8 +409,8 @@
       "from": "scan-static",
       "to": "ingest",
       "w1h": 25,
-      "w24h": 891,
-      "w7d": 1744
+      "w24h": 900,
+      "w7d": 1775
     },
     {
       "from": "pump",
@@ -403,8 +423,8 @@
       "from": "live-probe",
       "to": "ingest",
       "w1h": 10,
-      "w24h": 550,
-      "w7d": 1110
+      "w24h": 560,
+      "w7d": 1130
     },
     {
       "from": "pump",
@@ -418,7 +438,7 @@
       "to": "ingest",
       "w1h": 10,
       "w24h": 120,
-      "w7d": 220
+      "w7d": 240
     },
     {
       "from": "pump",
@@ -483,114 +503,113 @@
     "assessed": {
       "w24h": 140,
       "all": 140
-    },
-    "quarantined_daily": 6
+    }
   },
   "now_checking": [
     {
-      "subject": "acme-labs/files-mcp",
+      "subject": "acme-labs/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "acme-labs/mcp-postgres",
+      "subject": "acme-labs/mcp-search-lite",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "contoso-dev/files-mcp",
+      "subject": "contoso-dev/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "contoso-dev/mcp-postgres",
+      "subject": "contoso-dev/mcp-search-lite",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "fabrikam/files-mcp",
+      "subject": "fabrikam/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "fabrikam/mcp-postgres",
+      "subject": "fabrikam/mcp-redis-bridge",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "globex-oss/files-mcp",
+      "subject": "fabrikam/mcp-search-lite",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "globex-oss/mcp-postgres",
+      "subject": "globex-oss/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "hooli-xyz/files-mcp",
+      "subject": "globex-oss/mcp-redis-bridge",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "hooli-xyz/mcp-postgres",
+      "subject": "hooli-xyz/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "initech/files-mcp",
+      "subject": "hooli-xyz/mcp-redis-bridge",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "initech/mcp-postgres",
+      "subject": "initech/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "northwind-io/files-mcp",
+      "subject": "initech/mcp-redis-bridge",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "northwind-io/mcp-postgres",
+      "subject": "northwind-io/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "piedpiper-net/files-mcp",
+      "subject": "northwind-io/mcp-search-lite",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "piedpiper-net/mcp-postgres",
+      "subject": "piedpiper-net/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "tailspin-tools/files-mcp",
+      "subject": "piedpiper-net/mcp-redis-bridge",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "tailspin-tools/mcp-postgres",
+      "subject": "tailspin-tools/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "umbrella-data/files-mcp",
+      "subject": "tailspin-tools/mcp-redis-bridge",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     },
     {
-      "subject": "umbrella-data/mcp-postgres",
+      "subject": "umbrella-data/kanban-mcp",
       "lane": "scan-static",
       "since": "2026-11-25T21:36:00.000Z"
     }
   ],
   "recent": [
     {
-      "seq": 49878900034,
+      "seq": 49878900032,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:37:04.000Z",
       "recorded_at": "2026-11-25T21:37:04.000Z",
@@ -600,7 +619,7 @@
       "state": "ok"
     },
     {
-      "seq": 49878900033,
+      "seq": 49878900031,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:37:00.000Z",
       "recorded_at": "2026-11-25T21:37:00.000Z",
@@ -609,7 +628,7 @@
       "label": "started"
     },
     {
-      "seq": 49878900032,
+      "seq": 49878900030,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:36:50.000Z",
       "recorded_at": "2026-11-25T21:36:50.000Z",
@@ -618,7 +637,7 @@
       "label": "finished"
     },
     {
-      "seq": 49878900031,
+      "seq": 49878900029,
       "type": "batch_sent",
       "occurred_at": "2026-11-25T21:36:02.000Z",
       "recorded_at": "2026-11-25T21:36:02.000Z",
@@ -626,7 +645,7 @@
       "n": 25
     },
     {
-      "seq": 49878900030,
+      "seq": 49878900028,
       "type": "batch_sent",
       "occurred_at": "2026-11-25T21:31:02.000Z",
       "recorded_at": "2026-11-25T21:31:02.000Z",
@@ -634,7 +653,7 @@
       "n": 10
     },
     {
-      "seq": 49878900029,
+      "seq": 49878900027,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:26:34.000Z",
       "recorded_at": "2026-11-25T21:26:34.000Z",
@@ -644,7 +663,7 @@
       "state": "ok"
     },
     {
-      "seq": 49878900028,
+      "seq": 49878900026,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:26:30.000Z",
       "recorded_at": "2026-11-25T21:26:30.000Z",
@@ -653,7 +672,7 @@
       "label": "started"
     },
     {
-      "seq": 49878900027,
+      "seq": 49878900025,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:26:20.000Z",
       "recorded_at": "2026-11-25T21:26:20.000Z",
@@ -662,7 +681,7 @@
       "label": "finished"
     },
     {
-      "seq": 49878900026,
+      "seq": 49878900024,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:16:04.000Z",
       "recorded_at": "2026-11-25T21:16:04.000Z",
@@ -672,17 +691,27 @@
       "state": "ok"
     },
     {
-      "seq": 49878900025,
+      "seq": 49878900023,
+      "type": "batch_closed",
+      "occurred_at": "2026-11-25T21:16:00.000Z",
+      "recorded_at": "2026-11-25T21:16:00.000Z",
+      "lane": "scan-static",
+      "n": 25,
+      "accepted": 23,
+      "not_used": 2
+    },
+    {
+      "seq": 49878900022,
       "type": "result",
       "occurred_at": "2026-11-25T21:16:00.000Z",
       "recorded_at": "2026-11-25T21:16:00.000Z",
       "lane": "scan-static",
       "n": 1,
-      "subject": "piedpiper-net/notes-mcp",
+      "subject": "vandelay-ind/kanban-mcp",
       "side": "assessed"
     },
     {
-      "seq": 49878900024,
+      "seq": 49878900021,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:16:00.000Z",
       "recorded_at": "2026-11-25T21:16:00.000Z",
@@ -691,7 +720,7 @@
       "label": "started"
     },
     {
-      "seq": 49878900023,
+      "seq": 49878900020,
       "type": "pump_run",
       "occurred_at": "2026-11-25T21:15:50.000Z",
       "recorded_at": "2026-11-25T21:15:50.000Z",
@@ -700,83 +729,74 @@
       "label": "finished"
     },
     {
-      "seq": 49878900022,
+      "seq": 49878900019,
       "type": "result",
       "occurred_at": "2026-11-25T21:15:00.000Z",
       "recorded_at": "2026-11-25T21:15:00.000Z",
       "lane": "scan-static",
       "n": 1,
-      "subject": "hooli-xyz/notes-mcp",
+      "subject": "piedpiper-net/kanban-mcp",
       "side": "assessed"
     },
     {
-      "seq": 49878900021,
+      "seq": 49878900018,
       "type": "result",
       "occurred_at": "2026-11-25T21:14:00.000Z",
       "recorded_at": "2026-11-25T21:14:00.000Z",
       "lane": "scan-static",
       "n": 1,
-      "subject": "umbrella-data/notes-mcp",
-      "side": "policy"
-    },
-    {
-      "seq": 49878900020,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:13:00.000Z",
-      "recorded_at": "2026-11-25T21:13:00.000Z",
-      "lane": "scan-static",
-      "n": 1,
-      "subject": "initech/notes-mcp",
-      "side": "tool"
-    },
-    {
-      "seq": 49878900019,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:12:00.000Z",
-      "recorded_at": "2026-11-25T21:12:00.000Z",
-      "lane": "scan-static",
-      "n": 1,
-      "subject": "globex-oss/notes-mcp",
-      "side": "tool"
-    },
-    {
-      "seq": 49878900018,
-      "type": "result",
-      "occurred_at": "2026-11-25T21:11:00.000Z",
-      "recorded_at": "2026-11-25T21:11:00.000Z",
-      "lane": "scan-static",
-      "n": 1,
-      "subject": "tailspin-tools/notes-mcp",
+      "subject": "hooli-xyz/kanban-mcp",
       "side": "assessed"
     },
     {
       "seq": 49878900017,
       "type": "result",
-      "occurred_at": "2026-11-25T21:10:00.000Z",
-      "recorded_at": "2026-11-25T21:10:00.000Z",
+      "occurred_at": "2026-11-25T21:13:00.000Z",
+      "recorded_at": "2026-11-25T21:13:00.000Z",
       "lane": "scan-static",
       "n": 1,
-      "subject": "fabrikam/notes-mcp",
+      "subject": "umbrella-data/kanban-mcp",
       "side": "assessed"
     },
     {
       "seq": 49878900016,
-      "type": "rejected",
-      "occurred_at": "2026-11-25T21:09:00.000Z",
-      "recorded_at": "2026-11-25T21:09:00.000Z",
+      "type": "result",
+      "occurred_at": "2026-11-25T21:12:00.000Z",
+      "recorded_at": "2026-11-25T21:12:00.000Z",
       "lane": "scan-static",
       "n": 1,
-      "class": "worker_output"
+      "subject": "initech/kanban-mcp",
+      "side": "assessed"
     },
     {
       "seq": 49878900015,
       "type": "result",
-      "occurred_at": "2026-11-25T21:08:00.000Z",
-      "recorded_at": "2026-11-25T21:08:00.000Z",
+      "occurred_at": "2026-11-25T21:11:00.000Z",
+      "recorded_at": "2026-11-25T21:11:00.000Z",
       "lane": "scan-static",
       "n": 1,
-      "subject": "northwind-io/notes-mcp",
+      "subject": "globex-oss/kanban-mcp",
       "side": "assessed"
+    },
+    {
+      "seq": 49878900014,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:10:00.000Z",
+      "recorded_at": "2026-11-25T21:10:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "tailspin-tools/kanban-mcp",
+      "side": "assessed"
+    },
+    {
+      "seq": 49878900013,
+      "type": "result",
+      "occurred_at": "2026-11-25T21:09:00.000Z",
+      "recorded_at": "2026-11-25T21:09:00.000Z",
+      "lane": "scan-static",
+      "n": 1,
+      "subject": "fabrikam/kanban-mcp",
+      "side": "policy"
     }
   ]
 }
