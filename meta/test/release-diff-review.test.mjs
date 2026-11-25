@@ -417,7 +417,12 @@ test('R-RD-19: an artifact whose bytes do not match the registry\'s digest is a 
     [c.held[0].package, c.held[0].version, c.held[0].ecosystem, c.held[0].artifact, c.held[0].indicators, c.held[0].sha256, c.held[0].size],
     ['acme-tool', '1.0.0', 'npm', 'npm_tarball', ['integrity_mismatch'], sha256(f.tarball), f.tarball.length],
   );
-  assert.equal(c.artifacts[0].outcome, 'artifact_not_verified');
+  // The public record is exactly what an artifact the registry answers 404 for gives: same outcome, no skip, no finding.
+  const gone = await collectSubject(http(npmWorld({ pkg, src: { 'package.json': SRC_JSON, 'lib/index.js': 'x' }, extra: [{ prefix: 'https://registry.npmjs.org/acme-tool/-/', status: 404, body: '' }] })), 'acme/tool', { seed: NPM_SEED });
+  assert.equal(gone.artifacts[0].outcome, 'artifact_not_found');
+  assert.deepEqual(gone.held, []);
+  assert.deepEqual(c.artifacts, gone.artifacts, 'the public artifact records are identical');
+  assert.deepEqual([c.skips, c.findings, c.summaries, c.stages], [gone.skips, gone.findings, gone.summaries, gone.stages]);
   // Nothing public names it: not the findings, the summaries, the artifacts, nor the held count in the stages.
   const pub = JSON.stringify([c.findings, c.summaries, c.artifacts, c.stages, c.skips]);
   assert.ok(!/integrity|mismatch|held/i.test(pub), pub);

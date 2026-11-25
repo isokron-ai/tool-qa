@@ -334,7 +334,7 @@ matched text, and is left out of every public field and count. The held list is 
 `held_truncated` entry counts what it left out. An artifact whose bytes do
 not match the registry's own digest is held too (rule id `integrity_mismatch`,
 with the sha256 of what was read), with no skip; the public artifact record
-says only `artifact_not_verified`. The fixture
+says only `artifact_not_found`, the outcome of an artifact the registry no longer serves, with no skip and no finding, so public data cannot tell the two apart. The fixture
 run's log prints nothing about it.
 
 ### Skips

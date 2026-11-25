@@ -677,7 +677,9 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
           // Bytes that do not match the registry's own digest can be a real tamper (a mirror, a swapped file): the
           // artifact is held, not skipped as an outage, and the public record says only that it was not read (R-RD-19).
           if (d.status === 'integrity_mismatch') {
-            j.outcome = 'artifact_not_verified';
+            // The same outcome, with no skip and no finding, as an artifact the registry no longer serves (404 or 410):
+            // the public data cannot tell the two apart.
+            j.outcome = 'artifact_not_found';
             held.push({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, path: null, sha256: d.sha256, size: d.bytes, placement: 'artifact', indicators: ['integrity_mismatch'] });
             continue;
           }
