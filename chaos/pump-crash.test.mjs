@@ -79,8 +79,8 @@ test('1d: a pump killed after judging results but before pushing them: the next 
 test('3a: a successor dispatch that fails turns the health issue red at once; the watchdog restarts the chain and it recovers', CHAOS, async () => {
   await withSim({}, async (sim) => {
     sim.cronOn.pump = false;
-    // 502 on every try: the successor retries a server error (a duplicate only replaces the pending run).
-    sim.gh.addFault({ name: 'successor 502', times: 4, match: CALLS.successorDispatch, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
+    // 502 on every try: the successor retries a server error (a duplicate only replaces the pending run), 6 tries (R-CHAOS-15).
+    sim.gh.addFault({ name: 'successor 502', times: 6, match: CALLS.successorDispatch, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
     startPump(sim);
     await sim.runFor(5 * MIN);
     assert.equal(healthOf(sim, 'pump-successor'), 'red', 'the successor reports its own failure to the health issue');
@@ -187,8 +187,8 @@ test('R-CHAOS-08: a server error on the branch re-read right before sending: not
   await withSim({}, async (sim) => {
     let reads = 0;
     // The tick reads the branch once to reserve, then again before each send:
-    // fail every try (4) of the first re-read.
-    sim.gh.addFault({ name: 'branch 502', times: 4, match: (r) => CALLS.branch(r) && ++reads >= 2, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
+    // fail every try (6) of the first re-read.
+    sim.gh.addFault({ name: 'branch 502', times: 6, match: (r) => CALLS.branch(r) && ++reads >= 2, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
     startPump(sim);
     await sim.runFor(5 * MIN);
     const s = sim.readLive();

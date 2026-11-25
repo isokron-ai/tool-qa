@@ -64,13 +64,26 @@ test('R-CHAOS-07: a rate limit that ends mid-run: the late dispatches ingest cou
   });
 });
 
-test('6b: a rate limit on the state push: the run fails loudly, nothing sent is lost, the next run carries on', CHAOS, async () => {
+test('6b: a rate limit on the state push that outlasts the retries (6 tries): the run fails loudly, nothing sent is lost, the next run carries on', CHAOS, async () => {
   await withSim({}, async (sim) => {
-    sim.gh.addFault({ name: '429 upload', times: 1, match: CALLS.stateUpload, respond: () => ({ status: 429, headers: { 'retry-after': '20' }, body: { message: 'secondary rate limit' } }) });
+    sim.gh.addFault({ name: '429 upload', times: 6, match: CALLS.stateUpload, respond: () => ({ status: 429, headers: { 'retry-after': '20' }, body: { message: 'secondary rate limit' } }) });
     startPump(sim);
     await sim.runFor(2 * HOUR);
     assert.equal(pumpOutcomes(sim)[0], 'failure');
     assert.ok(logLines(sim, /nothing dispatched: the state could not be saved/).length === 1, 'nothing was sent without being saved first');
+    assertRecovered(sim);
+  });
+});
+
+test('R-CHAOS-14: a short GitHub outage on the state push (500s on the upload, then a 502) is ridden out by the retries: the run does not fail and nothing is saved twice', CHAOS, async () => {
+  await withSim({}, async (sim) => {
+    sim.gh.addFault({ name: '500 upload', times: 3, match: CALLS.stateUpload, respond: () => ({ status: 500, body: { message: 'Server Error' } }) });
+    sim.gh.addFault({ name: '502 rename', times: 1, match: CALLS.stateRename, respond: () => ({ status: 502, body: { message: 'Bad Gateway' } }) });
+    startPump(sim);
+    await sim.runFor(2 * HOUR);
+    assert.equal(pumpOutcomes(sim)[0], 'success', 'the first run saved its state after retrying');
+    assert.equal(logLines(sim, /nothing dispatched: the state could not be saved/).length, 0);
+    assert.ok(logLines(sim, /retry: POST .*assets.*HTTP 500; attempt 1\/6 failed/).length >= 1, 'the retries are in the log');
     assertRecovered(sim);
   });
 });

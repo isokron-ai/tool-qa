@@ -250,7 +250,7 @@ export async function runPump({
   let db;
   let pulled;
   try {
-    pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, retryUntil: start + PULL_RETRY_MS, ...stateKeys });
+    pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, clock: now, retryUntil: start + PULL_RETRY_MS, ...stateKeys });
     // No state asset, but snapshots of one: the state was lost, not never
     // made. Starting from empty would silently throw away every result and
     // the fence counter (R-CHAOS-01); a person restores a snapshot instead.
@@ -286,7 +286,7 @@ export async function runPump({
       // Retries (pump/retry.mjs) stop at the run's deadline, so a tick's push
       // cannot hold the run past it; the push at the end of the run may go on a
       // little longer, still inside the job's timeout (R-CHAOS-13).
-      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), retryUntil: open ? deadline : deadline + FINAL_PUSH_GRACE_MS, ...stateKeys });
+      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), clock: now, retryUntil: open ? deadline : deadline + FINAL_PUSH_GRACE_MS, ...stateKeys });
       return true;
     } catch (err) {
       ok = false;

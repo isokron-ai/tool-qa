@@ -884,6 +884,38 @@ A running pump run notices none of these until its next start; cancel it from
 the Actions tab if it must stop at once. Its dispatches stay in the state, and
 their leases expire as usual.
 
+### GitHub outages: retries (R-CHAOS-13 to R-CHAOS-18)
+
+Every GitHub call the pump, the state asset and the state snapshot make goes
+through one retry policy (`pump/retry.mjs`). It retries HTTP 500, 502, 503,
+504, 429, a 403 that carries a rate-limit signal, and network errors or
+timeouts; any other 4xx is final. A call is tried up to 6 times, with
+exponential delays and full jitter (2 s base, 120 s cap, 62 s at most per
+call). `Retry-After` is honoured up to 60 s; a longer one ends the retries.
+All the sleeping of one push or pull is capped (180 s; the snapshot job 300 s)
+and a push stops at the run's deadline (the last push of a run may go 90 s past
+it), so a retry can never outlast the job. The log shows `retry: <call>: HTTP
+502; attempt 2/6 failed, next in 3.1s`.
+
+What is repeated, and what is not: reads, deletes and renames; the successor
+dispatch (a repeat only replaces the pending pump run) and token mints; an
+upload or a release create, after looking at what the failed one stored (a
+complete asset of the same name, size and label is used, a partial one is
+deleted). A worker shard dispatch is sent once: a repeat after a 5xx could
+start a second run for one lease. The pump still fails closed: it dispatches
+nothing it could not save state for, and when the successor cannot be sent it
+marks `pump-successor` red and carries on.
+
+### Registry delta capture
+
+GitHub's `*/15` cron for `history-registry.yml` fires hours late at times. Each
+pump tick (at most every 5 minutes) therefore checks the newest
+`registry-delta-*` artifact; if it is over 15 minutes old and no delta run is
+queued or running, the pump dispatches `history-registry.yml` with `mode:
+delta` (and `since` if the gap is over 75 minutes). The answer is in kv
+`pump.registry_delta`. The cron stays as a second path;
+`LANE_HISTORY_REGISTRY_ENABLED=false` stops both.
+
 ## The sandbox breaker
 
 Lanes that run third-party code (servers, builds) run it only inside the

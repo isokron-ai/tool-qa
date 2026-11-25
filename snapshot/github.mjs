@@ -20,14 +20,14 @@ function transient(err) {
 
 // The job has 10 minutes (state-snapshot.yml), so all the sleeping one client
 // does for retries is capped at 5; see pump/retry.mjs for the policy.
-export function createReleaseClient({ repo, token, fetch = globalThis.fetch, apiUrl, sleep, log = () => {}, random, retryUntil, retryTotalMs = 300_000, requestTimeoutMs = 120_000 }) {
+export function createReleaseClient({ repo, token, fetch = globalThis.fetch, apiUrl, sleep, log = () => {}, random, clock, retryUntil, retryTotalMs = 300_000, requestTimeoutMs = 120_000 }) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repo || ''))) {
     throw new Error(`repository must be "owner/name", got ${JSON.stringify(repo)}`);
   }
   const api = String(apiUrl || 'https://api.github.com').replace(/\/+$/, '');
   const scrub = (text) => (token ? String(text).split(token).join('***') : String(text));
   const doSleep = sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const retrier = createRetrier({ totalMs: retryTotalMs, until: retryUntil ?? null, sleep: doSleep, random, log });
+  const retrier = createRetrier({ totalMs: retryTotalMs, until: retryUntil ?? null, sleep: doSleep, random, now: clock, log });
 
   function headers(extra = {}, withAuth = true) {
     const h = { 'User-Agent': USER_AGENT, 'X-GitHub-Api-Version': '2022-11-28', Accept: 'application/vnd.github+json', ...extra };
