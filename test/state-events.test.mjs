@@ -309,6 +309,22 @@ test('the pump notes write their kv record and event together, and the kv record
   assert.throws(() => db.notePumpRun('paused', {}, { now: T0 }), TypeError);
 });
 
+test('R-LIVE-01: noteShaMismatch sets the pause and removes the count in one transaction: neither write happens without the other', () => {
+  const db = openState(':memory:');
+  const note = (i) => db.noteShaMismatch('live-probe', { sha: `${i}`.repeat(40), created: T0 + i * 10 * MIN, now: T0 + i * 10 * MIN });
+  note(1);
+  note(2);
+  db.raw.exec("CREATE TEMP TRIGGER count_delete_fails BEFORE DELETE ON kv WHEN OLD.key = 'pump.sha_mismatch:live-probe' BEGIN SELECT RAISE(ABORT, 'kv delete refused'); END");
+  assert.throws(() => note(3), /kv delete refused/);
+  assert.equal(db.getKv('pump.paused:live-probe'), undefined, 'no pause without the count removed (two separate writes left a pause here)');
+  assert.equal(db.getKv('pump.sha_mismatch:live-probe').count, 2, 'the count is as it was');
+  assert.equal(db.listEvents().length, 0);
+  db.raw.exec('DROP TRIGGER temp.count_delete_fails');
+  assert.equal(note(3).paused, true);
+  assert.ok(db.getKv('pump.paused:live-probe'));
+  assert.equal(db.getKv('pump.sha_mismatch:live-probe'), undefined);
+});
+
 // ---- events on or off: everything else is the same ----
 
 test('the same history with events recorded and with recordEvent a no-op leaves every other table byte for byte the same', () => {

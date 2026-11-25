@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { SCHEMA_VERSION } from '../state/db.mjs';
 import { HOUR, MIN, WORKFLOW } from './lib/sim.mjs';
 import { assertRecovered, CHAOS, logLines, startPump, withSim } from './lib/harness.mjs';
 
@@ -27,7 +28,7 @@ async function warmUp(sim) {
   await sim.runFor(45 * MIN);
   assert.equal(sim.missing().length, 0, 'every subject has its first result');
   const s = sim.readLive();
-  assert.equal(s.version, 9);
+  assert.equal(s.version, SCHEMA_VERSION);
   for (const [i, x] of sim.subjects.entries()) {
     const row = subjectOf(s, x.id);
     assert.equal(row.repo_id, 9000 + i, `${x.id} is bound to its repository id`);
