@@ -1,0 +1,285 @@
+name: publish-results
+
+# Publishes the loop's accepted results to isokron-ai/mcp-results as redacted plain files, as one
+# pull request that a person merges. OFF by default: it does nothing unless the repository variable
+# RESULTS_PUBLISH_ENABLED is exactly "true" (and the loop is on: LOOP_ENABLED, LOOP_PAUSE_UNTIL,
+# LANE_PUBLISH_RESULTS_ENABLED, as for every loop job). Design, redaction and the security hold:
+# docs/PUBLISHING.md.
+#
+# Nothing becomes public before a person has looked at it. Both repositories are public, so a
+# branch or pull request on mcp-results (and a readable artifact here) is public the moment it
+# exists, even if closed later. So:
+#
+#   build    runs on the schedule and by hand (no inputs). Environment `loop`, AGE_IDENTITY in one
+#            step. Reads the sealed `ingest-keep-*` artifacts of the last RESULTS_PUBLISH_LOOKBACK_DAYS
+#            days (default 7), keeps what ingest accepted, applies the publish policy and the
+#            redaction rules, checks the output with mcp-results' scripts/verify.mjs (only after
+#            publish/pin-check.mjs shows the reviewed version, in a step with no secret), and uploads
+#            ONLY ciphertext: the output sealed to worker-kit/ingest.pub, and a sealed, padded private
+#            report. It never delivers. Its summary shows the digest of the output's SHA256SUMS.
+#   approve  runs only from a manual dispatch with two inputs: the run id of a build run and
+#            `reviewed_sums`, the digest the reviewer read after opening that run's sealed output on
+#            his own machine (docs/PUBLISHING.md, "Review"). Environment `publish`, which has the
+#            owner as required reviewer: the job waits for his approval. It holds no secret and does
+#            nothing but check the inputs' format and that the environment really has a
+#            required-reviewers rule (publish/env-check.mjs).
+#   deliver  needs approve. Environment `loop` (the existing secrets; none is moved). The open step
+#            holds AGE_IDENTITY only and opens the archive only if its SHA256SUMS has exactly the
+#            reviewed digest; the deliver step holds the GitHub App only. The code in the job is this
+#            repository's own. Never merges.
+#
+# Fail closed: GitHub creates an environment that a workflow names when it does not exist, with no
+# protection, and runs the job at once. So approve asks the API for the environment's protection
+# rules and fails unless there is a required-reviewers rule; deliver then never runs.
+
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+    inputs:
+      deliver_run_id:
+        description: 'Deliver: run id of the build run whose sealed output was reviewed (empty = build only)'
+        type: string
+        default: ''
+      reviewed_sums:
+        description: 'Deliver: the SHA256SUMS digest of that output, as reviewed'
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: publish-results
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build
+    if: github.event_name == 'schedule' || inputs.deliver_run_id == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: loop
+    permissions:
+      contents: read # check out this repository
+      actions: read # list and download the ingest-keep artifacts of this repository
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+      clean: ${{ steps.build.outputs.clean }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish gate
+        id: gate
+        env:
+          RESULTS_PUBLISH_ENABLED: ${{ vars.RESULTS_PUBLISH_ENABLED }}
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_PUBLISH_RESULTS_ENABLED: ${{ vars.LANE_PUBLISH_RESULTS_ENABLED }}
+        run: node publish/gate.mjs
+      - name: Set up Node
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install age (pinned version, sha256 checked)
+        if: steps.gate.outputs.proceed == 'true'
+        run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
+      # Public repository, read without a credential.
+      - name: Read isokron-ai/mcp-results (main)
+        id: results
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/isokron-ai/mcp-results.git "$RUNNER_TEMP/mcp-results"
+          echo "base=$(git -C "$RUNNER_TEMP/mcp-results" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # AGE_IDENTITY goes to this step only. The script drops it from its environment at start.
+      # Exit 4 (not clean) is passed on after the output is kept; any other failure stops here.
+      - name: Build the files to publish
+        id: build
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
+          GITHUB_TOKEN: ${{ github.token }}
+          LOOKBACK_DAYS: ${{ vars.RESULTS_PUBLISH_LOOKBACK_DAYS }}
+        run: |
+          set +e
+          node publish/run.mjs \
+            --results "$RUNNER_TEMP/mcp-results" \
+            --out "$RUNNER_TEMP/publish-out" \
+            --private-out "$RUNNER_TEMP/publish-private" \
+            --seal-to worker-kit/ingest.pub \
+            --source-artifacts \
+            --since-days "${LOOKBACK_DAYS:-7}"
+          code=$?
+          if [ "$code" -eq 0 ]; then echo "clean=true" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -eq 4 ]; then echo "clean=false" >> "$GITHUB_OUTPUT"
+          else exit "$code"; fi
+      # Code from another repository, so: no secret in this step or after it, and only the reviewed files.
+      - name: The checker is the reviewed version
+        if: steps.gate.outputs.proceed == 'true'
+        run: node publish/pin-check.mjs "$RUNNER_TEMP/mcp-results" publish/verify-pin.json
+      - name: Verify with mcp-results' own checker (append-only against the base commit)
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          BASE: ${{ steps.results.outputs.base }}
+        run: |
+          set -euo pipefail
+          if [ -d "$RUNNER_TEMP/publish-out/data" ]; then
+            mkdir -p "$RUNNER_TEMP/mcp-results/data"
+            cp -R "$RUNNER_TEMP/publish-out/data/." "$RUNNER_TEMP/mcp-results/data/"
+          fi
+          node "$RUNNER_TEMP/mcp-results/scripts/verify.mjs" "$RUNNER_TEMP/mcp-results" --base "$BASE"
+      # Public key only: no secret here. The output leaves this job as ciphertext.
+      - name: Seal the output to the loop's public key
+        id: seal
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          AGE_BIN: ${{ runner.temp }}/age/age
+          BASE: ${{ steps.results.outputs.base }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sealed"
+          node publish/seal.mjs seal --dir "$RUNNER_TEMP/publish-out" --out "$RUNNER_TEMP/sealed/publish-out.tar.age" --base "$BASE" --to worker-kit/ingest.pub
+          {
+            echo '## Publish results (sealed)'
+            echo
+            echo "Reviewed digest to pass to a delivery: \`$(grep '^sums=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)\`"
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/publish-out/report.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the sealed output (ciphertext, 14 days)
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: publish-out-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sealed
+          retention-days: 14
+          if-no-files-found: error
+      # age ciphertext only: what was held and why, padded to a fixed size.
+      - name: Keep the private report (ciphertext, 30 days)
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: publish-private-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publish-private
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # Our own failures are not left in a report: the run ends red.
+  not-clean:
+    name: not clean
+    needs: build
+    if: always() && needs.build.outputs.clean == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Fail the run
+        run: |
+          echo "::error title=publish-results::The build was not clean (a sealed file could not be read, a result was held for a coverage mismatch, or a re-read record differs from its published one). The details are in the sealed private report artifact."
+          exit 1
+
+  approve:
+    name: approve
+    if: github.event_name == 'workflow_dispatch' && inputs.deliver_run_id != '' && inputs.reviewed_sums != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Required reviewers: the job does not start until the owner approves it. No secret is used here.
+    environment: publish
+    permissions:
+      contents: read # check out this repository
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: What is being approved
+        env:
+          RUN_ID: ${{ inputs.deliver_run_id }}
+          SUMS: ${{ inputs.reviewed_sums }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] && [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]]
+          echo "Approving delivery of the sealed output of run $RUN_ID, reviewed digest $SUMS"
+      # Reading an environment needs no more than read access to the repository.
+      - name: The publish environment has required reviewers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh api "repos/$REPO/environments/publish" | node publish/env-check.mjs
+
+  deliver:
+    name: deliver
+    needs: approve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: loop
+    permissions:
+      contents: read # check out this repository
+      actions: read # download the build run's sealed output
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish gate
+        id: gate
+        env:
+          RESULTS_PUBLISH_ENABLED: ${{ vars.RESULTS_PUBLISH_ENABLED }}
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_PUBLISH_RESULTS_ENABLED: ${{ vars.LANE_PUBLISH_RESULTS_ENABLED }}
+        run: node publish/gate.mjs
+      - name: The inputs are what they say
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          RUN_ID: ${{ inputs.deliver_run_id }}
+          SUMS: ${{ inputs.reviewed_sums }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]] && [[ "$SUMS" =~ ^[0-9a-f]{64}$ ]]
+      - name: Set up Node
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install age (pinned version, sha256 checked)
+        if: steps.gate.outputs.proceed == 'true'
+        run: bash worker-kit/install-age.sh "$RUNNER_TEMP/age"
+      - name: Download the sealed output of that run
+        if: steps.gate.outputs.proceed == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: publish-out-${{ inputs.deliver_run_id }}-*
+          merge-multiple: true
+          run-id: ${{ inputs.deliver_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/sealed
+      # AGE_IDENTITY goes to this step only. It opens the archive only if its SHA256SUMS has exactly
+      # the digest the reviewer read.
+      - name: Open the reviewed output
+        id: open
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          AGE_IDENTITY: ${{ secrets.AGE_IDENTITY }}
+          AGE_BIN: ${{ runner.temp }}/age/age
+          SUMS: ${{ inputs.reviewed_sums }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/publish-out"
+          node publish/seal.mjs open --in "$RUNNER_TEMP/sealed/publish-out.tar.age" --dir "$RUNNER_TEMP/publish-out" --expect "$SUMS"
+      # The GitHub App goes to this step only.
+      - name: Open or update the pull request on mcp-results
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          APP_ID: ${{ vars.APP_ID }}
+          APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: node publish/deliver.mjs --out "$RUNNER_TEMP/publish-out" --base-sha-file "$RUNNER_TEMP/publish-out/BASE_SHA"

@@ -1,0 +1,11 @@
+{
+  "description": "sha256 of the mcp-results files that make up scripts/verify.mjs. The verify job runs that checker only if these match (publish/pin-check.mjs). Update them in a reviewed pull request when the checker changes.",
+  "files": {
+    "scripts/verify.mjs": "871d7fe0dc6fc9e7d269b66afaad6d41cca537f07ab7be46c3d20a4ff9e39917",
+    "scripts/lib/schema.mjs": "95e4c667e11fefa989a23dd7ed9c9cfa0d9fa78acfa7b6b1877efdf12625e216",
+    "scripts/lib/miniyaml.mjs": "96fc179a5bae2847a5cab000521e9ddb0296a95faa8f53d64a8f739fab28db8f",
+    "schema/record.schema.json": "6d73b09ccef7ed3084b07401d9422a06e3969b3f7e8b3b1ba108975c7e8bdfc7",
+    "schema/manifest.schema.json": "f4cfa28bd82f94bd4978b4ca4b7f2dff471348f7ab3644f5e818fb4ee6542b59",
+    "schema/correction.schema.json": "e23f98dc19bc40ba7e9226de9a40eb732f73848ac8ecd26726d2dbfd5a6c7a7f"
+  }
+}
