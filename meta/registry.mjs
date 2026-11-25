@@ -27,7 +27,7 @@ import { readFileSync } from 'node:fs';
 
 import { FetchProblem } from './lib/http.mjs';
 import { OCI_HOSTS, ociTarget, resolveTags } from './lib/oci.mjs';
-import { bool, githubRepoOf, int, record, skipFor, str, textDigest, time } from './lib/common.mjs';
+import { bool, githubRepoOf, int, record, skipFor, str, textDigest, time, toolErrorSkip } from './lib/common.mjs';
 
 export const LANE = 'meta-registry';
 export const VERSION = '1.1.0';
@@ -683,7 +683,7 @@ const ATTRIBUTION = 'Data from deps.dev, CC BY 4.0 for the data deps.dev generat
 export function subjectErrorOutput() {
   return {
     records: [record('registry_entry_history', null, 'this subject\'s data could not be read (the lane failed on it)')],
-    skips: [{ stage: 'collect', reason: 'upstream_unavailable', retryable: false }],
+    skips: [toolErrorSkip('collect')],
     stages: { collect: 'subject_error' },
   };
 }

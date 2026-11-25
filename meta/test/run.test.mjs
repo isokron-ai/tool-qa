@@ -13,7 +13,7 @@ function tmp() {
 
 const envFor = (items, extra = {}) => ({ SHARD_ID: 'meta-shard-1', ATTEMPT_ID: 'att-42', ITEMS: JSON.stringify(items), ...extra });
 
-test('meta-github: a bundle per item, each accepted by ingest; a non-repository subject reports policy_excluded', async () => {
+test('meta-github: a bundle per item, each accepted by ingest; a non-repository subject reports unsupported_layout (our limit)', async () => {
   const dir = tmp();
   try {
     const items = [
@@ -33,7 +33,7 @@ test('meta-github: a bundle per item, each accepted by ingest; a non-repository 
     const meta = (i) => JSON.parse(readFileSync(join(out, String(i), 'meta.json'), 'utf8'));
     assert.equal(meta(0).subject.sha, 'a'.repeat(40));
     assert.deepEqual(meta(0).controls.map((c) => [c.kind, c.observed]), [['known_good', 'match'], ['forgery', 'contained']]);
-    assert.deepEqual(meta(3).skips, [{ stage: 'collect', reason: 'policy_excluded' }]);
+    assert.deepEqual(meta(3).skips, [{ stage: 'collect', reason: 'unsupported_layout', fault: 'tool' }]);
     assert.notEqual(meta(0).controls[1].marker, meta(1).controls[1].marker, 'a fresh forgery marker per item');
     const obs2 = readFileSync(join(out, '2', 'bundle', 'observations', 'meta-github.ndjson'), 'utf8');
     assert.match(obs2, /"why":"GitHub has no public repository with this name"/);
@@ -112,7 +112,7 @@ test('subjects not started before the deadline still get a bundle, with a retrya
     assert.ok(late.length > 0);
     for (const o of late) {
       const meta = JSON.parse(readFileSync(join(out, String(o.index), 'meta.json'), 'utf8'));
-      assert.deepEqual(meta.skips, [{ stage: 'collect', reason: 'upstream_unavailable', retryable: true }]);
+      assert.deepEqual(meta.skips, [{ stage: 'collect', reason: 'reader_limit', fault: 'tool', retryable: true }]);
       assert.equal(judgeItem(join(out, String(o.index)), { attemptId: 'att-42', fence: o.fence, runKey: o.run_key }).outcome, 'accepted');
     }
   } finally {

@@ -94,7 +94,7 @@ test('a GitHub rate limit on GraphQL makes every repository of the batch a retry
   const out = await collect({ http, repos: ['a/b', 'c/d'], token: 't', budget: createBudget() });
   for (const r of ['a/b', 'c/d']) {
     const o = subjectOutput({ ...out.get(r), observedAt: '2026-11-24T00:00:00Z' });
-    assert.deepEqual(o.skips, [{ stage: 'graphql', reason: 'rate_limited', retryable: true }]);
+    assert.deepEqual(o.skips, [{ stage: 'graphql', reason: 'rate_limited', fault: 'infra', retryable: true }]);
     assert.ok(o.records.every((x) => x.value === null && x.why));
   }
 });
@@ -180,7 +180,7 @@ test('R-DRIFT-21: a GraphQL error on the tag refs is a failed read (null with wh
     ['git_tag_targets', null, 'GitHub GraphQL returned an error for the tag refs'],
     ['git_tag_map_sha256', null, 'GitHub GraphQL returned an error for the tag refs'],
   ]);
-  assert.deepEqual(o.skips, [{ stage: 'tag_refs', reason: 'upstream_unavailable', retryable: true }]);
+  assert.deepEqual(o.skips, [{ stage: 'tag_refs', reason: 'upstream_unavailable', fault: 'infra', retryable: true }]);
   assert.equal(o.stages.tag_refs, 'error');
   assert.equal(o.records.find((r) => r.field === 'repo_core').value.github_id, 1463720077, 'the rest of the repository is kept');
 });
