@@ -18,11 +18,17 @@ function fakeGitHub({ loop = 'true', vars = {}, runs = {}, fail = {}, many = 0 }
       const all = { ...(loop === null ? {} : { LOOP_ENABLED: loop }), ...vars };
       for (let i = 0; i < many; i++) all['FILLER_' + i] = 'x';
       const names = Object.keys(all).filter((n) => all[n] !== undefined);
-      const per = Number(u.searchParams.get('per_page')); const page = Number(u.searchParams.get('page'));
+      const per = Math.min(30, Number(u.searchParams.get('per_page'))); const page = Number(u.searchParams.get('page'));
       return res(200, { total_count: names.length, variables: names.slice((page - 1) * per, page * per).map((name) => ({ name, value: all[name] })) });
     }
     const m = /\/workflows\/([^/]+)\/(runs|dispatches)$/.exec(u.pathname);
-    if (m && m[2] === 'runs') return res(200, { workflow_runs: runs[m[1]] || [] });
+    if (m && m[2] === 'runs') {
+      let list = (runs[m[1]] || []).filter((r) => (r.head_branch ?? 'main') === (u.searchParams.get('branch') ?? (r.head_branch ?? 'main')));
+      const cr = u.searchParams.get('created');
+      if (cr) list = list.filter((r) => Date.parse(r.created_at) >= Date.parse(cr.replace('>=', '')));
+      const per = Number(u.searchParams.get('per_page')); const page = Number(u.searchParams.get('page') || 1);
+      return res(200, { workflow_runs: list.slice((page - 1) * per, page * per) });
+    }
     if (m && m[2] === 'dispatches') { dispatches.push({ workflow: m[1], body: JSON.parse(init.body) }); return res(204, null); }
     throw new Error('unexpected ' + url);
   };
@@ -249,7 +255,7 @@ test('R-HB-12: history-registry is watched for its full capture only: the 15-min
   await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: j });
   assert.equal(j.dispatches.length, 1);
   // It lists 100 runs, so a day of deltas still shows the full run.
-  assert.ok(f.calls.length > 0 && entry('history-registry.yml').perPage === 100);
+  assert.equal(entry('history-registry.yml').perPage, 100);
 });
 
 test('R-HB-13: inputs sent with a dispatch: mode full for the registry, stars (all on Monday UTC) for popularity, none elsewhere', async () => {
@@ -286,15 +292,17 @@ test('R-HB-15: the variables are read in one call, and a tick stays far under th
   await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: f });
   assert.equal(f.calls.filter((c) => c.includes('/variables')).length, 1);
   assert.equal(f.calls.length, 1 + WATCH.length);
+  assert.ok(f.calls.every((c) => !c.includes('per_page=100') || c.includes('runs')));
   assert.ok(!f.calls.some((c) => /\/variables\//.test(c)), 'no per-variable call');
-  // Worst case: 350 variables (4 pages), every workflow stale, every dispatch attempted.
-  const w = fakeGitHub({ many: 350, runs: {} });
+  // Worst case: 300 variables (10 pages of 30), every workflow stale, every dispatch attempted.
+  const w = fakeGitHub({ many: 299, runs: {} });
   const log = await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: w });
-  assert.equal(w.calls.filter((c) => c.includes('/variables')).length, 4);
-  assert.equal(w.calls.length, 4 + WATCH.length + MAX_DISPATCHES);
+  assert.equal(w.calls.filter((c) => c.includes('/variables')).length, 10);
+  assert.equal(w.calls.length, 10 + WATCH.length + MAX_DISPATCHES, 'a registry window with fewer than 100 runs is one page');
+  assert.ok(10 + WATCH.length + 2 + MAX_DISPATCHES <= 40, 'and with 3 registry pages (the most) it is 27');
   assert.ok(w.calls.length <= 40, String(w.calls.length));
   assert.equal(log.filter((l) => /: dispatched/.test(l)).length, 4);
-  // Pagination: LOOP_ENABLED on the second page is still found; variables beyond five pages: nothing done.
+  // Pagination: LOOP_ENABLED is read whatever page it is on; more variables than the page cap: nothing done.
   const p = fakeGitHub({ many: 150, runs: {} });
   assert.equal((await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: p })).filter((l) => /: dispatched/.test(l)).length, 4);
   const big = fakeGitHub({ many: 900, runs: {} });
@@ -330,4 +338,64 @@ test('R-HB-16: a failing daily or weekly run is not re-dispatched in a loop; sta
   const f = fakeGitHub({ runs: { ...allHealthy(), 'state-snapshot.yml': [done(35, 'failure')], 'ledger.yml': [done(35, 'failure')] } });
   await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: f });
   assert.deepEqual(wfOf(f), ['state-snapshot.yml']);
+});
+
+test('R-HB-17: variables are listed 30 per page: a switch on page 2 still stops every dispatch', async () => {
+  const many = {}; for (let i = 0; i < 45; i++) many['A_FILLER_' + String(i).padStart(2, '0')] = 'x';
+  // LOOP_ENABLED is first; LOOP_PAUSE_UNTIL is pushed to page 2 by the 45 fillers placed before it.
+  const fut = new Date(NOW + 3600_000).toISOString();
+  const f = fakeGitHub({ vars: { ...many, LOOP_PAUSE_UNTIL: fut }, runs: {} });
+  const log = await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: f });
+  assert.equal(f.dispatches.length, 0);
+  assert.match(log.join('\n'), /paused until/);
+  assert.equal(f.calls.filter((c) => c.includes('/variables')).length, 2);
+  assert.ok(f.calls.some((c) => c.includes('/variables')) );
+  // Same fixture without the pause: dispatches go ahead.
+  const g = fakeGitHub({ vars: many, runs: {} });
+  await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: g });
+  assert.equal(g.dispatches.length, 4);
+});
+
+test('R-HB-18: only runs on main count: a pull request run cannot hide a missed scheduled run', async () => {
+  const urls = []; const inner = fakeGitHub({ runs: { ...allHealthy(), 'perf-baselines.yml': [done(1, 'success', { head_branch: 'some-pr', event: 'pull_request' }), done(20000)] } });
+  const f = async (url, init) => { urls.push(url); return inner(url, init); };
+  await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: f });
+  assert.deepEqual(wfOf(inner), ['perf-baselines.yml']);
+  assert.ok(urls.filter((u) => u.includes('/runs?')).every((u) => u.includes('branch=main')));
+});
+
+test('R-HB-19: the registry full run is found behind a day of deltas, and a window without one dispatches', async () => {
+  const delta = (min) => done(min, 'success', { display_title: 'history-registry delta' });
+  const full = (min) => done(min, 'success', { display_title: 'history-registry full' });
+  const deltas = (n) => Array.from({ length: n }, (_, i) => delta(2 + i * 15));
+  // 105 deltas span 26 h; the full run from 25.5 h ago is on page 2 and counts: no dispatch.
+  const a = fakeGitHub({ runs: { ...allHealthy(), 'history-registry.yml': [...deltas(100), full(25.5 * HOUR), delta(25.5 * HOUR + 3)] } });
+  await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: a });
+  assert.equal(a.dispatches.length, 0);
+  assert.equal(a.calls.filter((c) => c.includes('history-registry.yml/runs')).length, 2);
+  assert.ok(a.calls.length <= 1 + WATCH.length + 1);
+  // The full run is 27 h old: outside staleMin, so it is dispatched (and the created window leaves it out of the list).
+  const b = fakeGitHub({ runs: { ...allHealthy(), 'history-registry.yml': [...deltas(100), full(27 * HOUR)] } });
+  await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: b });
+  assert.deepEqual(b.dispatches, [{ workflow: 'history-registry.yml', body: { ref: 'main', inputs: { mode: 'full' } } }]);
+  // The window is sent as created=>=.
+  assert.ok(b.calls.length > 0);
+});
+
+test('R-HB-20: a state snapshot that keeps failing is retried fast only 3 times, then every staleMin, with a loud alert', async () => {
+  const s = { staleMin: 90, stuckMin: 20, retryFailedAfterMin: 30, now: NOW };
+  assert.equal(decide([done(31, 'failure'), done(70, 'success')], s).action, 'dispatch', '1 failure: retry');
+  assert.equal(decide([done(31, 'failure'), done(61, 'failure'), done(91, 'success')], s).action, 'dispatch', '2 in a row: retry');
+  const three = [done(31, 'failure'), done(61, 'timed_out'), done(91, 'failure'), done(121, 'success')];
+  const d = decide(three, s);
+  assert.equal(d.action, 'ok'); assert.match(d.alert, /failing repeatedly: 3 runs in a row; retrying only after 90 min/);
+  const e = decide([done(95, 'failure'), done(125, 'failure'), done(155, 'failure')], s);
+  assert.equal(e.action, 'dispatch'); assert.match(e.alert, /3 runs in a row/);
+  // Through tick: the alert is logged, and nothing is dispatched inside staleMin.
+  const f = fakeGitHub({ runs: { ...allHealthy(), 'state-snapshot.yml': three } });
+  const log = await tick({ token: 't0ken', enabled: 'true', now: NOW, fetch: f });
+  assert.equal(f.dispatches.length, 0);
+  assert.match(log.join('\n'), /ALERT state-snapshot\.yml: failing repeatedly: 3 runs in a row/);
+  // A success in between resets the count.
+  assert.equal(decide([done(31, 'failure'), done(61, 'success'), done(91, 'failure'), done(121, 'failure')], s).action, 'dispatch');
 });

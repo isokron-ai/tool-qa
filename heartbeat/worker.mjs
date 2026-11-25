@@ -31,7 +31,7 @@ export const REF = 'main';
 //   usesSlots  the pump alone stops chaining at LOOP_SLOTS=0.
 //   match      which runs count (history-registry: only the full capture; the pump dispatches a delta every ~15 min).
 //   inputs     workflow_dispatch inputs to send.
-//   perPage    runs to list (one call per workflow).
+//   perPage, maxPages   runs to list per call, and how many pages to read while no matching run has shown up (default 5, 1).
 export const WATCH = [
   { workflow: 'pump.yml', lane: 'LANE_PUMP_ENABLED', staleMin: 15, stuckMin: 40, usesSlots: true },
   { workflow: 'watchdog.yml', lane: 'LANE_WATCHDOG_ENABLED', staleMin: 40, stuckMin: 20 },
@@ -42,15 +42,18 @@ export const WATCH = [
   { workflow: 'history-packages.yml', lane: 'LANE_HISTORY_PACKAGES_ENABLED', staleMin: 1560, stuckMin: 180 },
   // Weekly downloads and stars on Monday (UTC), stars only on other days, as its own schedule.
   { workflow: 'history-popularity.yml', lane: 'LANE_HISTORY_POPULARITY_ENABLED', staleMin: 1560, stuckMin: 90, inputs: (now) => ({ mode: new Date(now).getUTCDay() === 1 ? 'all' : 'stars' }) },
-  // The run name carries the mode ("history-registry full" / "history-registry delta"); 100 runs cover over a day of deltas.
-  { workflow: 'history-registry.yml', label: 'history-registry.yml (full)', lane: 'LANE_HISTORY_REGISTRY_ENABLED', staleMin: 1560, stuckMin: 60, perPage: 100, match: (r) => /^history-registry full$/.test(String(r.display_title ?? r.name ?? '').trim()), inputs: () => ({ mode: 'full' }) },
+  // The run name carries the mode ("history-registry full" / "history-registry delta"). Deltas come every ~15 min, so list
+  // the window (staleMin + 30 min) 100 at a time, up to 3 pages, until a full run shows up.
+  { workflow: 'history-registry.yml', label: 'history-registry.yml (full)', lane: 'LANE_HISTORY_REGISTRY_ENABLED', staleMin: 1560, stuckMin: 60, perPage: 100, maxPages: 3, match: (r) => /^history-registry full$/.test(String(r.display_title ?? r.name ?? '').trim()), inputs: () => ({ mode: 'full' }) },
   { workflow: 'perf-baselines.yml', lane: 'LANE_PERF_ENABLED', staleMin: 11520, stuckMin: 40 },
   // chaos-soak.yml is meant to run weekly; it plays an in-memory simulation only and has no guard step or lane variable.
   { workflow: 'chaos-soak.yml', lane: null, staleMin: 11520, stuckMin: 120 },
 ];
 export const MAX_DISPATCHES = 4; // per tick, so recovering from an outage does not burst
 const MAX_CALLS = 40; // Workers free plan: 50 subrequests per invocation
-const MAX_VAR_PAGES = 5;
+const VAR_PAGE = 30; // GitHub caps the variables list at 30 per page
+const MAX_VAR_PAGES = 10;
+export const MAX_FAILED_RETRIES = 3; // consecutive failed runs after which a fast retry gives way to staleMin
 const FAILED = new Set(['failure', 'timed_out', 'startup_failure', 'cancelled']);
 const RUNNING = new Set(['in_progress']);
 const WAITING = new Set(['queued', 'waiting', 'pending', 'requested']); // action_required counts as neither
@@ -90,11 +93,15 @@ export function decide(runs, { staleMin, stuckMin = Infinity, retryFailedAfterMi
   }
   const timed = list.filter((r) => r && runTime(r) !== undefined).sort((a, b) => runTime(b) - runTime(a));
   const newest = timed.length ? runTime(timed[0]) : undefined;
-  if (newest !== undefined && retryFailedAfterMin !== undefined && FAILED.has(timed[0].conclusion) && now - newest >= retryFailedAfterMin * 60_000) {
+  let streak = 0;
+  for (const r of timed) { if (FAILED.has(r.conclusion)) streak++; else break; }
+  const repeated = retryFailedAfterMin !== undefined && streak >= MAX_FAILED_RETRIES;
+  const alert = repeated ? `failing repeatedly: ${streak} runs in a row; retrying only after ${staleMin} min` : undefined;
+  if (newest !== undefined && retryFailedAfterMin !== undefined && !repeated && streak > 0 && now - newest >= retryFailedAfterMin * 60_000) {
     return { action: 'dispatch', why: `the newest run ${timed[0].conclusion} ${Math.round((now - newest) / 60_000)} min ago (retry after ${retryFailedAfterMin} min)` };
   }
-  if (newest !== undefined && now - newest < staleMin * 60_000) return { action: 'ok', why: `newest run was active ${Math.round((now - newest) / 60_000)} min ago` };
-  return { action: 'dispatch', why: newest === undefined ? 'no runs found' : `nothing running and the newest run was active ${Math.round((now - newest) / 60_000)} min ago` };
+  if (newest !== undefined && now - newest < staleMin * 60_000) return { action: 'ok', alert, why: `newest run was active ${Math.round((now - newest) / 60_000)} min ago` };
+  return { action: 'dispatch', alert, why: newest === undefined ? 'no runs found' : `nothing running and the newest run was active ${Math.round((now - newest) / 60_000)} min ago` };
 }
 
 // Same reading of the switches as scripts/guard.mjs (a test compares the two).
@@ -133,12 +140,12 @@ export function pausedBy(vars, { lane, usesSlots, now }) {
 async function readVars(call) {
   const vars = {};
   for (let page = 1; page <= MAX_VAR_PAGES; page++) {
-    const v = await call('GET', `/repos/${REPO}/actions/variables?per_page=100&page=${page}`);
+    const v = await call('GET', `/repos/${REPO}/actions/variables?per_page=${VAR_PAGE}&page=${page}`);
     if (!v.ok) return { ok: false, status: v.status, error: v.error };
     const list = v.json && Array.isArray(v.json.variables) ? v.json.variables : [];
     for (const x of list) if (x && typeof x.name === 'string' && typeof x.value === 'string') vars[x.name] = x.value;
     const total = v.json && Number.isFinite(v.json.total_count) ? v.json.total_count : list.length;
-    if (list.length === 0 || page * 100 >= total) return { ok: true, vars };
+    if (list.length < VAR_PAGE || Object.keys(vars).length >= total) return { ok: true, vars };
   }
   return { ok: false, error: 'more variable pages than expected' };
 }
@@ -160,11 +167,21 @@ export async function tick({ token, enabled, fetch: fetchImpl = globalThis.fetch
     const name = w.label || w.workflow;
     const why = pausedBy(vars, { lane: w.lane, usesSlots: w.usesSlots, now });
     if (why) { log.push(`heartbeat: ${name}: not started: ${why}`); continue; }
-    const r = await call('GET', `/repos/${REPO}/actions/workflows/${w.workflow}/runs?per_page=${w.perPage || 5}&exclude_pull_requests=true`);
-    if (!r.ok) { log.push(`heartbeat: ${name}: could not list runs (HTTP ${r.status || r.error}); next tick retries`); continue; }
-    let runs = r.json && r.json.workflow_runs;
-    if (w.match && Array.isArray(runs)) runs = runs.filter((x) => x && w.match(x));
+    // Only runs on main: a pull request run (perf-baselines has a pull_request trigger) must not hide a missed scheduled run.
+    // history-registry: a created window plus paging until the full run shows up, since deltas outnumber it ~100 to 1.
+    const perPage = w.perPage || 5;
+    const created = w.maxPages ? `&created=${encodeURIComponent('>=' + new Date(now - (w.staleMin + 30) * 60_000).toISOString())}` : '';
+    let runs = []; let failed;
+    for (let page = 1; page <= (w.maxPages || 1); page++) {
+      const r = await call('GET', `/repos/${REPO}/actions/workflows/${w.workflow}/runs?per_page=${perPage}&page=${page}&branch=${REF}${created}`);
+      if (!r.ok) { failed = r; break; }
+      const got = (r.json && Array.isArray(r.json.workflow_runs)) ? r.json.workflow_runs : [];
+      runs = runs.concat(w.match ? got.filter((x) => x && w.match(x)) : got);
+      if (got.length < perPage || runs.length) break;
+    }
+    if (failed) { log.push(`heartbeat: ${name}: could not list runs (HTTP ${failed.status || failed.error}); next tick retries`); continue; }
     const d = decide(runs, { staleMin: w.staleMin, stuckMin: w.stuckMin, retryFailedAfterMin: w.retryFailedAfterMin, now });
+    if (d.alert) log.push(`heartbeat: ALERT ${name}: ${d.alert}`);
     if (d.action === 'ok') { log.push(`heartbeat: ${name}: ok (${d.why})`); continue; }
     if (dispatched >= MAX_DISPATCHES) { log.push(`heartbeat: ${name}: needs a dispatch (${d.why}) but ${MAX_DISPATCHES} were already sent this tick; next tick retries`); continue; }
     dispatched++;

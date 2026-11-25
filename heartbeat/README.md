@@ -26,9 +26,13 @@ reads (a test checks it against each workflow file, so perf is `LANE_PERF_ENABLE
 The registry's daily full capture needs its own filter because the pump dispatches a delta capture about every 15
 minutes, so the newest `history-registry.yml` run is always recent.
 
+**Which runs count.** Only runs on `main` (a pull request run, e.g. perf-baselines', cannot hide a missed scheduled run).
+The registry lists the window of `staleMin` + 30 min with `created=>=`, paging until its full run shows up.
+
 **Failed runs.** The newest run counts whatever its conclusion, so a daily or weekly workflow that keeps failing is
 retried only after its `staleMin`, not every 5 minutes. The one exception is `state-snapshot.yml` (`retryFailedAfterMin`
-30): a stale backup is the risk, so a failed newest run is retried after 30 minutes.
+30): a stale backup is the risk, so a failed newest run is retried after 30 minutes. After 3 failed runs in a row it
+stops the fast retry (back to `staleMin`) and logs `ALERT ... failing repeatedly: N runs in a row`.
 
 **Why it exists.** On 25 Nov 2026 a GitHub outage broke the pump's self-dispatch chain, and the `*/30` schedule fallback
 didn't fire after recovery. In the 24 hours after that the pump ran 1 of 48 scheduled runs, the watchdog 2 of 96, the
@@ -51,8 +55,8 @@ good run, and nothing retried the failed daily ledger. GitHub's scheduled runs a
   run going and one pending, and a newer pending run supersedes an older one. The watchdog has the same shape.
 
 **Cost.** It makes 288 runs a day. The Workers free plan allows 50 subrequests per run; a tick reads all repository
-variables in one call (more only past 100 variables, at most 5 pages), makes one run-list call per workflow (11), and
-sends at most 4 dispatches, so at most 20 calls, and a hard stop at 40. If more than 4 workflows need a dispatch (an
+variables in one call (GitHub lists 30 per page; at most 10 pages, more means nothing is done), makes one run-list call per workflow (11; the registry
+reads up to 3 pages of 100 until it finds its full run), and sends at most 4 dispatches, so at most 27 calls, and a hard stop at 40. If more than 4 workflows need a dispatch (an
 outage recovery), the rest wait for the next tick, in table order.
 
 ## Deploy (owner)
