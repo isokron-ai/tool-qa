@@ -32,10 +32,9 @@ const { snapshot, hourEvents, previousHourEvents, problems } = buildLiveSnapshot
 | `scan.mjs` | `scanPublic(value)`: the secret scan (`ingest/redact.mjs`) and the vendor-name scan over every string and key; hits are `{rule, path}` only |
 | `vendor-names.mjs` | the vendor, model and client name scanner (word list kept split in source, as R-PUB-08 does) |
 
-The builder reads `events`, `results`, `dispatches`, `dispatch_items` (counted
-only), `slot_ledger`, `subjects` and `kv`, never `attempts`, `leases`,
-`run_keys`, any digest, fence, holder, error or batch name column, or any
-bundle. Every statement it runs is checked against that list.
+The builder reads `events`, `results`, `dispatches`, `slot_ledger`,
+`subjects` and `kv`, never `dispatch_items`, `attempts`, `leases`,
+`run_keys`, any digest, fence, holder or error column, or any bundle. Every statement it runs is checked against that list.
 
 ## The snapshot
 
@@ -48,10 +47,10 @@ bundle. Every statement it runs is checked against that list.
 | `breaker` | null or `{state: closed / waiting_sandbox_check, checked_at, lanes}` |
 | `lanes[]` | `id`, `state` (`on`, `off`, `not_built`, `waiting_sandbox_check`), `tool`, `pin`, `note`, `w1h`, `w24h`, `spark24[24]` (accepted results per hour), `fault {subject, tool, infra, policy, unknown}` (24 h), `ring {accepted}` (24 h), `ring_daily {not_used, lease, integrity, worker_output, infra}`, `t0_w24h`; numbers null for a lane not built |
 | `history[]` | `registry-delta {state, last_capture_at, versions}`, `registry-full {state, last_capture_at, registry_size, full_at}`, `packages`, `popularity` `{state, last_capture_at}` |
-| `edges[]` | `{from, to, w1h, w24h, w7d}`: pump → lane (items sent), lane → ingest (items of batches that ended), pump → history (deltas) |
+| `edges[]` | `{from, to, w1h, w24h, w7d}`: pump → lane (batches sent), lane → ingest (accepted results), pump → history (deltas) |
 | `publish` | `{state: on/off}` |
 | `counts` | `subjects_in_seed`, `checked {w24h, w7d, all}`, `assessed {w24h, all}` |
-| `now_checking[]` | per lane with batches out: `{lane, batches_out, items_out, since_oldest}`; no server names |
+| `now_checking[]` | per lane with batches out: `{lane, batches_out, since_oldest}`; no server names, no item counts |
 | `just_checked` | `{hour, results: [{subject, lane, side}]}`: the named results of the last complete hour, sorted by name, at most 20 |
 | `recent[]` | the 20 newest public events that name no server, newest first |
 
@@ -81,10 +80,10 @@ the start of H-1; then every other public event recorded in H, in order.
 
 | Internal event | Public event | Public fields |
 |---|---|---|
-| `dispatch_sent` | `batch_sent` | lane, n |
-| `dispatch_failed`, `dispatch_unconfirmed` | `batch_not_sent` | lane, n, label (`GitHub error`, `refused`, `withdrawn`) |
-| `dispatch_closed` | `batch_closed` | lane, n |
-| `dispatch_expired` | `batch_expired` | lane, n |
+| `dispatch_sent` | `batch_sent` | lane, n (always 1: one batch) |
+| `dispatch_failed`, `dispatch_unconfirmed` | `batch_not_sent` | lane, n (1), label (`GitHub error`, `refused`, `withdrawn`) |
+| `dispatch_closed` | `batch_closed` | lane, n (1) |
+| `dispatch_expired` | `batch_expired` | lane, n (1) |
 | `result_recorded`, accepted, side `assessed` or `subject` | `result`, in the next hour's file only | lane, n (1), subject (owner/name or absent), side |
 | `result_recorded`, anything else | nothing | lane counts only |
 | `pump_run_started`, `pump_run_finished`, `successor` | `pump_run` | label (`started`, `finished`, `successor`), state and status for the successor |
@@ -104,6 +103,9 @@ snapshots and hour files.
   `subject`), never for a tool, infra, policy or unknown result (R-LIVE-27),
   and only an hour later, sorted by name, with no time finer than the hour
   (R-LIVE-26). No batch says how many of its items were used.
+- Dispatched work is public only as batch counts, never item counts
+  (R-LIVE-28): items sent minus accepted results would give each batch's, and
+  each day's, non-use, and undo the suppression of a small `not_used`.
 - Rejections and quarantines are never events, and their classes are only
   daily totals per lane, suppressed as above (R-LIVE-20, R-LIVE-25). A test
   builds two timelines that differ only in one item being quarantined or
@@ -116,11 +118,20 @@ snapshots and hour files.
   or it is left out (R-LIVE-23).
 - Retry call labels come from a fixed list (R-LIVE-24).
 
+## What stays visible, by design
+
+Per-lane counts of accepted results are live (`w1h`, `w24h`, `spark24`,
+`fault`, `ring.accepted`, the lane → ingest edge, `counts`), and accepted
+results that are assessed or the server's own condition are named an hour
+later. How many batches a lane sent, ended and has out is live. None of this
+says how many items a batch had, which server was in which batch, or what
+happened to an item that was not used.
+
 ## What never is
 
 Fences, attempt ids, item positions, run keys and their fields, digests,
 holders, shard ids, run URLs, artifact names, raw reason codes, error text,
-App or installation ids, environment values, batch membership, any
+App or installation ids, environment values, batch membership, item counts of dispatched work, any
 per-server or per-batch rejection or quarantine, any count of held or
 security-class results (no key or value says `held`), lane pauses, personal
 names, logins or emails, and AI vendor or model names.

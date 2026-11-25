@@ -414,44 +414,44 @@
     {
       "from": "pump",
       "to": "scan-static",
-      "w1h": 50,
-      "w24h": 900,
-      "w7d": 1800
+      "w1h": 2,
+      "w24h": 36,
+      "w7d": 72
     },
     {
       "from": "scan-static",
       "to": "ingest",
-      "w1h": 25,
-      "w24h": 900,
-      "w7d": 1775
+      "w1h": 23,
+      "w24h": 783,
+      "w7d": 1556
     },
     {
       "from": "pump",
       "to": "live-probe",
-      "w1h": 10,
-      "w24h": 560,
-      "w7d": 1140
+      "w1h": 1,
+      "w24h": 56,
+      "w7d": 114
     },
     {
       "from": "live-probe",
       "to": "ingest",
-      "w1h": 10,
-      "w24h": 560,
-      "w7d": 1130
+      "w1h": 8,
+      "w24h": 465,
+      "w7d": 984
     },
     {
       "from": "pump",
       "to": "writecheck",
-      "w1h": 10,
-      "w24h": 120,
-      "w7d": 240
+      "w1h": 1,
+      "w24h": 12,
+      "w7d": 24
     },
     {
       "from": "writecheck",
       "to": "ingest",
-      "w1h": 10,
-      "w24h": 120,
-      "w7d": 240
+      "w1h": 8,
+      "w24h": 112,
+      "w7d": 213
     },
     {
       "from": "pump",
@@ -522,13 +522,11 @@
     {
       "lane": "scan-static",
       "batches_out": 1,
-      "items_out": 25,
       "since_oldest": "2026-11-25T21:36:00.000Z"
     },
     {
       "lane": "live-probe",
       "batches_out": 1,
-      "items_out": 10,
       "since_oldest": "2026-11-25T21:31:00.000Z"
     }
   ],
@@ -672,7 +670,7 @@
       "occurred_at": "2026-11-25T21:36:02.000Z",
       "recorded_at": "2026-11-25T21:36:02.000Z",
       "lane": "scan-static",
-      "n": 25
+      "n": 1
     },
     {
       "seq": 49878900054,
@@ -680,7 +678,7 @@
       "occurred_at": "2026-11-25T21:31:02.000Z",
       "recorded_at": "2026-11-25T21:31:02.000Z",
       "lane": "live-probe",
-      "n": 10
+      "n": 1
     },
     {
       "seq": 49878900053,
@@ -726,7 +724,7 @@
       "occurred_at": "2026-11-25T21:16:00.000Z",
       "recorded_at": "2026-11-25T21:16:00.000Z",
       "lane": "scan-static",
-      "n": 25
+      "n": 1
     },
     {
       "seq": 49878900048,
@@ -789,7 +787,7 @@
       "occurred_at": "2026-11-25T20:59:30.000Z",
       "recorded_at": "2026-11-25T20:59:30.000Z",
       "lane": "writecheck",
-      "n": 10
+      "n": 1
     },
     {
       "seq": 49878800080,

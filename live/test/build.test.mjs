@@ -132,7 +132,7 @@ test('allowlist: every public event has only the public keys and types; the snap
   for (const h of snapshot.history) assert.ok(Object.keys(h).every((k) => ['kind', 'state', 'last_capture_at', 'versions', 'registry_size', 'full_at'].includes(k)));
   for (const e of snapshot.edges) assert.deepEqual(Object.keys(e), ['from', 'to', 'w1h', 'w24h', 'w7d']);
   assert.deepEqual(Object.keys(snapshot.counts), ['subjects_in_seed', 'checked', 'assessed']);
-  for (const c of snapshot.now_checking) assert.deepEqual(Object.keys(c), ['lane', 'batches_out', 'items_out', 'since_oldest']);
+  for (const c of snapshot.now_checking) assert.deepEqual(Object.keys(c), ['lane', 'batches_out', 'since_oldest']);
   assert.deepEqual(Object.keys(snapshot.just_checked), ['hour', 'results']);
   for (const j of snapshot.just_checked.results) assert.deepEqual(Object.keys(j), ['subject', 'lane', 'side']);
   assert.ok(snapshot.recent.every((e) => e.type !== 'result' && !('subject' in e)), 'recent names no server');
@@ -140,18 +140,17 @@ test('allowlist: every public event has only the public keys and types; the snap
   assert.equal(snapshot.schema, SCHEMA);
 });
 
-test('the builder reads only the allowed tables and never a digest, fence, holder, error or name column of a batch', () => {
+test('the builder reads only the allowed tables, never a batch\'s items, and never a digest, fence, holder or error column', () => {
   const { db, cfg, retry } = hostileState();
   const seen = [];
   const raw = { prepare: (sql) => { seen.push(sql); return db.raw.prepare(sql); } };
   buildLiveSnapshot({ raw }, { now: Date.parse('2026-11-25T21:02:00.000Z'), config: cfg, retry });
   assert.ok(seen.length > 5);
-  const allowed = new Set(['events', 'results', 'dispatches', 'dispatch_items', 'slot_ledger', 'subjects', 'kv', 'sqlite_master']);
+  const allowed = new Set(['events', 'results', 'dispatches', 'slot_ledger', 'subjects', 'kv', 'sqlite_master']);
   for (const sql of seen) {
-    assert.ok(!/\b(?:attempts|leases|run_keys|oracle_facts|oracle_disagreements|subject_events|counters|runs)\b/i.test(sql), sql);
+    assert.ok(!/\b(?:attempts|leases|run_keys|dispatch_items|oracle_facts|oracle_disagreements|subject_events|counters|runs)\b/i.test(sql), sql);
     assert.ok(!/\b(?:digest|fence|holder|holder_run|error|run_url|shard_id|fields|subject_name)\b/i.test(sql), sql);
     assert.ok(!/select\s+\*/i.test(sql), sql);
-    if (/dispatch_items/.test(sql)) assert.match(sql, /COUNT\(\*\) FROM dispatch_items/, 'batch items are only counted');
     for (const m of sql.matchAll(/\b(?:FROM|JOIN)\s+([a-z_]+)/gi)) assert.ok(allowed.has(m[1]), `${m[1]} in ${sql}`);
   }
 });
@@ -258,7 +257,7 @@ test('R-LIVE-21: public seq numbers leave no gap where a result was not publishe
   assert.equal(b.snapshot.seq, Math.floor(NOW / 1000));
 });
 
-test('R-LIVE-22: now_checking is counts per lane: batches and items out, the oldest start; no server is named', () => {
+test('R-LIVE-22: now_checking is counts per lane: batches out and the oldest start; no server is named', () => {
   const db = emptyState();
   for (const id of ['a-org/one', 'b-org/two', 'c-org/three']) addSubject(db, { id, at: NOW - 86_400_000 });
   addDispatch(db, { attemptId: 'x1', workflow: 'live-probe', created: NOW - 300_000, expires: NOW + HOUR, items: [{ subject: 'a-org/one', resolved: true }, { subject: 'b-org/two' }, { subject: 'c-org/three' }] });
@@ -266,7 +265,7 @@ test('R-LIVE-22: now_checking is counts per lane: batches and items out, the old
   addDispatch(db, { attemptId: 'x2', workflow: 'live-probe', created: NOW - 200_000, expires: NOW + HOUR, status: 'done', items: [{ subject: 'a-org/one' }] });
   addDispatch(db, { attemptId: 'x3', workflow: 'writecheck', created: NOW - 200_000, expires: NOW - 1, items: [{ subject: 'b-org/two' }] });
   const { snapshot } = buildLiveSnapshot(db, { now: NOW, config: config() });
-  assert.deepEqual(snapshot.now_checking, [{ lane: 'live-probe', batches_out: 2, items_out: 4, since_oldest: new Date(NOW - 300_000).toISOString() }]);
+  assert.deepEqual(snapshot.now_checking, [{ lane: 'live-probe', batches_out: 2, since_oldest: new Date(NOW - 300_000).toISOString() }]);
   assert.ok(!/-org\//.test(JSON.stringify(snapshot)));
 });
 
@@ -437,13 +436,14 @@ test('toPublicEvent maps each internal type to its public shape, and nothing els
   const lanes = Object.keys(WORKFLOWS.workflows);
   const pub = (type, data, extra = {}) => toPublicEvent({ ...base, type, data: JSON.stringify(data), ...extra }, { lanes, subjectName: ACCEPTED });
   const head = { seq: null, occurred_at: base.occurred_at, recorded_at: base.recorded_at, lane: 'live-probe', n: 10 };
-  assert.deepEqual(pub('dispatch_sent', { run_id: '1', run_url: RUN_URL }), { ...head, type: 'batch_sent' });
-  assert.deepEqual(pub('dispatch_failed', { status: 502 }), { ...head, type: 'batch_not_sent', label: 'GitHub error' });
-  assert.deepEqual(pub('dispatch_failed', { status: 422 }), { ...head, type: 'batch_not_sent', label: 'refused' });
-  assert.deepEqual(pub('dispatch_failed', { withdrawn: true }), { ...head, type: 'batch_not_sent', label: 'withdrawn' });
-  assert.deepEqual(pub('dispatch_unconfirmed', { status: 504 }), { ...head, type: 'batch_not_sent', label: 'GitHub error' });
-  assert.deepEqual(pub('dispatch_closed', { close_reason: 'results_in', accepted: 3 }), { ...head, type: 'batch_closed' });
-  assert.deepEqual(pub('dispatch_expired', {}), { ...head, type: 'batch_expired' });
+  const one = { ...head, n: 1 };
+  assert.deepEqual(pub('dispatch_sent', { run_id: '1', run_url: RUN_URL }), { ...one, type: 'batch_sent' });
+  assert.deepEqual(pub('dispatch_failed', { status: 502 }), { ...one, type: 'batch_not_sent', label: 'GitHub error' });
+  assert.deepEqual(pub('dispatch_failed', { status: 422 }), { ...one, type: 'batch_not_sent', label: 'refused' });
+  assert.deepEqual(pub('dispatch_failed', { withdrawn: true }), { ...one, type: 'batch_not_sent', label: 'withdrawn' });
+  assert.deepEqual(pub('dispatch_unconfirmed', { status: 504 }), { ...one, type: 'batch_not_sent', label: 'GitHub error' });
+  assert.deepEqual(pub('dispatch_closed', { close_reason: 'results_in', accepted: 3 }), { ...one, type: 'batch_closed' });
+  assert.deepEqual(pub('dispatch_expired', {}), { ...one, type: 'batch_expired' });
   const hour = { occurred_at: '2026-11-25T21:00:00.000Z', recorded_at: '2026-11-25T21:00:00.000Z' };
   assert.deepEqual(pub('result_recorded', { verdict: 'accepted', coverage: 'assessed' }), { ...head, ...hour, n: 1, type: 'result', subject: ACCEPTED, side: 'assessed' });
   assert.deepEqual(pub('result_recorded', { verdict: 'accepted', fault: 'subject', coverage: 'subject' }).side, 'subject');
@@ -552,7 +552,7 @@ test('deterministic: the same state and clock give the same bytes; epoch ms, Dat
   assert.throws(() => buildLiveSnapshot(a.db, { now: 'nope', config: a.cfg }), TypeError);
 });
 
-test('counts and edges follow the events: accepted results, items sent and items of batches that ended', () => {
+test('counts and edges follow the events: accepted results and batches sent', () => {
   const db = emptyState();
   addSubject(db, { id: 'a-org/one', at: NOW - 86_400_000, tier: 0 });
   addSubject(db, { id: 'b-org/two', at: NOW - 86_400_000, tier: 2, retired: true });
@@ -577,12 +577,12 @@ test('counts and edges follow the events: accepted results, items sent and items
   assert.equal(wc.spark24.reduce((x, y) => x + y, 0), 3);
   assert.equal(wc.spark24[23], 1);
   const edge = (from, to) => snapshot.edges.find((e) => e.from === from && e.to === to);
-  assert.deepEqual(edge('pump', 'writecheck'), { from: 'pump', to: 'writecheck', w1h: 3, w24h: 3, w7d: 8 });
-  assert.deepEqual(edge('writecheck', 'ingest'), { from: 'writecheck', to: 'ingest', w1h: 3, w24h: 5, w7d: 5 });
+  assert.deepEqual(edge('pump', 'writecheck'), { from: 'pump', to: 'writecheck', w1h: 1, w24h: 1, w7d: 2 });
+  assert.deepEqual(edge('writecheck', 'ingest'), { from: 'writecheck', to: 'ingest', w1h: 1, w24h: 3, w7d: 3 });
   assert.deepEqual(edge('pump', 'history'), { from: 'pump', to: 'history', w1h: 1, w24h: 1, w7d: 1 });
   assert.deepEqual(snapshot.pump.registry_delta, { at: new Date(NOW - 10 * 60_000).toISOString(), w24h: 1 });
   assert.deepEqual(snapshot.counts, { subjects_in_seed: 2, checked: { w24h: 2, w7d: 2, all: 1 }, assessed: { w24h: 2, all: 1 } });
-  assert.deepEqual(hourEvents.map((e) => [e.type, e.n]), [['batch_sent', 3], ['batch_closed', 3], ['history_triggered', 1], ['history_triggered', 1]]);
+  assert.deepEqual(hourEvents.map((e) => [e.type, e.n]), [['batch_sent', 1], ['batch_closed', 1], ['history_triggered', 1], ['history_triggered', 1]]);
 });
 
 test('with the store\'s own event writers: sent, accepted, rejected and quarantined results come out as the plan says', async () => {
@@ -602,11 +602,53 @@ test('with the store\'s own event writers: sent, accepted, rejected and quaranti
   db.recordResult({ run_key: items[1].run_key, attempt_id: 'att-1', fence: items[1].fence, verdict: 'rejected', outcome: 'quarantined', reason: 'secret_scan', now: t + 61_000 });
   db.recordResult({ run_key: items[2].run_key, attempt_id: 'att-1', fence: items[2].fence, verdict: 'rejected', outcome: 'rejected', reason: 'digest_mismatch', now: t + 62_000 });
   const prev = buildLiveSnapshot(db, { now: t + 63_000, config: config() });
-  assert.deepEqual(prev.hourEvents.map((e) => [e.type, e.lane, e.n]), [['batch_sent', 'live-probe', 3], ['batch_closed', 'live-probe', 3]]);
+  assert.deepEqual(prev.hourEvents.map((e) => [e.type, e.lane, e.n]), [['batch_sent', 'live-probe', 1], ['batch_closed', 'live-probe', 1]]);
   const { snapshot, hourEvents, problems } = buildLiveSnapshot(db, { now: NOW, config: config() });
   assert.deepEqual(problems, []);
   assert.deepEqual(hourEvents.map((e) => [e.type, e.subject, e.side]), [['result', 'a-org/one', 'assessed']]);
   const text = JSON.stringify([snapshot, hourEvents, prev]);
   assert.ok(!text.includes('b-org/two') && !text.includes('c-org/three'));
   assert.deepEqual(snapshot.lanes.find((l) => l.id === 'live-probe').ring, { accepted: 1 });
+});
+
+/**
+ * Sixteen batches on writecheck on 24 Nov, thirteen results accepted. `extra`
+ * puts that many more items, all not used, into the last batch: with none,
+ * every batch has one item and three are not used.
+ */
+function sixteenBatches(extra) {
+  const db = emptyState();
+  const day = Date.UTC(2026, 10, 24);
+  for (let b = 0; b < 16; b++) {
+    const t = day + (b + 1) * HOUR;
+    const id = `s${String(b).padStart(2, '0')}-org/server`;
+    addSubject(db, { id, at: day - 86_400_000 });
+    addEvent(db, { type: 'dispatch_sent', at: t, lane: 'writecheck', n: 1 + (b === 15 ? extra : 0) });
+    const accepted = b < 13;
+    addEvent(db, { type: 'result_recorded', at: t + 60_000, lane: 'writecheck', subject: id, data: accepted ? { verdict: 'accepted', outcome: 'accepted', coverage: 'assessed' } : { verdict: 'rejected', reason: 'stale_fence', outcome: 'rejected' } });
+    for (let k = 0; b === 15 && k < extra; k++) addEvent(db, { type: 'result_recorded', at: t + 60_000, lane: 'writecheck', data: { verdict: 'rejected', reason: 'retry_later', outcome: 'rejected' } });
+    addEvent(db, { type: 'dispatch_closed', at: t + 120_000, lane: 'writecheck', n: 1 + (b === 15 ? extra : 0) });
+  }
+  return db;
+}
+
+test('R-LIVE-28: dispatched work is public only as batch counts, so items minus accepted results never reproduces a suppressed not_used', () => {
+  // 16 single-item batches with 3 not used, and the same 16 batches with 4 not used (one batch of two):
+  // both suppressed (below 5), and every snapshot and hour file is the same.
+  const from = Date.parse('2026-11-24T00:30:00.000Z');
+  const to = Date.parse('2026-11-25T00:20:00.000Z');
+  const three = observe(sixteenBatches(0), from, to, config());
+  const four = observe(sixteenBatches(1), from, to, config());
+  assert.equal(three.length, four.length);
+  for (let i = 0; i < three.length; i++) assert.equal(JSON.stringify(three[i]), JSON.stringify(four[i]), new Date(three[i].t).toISOString());
+  const last = three.at(-1).snapshot.lanes.find((l) => l.id === 'writecheck');
+  assert.equal(last.ring_daily.not_used, null);
+  // No public number is an item count: every batch event says n 1, and no field names items.
+  for (const x of three) {
+    for (const e of [...x.hour, ...(x.previous ?? []), ...x.snapshot.recent]) if (e.type.startsWith('batch_')) assert.equal(e.n, 1);
+    assert.ok(!/items/.test(JSON.stringify(x.snapshot)), 'no items field');
+  }
+  // With five not used, the total shows: the suppression is what hides three or four.
+  const five = observe(sixteenBatches(2), to, to, config());
+  assert.equal(five[0].snapshot.lanes.find((l) => l.id === 'writecheck').ring_daily.not_used, 5);
 });

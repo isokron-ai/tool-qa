@@ -11,8 +11,7 @@
 // Design: PHASE-1-BUILD-PLAN.md section 3 as amended by the review of #75
 // ("design B"), 26 Nov 2026.
 //
-// Tables read: events, results, dispatches, dispatch_items (counts only),
-// slot_ledger, subjects, kv. Never
+// Tables read: events, results, dispatches, slot_ledger, subjects, kv. Never
 // attempts, leases, run_keys or any bundle, and never a digest, fence, holder
 // or error column (live/test/build.test.mjs checks every statement).
 //
@@ -24,7 +23,9 @@
 //     after the one it was recorded in, sorted by name, its times cut to the
 //     hour (R-LIVE-26), and only when it is assessed or the server's own
 //     condition (side subject); tool, infra, policy and unknown results are
-//     lane counts only (R-LIVE-27). No batch carries how many items were used.
+//     lane counts only (R-LIVE-27). Dispatched work is public only as batch
+//     counts, never item counts, so items minus accepted results is never
+//     public (R-LIVE-28); accepted counts per lane are live.
 //   - No rejection or quarantine is an event of its own. Rejection classes are
 //     per lane and previous complete UTC day only (ring_daily): not_used in
 //     total, null below 5, and the four classes, all null if any is below 5,
@@ -258,15 +259,16 @@ export function toPublicEvent(row, { seq = null, subjectName = null, lanes = nul
     return out;
   };
   switch (row.type) {
+    // Batches are counted as batches (n = 1), never by their items (R-LIVE-28).
     case 'dispatch_sent':
-      return ev('batch_sent');
+      return ev('batch_sent', { n: 1 });
     case 'dispatch_failed':
     case 'dispatch_unconfirmed':
-      return ev('batch_not_sent', { label: batchLabel(row.type, d) });
+      return ev('batch_not_sent', { n: 1, label: batchLabel(row.type, d) });
     case 'dispatch_closed':
-      return ev('batch_closed');
+      return ev('batch_closed', { n: 1 });
     case 'dispatch_expired':
-      return ev('batch_expired');
+      return ev('batch_expired', { n: 1 });
     case 'result_recorded': {
       // Only an accepted result that is assessed or the server's own
       // condition names its server; any other side is a lane count only (R-LIVE-27).
@@ -312,7 +314,7 @@ export function toPublicEvent(row, { seq = null, subjectName = null, lanes = nul
 
 // ---- reading the state ----
 
-const FORBIDDEN = /\b(?:attempts|leases|run_keys|subject_name|digest|artifact_digest|fence|holder|holder_run|error|run_url|shard_id|repo_id|node_id)\b/i;
+const FORBIDDEN = /\b(?:attempts|leases|run_keys|dispatch_items|subject_name|digest|artifact_digest|fence|holder|holder_run|error|run_url|shard_id|repo_id|node_id)\b/i;
 
 /** The raw connection, with every statement checked against the table allowlist. */
 function reader(db) {
@@ -438,20 +440,25 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
   if (events) {
     // Accepted results (a rejection and a quarantine count nowhere live).
     const rows = r.all(`
-      SELECT e.lane AS lane, substr(e.occurred_at, 1, 13) AS hr, e.occurred_at > ? AS in1h,
+      SELECT e.lane AS lane, substr(e.occurred_at, 1, 13) AS hr, e.occurred_at > ? AS in1h, e.occurred_at > ? AS in24h,
         json_extract(e.data, '$.fault') AS fault, json_extract(e.data, '$.coverage') AS coverage,
         COALESCE((SELECT s.tier FROM subjects s WHERE s.id = e.subject), 4) = 0 AS t0,
         SUM(e.n) AS n
       FROM events e
       WHERE e.type = 'result_recorded' AND e.occurred_at > ? AND e.occurred_at <= ? AND ${ACCEPTED_SQL.replaceAll('data', 'e.data')}
-      GROUP BY 1, 2, 3, 4, 5, 6 ORDER BY 1, 2, 3, 4, 5, 6
-    `, since1h, since24h, nowIso);
+      GROUP BY 1, 2, 3, 4, 5, 6, 7 ORDER BY 1, 2, 3, 4, 5, 6, 7
+    `, since1h, since24h, since7d, nowIso);
     const hourIndex = new Map();
     for (let i = 0; i < 24; i++) hourIndex.set(isoMs(hourStartMs - (23 - i) * HOUR).slice(0, 13), i);
     for (const row of rows) {
       const st = laneStats.get(row.lane);
       if (!st) continue;
       const n = count(row.n);
+      // lane -> ingest: accepted results, never dispatched items (R-LIVE-28).
+      st.back.w7d += n;
+      if (!row.in24h) continue;
+      st.back.w24h += n;
+      if (row.in1h) st.back.w1h += n;
       st.w24h += n;
       if (row.in1h) st.w1h += n;
       if (hourIndex.has(row.hr)) st.spark[hourIndex.get(row.hr)] += n;
@@ -459,21 +466,20 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
       const side = sideOf(row.fault, row.coverage);
       if (side !== 'assessed') st.fault[side] += n;
     }
-    // Items sent, items of batches that ended, registry deltas.
+    // Batches sent (counted as batches, never items: R-LIVE-28), registry deltas.
     const flows = r.all(`
       SELECT type, lane, occurred_at > ? AS in1h, occurred_at > ? AS in24h,
         CASE WHEN type = 'registry_delta' AND json_valid(data) THEN json_extract(data, '$.action') END AS action,
-        SUM(n) AS n, COUNT(*) AS c
-      FROM events WHERE type IN ('dispatch_sent', 'dispatch_closed', 'dispatch_expired', 'registry_delta') AND occurred_at > ? AND occurred_at <= ?
+        COUNT(*) AS c
+      FROM events WHERE type IN ('dispatch_sent', 'registry_delta') AND occurred_at > ? AND occurred_at <= ?
       GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5
     `, since1h, since24h, since7d, nowIso);
     for (const row of flows) {
       let target = null;
       if (row.type === 'dispatch_sent') target = laneStats.get(row.lane)?.sent;
       else if (row.type === 'registry_delta') target = row.action === 'dispatched' ? historyTriggered : null;
-      else target = laneStats.get(row.lane)?.back;
       if (!target) continue;
-      const n = row.type === 'registry_delta' ? count(row.c) : count(row.n);
+      const n = count(row.c);
       target.w7d += n;
       if (row.in24h) target.w24h += n;
       if (row.in1h) target.w1h += n;
@@ -600,11 +606,7 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
   for (const id of laneIds) {
     const o = out.find((x) => x.lane === id);
     if (!o) continue;
-    const items = count(r.get(`
-      SELECT COALESCE(SUM((SELECT COUNT(*) FROM dispatch_items i WHERE i.attempt_id = d.attempt_id)), 0) AS n FROM dispatches d
-      WHERE d.workflow = ? AND d.status = 'dispatched' AND d.expires > ? AND d.created <= ?
-    `, id, nowIso, nowIso)?.n);
-    nowChecking.push({ lane: id, batches_out: count(o.batches), items_out: items, since_oldest: isoOrNull(o.since) });
+    nowChecking.push({ lane: id, batches_out: count(o.batches), since_oldest: isoOrNull(o.since) });
   }
 
   // ---- hour files, recent, just checked ----

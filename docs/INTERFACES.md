@@ -413,9 +413,9 @@ returns `{ snapshot, hourEvents, previousHourEvents, problems }`: the
 file of the previous hour while the current one is under 300 s old (else
 null; the uploader writes it again then), and the scan and size problems
 (`[{rule, path}]`; any problem means nothing is uploaded). It is pure and
-read-only: it reads `events`, `results`, `dispatches`, `dispatch_items`
-(counted only), `slot_ledger`, `subjects` and `kv`, never `attempts`,
-`leases`, `run_keys` or a digest. No server name is published live: an
+read-only: it reads `events`, `results`, `dispatches`, `slot_ledger`,
+`subjects` and `kv`, never `dispatch_items`, `attempts`, `leases`,
+`run_keys` or a digest. Dispatched work is public only as batch counts. No server name is published live: an
 accepted result that is assessed or the server's own condition is named in
 the next hour's file only, sorted by name; batch membership, per-item
 rejections and quarantines are never published, and rejection classes are

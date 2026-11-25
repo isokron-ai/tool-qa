@@ -415,43 +415,43 @@
       "from": "pump",
       "to": "scan-static",
       "w1h": 0,
-      "w24h": 650,
-      "w7d": 1550
+      "w24h": 26,
+      "w7d": 62
     },
     {
       "from": "scan-static",
       "to": "ingest",
       "w1h": 0,
-      "w24h": 675,
-      "w7d": 1550
+      "w24h": 572,
+      "w7d": 1345
     },
     {
       "from": "pump",
       "to": "live-probe",
       "w1h": 0,
-      "w24h": 410,
-      "w7d": 990
+      "w24h": 41,
+      "w7d": 99
     },
     {
       "from": "live-probe",
       "to": "ingest",
       "w1h": 0,
-      "w24h": 420,
-      "w7d": 990
+      "w24h": 359,
+      "w7d": 874
     },
     {
       "from": "pump",
       "to": "writecheck",
       "w1h": 0,
-      "w24h": 90,
-      "w7d": 210
+      "w24h": 9,
+      "w7d": 21
     },
     {
       "from": "writecheck",
       "to": "ingest",
       "w1h": 0,
-      "w24h": 90,
-      "w7d": 210
+      "w24h": 83,
+      "w7d": 195
     },
     {
       "from": "pump",
