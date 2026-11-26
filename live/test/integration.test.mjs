@@ -25,14 +25,17 @@ test('integration: publishLive with the real builder uploads snapshot, hour file
     const put = async (key, body, o) => { puts.push({ key, body, cc: o.cacheControl }); return { status: 200 }; };
     const r = await publishLive({ db, put, env: ENV, now: () => t, config: { workflows, switches: {}, history: [], lane_notes: { 'live-probe': 're_sweep' } }, deadlineMs: 5000, log: (l) => lines.push(l) });
     assert.equal(r.ok, true, lines.join('\n'));
-    const keys = puts.map((p) => p.key);
+    // The snapshot's files end with the pointer; the daily history (first publish of the day) follows it.
+    const allKeys = puts.map((p) => p.key);
+    const keys = allKeys.slice(0, allKeys.indexOf('v1/latest.json') + 1);
     assert.match(keys[0], /^v1\/snap\/[0-9a-f]{16}\.json$/);
     assert.equal(keys.at(-1), 'v1/latest.json');
+    assert.ok(allKeys.slice(keys.length).every((k) => k.startsWith('v1/history/')), allKeys.join(' '));
     assert.ok(keys.includes('v1/events/2026-11-25/14.ndjson'));
     const snap = JSON.parse(puts[0].body);
     assert.equal(snap.schema, 'isokron-loop-live/1');
     assert.ok(Buffer.byteLength(puts[0].body) < 20 * 1024);
-    const ptr = JSON.parse(puts.at(-1).body);
+    const ptr = JSON.parse(puts[keys.length - 1].body);
     assert.equal(ptr.snap, keys[0]);
     assert.equal(ptr.seq, snap.seq);
     // inside the first 5 minutes of the hour the previous hour is written too, immutable

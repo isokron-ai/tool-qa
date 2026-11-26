@@ -88,12 +88,16 @@ const IMMUTABLE = 'public, max-age=31536000, immutable';
  *   v1/events/<date>/<HH>.ndjson        max-age=60 for the open hour, immutable once it is past
  *   v1/heartbeat.json                   max-age=30
  *   v1/retry.json                       max-age=5 (the open retry, from memory)
+ *   v1/history/days/<YYYY-MM-DD>.json   immutable (a complete UTC day, written once)
+ *   v1/history/recent.json, index.json  max-age=300 (rewritten once a day)
  */
 export function cacheControlFor(key, { now = Date.now() } = {}) {
   if (key === 'v1/latest.json') return 'public, max-age=5, s-maxage=10';
   if (key === 'v1/heartbeat.json') return 'public, max-age=30';
   if (key === 'v1/retry.json') return 'public, max-age=5';
   if (/^v1\/snap\/[0-9a-f]{16}\.json$/.test(key)) return IMMUTABLE;
+  if (key === 'v1/history/recent.json' || key === 'v1/history/index.json') return 'public, max-age=300';
+  if (/^v1\/history\/days\/\d{4}-\d{2}-\d{2}\.json$/.test(key)) return IMMUTABLE;
   const m = /^v1\/events\/(\d{4}-\d{2}-\d{2})\/(\d{2})\.ndjson$/.exec(key);
   if (m) {
     const hourStart = Date.parse(`${m[1]}T${m[2]}:00:00Z`);
