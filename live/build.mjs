@@ -542,7 +542,9 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
   });
 
   // ---- switches, mode ----
-  const loopOn = String(switches.LOOP_ENABLED ?? '').trim() === 'true';
+  // The pump only runs when scripts/guard.mjs let it, so a LOOP_ENABLED the run was not
+  // given means the loop is on (R-LIVE-29); only a value given and not "true" means off.
+  const loopOn = switches.LOOP_ENABLED === undefined || String(switches.LOOP_ENABLED).trim() === 'true';
   const pauseText = String(switches.LOOP_PAUSE_UNTIL ?? '').trim();
   const pauseUntil = Date.parse(pauseText);
   const pausedNow = pauseText !== '' && !(Number.isFinite(pauseUntil) && pauseUntil <= nowMs);

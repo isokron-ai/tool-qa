@@ -652,3 +652,16 @@ test('R-LIVE-28: dispatched work is public only as batch counts, so items minus 
   const five = observe(sixteenBatches(2), to, to, config());
   assert.equal(five[0].snapshot.lanes.find((l) => l.id === 'writecheck').ring_daily.not_used, 5);
 });
+
+test('R-LIVE-29: the pump step is not given LOOP_ENABLED, so its absence reads as on: LOOP_SLOTS=0 is idle "scanning paused by us", never "loop switched off by us"', () => {
+  const now = Date.parse('2026-11-26T00:50:53.000Z');
+  const db = emptyState();
+  const cfg = config({ slots: '0' });
+  delete cfg.switches.LOOP_ENABLED;
+  delete cfg.switches.LOOP_PAUSE_UNTIL;
+  const { snapshot } = buildLiveSnapshot(db, { now, config: cfg });
+  assert.equal(snapshot.mode, 'idle');
+  assert.equal(snapshot.mode_reason, 'scanning paused by us');
+  const off = config({ slots: '0', loop: 'false' });
+  assert.equal(buildLiveSnapshot(db, { now, config: off }).snapshot.mode, 'off');
+});
