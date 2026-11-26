@@ -1,0 +1,821 @@
+{
+  "schema": "isokron-loop-live/1",
+  "seq": 1795642800,
+  "generated_at": "2026-11-25T21:40:00.000Z",
+  "version": "0f1e2d3",
+  "mode": "live",
+  "mode_reason": "scanning live",
+  "pump": {
+    "run_started_at": "2026-11-25T21:37:00.000Z",
+    "tick_at": "2026-11-25T21:39:30.000Z",
+    "tick_s": 150,
+    "runs_24h": 137,
+    "successor": {
+      "state": "ok",
+      "at": "2026-11-25T21:37:04.000Z"
+    },
+    "slots": {
+      "budget": 2,
+      "open": 2,
+      "max": 15,
+      "ramp": [
+        2,
+        5,
+        8,
+        12,
+        15
+      ]
+    },
+    "registry_delta": {
+      "at": "2026-11-25T21:00:00.000Z",
+      "w24h": 32
+    }
+  },
+  "retry": null,
+  "breaker": {
+    "state": "closed",
+    "checked_at": "2026-11-25T13:52:10.000Z",
+    "lanes": []
+  },
+  "lanes": [
+    {
+      "id": "scan-static",
+      "state": "on",
+      "tool": "mcp-check",
+      "pin": "75503c1",
+      "note": null,
+      "w1h": 23,
+      "w24h": 783,
+      "spark24": [
+        32,
+        40,
+        29,
+        39,
+        29,
+        36,
+        30,
+        37,
+        33,
+        39,
+        32,
+        40,
+        8,
+        40,
+        29,
+        41,
+        23,
+        24,
+        30,
+        41,
+        33,
+        38,
+        29,
+        16
+      ],
+      "fault": {
+        "subject": 73,
+        "tool": 46,
+        "infra": 29,
+        "policy": 38,
+        "unknown": 38
+      },
+      "ring": {
+        "accepted": 783
+      },
+      "ring_daily": {
+        "not_used": 61,
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
+      },
+      "t0_w24h": 25
+    },
+    {
+      "id": "live-probe",
+      "state": "on",
+      "tool": "mcp-check",
+      "pin": "116b0ca",
+      "note": "re-checking every server after a fix to our PyPI launcher",
+      "w1h": 8,
+      "w24h": 465,
+      "spark24": [
+        19,
+        24,
+        21,
+        20,
+        18,
+        17,
+        15,
+        23,
+        20,
+        19,
+        18,
+        15,
+        22,
+        19,
+        19,
+        18,
+        25,
+        23,
+        10,
+        26,
+        18,
+        25,
+        22,
+        0
+      ],
+      "fault": {
+        "subject": 41,
+        "tool": 25,
+        "infra": 23,
+        "policy": 18,
+        "unknown": 27
+      },
+      "ring": {
+        "accepted": 465
+      },
+      "ring_daily": {
+        "not_used": 43,
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
+      },
+      "t0_w24h": 23
+    },
+    {
+      "id": "scan-deep",
+      "state": "not_built",
+      "tool": null,
+      "pin": null,
+      "note": "not built yet",
+      "w1h": null,
+      "w24h": null,
+      "spark24": null,
+      "fault": null,
+      "ring": null,
+      "ring_daily": null,
+      "t0_w24h": null
+    },
+    {
+      "id": "build-probe",
+      "state": "not_built",
+      "tool": null,
+      "pin": null,
+      "note": "not built yet",
+      "w1h": null,
+      "w24h": null,
+      "spark24": null,
+      "fault": null,
+      "ring": null,
+      "ring_daily": null,
+      "t0_w24h": null
+    },
+    {
+      "id": "writecheck",
+      "state": "on",
+      "tool": "mcp-writecheck-action",
+      "pin": "54d4541",
+      "note": "most servers skipped: npm and PyPI only for now",
+      "w1h": 8,
+      "w24h": 112,
+      "spark24": [
+        8,
+        2,
+        6,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        6,
+        1,
+        7,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        2,
+        8,
+        0
+      ],
+      "fault": {
+        "subject": 4,
+        "tool": 1,
+        "infra": 2,
+        "policy": 4,
+        "unknown": 72
+      },
+      "ring": {
+        "accepted": 112
+      },
+      "ring_daily": {
+        "not_used": 5,
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
+      },
+      "t0_w24h": 5
+    },
+    {
+      "id": "meta-github",
+      "state": "off",
+      "tool": "meta-github",
+      "pin": "1.2.0",
+      "note": "off",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0
+      },
+      "ring_daily": {
+        "not_used": null,
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
+      },
+      "t0_w24h": 0
+    },
+    {
+      "id": "meta-registry",
+      "state": "off",
+      "tool": "meta-registry",
+      "pin": "1.2.0",
+      "note": "off",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0
+      },
+      "ring_daily": {
+        "not_used": null,
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
+      },
+      "t0_w24h": 0
+    },
+    {
+      "id": "release-diff",
+      "state": "off",
+      "tool": "release-diff",
+      "pin": "1.1.0",
+      "note": "off",
+      "w1h": 0,
+      "w24h": 0,
+      "spark24": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "fault": {
+        "subject": 0,
+        "tool": 0,
+        "infra": 0,
+        "policy": 0,
+        "unknown": 0
+      },
+      "ring": {
+        "accepted": 0
+      },
+      "ring_daily": {
+        "not_used": null,
+        "lease": null,
+        "integrity": null,
+        "worker_output": null,
+        "infra": null
+      },
+      "t0_w24h": 0
+    }
+  ],
+  "history": [
+    {
+      "kind": "registry-delta",
+      "state": "on",
+      "last_capture_at": "2026-11-25T21:31:02.000Z",
+      "versions": 37
+    },
+    {
+      "kind": "registry-full",
+      "state": "on",
+      "last_capture_at": "2026-11-25T12:46:00.000Z",
+      "registry_size": 73655,
+      "full_at": "2026-11-25T12:46:00.000Z"
+    },
+    {
+      "kind": "packages",
+      "state": "on",
+      "last_capture_at": "2026-11-25T03:12:40.000Z"
+    },
+    {
+      "kind": "popularity",
+      "state": "on",
+      "last_capture_at": "2026-11-23T04:05:11.000Z"
+    }
+  ],
+  "edges": [
+    {
+      "from": "pump",
+      "to": "scan-static",
+      "w1h": 2,
+      "w24h": 36,
+      "w7d": 72
+    },
+    {
+      "from": "scan-static",
+      "to": "ingest",
+      "w1h": 23,
+      "w24h": 783,
+      "w7d": 1556
+    },
+    {
+      "from": "pump",
+      "to": "live-probe",
+      "w1h": 1,
+      "w24h": 56,
+      "w7d": 114
+    },
+    {
+      "from": "live-probe",
+      "to": "ingest",
+      "w1h": 8,
+      "w24h": 465,
+      "w7d": 984
+    },
+    {
+      "from": "pump",
+      "to": "writecheck",
+      "w1h": 1,
+      "w24h": 12,
+      "w7d": 24
+    },
+    {
+      "from": "writecheck",
+      "to": "ingest",
+      "w1h": 8,
+      "w24h": 112,
+      "w7d": 213
+    },
+    {
+      "from": "pump",
+      "to": "meta-github",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "meta-github",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "meta-registry",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "meta-registry",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "release-diff",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "release-diff",
+      "to": "ingest",
+      "w1h": 0,
+      "w24h": 0,
+      "w7d": 0
+    },
+    {
+      "from": "pump",
+      "to": "history",
+      "w1h": 1,
+      "w24h": 32,
+      "w7d": 64
+    }
+  ],
+  "publish": {
+    "state": "off"
+  },
+  "counts": {
+    "subjects_in_seed": 140,
+    "checked": {
+      "w24h": 140,
+      "w7d": 140,
+      "all": 140
+    },
+    "assessed": {
+      "w24h": 140,
+      "all": 140
+    }
+  },
+  "now_checking": [
+    {
+      "lane": "scan-static",
+      "batches_out": 1,
+      "since_oldest": "2026-11-25T21:36:00.000Z"
+    },
+    {
+      "lane": "live-probe",
+      "batches_out": 1,
+      "since_oldest": "2026-11-25T21:31:00.000Z"
+    }
+  ],
+  "just_checked": {
+    "hour": "2026-11-25T20:00:00.000Z",
+    "results": [
+      {
+        "subject": "acme-labs/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      },
+      {
+        "subject": "acme-labs/mcp-git-tools",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "acme-labs/mcp-redis-bridge",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "contoso-dev/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      },
+      {
+        "subject": "contoso-dev/mcp-redis-bridge",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "contoso-dev/notes-mcp",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "contoso-dev/notes-mcp",
+        "lane": "writecheck",
+        "side": "assessed"
+      },
+      {
+        "subject": "fabrikam/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      },
+      {
+        "subject": "fabrikam/mcp-git-tools",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "fabrikam/mcp-redis-bridge",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "fabrikam/mcp-search-lite",
+        "lane": "live-probe",
+        "side": "subject"
+      },
+      {
+        "subject": "fabrikam/notes-mcp",
+        "lane": "scan-static",
+        "side": "subject"
+      },
+      {
+        "subject": "globex-oss/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      },
+      {
+        "subject": "globex-oss/mcp-git-tools",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "globex-oss/mcp-redis-bridge",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "globex-oss/mcp-search-lite",
+        "lane": "live-probe",
+        "side": "subject"
+      },
+      {
+        "subject": "hooli-xyz/mcp-git-tools",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "hooli-xyz/mcp-git-tools",
+        "lane": "writecheck",
+        "side": "assessed"
+      },
+      {
+        "subject": "hooli-xyz/notes-mcp",
+        "lane": "scan-static",
+        "side": "assessed"
+      },
+      {
+        "subject": "initech/kanban-mcp",
+        "lane": "live-probe",
+        "side": "assessed"
+      }
+    ]
+  },
+  "recent": [
+    {
+      "seq": 49878900058,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:37:04.000Z",
+      "recorded_at": "2026-11-25T21:37:04.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "successor",
+      "state": "ok"
+    },
+    {
+      "seq": 49878900057,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:37:00.000Z",
+      "recorded_at": "2026-11-25T21:37:00.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900056,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:36:50.000Z",
+      "recorded_at": "2026-11-25T21:36:50.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900055,
+      "type": "batch_sent",
+      "occurred_at": "2026-11-25T21:36:02.000Z",
+      "recorded_at": "2026-11-25T21:36:02.000Z",
+      "lane": "scan-static",
+      "n": 1
+    },
+    {
+      "seq": 49878900054,
+      "type": "batch_sent",
+      "occurred_at": "2026-11-25T21:31:02.000Z",
+      "recorded_at": "2026-11-25T21:31:02.000Z",
+      "lane": "live-probe",
+      "n": 1
+    },
+    {
+      "seq": 49878900053,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:26:34.000Z",
+      "recorded_at": "2026-11-25T21:26:34.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "successor",
+      "state": "ok"
+    },
+    {
+      "seq": 49878900052,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:26:30.000Z",
+      "recorded_at": "2026-11-25T21:26:30.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900051,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:26:20.000Z",
+      "recorded_at": "2026-11-25T21:26:20.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900050,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:16:04.000Z",
+      "recorded_at": "2026-11-25T21:16:04.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "successor",
+      "state": "ok"
+    },
+    {
+      "seq": 49878900049,
+      "type": "batch_closed",
+      "occurred_at": "2026-11-25T21:16:00.000Z",
+      "recorded_at": "2026-11-25T21:16:00.000Z",
+      "lane": "scan-static",
+      "n": 1
+    },
+    {
+      "seq": 49878900048,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:16:00.000Z",
+      "recorded_at": "2026-11-25T21:16:00.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900047,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:15:50.000Z",
+      "recorded_at": "2026-11-25T21:15:50.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900046,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:05:34.000Z",
+      "recorded_at": "2026-11-25T21:05:34.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "successor",
+      "state": "ok"
+    },
+    {
+      "seq": 49878900045,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:05:30.000Z",
+      "recorded_at": "2026-11-25T21:05:30.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878900044,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T21:05:20.000Z",
+      "recorded_at": "2026-11-25T21:05:20.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    },
+    {
+      "seq": 49878900043,
+      "type": "history_triggered",
+      "occurred_at": "2026-11-25T21:00:00.000Z",
+      "recorded_at": "2026-11-25T21:00:00.000Z",
+      "lane": null,
+      "n": 1,
+      "state": "dispatched"
+    },
+    {
+      "seq": 49878800081,
+      "type": "batch_closed",
+      "occurred_at": "2026-11-25T20:59:30.000Z",
+      "recorded_at": "2026-11-25T20:59:30.000Z",
+      "lane": "writecheck",
+      "n": 1
+    },
+    {
+      "seq": 49878800080,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T20:55:04.000Z",
+      "recorded_at": "2026-11-25T20:55:04.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "successor",
+      "state": "ok"
+    },
+    {
+      "seq": 49878800079,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T20:55:00.000Z",
+      "recorded_at": "2026-11-25T20:55:00.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "started"
+    },
+    {
+      "seq": 49878800078,
+      "type": "pump_run",
+      "occurred_at": "2026-11-25T20:54:50.000Z",
+      "recorded_at": "2026-11-25T20:54:50.000Z",
+      "lane": null,
+      "n": 1,
+      "label": "finished"
+    }
+  ]
+}

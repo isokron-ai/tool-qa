@@ -404,3 +404,20 @@ State calls:
 | `pump.paused:<workflow>` | `{ reason: 'run_sha_mismatch', count, since, until }`: set when that count reaches 3. Until `until` (6 hours) the pump dispatches none of the workflow and every pump run fails, so the health issue shows it red; the pause ends on its own. |
 | `pump.api_budget` | The pump's API budget (`ApiBudget.snapshot()`): the time of every API call in the last hour, per endpoint family, and any rate-limit block still in force. Saved before every push and restored at the start of the next run, so the hourly caps hold across runs rather than per run. |
 | `ingest.failures:<attempt_id>:<index>` | `{ count, first, last, error }`: how often the pump failed to judge that item (not counting transient errors). Removed when the item is decided; at 3 it is recorded as `ingest_error`. |
+
+## Public live snapshot (`live/`)
+
+`buildLiveSnapshot(db, { now, config, retry, version })` (`live/build.mjs`)
+returns `{ snapshot, hourEvents, previousHourEvents, problems }`: the
+`isokron-loop-live/1` snapshot, the public file of the current UTC hour, the
+file of the previous hour while the current one is under 300 s old (else
+null; the uploader writes it again then), and the scan and size problems
+(`[{rule, path}]`; any problem means nothing is uploaded). It is pure and
+read-only: it reads `events`, `results`, `dispatches`, `slot_ledger`,
+`subjects` and `kv`, never `dispatch_items`, `attempts`, `leases`,
+`run_keys` or a digest. Dispatched work is public only as batch counts. No server name is published live: an
+accepted result that is assessed or the server's own condition is named in
+the next hour's file only, sorted by name; batch membership, per-item
+rejections and quarantines are never published, and rejection classes are
+per-lane daily totals with small counts suppressed. Public `seq` numbers are
+not event ids. What is public and what never is: `live/README.md`.
