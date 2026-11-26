@@ -71,6 +71,10 @@
 //   LANE_STATE_PRUNE_ENABLED   anything but unset, empty or "true" stops pruning
 //   LANE_SUBJECT_IDS_ENABLED   anything but unset, empty or "true" stops the
 //                      subject id lookups (pump/identity.mjs)
+//   LANE_LIVE_SNAPSHOT_ENABLED   only the exact value "true" publishes the live
+//                      loop snapshot to R2 (live/publish.mjs); with
+//                      LIVE_R2_ACCESS_KEY_ID, LIVE_R2_SECRET_ACCESS_KEY,
+//                      R2_ACCOUNT_ID (and LIVE_R2_BUCKET, default isokron-loop-live)
 //
 // Ingest outputs are sealed to worker-kit/ingest.pub and written to --ingest-out
 // (default $RUNNER_TEMP/ingest-out); pump.yml uploads that directory. The keep-forever
@@ -91,6 +95,7 @@ import { createDispatcher } from './dispatch.mjs';
 import { dueFromState, isEnabled, loadConfig } from './due.mjs';
 import { lanePinModes } from './pins.mjs';
 import { createClient, scrub } from './github.mjs';
+import { POLICY } from './retry.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.mjs';
 import { computeBudget, reapExpired } from './slots.mjs';
@@ -98,6 +103,7 @@ import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
 import { planShards, runTick } from './tick.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
+import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
 // How long the first pull may keep retrying, and how long past its deadline the
@@ -112,6 +118,15 @@ export const REGISTRY_DELTA_KEY = 'pump.registry_delta';
 export const BUDGET_KEY = 'pump.api_budget';
 export const BREAKER_KEY = 'pump.breaker';
 export const CONFORMANCE_KEY = 'pump.conformance';
+// While a retry is open the live snapshot is uploaded at once, at most this often.
+export const LIVE_RETRY_UPLOAD_MS = 20_000;
+export const LIVE_DEADLINE_MS = 20_000;
+export const LIVE_FINAL_DEADLINE_MS = 5_000;
+export const LANE_NOTES_FILE = fileURLToPath(new URL('../live/lane-notes.json', import.meta.url));
+// The values the run read that the snapshot builder shows (build plan section 3).
+export const LIVE_SWITCH_VARS = ['LOOP_ENABLED', 'LOOP_PAUSE_UNTIL', 'LOOP_SLOTS', 'RESULTS_PUBLISH_ENABLED', 'LANE_HISTORY_REGISTRY_ENABLED', 'LANE_HISTORY_PACKAGES_ENABLED', 'LANE_HISTORY_POPULARITY_ENABLED'];
+// What the secrets scrub list covers beyond the GitHub ones (also used by tests).
+export const secretValues = (env) => [env.GITHUB_TOKEN, env.APP_PRIVATE_KEY, env.AGE_IDENTITY, env.LIVE_R2_ACCESS_KEY_ID, env.LIVE_R2_SECRET_ACCESS_KEY, env.R2_ACCOUNT_ID];
 
 const isSetupError = (err) => err instanceof IngestSetupError || err?.name === 'IngestSetupError';
 
@@ -125,6 +140,10 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
  * ingest: undefined for the pump's own collector (ingest/collect.mjs, built
  * with `ingestOptions`), null for none, a function (called as collect()), or an
  * object with collect() and optionally check().
+ *
+ * live: the live snapshot step (live/publish.mjs), for tests: `build` (default
+ * live/build.mjs, loaded by publishLive), `put` (default R2), `publish`,
+ * `publishRetry`, `scan`, `deadlineMs`, `finalDeadlineMs`.
  *
  * @returns {Promise<{ ok: boolean, ticks: number, dispatched: number, failed: number,
  *   workerSlots: number, loopBudget: number }>}
@@ -159,13 +178,14 @@ export async function runPump({
   crypto,
   fetchArchive,
   registryDelta,
+  live = {},
 } = {}) {
   const start = now();
   const deadline = start + maxRunMs;
   const ingestDeadline = deadline - ingestStopMs;
   const repo = env.GITHUB_REPOSITORY;
   const stateToken = env.GITHUB_TOKEN || undefined;
-  const secrets = [stateToken, env.APP_PRIVATE_KEY, env.AGE_IDENTITY];
+  const secrets = secretValues(env).map((v) => (v === env.GITHUB_TOKEN ? stateToken : v));
   // The state asset is age ciphertext (R-ING-15): pulled and pushed with the
   // same identity ingest uses, which must be a recipient in state/state.pub.
   const stateKeys = {
@@ -181,20 +201,37 @@ export async function runPump({
   say(`pump: LOOP_SLOTS=${requested}, loop budget ${loopBudget}, worker slots ${workerSlots}`);
 
   const bud = budget ?? new ApiBudget({ now, sleep });
+
+  // Retries (pump/retry.mjs) are counted per tick for the `retry` event, and the
+  // open one goes into the live snapshot. `source` is a fixed label, never a URL.
+  const tickRetries = new Map(); // source -> { label, status, attempts, gave_up }
+  let openRetry = null; // { call, status, attempt, of, next_at, since }
+  let liveHook = () => {}; // set once the state is open (below)
+  const retryHook = (source) => (info) => {
+    const t = tickRetries.get(source) ?? { label: source, status: 0, attempts: 0, gave_up: false };
+    t.attempts += 1;
+    t.status = info.status;
+    t.gave_up = t.gave_up || info.gaveUp === true;
+    tickRetries.set(source, t);
+    if (!info.gaveUp) {
+      openRetry = { call: source, status: info.status, attempt: info.attempt, of: info.of ?? POLICY.attempts, next_at: new Date(now() + (info.delayMs ?? 0)).toISOString(), since: openRetry?.since ?? new Date(now()).toISOString() };
+    }
+    liveHook();
+  };
   const mask = (token) => {
     secrets.push(token);
     if (env.GITHUB_ACTIONS === 'true') process.stdout.write(`::add-mask::${token}\n`);
   };
   let minter = mintToken;
   const lazyMint = async (args) => {
-    minter = minter ?? appTokenMinter({ env, fetch, now, sleep, budget: bud, retryUntil: () => deadline });
+    minter = minter ?? appTokenMinter({ env, fetch, now, sleep, budget: bud, retryUntil: () => deadline, onRetry: retryHook('app_token') });
     const out = await minter(args);
     mask(out.token);
     return out;
   };
   let disp = dispatcher;
   const getDispatcher = () => {
-    disp = disp ?? createDispatcher({ mintToken: lazyMint, fetch, budget: bud, now, sleep, pollAttempts: 4, pollIntervalMs: 4000, log: say, retryUntil: () => deadline });
+    disp = disp ?? createDispatcher({ mintToken: lazyMint, fetch, budget: bud, now, sleep, pollAttempts: 4, pollIntervalMs: 4000, log: say, retryUntil: () => deadline, onRetry: retryHook('github_api') });
     return disp;
   };
   const apiUrl = env.GITHUB_API_URL || 'https://api.github.com';
@@ -257,7 +294,7 @@ export async function runPump({
   let db;
   let pulled;
   try {
-    pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, clock: now, retryUntil: start + PULL_RETRY_MS, ...stateKeys });
+    pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, clock: now, retryUntil: start + PULL_RETRY_MS, onRetry: retryHook('state_asset'), ...stateKeys });
     // No state asset, but snapshots of one: the state was lost, not never
     // made. Starting from empty would silently throw away every result and
     // the fence counter (R-CHAOS-01); a person restores a snapshot instead.
@@ -281,6 +318,83 @@ export async function runPump({
   const keepBudget = () => {
     if (typeof bud.snapshot === 'function') db.setKv(BUDGET_KEY, bud.snapshot(), { now: now() });
   };
+  // The live loop snapshot (live/publish.mjs). Off unless LANE_LIVE_SNAPSHOT_ENABLED
+  // is exactly "true" and the credentials exist; never throws, never holds the
+  // run past its deadline.
+  //
+  // Two uploads, kept apart on purpose:
+  //   - the snapshot (reads the state): only at a tick boundary and once at the
+  //     end of the run, awaited right there, so it never overlaps ingest, the
+  //     identity step or a transaction (publishLive also refuses inside one);
+  //   - v1/retry.json (the open retry, from memory, never touches the state):
+  //     while a retry is open, at most once per 20 s, and once when it clears.
+  //     Not awaited by the run.
+  const liveCap = () => Math.max(0, Math.min(live.deadlineMs ?? LIVE_DEADLINE_MS, deadline - now()));
+  const liveCommon = () => ({
+    ...(live.put ? { put: live.put } : {}), env, fetch: live.fetch ?? fetch, now, log: say,
+  });
+  // Short notes the builder may show per lane ({lane: noteKey|null}), from a
+  // committed file read at publish time; missing or invalid means none.
+  const laneNotes = () => {
+    try {
+      const v = JSON.parse(readFileSync(live.laneNotesFile ?? LANE_NOTES_FILE, 'utf8'));
+      if (!v || typeof v !== 'object' || Array.isArray(v) || Object.values(v).some((x) => x !== null && typeof x !== 'string')) throw new TypeError('not a {lane: key|null} object');
+      return v;
+    } catch (err) {
+      say(`pump: live lane notes unavailable (${String(err?.code ?? err?.name ?? 'error').slice(0, 40)}); publishing without them`);
+      return {};
+    }
+  };
+  const liveSwitches = () => Object.fromEntries(LIVE_SWITCH_VARS.filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
+  let retryChain = Promise.resolve();
+  let lastRetryUpload = -Infinity;
+  let retryShown = false;
+  const uploadRetry = (value) => {
+    const body = value ? { ...value } : null;
+    retryChain = retryChain.then(async () => {
+      try {
+        await (live.publishRetry ?? publishRetry)({ retry: body, ...liveCommon(), ...(live.scan ? { scan: live.scan } : {}), deadlineMs: liveCap() });
+      } catch (err) {
+        say(`pump: live retry upload failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
+      }
+    });
+  };
+  liveHook = () => {
+    if (!openRetry || !liveEnabled(env) || now() - lastRetryUpload < LIVE_RETRY_UPLOAD_MS) return;
+    lastRetryUpload = now();
+    retryShown = true;
+    uploadRetry(openRetry);
+  };
+  // End of a tick: the tick's retries become `retry` events, the open one closes.
+  const flushRetries = () => {
+    const rows = [...tickRetries.values()];
+    tickRetries.clear();
+    openRetry = null;
+    if (retryShown) {
+      retryShown = false;
+      uploadRetry(null);
+    }
+    if (!rows.length) return;
+    try {
+      db.tx(() => {
+        for (const r of rows) db.recordEvent({ type: 'retry', data: { label: r.label, status: r.status, attempts: r.attempts, gave_up: r.gave_up } }, now());
+      });
+    } catch (err) {
+      say(`pump: could not record retry events (continuing): ${err?.message ?? err}`);
+    }
+  };
+  // The snapshot at a tick boundary, or the last one of the run (capped at 5 s).
+  const liveStep = async (reason, { final = false } = {}) => {
+    try {
+      const deadlineMs = final ? Math.min(live.finalDeadlineMs ?? LIVE_FINAL_DEADLINE_MS, live.deadlineMs ?? LIVE_DEADLINE_MS) : liveCap();
+      await (live.publish ?? publishLive)({
+        db, ...(live.build ? { build: live.build } : {}), ...liveCommon(), config: { ...cfg, switches: liveSwitches(), history: [], lane_notes: laneNotes() }, retry: openRetry,
+        version: env.GITHUB_SHA ? String(env.GITHUB_SHA).slice(0, 7) : undefined, deadlineMs,
+      });
+    } catch (err) {
+      say(`pump: live snapshot (${reason}) failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
+    }
+  };
   let ticks = 0;
   let dispatched = 0;
   let failed = 0;
@@ -294,7 +408,7 @@ export async function runPump({
       // Retries (pump/retry.mjs) stop at the run's deadline, so a tick's push
       // cannot hold the run past it; the push at the end of the run may go on a
       // little longer, still inside the job's timeout (R-CHAOS-13).
-      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), clock: now, retryUntil: open ? deadline : deadline + FINAL_PUSH_GRACE_MS, ...(open ? {} : { requestTimeoutMs: FINAL_REQUEST_TIMEOUT_MS }), ...stateKeys });
+      await push({ repo, token: stateToken, file: stateFile, fetch, log: say, now: now(), clock: now, retryUntil: open ? deadline : Math.max(deadline, now()) + FINAL_PUSH_GRACE_MS, onRetry: retryHook('state_asset'), ...(open ? {} : { requestTimeoutMs: FINAL_REQUEST_TIMEOUT_MS }), ...stateKeys });
       return true;
     } catch (err) {
       ok = false;
@@ -329,7 +443,7 @@ export async function runPump({
     // Subject ids (pump/identity.mjs): backfill and daily re-check, a few
     // GraphQL queries at most; never fails or holds the run (loop upgrade #15).
     if (identity !== null && identityEnabled(env)) {
-      const client = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => deadline }) : null;
+      const client = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => deadline, onRetry: retryHook('github_api') }) : null;
       const ids = await refreshIdentities(db, { client, now, log: say, ...(identity ?? {}) });
       say(`pump: subject ids: ${ids.summary}`);
     } else if (identity !== null) {
@@ -359,7 +473,7 @@ export async function runPump({
           const until = Math.min(deadline, now() + REGISTRY_DELTA_WINDOW_MS);
           if (!registryClient) {
             const { token } = await lazyMint({ repositories: [repo.split('/')[1]], permissions: { actions: 'write' } });
-            registryClient = createClient({ token, fetch, apiUrl, budget: bud, now, sleep, log: say, retryTotalMs: REGISTRY_DELTA_WINDOW_MS, requestTimeoutMs: 20_000, retryUntil: () => registryUntil });
+            registryClient = createClient({ token, fetch, apiUrl, budget: bud, now, sleep, log: say, retryTotalMs: REGISTRY_DELTA_WINDOW_MS, requestTimeoutMs: 20_000, retryUntil: () => registryUntil, onRetry: retryHook('github_api') });
           }
           registryUntil = until;
           r = await ensureRegistryDelta({ client: registryClient, repo, ref: env.GITHUB_REF_NAME || 'main', now: now(), lastDispatchAt: Number.isFinite(lastDispatchAt) ? lastDispatchAt : null, lastCaptureAt: Number.isFinite(Date.parse(prior?.captureAt)) ? Date.parse(prior.captureAt) : null, log: say });
@@ -431,6 +545,8 @@ export async function runPump({
         : null;
       db.setKv('pump.last_tick', { ...summary, loopBudget, requested, ingest: ingestNote, blocked, breaker: breaker ? { tripped: breaker.tripped, reason: breaker.reason, held: breaker.held } : null }, { now: now() });
       say(`pump: tick ${ticks}: due ${summary.due ?? '-'}, dispatched ${summary.dispatched}, failed ${summary.failed}, reaped ${summary.reaped}${summary.stopped ? `, stopped (${summary.stopped})` : ''}`);
+      flushRetries();
+      await liveStep(`tick ${ticks}`);
       if (summary.dispatched || summary.failed || summary.withdrawn || summary.reaped || summary.reapedSlots || ingested?.changed) await save(`tick ${ticks}`);
       if (slots === 0 || summary.stopped === 'unauthorized') break;
       // A failed push: one housekeeping tick (ingest, reap, no dispatch), then stop.
@@ -455,7 +571,10 @@ export async function runPump({
     }
     keepBudget();
     db.notePumpRun('finished', { ticks, dispatched, lastRun: { started: new Date(start).toISOString(), finished: new Date(now()).toISOString(), ticks, dispatched, failed, workerSlots, loopBudget } }, { now: now() });
+    flushRetries();
+    await liveStep('end of run', { final: true });
   } finally {
+    liveHook = () => {};
     db.close();
   }
   await save('end of run', { open: false });
@@ -571,7 +690,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     process.stderr.write('pump: GITHUB_REPOSITORY is required\n');
     return 2;
   }
-  const secrets = [env.GITHUB_TOKEN, env.APP_PRIVATE_KEY, env.AGE_IDENTITY];
+  const secrets = secretValues(env);
   try {
     const out = await runPump({
       env,

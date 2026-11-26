@@ -32,6 +32,7 @@
 //   AGE_BIN, AGE_KEYGEN_BIN   optional paths of age and age-keygen
 //   ARCHIVE_LAST_OK     the Mac archive pull's heartbeat, `${{ vars.ARCHIVE_LAST_OK }}`
 //                       (watchdog/archive.mjs)
+//   LANE_LIVE_SNAPSHOT_ENABLED  the live loop snapshot switch; only "true" is on (watchdog `live-snapshot`)
 //   LANE_OFFSITE_ENABLED  the off-site backup's lane switch (watchdog/offsite.mjs)
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
@@ -89,6 +90,7 @@ export function readState(file) {
         'pump.api_budget': db.getKv('pump.api_budget') ?? null,
         'pump.last_run': db.getKv('pump.last_run') ?? null,
         'state.size': db.getKv('state.size') ?? null,
+        'live.last_upload': db.getKv('live.last_upload') ?? null,
         'retention.seal': db.getKv('retention.seal') ?? null,
       },
     };
@@ -209,7 +211,7 @@ export async function runWatchdog({
   if (snapshot?.error) snapshot = { ...snapshot, error: scrub(String(snapshot.error), secrets).slice(0, 200) };
 
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), runs, artifacts, state, workflows, expected, breaker, snapshot });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');

@@ -83,6 +83,14 @@ jobs:
           LANE_STATE_PRUNE_ENABLED: ${{ vars.LANE_STATE_PRUNE_ENABLED }}
           LANE_HISTORY_REGISTRY_ENABLED: ${{ vars.LANE_HISTORY_REGISTRY_ENABLED }}
           LANE_SUBJECT_IDS_ENABLED: ${{ vars.LANE_SUBJECT_IDS_ENABLED }}
+          # The live loop view snapshot (live/publish.mjs): off unless the variable is exactly "true".
+          LANE_LIVE_SNAPSHOT_ENABLED: ${{ vars.LANE_LIVE_SNAPSHOT_ENABLED }}
+          # Shown by the live view's publish gate node (config.switches).
+          RESULTS_PUBLISH_ENABLED: ${{ vars.RESULTS_PUBLISH_ENABLED }}
+          LIVE_R2_ACCESS_KEY_ID: ${{ secrets.LIVE_R2_ACCESS_KEY_ID }}
+          LIVE_R2_SECRET_ACCESS_KEY: ${{ secrets.LIVE_R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          LIVE_R2_BUCKET: isokron-loop-live
         run: >-
           node pump/run.mjs --state "$RUNNER_TEMP/state/state.sqlite"
           --successor-result "$RUNNER_TEMP/successor.json"

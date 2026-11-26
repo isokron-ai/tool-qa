@@ -68,6 +68,8 @@ export const THRESHOLDS = Object.freeze({
   pumpRedMs: 40 * MIN,
   stuckGraceMs: 15 * MIN,
   budgetHeldMs: 30 * MIN,
+  liveAmberMs: 20 * MIN,
+  liveRedMs: 40 * MIN,
   history: Object.freeze([
     { id: 'history-registry-delta', lane: 'history-registry', prefix: 'registry-delta-', label: 'registry-delta', greenMs: 45 * MIN, redMs: 90 * MIN },
     { id: 'history-registry-full', lane: 'history-registry', prefix: 'registry-full-', label: 'registry-full', greenMs: 26 * HOUR, redMs: 50 * HOUR },
@@ -108,6 +110,37 @@ function minutes(ms) {
   return `${(ms / HOUR).toFixed(1)} hours ago`;
 }
 
+/**
+ * The live loop view snapshot (live/publish.mjs, kv live.last_upload). Off
+ * while the switch is not exactly "true"; red when the last upload was blocked
+ * by the scan or the last good one is over 40 minutes old; amber over 20.
+ */
+export function liveSnapshotCheck({ now, on, last }) {
+  const id = 'live-snapshot';
+  if (!on) return { id, status: 'off', summary: 'the live snapshot is switched off (LANE_LIVE_SNAPSHOT_ENABLED is not "true")' };
+  const rec = last && typeof last === 'object' ? last : null;
+  // A scan block stays red until a good upload (blocked_at is carried until then).
+  if (rec && !rec.ok && (rec.blocked === 'scan' || rec.blocked_at)) {
+    return { id, status: 'red', summary: 'a live snapshot was held back by the pre-upload scan and none has passed since: nothing is published until it does (see the pump log for the rule and path)', at: rec.blocked_at ?? rec.at };
+  }
+  // No builder (live/build.mjs missing or failing): nothing can be published.
+  if (rec && !rec.ok && rec.error === 'build') {
+    return { id, status: 'red', summary: 'the live snapshot builder could not run (live/build.mjs missing or failing): nothing is published', at: rec.at };
+  }
+  const okAt = rec ? (rec.ok ? rec.at : rec.last_ok_at) : null;
+  const why = rec && !rec.ok ? `; the latest attempt failed (${String(rec.error ?? 'unknown').slice(0, 40)})` : '';
+  if (!okAt || !Number.isFinite(Date.parse(okAt))) {
+    // Never a good upload: red 40 minutes after the first attempt (a missing credential included).
+    const a0 = age(now, rec?.first_at);
+    if (!Number.isFinite(a0)) return { id, status: 'amber', summary: 'no live snapshot has been uploaded yet' };
+    return { id, status: a0 > THRESHOLDS.liveRedMs ? 'red' : 'amber', summary: `no live snapshot has ever been uploaded (first attempt ${minutes(a0)})${why}`, at: rec.first_at };
+  }
+  const a = age(now, okAt);
+  if (a > THRESHOLDS.liveRedMs) return { id, status: 'red', summary: `last good live snapshot upload ${minutes(a)}${why}`, at: okAt };
+  if (a > THRESHOLDS.liveAmberMs) return { id, status: 'amber', summary: `last good live snapshot upload ${minutes(a)}${why}`, at: okAt };
+  return { id, status: 'green', summary: `last live snapshot upload ${minutes(a)}${why}`, at: okAt };
+}
+
 const laneOn = (lanes, lane) => lanes?.[lane] !== false;
 const baseName = (path) => String(path).split('/').pop();
 
@@ -119,7 +152,7 @@ const baseName = (path) => String(path).split('/').pop();
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
+export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -216,6 +249,7 @@ export function evaluate({ now, slots, lanes = {}, runs = {}, artifacts = [], st
         ? { id: 'subjects', status: 'green', summary: String(subj.summary ?? 'seed subjects loaded').slice(0, 200), at: subj.at }
         : { id: 'subjects', status: 'red', summary: `the pump could not load the seed subjects (it keeps dispatching the ones it has): ${String(subj.summary ?? 'unknown error').slice(0, 200)}`, at: subj.at });
     }
+    checks.push(liveSnapshotCheck({ now, on: liveSwitch === 'true', last: state.kv?.['live.last_upload'] ?? null }));
     const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
   }
 

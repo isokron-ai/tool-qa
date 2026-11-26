@@ -594,3 +594,250 @@ test('R-CHAOS-12: cancelling the successor says so only when GitHub cancelled it
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---- the live loop view snapshot (live/publish.mjs) ----
+
+const LIVE_ENV = { LANE_LIVE_SNAPSHOT_ENABLED: 'true', LIVE_R2_ACCESS_KEY_ID: 'AKIA_SYN_RUN', LIVE_R2_SECRET_ACCESS_KEY: 'syn-run-secret-abc', R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef' };
+function liveHarness(over = {}) {
+  const h = harness({ slots: '3', subjects: 4 });
+  const builds = [];
+  const puts = [];
+  const bodies = [];
+  const live = {
+    deadlineMs: 80,
+    scan: () => ({ ok: true, hits: [] }),
+    build: async (db, a) => {
+      builds.push({ retry: a.retry, now: a.now });
+      return { snapshot: { schema: 'isokron-loop-live/1', seq: builds.length, generated_at: new Date(a.now).toISOString(), recent: [] }, hourEvents: [], problems: [] };
+    },
+    put: async (key, body) => { puts.push(key); bodies.push({ key, body: key.endsWith('.ndjson') ? body : JSON.parse(body) }); return { status: 200 }; },
+    ...over,
+  };
+  h.opts.env = { ...h.opts.env, ...LIVE_ENV, ...(over.env ?? {}) };
+  delete live.env;
+  h.opts.live = live;
+  return { h, builds, puts, bodies };
+}
+
+test('live: each tick and the end of the run publish, after pump.last_tick and before the push; nothing when the switch is off', async () => {
+  const { h, builds, puts } = liveHarness();
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true);
+  assert.equal(builds.length, 6, 'five ticks and the end of the run');
+  assert.equal(puts.filter((k) => k === 'v1/latest.json').length, 6);
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('live.last_upload').ok, true);
+  db.close();
+  h.cleanup();
+
+  const off = liveHarness({ env: { LANE_LIVE_SNAPSHOT_ENABLED: 'TRUE' } });
+  await runPump(off.h.opts);
+  assert.equal(off.builds.length, 0);
+  assert.equal(off.puts.length, 0);
+  off.h.cleanup();
+});
+
+test('live: an upload that throws does not fail the run', async () => {
+  const { h } = liveHarness({ put: async () => { throw new Error('r2 exploded'); } });
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true);
+  assert.equal(out.ticks, 5);
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('live.last_upload').ok, false);
+  db.close();
+  h.cleanup();
+  const b = liveHarness({ build: async () => { throw new Error('builder exploded'); } });
+  assert.equal((await runPump(b.h.opts)).ok, true);
+  b.h.cleanup();
+});
+
+test('live: an upload that hangs is cut at its deadline and does not delay or fail the run', async () => {
+  const { h } = liveHarness({ put: (_k, _b, o) => new Promise((_, reject) => { o?.signal?.addEventListener('abort', () => reject(new Error('aborted'))); }), deadlineMs: 40 });
+  const t0 = Date.now();
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true);
+  assert.equal(out.ticks, 5);
+  assert.ok(Date.now() - t0 < 5000, 'six publishes of at most 40 ms each');
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('live.last_upload').error, 'deadline');
+  db.close();
+  h.cleanup();
+});
+
+test('live: a scan-blocked snapshot uploads nothing and the run goes on', async () => {
+  const { h, puts } = liveHarness({ build: async () => ({ snapshot: { seq: 1 }, hourEvents: [], problems: [{ rule: 'secret', path: 'a.b' }] }) });
+  assert.equal((await runPump(h.opts)).ok, true);
+  assert.deepEqual(puts, []);
+  const db = openState(h.stateFile);
+  assert.equal(db.getKv('live.last_upload').blocked, 'scan');
+  db.close();
+  h.cleanup();
+});
+
+test('live: the retry hook fires on a 5xx; the open retry goes out as v1/retry.json from memory (no snapshot build), once per 20 s, and clears; the tick records a retry event', async () => {
+  const { h, builds, puts, bodies } = liveHarness();
+  let first = true;
+  const push = h.opts.push;
+  h.opts.push = async (args) => {
+    if (first) {
+      first = false;
+      assert.equal(typeof args.onRetry, 'function', 'the state asset client gets the hook');
+      args.onRetry({ label: 'GET /repos/o/r/releases', attempt: 1, of: 6, status: 503, delayMs: 2000, gaveUp: false });
+      args.onRetry({ label: 'GET /repos/o/r/releases', attempt: 2, of: 6, status: 503, delayMs: 4000, gaveUp: false });
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    return push(args);
+  };
+  await runPump(h.opts);
+  const retryPuts = bodies.filter((b) => b.key === 'v1/retry.json');
+  assert.equal(retryPuts.length, 2, 'one while open (the second hook call is inside 20 s), one when it cleared');
+  assert.deepEqual({ call: retryPuts[0].body.retry.call, status: retryPuts[0].body.retry.status, attempt: retryPuts[0].body.retry.attempt, of: retryPuts[0].body.retry.of }, { call: 'state_asset', status: 503, attempt: 1, of: 6 });
+  assert.equal(retryPuts[1].body.retry, null);
+  assert.equal(builds.length, 6, 'no snapshot build was triggered by the retry');
+  assert.ok(builds.every((b) => b.retry === null), 'the snapshot at a tick boundary sees no open retry');
+  assert.ok(puts.indexOf('v1/retry.json') >= 0);
+  const db = openState(h.stateFile);
+  const events = db.listEvents().filter((e) => e.type === 'retry');
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0].data, { label: 'state_asset', status: 503, attempts: 2, gave_up: false });
+  db.close();
+  h.cleanup();
+});
+
+test('live: retry uploads are at most one per 20 s', async () => {
+  const { h, bodies } = liveHarness();
+  let calls = 0;
+  const push = h.opts.push;
+  h.opts.push = async (args) => {
+    if (calls++ === 0) {
+      for (let i = 1; i <= 5; i++) { args.onRetry({ label: 'x', attempt: i, of: 6, status: 502, delayMs: 10, gaveUp: false }); await new Promise((r) => setTimeout(r, 5)); }
+    }
+    return push(args);
+  };
+  await runPump(h.opts);
+  assert.equal(bodies.filter((b) => b.key === 'v1/retry.json' && b.body.retry).length, 1);
+  h.cleanup();
+});
+
+test('live: a retry upload that hangs holds nothing: ticks, the final snapshot and the run go on', async () => {
+  const { h, builds, bodies } = liveHarness();
+  const hang = (key, o) => (key === 'v1/retry.json' ? new Promise((_, reject) => { o?.signal?.addEventListener('abort', () => reject(new Error('aborted'))); }) : Promise.resolve({ status: 200 }));
+  h.opts.live.put = async (key, body, o) => { bodies.push({ key, body: key.endsWith('.ndjson') ? body : JSON.parse(body) }); return hang(key, o); };
+  let first = true;
+  const push = h.opts.push;
+  h.opts.push = async (args) => {
+    if (first) { first = false; args.onRetry({ label: 'x', attempt: 1, of: 6, status: 503, delayMs: 5, gaveUp: false }); }
+    return push(args);
+  };
+  const t0 = Date.now();
+  const out = await runPump(h.opts);
+  assert.equal(out.ok, true);
+  assert.equal(builds.length, 6);
+  assert.ok(Date.now() - t0 < 4000);
+  h.cleanup();
+});
+
+test('live: the snapshot is read and uploaded only at the tick boundary, never inside a state transaction', async () => {
+  const { h } = liveHarness();
+  const seenInTx = [];
+  h.opts.live.build = async (db, a) => {
+    seenInTx.push(db.inTx);
+    return { snapshot: { schema: 'isokron-loop-live/1', seq: 1, generated_at: new Date(a.now).toISOString(), recent: [] }, hourEvents: [], problems: [] };
+  };
+  await runPump(h.opts);
+  assert.equal(seenInTx.length, 6);
+  assert.ok(seenInTx.every((x) => x === false));
+  h.cleanup();
+});
+
+test('live: in-run uploads are capped by the run deadline and 20 s; the end-of-run one at 5 s', async () => {
+  const { h } = liveHarness();
+  const caps = [];
+  delete h.opts.live.deadlineMs;
+  h.opts.live.publish = async (a) => { caps.push({ at: h.c.t, ms: a.deadlineMs }); return { ok: true }; };
+  const start = h.c.t;
+  await runPump(h.opts);
+  const deadline = start + 11 * 60_000;
+  assert.equal(caps.length, 6);
+  for (const c of caps.slice(0, 5)) assert.equal(c.ms, Math.min(20_000, deadline - c.at));
+  assert.equal(caps[5].ms, 5000);
+  h.cleanup();
+  // near the deadline the budget shrinks to what is left (and 0 means skipped)
+  const near = liveHarness();
+  const caps2 = [];
+  delete near.h.opts.live.deadlineMs;
+  near.h.opts.maxRunMs = 5 * 60_000;
+  near.h.opts.tickIntervalMs = 150_000;
+  near.h.opts.live.publish = async (a) => { caps2.push(a.deadlineMs); return { ok: true }; };
+  const s2 = near.h.c.t;
+  near.h.opts.sleep = async (ms) => { near.h.c.t += ms; };
+  await runPump(near.h.opts);
+  assert.ok(caps2.every((m) => m >= 0 && m <= 20_000));
+  assert.ok(caps2.slice(0, -1).every((m, i) => m <= s2 + 5 * 60_000 - (s2 + i * 150_000)));
+  near.h.cleanup();
+});
+
+test('R-LIVE-42: the final state push keeps its full grace after a slow end-of-run upload', async () => {
+  const { h } = liveHarness();
+  let calls = 0;
+  h.opts.live.publish = async () => { calls += 1; if (calls === 6) h.c.t += 100_000; return { ok: true }; };
+  const pushes = [];
+  const push = h.opts.push;
+  h.opts.push = async (args) => { pushes.push({ until: args.retryUntil, at: h.c.t }); return push(args); };
+  const start = h.c.t;
+  await runPump(h.opts);
+  const last = pushes.at(-1);
+  assert.ok(last.at > start + 11 * 60_000, 'the slow upload ran past the run deadline');
+  assert.equal(last.until - last.at, 90_000, 'the final push still has all of its grace');
+  h.cleanup();
+});
+
+test('live: the R2 credentials and account id are scrubbed from the log', async () => {
+  const { h } = liveHarness({ build: async () => { throw new Error(`failed with ${LIVE_ENV.LIVE_R2_SECRET_ACCESS_KEY} for ${LIVE_ENV.R2_ACCOUNT_ID}`); } });
+  await runPump(h.opts);
+  const log = h.lines.join('\n');
+  assert.ok(log.includes('builder') || log.includes('live:'), 'something was logged');
+  for (const v of Object.values(LIVE_ENV).slice(1)) assert.ok(!log.includes(v), `log contains ${v}`);
+  h.cleanup();
+});
+
+test('live: the builder gets the switches the run read (RESULTS_PUBLISH_ENABLED among them) and an empty history list', async () => {
+  const { h } = liveHarness({ env: { RESULTS_PUBLISH_ENABLED: 'true', LOOP_SLOTS: '3' } });
+  const seen = [];
+  h.opts.live.build = async (db, a) => { seen.push(a.config); return { snapshot: { schema: 'isokron-loop-live/1', seq: 1, generated_at: new Date(a.now).toISOString(), recent: [] }, hourEvents: [], problems: [] }; };
+  await runPump(h.opts);
+  assert.equal(seen[0].switches.RESULTS_PUBLISH_ENABLED, 'true');
+  assert.equal(seen[0].switches.LOOP_SLOTS, '3');
+  assert.deepEqual(seen[0].history, []);
+  assert.ok(seen[0].workflows, 'the pump config is passed as is');
+  h.cleanup();
+});
+
+test('live: lane notes come from the committed file; a missing or invalid file gives {} and a log line', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lane-notes-'));
+  const seenWith = async (file) => {
+    const { h } = liveHarness();
+    const seen = [];
+    h.opts.live.laneNotesFile = file;
+    h.opts.live.build = async (db, a) => { seen.push(a.config.lane_notes); return { snapshot: { schema: 'isokron-loop-live/1', seq: 1, generated_at: new Date(a.now).toISOString(), recent: [] }, hourEvents: [], problems: [] }; };
+    await runPump(h.opts);
+    const logged = h.lines.some((l) => /lane notes unavailable/.test(l));
+    h.cleanup();
+    return { seen, logged };
+  };
+  const real = await seenWith(undefined);
+  assert.deepEqual(real.seen[0], { 'live-probe': 're_sweep' });
+  assert.equal(real.logged, false);
+  const bad = join(dir, 'bad.json');
+  writeFileSync(bad, '{"a": 3}');
+  let r = await seenWith(bad);
+  assert.deepEqual(r.seen[0], {});
+  assert.equal(r.logged, true);
+  writeFileSync(bad, 'not json');
+  r = await seenWith(bad);
+  assert.deepEqual(r.seen[0], {});
+  r = await seenWith(join(dir, 'missing.json'));
+  assert.deepEqual(r.seen[0], {});
+  assert.equal(r.logged, true);
+  rmSync(dir, { recursive: true, force: true });
+});
