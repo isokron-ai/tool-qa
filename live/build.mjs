@@ -104,7 +104,7 @@ export const PUBLIC_EVENT_KEYS = Object.freeze([
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const LANE_RE = /^[a-z][a-z0-9-]{0,63}$/;
+export const LANE_RE = /^[a-z][a-z0-9-]{0,63}$/;
 const NAME_PART_RE = /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
 const TOOL_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const PIN_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/;
@@ -112,7 +112,7 @@ const VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
 const QUARANTINE_SQL = QUARANTINE_REASONS.map((x) => `'${x}'`).join(', ');
 // IS, not =: a missing field is false here, never NULL (NOT NULL would drop the row from both sides).
-const ACCEPTED_SQL = `json_valid(data) AND (json_extract(data, '$.verdict') IS 'accepted' OR json_extract(data, '$.accepted') IS 1)
+export const ACCEPTED_SQL = `json_valid(data) AND (json_extract(data, '$.verdict') IS 'accepted' OR json_extract(data, '$.accepted') IS 1)
   AND COALESCE(json_extract(data, '$.outcome'), '') <> 'quarantined' AND COALESCE(json_extract(data, '$.reason'), '') NOT IN (${QUARANTINE_SQL})`;
 
 // ---- small validators: everything public passes through one of these ----
@@ -317,7 +317,7 @@ export function toPublicEvent(row, { seq = null, subjectName = null, lanes = nul
 const FORBIDDEN = /\b(?:attempts|leases|run_keys|dispatch_items|subject_name|digest|artifact_digest|fence|holder|holder_run|error|run_url|shard_id|repo_id|node_id)\b/i;
 
 /** The raw connection, with every statement checked against the table allowlist. */
-function reader(db) {
+export function reader(db) {
   const raw = db?.raw ?? db;
   if (!raw || typeof raw.prepare !== 'function') throw new TypeError('buildLiveSnapshot needs a StateDb or a node:sqlite database');
   return {
@@ -524,10 +524,7 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
   const lanes = laneIds.map((id) => {
     const wf = workflows[id] ?? {};
     const notBuilt = notBuiltSet.has(id);
-    let state = 'on';
-    if (notBuilt) state = 'not_built';
-    else if (wf.enabled !== true) state = 'off';
-    else if (waiting.has(id)) state = 'waiting_sandbox_check';
+    const state = laneStateOf(id, wf, notBuiltSet, waiting);
     const [tool, pin] = Object.entries(wf.versions?.tool ?? {})[0] ?? [null, null];
     const lane = {
       id,
@@ -676,13 +673,39 @@ function recentEvents(r, ctx, hourStartMs, nowMs) {
 }
 
 /** The daily ring: not_used null below 5; the classes all null if any is below 5. */
-function dailyRing(daily) {
+export function dailyRing(daily) {
   const classes = CLASSES.map((k) => daily[k]);
   const show = classes.every((n) => n >= DAILY_MIN);
   return {
     not_used: daily.not_used >= DAILY_MIN ? daily.not_used : null,
     ...Object.fromEntries(CLASSES.map((k) => [k, show ? daily[k] : null])),
   };
+}
+
+/** A lane's state from its config: not_built, off, waiting_sandbox_check (when in `waiting`) or on. */
+export function laneStateOf(id, wf, notBuiltSet, waiting = new Set()) {
+  if (notBuiltSet.has(id)) return 'not_built';
+  if (wf?.enabled !== true) return 'off';
+  if (waiting.has(id)) return 'waiting_sandbox_check';
+  return 'on';
+}
+
+/**
+ * A lane's tool and probe version labels ("<name> <version>"), in config
+ * order, tools first. A name or version that is not a plain label, or that
+ * names a vendor, is left out.
+ */
+export function lanePins(wf) {
+  const out = [];
+  for (const group of ['tool', 'probe']) {
+    const entries = wf?.versions?.[group];
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) continue;
+    for (const [name, ver] of Object.entries(entries)) {
+      if (!TOOL_RE.test(name) || typeof ver !== 'string' || !PIN_RE.test(ver) || hasVendorName(name) || hasVendorName(ver)) continue;
+      out.push(`${name} ${ver}`);
+    }
+  }
+  return out;
 }
 
 /** A lane's note: a key config.lane_notes picks, else "not built yet" or "off", else null. */

@@ -30,10 +30,11 @@ const { snapshot, hourEvents, previousHourEvents, problems } = buildLiveSnapshot
 | `build.mjs` | the snapshot (`isokron-loop-live/1`), the hour files, `toPublicEvent(row)` |
 | `classes.mjs` | raw rejection reason → `lease`, `integrity`, `worker_output`, `infra` (unknown → `worker_output`); a quarantine counts as `integrity` |
 | `scan.mjs` | `scanPublic(value)`: the secret scan (`ingest/redact.mjs`) and the vendor-name scan over every string and key; hits are `{rule, path}` only |
+| `history.mjs` | the day file of the daily history (`isokron-loop-day/1`), `buildDay(db, {day, now, config})` |
 | `vendor-names.mjs` | the vendor, model and client name scanner (word list kept split in source, as R-PUB-08 does) |
 
 The builder reads `events`, `results`, `dispatches`, `slot_ledger`,
-`subjects` and `kv`, never `dispatch_items`, `attempts`, `leases`,
+`subjects` and `kv` (the day builder only `events` and `subjects`), never `dispatch_items`, `attempts`, `leases`,
 `run_keys`, any digest, fence, holder or error column, or any bundle. Every statement it runs is checked against that list.
 
 ## The snapshot
@@ -67,6 +68,71 @@ null. Config never carries the text.
 
 When the snapshot would reach 20 KB, `recent` and then `just_checked` are
 shortened; only if it is still too big is the upload blocked.
+
+## The daily history
+
+`live/history.mjs` builds one file per complete UTC day, and
+`publishHistory` (in `live/publish.mjs`) uploads it once, after the first
+good snapshot upload of the next day:
+
+```js
+import { buildDay } from './live/history.mjs';
+const { day, problems } = buildDay(db, { day: '2026-11-24', now, config });
+// problems non-empty: upload nothing.
+```
+
+| Object | Content |
+|---|---|
+| `v1/history/days/<YYYY-MM-DD>.json` | one day (`isokron-loop-day/1`), immutable, kept indefinitely |
+| `v1/history/recent.json` | `{schema: 'isokron-loop-history-recent/1', days: [day objects]}`: the last 120 days, oldest first, `max-age=300` |
+| `v1/history/index.json` | `{schema: 'isokron-loop-history-index/1', days: ['YYYY-MM-DD', ...]}`: every day with a file, `max-age=300` |
+
+A day:
+
+| Field | Content |
+|---|---|
+| `schema`, `day`, `generated_at` | `isokron-loop-day/1`, the UTC day, when it was built (whole seconds) |
+| `partial` | true only for the day the events table begins (the loop's first day): its counts start at its first event |
+| `lanes[]` | per lane of `pump/workflows.json`: `id`, `state` (`on`, `off`, `not_built` from the config, or null; see below), `pins`, `results`, `assessed`, `sides {subject, tool, infra, policy, unknown}`, `not_used`, `classes {lease, integrity, worker_output, infra}`; the numbers are null for a lane not built |
+| `totals` | `subjects_in_seed` (when built), `servers_checked` and `servers_assessed` (distinct servers with an accepted, or an accepted and assessed, result that day) |
+| `tool_releases` | always `[]` for now: no feed records our tools' releases yet |
+
+- `results`: accepted results that day (by `occurred_at`); `assessed`: those
+  with coverage `assessed`; `sides`: the rest by fault side (`sideOf`, the
+  snapshot's `fault`). `tool`, `infra`, `policy` and `unknown` are ours;
+  `subject` is the server's condition.
+- `not_used` and `classes` follow `ring_daily`: `not_used` null below 5;
+  `classes` null unless every class is 5 or more, a quarantine counted in
+  `integrity`. A test builds two days that differ only in one item
+  quarantined or rejected for its lease (and one more unused item) and checks
+  the files are byte-identical (R-LIVE-30).
+- `pins`: the lane's `versions.tool` then `versions.probe` labels
+  (`"<name> <version>"`, plain labels with no vendor name only). `state` and
+  `pins` come from the config only when the day is built within a day of its
+  end; for an older day (the backfill, or after the pump was off) both are
+  `null`, since what was in force then is not known (R-LIVE-33).
+- Nothing names a server, a batch or an item, and no dispatched item count is
+  in it (R-LIVE-28). No reason code, id, fence, held or security-class count.
+  The whole file passes `scanPublic`; a hit keeps that day out.
+
+The rollover, once per UTC day, while kv `live.history.last_day` is not the
+previous day:
+
+1. A day file whose upload was not confirmed (kv `live.history.pending`) is
+   sent again with exactly its stored body, never rebuilt, so an immutable
+   key never gets a second body even when a PUT landed but answered an error
+   (R-LIVE-31).
+2. Each missing day, oldest first, at most 2 per publish (a build is a few
+   synchronous queries on the pump's thread): the previous day and, on the
+   first run or after a gap, the up to 7 days before it. A day is built only
+   when the events table holds all of it (its oldest event at or before the
+   day's start, and the day inside the 8 days events are kept), or when it
+   is the day the events begin, marked `partial` (R-LIVE-32). Days in kv
+   `live.history.days` or `live.history.blocked` are skipped. Build, scan,
+   store the body as pending, upload, record, clear pending.
+3. Then `recent.json`, then `index.json`, from kv, and only then `last_day`.
+   A failure anywhere leaves `last_day`; the next publish goes on. Keys, retention and
+recovery: docs/OPERATIONS.md, "The daily history".
 
 ## Hour files and public events
 
