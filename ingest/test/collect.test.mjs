@@ -1250,7 +1250,7 @@ test('R-PIN-01: in the pump, a result refused for its version pins pauses its la
       h.cleanup();
     }
   };
-  const bad = await go('d4a373a'.padEnd(40, '0'), 'label');
+  const bad = await go('d4a373a'.padEnd(40, '0'), 'enforce'); // on label, the worker repository's own pin moving is only a note (R-PIN-02)
   assert.deepEqual(bad.s.outcomes, { rejected: 1 });
   assert.equal(bad.report.reason, 'pin_mismatch');
   assert.equal(bad.db.getDispatch('att-1').status, 'done', 'the dispatch is closed');
