@@ -71,9 +71,11 @@ export function oldestEventMs(db) {
  * @returns {{day: object, problems: {rule: string, path: string}[]}}
  *   problems non-empty means: upload nothing.
  *
- * `pins` are the config's labels when the day is built within a day of its
- * end (the run right after midnight); for an older day (a backfill, or a pump
- * that was off) the labels in force then are not known, so pins is null.
+ * Each lane's `state` and `pins` come from the config when the day is built
+ * within a day of its end (the run right after midnight); for an older day (a
+ * backfill, or a pump that was off) they are not known then, so both are null.
+ * `partial` is true for the day the events table begins (its first event after
+ * the day's start): its counts start there.
  */
 export function buildDay(db, { day, now, config } = {}) {
   const startMs = dayStart(day);
@@ -88,7 +90,11 @@ export function buildDay(db, { day, now, config } = {}) {
   const workflows = config?.workflows && typeof config.workflows === 'object' ? config.workflows : {};
   const laneIds = Object.keys(workflows).filter((id) => LANE_RE.test(id));
   const notBuilt = new Set(Array.isArray(config?.not_built_lanes) ? config.not_built_lanes : NOT_BUILT_LANES);
-  const freshPins = nowMs < endMs + DAY;
+  // Built within a day of its end (the rollover right after midnight; a retry
+  // re-sends the stored body, never rebuilds): the config's states and pins are
+  // those in force. Later (a backfill, or after the pump was off) they are not
+  // known, so both are null (R-LIVE-33).
+  const fresh = nowMs < endMs + DAY;
   const hasEvents = r.get("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'events'").n > 0;
 
   const stats = new Map(laneIds.map((id) => [id, {
@@ -136,9 +142,10 @@ export function buildDay(db, { day, now, config } = {}) {
 
   const lanes = laneIds.map((id) => {
     const wf = workflows[id] ?? {};
-    const state = laneStateOf(id, wf, notBuilt);
-    const pins = freshPins ? lanePins(wf) : null;
-    if (state === 'not_built') return { id, state, pins, results: null, assessed: null, sides: null, not_used: null, classes: null };
+    const configured = laneStateOf(id, wf, notBuilt);
+    const state = fresh ? configured : null;
+    const pins = fresh ? lanePins(wf) : null;
+    if (configured === 'not_built') return { id, state, pins, results: null, assessed: null, sides: null, not_used: null, classes: null };
     const st = stats.get(id);
     const ring = dailyRing(st.daily);
     return {
@@ -153,10 +160,19 @@ export function buildDay(db, { day, now, config } = {}) {
     };
   });
 
+  // The day the events begin (the loop's first day): counts from its first event only (R-LIVE-32).
+  let partial = false;
+  if (hasEvents) {
+    const first = r.get('SELECT MIN(occurred_at) AS t FROM events')?.t;
+    const firstMs = typeof first === 'string' ? Date.parse(first) : NaN;
+    partial = Number.isFinite(firstMs) && firstMs > startMs && firstMs < endMs;
+  }
+
   const out = {
     schema: DAY_SCHEMA,
     day,
     generated_at: new Date(Math.floor(nowMs / 1000) * 1000).toISOString(),
+    partial,
     lanes,
     totals: {
       subjects_in_seed: count(r.get("SELECT COUNT(*) AS n FROM subjects WHERE source LIKE 'seed-v%' AND retired_at IS NULL AND alias_of IS NULL")?.n),

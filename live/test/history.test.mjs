@@ -63,7 +63,8 @@ test('day file: the exact shape and the counts of a seeded day', () => {
   const db = seededDay();
   const { day, problems } = buildDay(db, { day: '2026-11-24', now: AFTER, config: config() });
   assert.deepEqual(problems, []);
-  assert.deepEqual(Object.keys(day), ['schema', 'day', 'generated_at', 'lanes', 'totals', 'tool_releases']);
+  assert.deepEqual(Object.keys(day), ['schema', 'day', 'generated_at', 'partial', 'lanes', 'totals', 'tool_releases']);
+  assert.equal(day.partial, false);
   assert.equal(day.schema, DAY_SCHEMA);
   assert.equal(day.day, '2026-11-24');
   assert.equal(day.generated_at, '2026-11-25T00:02:31.000Z');
@@ -84,9 +85,8 @@ test('day file: the exact shape and the counts of a seeded day', () => {
   assert.equal(day.lanes.find((l) => l.id === 'meta-github').state, 'off');
   assert.deepEqual(day.totals, { subjects_in_seed: 4, servers_checked: 4, servers_assessed: 2 });
   assert.deepEqual(day.tool_releases, []);
-  // Built more than a day after it ended (a backfill): the pins in force then are not known.
+  // Built more than a day after it ended (a backfill): see R-LIVE-33.
   const late = buildDay(db, { day: '2026-11-24', now: AFTER + DAY, config: config() }).day;
-  assert.ok(late.lanes.every((l) => l.pins === null));
   assert.deepEqual(late.lanes.map((l) => l.results), day.lanes.map((l) => l.results));
   // Pure: the same state and now give the same bytes; a day not ended is refused.
   assert.equal(JSON.stringify(buildDay(db, { day: '2026-11-24', now: AFTER, config: config() }).day), JSON.stringify(day));
@@ -211,24 +211,35 @@ function recorder({ fail = () => false } = {}) {
 }
 
 const roll = (db, at, rec, extra = {}) => publishHistory({ db, putter: rec.putter, now: at, config: config(), ...extra });
+/** Publish (one minute apart) until the rollover is done or fails; the results of each call. */
+async function rollAll(db, at, rec, extra = {}) {
+  const out = [];
+  for (let i = 0; i < 10; i++) {
+    const r = await roll(db, at + i * 60_000, rec, extra);
+    out.push(r);
+    if (!r.more) break;
+  }
+  return out;
+}
+const DAYS = ['2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23', '2026-11-24'];
 
-test('rollover: the first run backfills the covered days oldest first, then recent, then index; once per day; then one day a day', async () => {
+test('rollover: the first run backfills the covered days oldest first, two per publish, then recent, then index; once per day; then one day a day', async () => {
   const db = loopState();
   assert.equal(oldestEventMs(db), Date.parse('2026-11-20T10:00:00Z'));
   const rec = recorder();
-  const r = await roll(db, AFTER, rec);
-  assert.equal(r.ok, true);
+  const calls = await rollAll(db, AFTER, rec);
+  assert.deepEqual(calls.map((r) => [r.ok, r.more ?? false, r.written]), [[true, true, DAYS.slice(0, 2)], [true, true, DAYS.slice(2, 4)], [true, false, DAYS.slice(4)]]);
   // 17-19 Nov are before the loop's first event (or pruned): never built.
-  const days = ['2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23', '2026-11-24'];
-  assert.deepEqual(rec.puts.map((p) => p.key), [...days.map((d) => `v1/history/days/${d}.json`), 'v1/history/recent.json', 'v1/history/index.json']);
-  assert.deepEqual(rec.puts.map((p) => p.cc), [...days.map(() => 'public, max-age=31536000, immutable'), 'public, max-age=300', 'public, max-age=300']);
-  assert.deepEqual(JSON.parse(rec.puts.at(-1).body), { schema: 'isokron-loop-history-index/1', days });
+  assert.deepEqual(rec.puts.map((p) => p.key), [...DAYS.map((d) => `v1/history/days/${d}.json`), 'v1/history/recent.json', 'v1/history/index.json']);
+  assert.deepEqual(rec.puts.map((p) => p.cc), [...DAYS.map(() => 'public, max-age=31536000, immutable'), 'public, max-age=300', 'public, max-age=300']);
+  assert.deepEqual(JSON.parse(rec.puts.at(-1).body), { schema: 'isokron-loop-history-index/1', days: DAYS });
   const recent = JSON.parse(rec.puts.at(-2).body);
   assert.equal(recent.schema, 'isokron-loop-history-recent/1');
-  assert.deepEqual(recent.days.map((d) => d.day), days);
+  assert.deepEqual(recent.days.map((d) => d.day), DAYS);
   assert.equal(recent.days[0].lanes.find((l) => l.id === 'live-probe').results, 1);
   assert.deepEqual(JSON.parse(rec.puts[4].body), recent.days[4], 'recent holds the day files as uploaded');
   assert.equal(db.getKv('live.history.last_day'), '2026-11-24');
+  assert.equal(db.getKv('live.history.pending'), undefined);
   // Again the same day, and later that day: nothing.
   const again = recorder();
   assert.deepEqual(await roll(db, AFTER + 60_000, again), { ok: true, skipped: 'done' });
@@ -243,48 +254,132 @@ test('rollover: the first run backfills the covered days oldest first, then rece
   db.close();
 });
 
-test('rollover: a failed upload leaves last_day; the next publish retries without rebuilding a stored day (its immutable key never gets a second body)', async () => {
+test('rollover: a failed upload leaves last_day; the next publish goes on and never builds a stored day again', async () => {
   for (const failing of ['v1/history/days/2026-11-22.json', 'v1/history/recent.json', 'v1/history/index.json']) {
     const db = loopState();
     const first = recorder({ fail: (k) => k === failing });
-    const r = await roll(db, AFTER, first);
-    assert.equal(r.ok, false);
-    assert.equal(r.error, 'put');
+    const calls = await rollAll(db, AFTER, first);
+    assert.equal(calls.at(-1).ok, false);
+    assert.equal(calls.at(-1).error, 'put');
     assert.equal(first.puts.at(-1).key, failing, 'stops at the failure');
     assert.equal(db.getKv('live.history.last_day'), undefined, `last_day recorded after ${failing} failed`);
     const second = recorder();
-    const later = AFTER + 150_000;
-    assert.equal((await roll(db, later, second)).ok, true);
-    const firstBodies = new Map(first.puts.filter((p) => p.key !== failing).map((p) => [p.key, p.body]));
-    for (const p of second.puts) {
-      if (p.key.startsWith('v1/history/days/')) assert.ok(!firstBodies.has(p.key), `${p.key} uploaded twice`);
+    assert.equal((await rollAll(db, AFTER + 600_000, second)).at(-1).ok, true);
+    const sent = new Map();
+    for (const p of [...first.puts, ...second.puts].filter((x) => x.key.includes('/days/'))) {
+      if (sent.has(p.key)) assert.equal(p.body, sent.get(p.key), `${p.key} got a second body`);
+      sent.set(p.key, p.body);
     }
     assert.deepEqual(second.puts.slice(-2).map((p) => p.key), ['v1/history/recent.json', 'v1/history/index.json']);
-    assert.deepEqual(JSON.parse(second.puts.at(-1).body).days, ['2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23', '2026-11-24']);
+    assert.deepEqual(JSON.parse(second.puts.at(-1).body).days, DAYS);
     assert.equal(db.getKv('live.history.last_day'), '2026-11-24');
     db.close();
   }
 });
 
-test('backfill builds only the days missing from kv; a day the scan blocks is not uploaded, and logged by rule only', async () => {
+test('R-LIVE-31: a day file whose PUT landed but answered an error (or whose kv record failed after it) is sent again byte-identical, never rebuilt', async () => {
+  // A PUT that stores the body and then throws, as a timeout after the write would.
+  const db = loopState();
+  const bucket = new Map();
+  const puts = [];
+  let lose = 'v1/history/days/2026-11-21.json';
+  const putter = async (key, body) => {
+    puts.push({ key, body });
+    bucket.set(key, bucket.has(key) && key.includes('/days/') && bucket.get(key) !== body ? 'SECOND BODY' : body);
+    if (key === lose) { lose = null; throw Object.assign(new Error('timeout'), { status: 0 }); }
+  };
+  const r1 = await publishHistory({ db, putter, now: AFTER, config: config() });
+  assert.equal(r1.ok, false);
+  assert.equal(db.getKv('live.history.pending').day, '2026-11-21');
+  // Retried hours later (a rebuild would change generated_at): the stored body again.
+  await rollAll(db, AFTER + 5 * 3_600_000, { putter });
+  const sends = puts.filter((p) => p.key === 'v1/history/days/2026-11-21.json');
+  assert.equal(sends.length, 2);
+  assert.equal(sends[1].body, sends[0].body);
+  assert.ok(![...bucket.values()].includes('SECOND BODY'));
+  assert.equal(db.getKv('live.history.pending'), undefined);
+  assert.equal(db.getKv('live.history.last_day'), '2026-11-24');
+  // A kv write that fails after a good PUT: the day stays pending and the same body goes again.
+  const db2 = loopState();
+  let breakOnce = true;
+  const flaky = new Proxy(db2, { get: (o, k) => (k === 'setKv' ? (key, v, opt) => { if (key === 'live.history.days' && breakOnce) { breakOnce = false; throw new Error('database is locked'); } return o.setKv(key, v, opt); } : Reflect.get(o, k)) });
+  const p2 = [];
+  const put2 = async (key, body) => { p2.push({ key, body }); };
+  assert.equal((await publishHistory({ db: flaky, putter: put2, now: AFTER, config: config() })).ok, false);
+  await rollAll(flaky, AFTER + 3_600_000, { putter: put2 });
+  const first = p2.filter((p) => p.key === 'v1/history/days/2026-11-20.json');
+  assert.equal(first.length, 2);
+  assert.equal(first[1].body, first[0].body);
+  assert.deepEqual(JSON.parse(p2.at(-1).body).days, DAYS);
+  db.close();
+  db2.close();
+});
+
+test('R-LIVE-32: a day is built only when the events table holds all of it; the loop\'s first day is built once, marked partial', async () => {
+  // Events from 20 Nov 10:00: 20 Nov is the first day (partial), 17-19 Nov are not built.
+  const db = loopState();
+  const rec = recorder();
+  await rollAll(db, AFTER, rec);
+  const files = rec.puts.filter((p) => p.key.includes('/days/')).map((p) => JSON.parse(p.body));
+  assert.deepEqual(files.map((d) => [d.day, d.partial]), DAYS.map((d) => [d, d === '2026-11-20']));
+  // Events from 16 Nov 10:00, as left by pruning: 17 Nov starts outside the 8 days kept, so it is not built
+  // even though it holds events; 18 Nov on are whole.
+  const db2 = emptyState();
+  for (let t = Date.parse('2026-11-16T10:00:00Z'); t < AFTER; t += 6 * 3_600_000) addEvent(db2, { type: 'pump_run_started', at: t });
+  const rec2 = recorder();
+  await rollAll(db2, AFTER, rec2);
+  const days2 = rec2.puts.filter((p) => p.key.includes('/days/')).map((p) => JSON.parse(p.body));
+  assert.deepEqual(days2.map((d) => d.day), ['2026-11-18', '2026-11-19', ...DAYS]);
+  assert.ok(days2.every((d) => d.partial === false));
+  // A day whose start is after the oldest event but which is not the first day: never partial.
+  assert.equal(buildDay(db2, { day: '2026-11-24', now: AFTER, config: config() }).day.partial, false);
+  // No events at all: nothing is built.
+  const db3 = emptyState();
+  const rec3 = recorder();
+  await rollAll(db3, AFTER, rec3);
+  assert.equal(rec3.puts.filter((p) => p.key.includes('/days/')).length, 0);
+  for (const d of [db, db2, db3]) d.close();
+});
+
+test('R-LIVE-33: a day built more than a day after it ended has lane state and pins null; the first build in its window uses the config', () => {
+  const db = seededDay();
+  const fresh = buildDay(db, { day: '2026-11-24', now: Date.parse('2026-11-25T23:59:59Z'), config: config() }).day;
+  assert.equal(fresh.lanes.find((l) => l.id === 'live-probe').state, 'on');
+  assert.deepEqual(fresh.lanes.find((l) => l.id === 'live-probe').pins, ['mcp-check 116b0ca', 'mcp-surface-corpus 4c16b58']);
+  const late = buildDay(db, { day: '2026-11-24', now: Date.parse('2026-11-26T00:00:00Z'), config: config() }).day;
+  assert.ok(late.lanes.every((l) => l.state === null && l.pins === null));
+  assert.equal(late.lanes.find((l) => l.id === 'live-probe').results, 9);
+  assert.equal(late.lanes.find((l) => l.id === 'scan-deep').results, null, 'a lane not built has no numbers either way');
+  db.close();
+});
+
+test('R-LIVE-34: a blocked day is kept once in live.history.blocked and not built again; backfill builds at most two days per publish', async () => {
   const db = loopState();
   db.setKv('live.history.days', ['2026-11-21', '2026-11-23'], { now: AFTER });
   const rec = recorder();
-  await roll(db, AFTER, rec);
-  assert.deepEqual(rec.puts.filter((p) => p.key.includes('/days/')).map((p) => p.key), ['v1/history/days/2026-11-20.json', 'v1/history/days/2026-11-22.json', 'v1/history/days/2026-11-24.json']);
-  assert.deepEqual(JSON.parse(rec.puts.at(-1).body).days, ['2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23', '2026-11-24']);
-  // Blocked: a vendor-named lane in the config.
+  const calls = await rollAll(db, AFTER, rec);
+  assert.deepEqual(calls.map((r) => r.written), [['2026-11-20', '2026-11-22'], ['2026-11-24']]);
+  assert.deepEqual(JSON.parse(rec.puts.at(-1).body).days, DAYS);
+  // Blocked: a vendor-named lane in the config. The recent upload fails once, so the rollover runs again.
   const db2 = loopState();
   const cfg = config();
   cfg.workflows = { ...cfg.workflows, [`${VENDOR}-lane`]: { enabled: true } };
   const lines = [];
-  const rec2 = recorder();
-  const r = await publishHistory({ db: db2, putter: rec2.putter, now: AFTER + DAY * 3, config: cfg, log: (l) => lines.push(l) });
-  assert.equal(r.ok, true);
+  let failRecent = true;
+  const rec2 = recorder({ fail: (k) => { if (k === 'v1/history/recent.json' && failRecent) { failRecent = false; return true; } return false; } });
+  const builds = [];
+  const counting = (d, o) => { builds.push(o.day); return buildDay(d, o); };
+  const r1 = await rollAll(db2, AFTER + DAY * 3, rec2, { config: cfg, log: (l) => lines.push(l), buildDay: counting, oldestEventMs });
+  assert.equal(r1.at(-1).error, 'put');
+  const r2 = await rollAll(db2, AFTER + DAY * 3 + 600_000, rec2, { config: cfg, buildDay: counting, oldestEventMs });
+  assert.equal(r2.at(-1).ok, true);
+  assert.ok(r1.slice(0, -1).every((r) => r.blocked.length <= 2));
   assert.equal(rec2.puts.filter((p) => p.key.includes('/days/')).length, 0);
-  assert.ok(r.blocked.length > 0);
+  const blocked = db2.getKv('live.history.blocked').map((b) => b.day);
+  assert.deepEqual(blocked, [...new Set(blocked)], 'each blocked day once');
+  assert.deepEqual(builds, [...new Set(builds)], 'a blocked day is not built again');
+  assert.equal(blocked.at(-1), '2026-11-27');
   assert.ok(lines.some((l) => /blocked by the scan: rule /.test(l)) && !lines.join().includes(VENDOR));
-  assert.equal(db2.getKv('live.history.blocked').at(-1).day, '2026-11-27');
   db.close();
   db2.close();
 });
@@ -298,7 +393,9 @@ test('publishLive: the history goes after the pointer; switch off makes no call;
   assert.equal(r.ok, true);
   assert.equal(r.history.ok, true);
   const ptr = puts.indexOf('v1/latest.json');
-  assert.ok(ptr > 0 && puts.slice(ptr + 1).length === 7 && puts.slice(ptr + 1).every((k) => k.startsWith('v1/history/')), puts.join(' '));
+  // At most two day files per publish: the first two days of the backfill, no recent or index yet.
+  assert.deepEqual(puts.slice(ptr + 1), ['v1/history/days/2026-11-20.json', 'v1/history/days/2026-11-21.json'], puts.join(' '));
+  assert.equal(r.history.more, true);
   // Off: no build, no call, no kv.
   for (const v of [undefined, 'false', 'TRUE', '1']) {
     const db2 = loopState();

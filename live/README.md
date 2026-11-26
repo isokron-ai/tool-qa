@@ -92,7 +92,8 @@ A day:
 | Field | Content |
 |---|---|
 | `schema`, `day`, `generated_at` | `isokron-loop-day/1`, the UTC day, when it was built (whole seconds) |
-| `lanes[]` | per lane of `pump/workflows.json`: `id`, `state` (`on`, `off`, `not_built`, from the config when built), `pins`, `results`, `assessed`, `sides {subject, tool, infra, policy, unknown}`, `not_used`, `classes {lease, integrity, worker_output, infra}`; the numbers are null for a lane not built |
+| `partial` | true only for the day the events table begins (the loop's first day): its counts start at its first event |
+| `lanes[]` | per lane of `pump/workflows.json`: `id`, `state` (`on`, `off`, `not_built` from the config, or null; see below), `pins`, `results`, `assessed`, `sides {subject, tool, infra, policy, unknown}`, `not_used`, `classes {lease, integrity, worker_output, infra}`; the numbers are null for a lane not built |
 | `totals` | `subjects_in_seed` (when built), `servers_checked` and `servers_assessed` (distinct servers with an accepted, or an accepted and assessed, result that day) |
 | `tool_releases` | always `[]` for now: no feed records our tools' releases yet |
 
@@ -106,21 +107,31 @@ A day:
   quarantined or rejected for its lease (and one more unused item) and checks
   the files are byte-identical (R-LIVE-30).
 - `pins`: the lane's `versions.tool` then `versions.probe` labels
-  (`"<name> <version>"`, plain labels with no vendor name only) from the config
-  when the day is built within a day of its end; for an older day (the
-  backfill, or after the pump was off) `null`, since the pins in force then
-  are not known.
+  (`"<name> <version>"`, plain labels with no vendor name only). `state` and
+  `pins` come from the config only when the day is built within a day of its
+  end; for an older day (the backfill, or after the pump was off) both are
+  `null`, since what was in force then is not known (R-LIVE-33).
 - Nothing names a server, a batch or an item, and no dispatched item count is
   in it (R-LIVE-28). No reason code, id, fence, held or security-class count.
   The whole file passes `scanPublic`; a hit keeps that day out.
 
 The rollover, once per UTC day, while kv `live.history.last_day` is not the
-previous day: build each missing day oldest first (the previous day always;
-on the first run, or after a gap, also the up to 7 days before it that the
-events table still holds whole, skipping any in kv `live.history.days`),
-scan, upload the day file; then `recent.json`, then `index.json`, from kv.
-`last_day` is written only after all three; a failure is retried at the
-next publish without rebuilding a day already stored. Keys, retention and
+previous day:
+
+1. A day file whose upload was not confirmed (kv `live.history.pending`) is
+   sent again with exactly its stored body, never rebuilt, so an immutable
+   key never gets a second body even when a PUT landed but answered an error
+   (R-LIVE-31).
+2. Each missing day, oldest first, at most 2 per publish (a build is a few
+   synchronous queries on the pump's thread): the previous day and, on the
+   first run or after a gap, the up to 7 days before it. A day is built only
+   when the events table holds all of it (its oldest event at or before the
+   day's start, and the day inside the 8 days events are kept), or when it
+   is the day the events begin, marked `partial` (R-LIVE-32). Days in kv
+   `live.history.days` or `live.history.blocked` are skipped. Build, scan,
+   store the body as pending, upload, record, clear pending.
+3. Then `recent.json`, then `index.json`, from kv, and only then `last_day`.
+   A failure anywhere leaves `last_day`; the next publish goes on. Keys, retention and
 recovery: docs/OPERATIONS.md, "The daily history".
 
 ## Hour files and public events

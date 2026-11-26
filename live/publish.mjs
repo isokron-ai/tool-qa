@@ -56,6 +56,9 @@ export const HISTORY_LAST_DAY_KEY = 'live.history.last_day';
 export const HISTORY_DAYS_KEY = 'live.history.days';
 export const HISTORY_RECENT_KEY = 'live.history.recent';
 export const HISTORY_BLOCKED_KEY = 'live.history.blocked';
+export const HISTORY_PENDING_KEY = 'live.history.pending';
+/** Day files built (or re-sent) per publish at most. */
+export const HISTORY_DAYS_PER_PUBLISH = 2;
 export const HISTORY_RECENT_FILE = 'v1/history/recent.json';
 export const HISTORY_INDEX_FILE = 'v1/history/index.json';
 export const HISTORY_RECENT_SCHEMA = 'isokron-loop-history-recent/1';
@@ -268,28 +271,40 @@ export const historyDayKey = (day) => `v1/history/days/${day}.json`;
 const DAY_MS = 86_400_000;
 const dayOfMs = (ms) => new Date(ms).toISOString().slice(0, 10);
 const isDay = (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && dayOfMs(Date.parse(`${d}T00:00:00Z`)) === d;
+const byDay = (a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
 
 /**
  * The daily history rollover (live/history.mjs builds the files). Called by
  * publishLive after a good snapshot upload, with its putter and its deadline's
  * signal; never throws.
  *
- * When kv `live.history.last_day` is not the previous UTC day: build each day
- * still missing, oldest first (the previous day always; on the first run, or
- * after the pump was off, also the up to 7 days before it that the events
- * table still covers, and none already in kv `live.history.days`), scan it,
- * and upload `v1/history/days/<day>.json` (immutable). A stored day goes into
- * kv `live.history.recent` (the day objects, last 120) and `live.history.days`
- * (every day with a file) at once, so a retry never rebuilds it: an
- * immutable key never gets a second body. Then `v1/history/recent.json` and
- * `v1/history/index.json` (max-age=300), from kv. `last_day` is recorded only
- * after all of them are stored; any failure leaves it, and the next publish
- * tries again. A day the scan blocks is not uploaded and not retried (it is
- * logged by rule and path, and kept in kv `live.history.blocked`).
+ * While kv `live.history.last_day` is not the previous UTC day:
+ *   1. A day file whose upload was not confirmed (kv `live.history.pending`
+ *      {day, body}) is sent again with exactly that body, never rebuilt: a PUT
+ *      may land while the client sees an error, and an immutable key must
+ *      never get a second body (R-LIVE-31).
+ *   2. Each missing day is built, oldest first, at most HISTORY_DAYS_PER_PUBLISH
+ *      per call (each build is a few synchronous queries over a day of events
+ *      on the pump's thread; the cap keeps one publish cheap and a backfill
+ *      spreads over a few publishes). A day is built only while the events
+ *      table holds all of it (the oldest event at or before its start, and the
+ *      day inside the 8 days events are kept), or when it is the day the
+ *      events begin, marked `partial` (R-LIVE-32). Days already in kv
+ *      `live.history.days` are skipped. The body is scanned, stored in
+ *      `live.history.pending`, uploaded, then moved into
+ *      `live.history.recent` (the day objects, last 120) and `live.history.days`,
+ *      and pending is cleared.
+ *   3. When no day is left: `v1/history/recent.json`, then
+ *      `v1/history/index.json` (max-age=300), from kv, and only then
+ *      `last_day`. Any failure leaves `last_day`; the next publish goes on.
+ * A day the scan blocks is not uploaded and not retried: it is logged by rule
+ * and path and kept once in kv `live.history.blocked`.
  *
- * @returns {Promise<{ok: boolean, skipped?: string, error?: string, written?: string[], blocked?: string[]}>}
+ * @returns {Promise<{ok: boolean, skipped?: string, error?: string, more?: boolean, written?: string[], blocked?: string[]}>}
  */
 export async function publishHistory({ db, buildDay, oldestEventMs, buildModule = './history.mjs', putter, now, config, signal, log = () => {} } = {}) {
+  const written = [];
+  const blocked = [];
   try {
     const nowMs = typeof now === 'function' ? now() : Number(now);
     const today = dayOfMs(nowMs);
@@ -306,23 +321,6 @@ export async function publishHistory({ db, buildDay, oldestEventMs, buildModule 
     const kept = db.getKv(HISTORY_RECENT_KEY);
     let recent = Array.isArray(kept) ? kept.filter((d) => d && typeof d === 'object' && isDay(d.day)) : [];
 
-    // The days to build: after last_day (or the 7 before the previous day on a first run), up to the previous day.
-    const prevStart = Date.parse(`${previous}T00:00:00Z`);
-    let firstStart = prevStart - HISTORY_BACKFILL_DAYS * DAY_MS;
-    if (isDay(last)) firstStart = Math.max(firstStart, Date.parse(`${last}T00:00:00Z`) + DAY_MS);
-    let oldest = null;
-    try { oldest = oldestOf(db); } catch { oldest = null; }
-    const todo = [];
-    for (let t = firstStart; t <= prevStart; t += DAY_MS) {
-      const d = dayOfMs(t);
-      if (have.has(d)) continue;
-      // An older day only while the events table still holds all of it, and once the loop had started.
-      const covered = t === prevStart || (t >= nowMs - HISTORY_EVENTS_KEPT_MS && oldest !== null && oldest < t + DAY_MS);
-      if (covered) todo.push(d);
-    }
-
-    const written = [];
-    const blocked = [];
     const put = async (key, body) => {
       if (signal?.aborted) throw Object.assign(new Error('deadline'), { deadline: true });
       await putter(key, body, { signal, cacheControl: cacheControlFor(key, { now: nowMs }) });
@@ -332,7 +330,52 @@ export async function publishHistory({ db, buildDay, oldestEventMs, buildModule 
       log(`live: history upload failed (${error}${key ? ` at ${safeToken(key)}` : ''}); retrying next publish`);
       return { ok: false, error, written, blocked };
     };
+    // Upload one day file from its stored body, then record it.
+    const ship = async (day, body) => {
+      const key = historyDayKey(day);
+      try { await put(key, body); } catch (err) { return failed(err, key); }
+      have.add(day);
+      recent = [...recent.filter((x) => x.day !== day), JSON.parse(body)].sort(byDay).slice(-HISTORY_RECENT_DAYS);
+      db.setKv(HISTORY_DAYS_KEY, [...have].sort(), { now: nowMs });
+      db.setKv(HISTORY_RECENT_KEY, recent, { now: nowMs });
+      db.deleteKv(HISTORY_PENDING_KEY);
+      written.push(day);
+      return null;
+    };
+
+    // No events table or no events yet: nothing to publish (the next publish looks again).
+    const oldest = oldestOf(db);
+    if (oldest === null) return { ok: true, skipped: 'no_events' };
+    let budget = HISTORY_DAYS_PER_PUBLISH;
+    // 1. An unconfirmed day file: the same body again.
+    const pending = db.getKv(HISTORY_PENDING_KEY);
+    if (pending && isDay(pending.day) && typeof pending.body === 'string') {
+      if (have.has(pending.day)) db.deleteKv(HISTORY_PENDING_KEY);
+      else {
+        const stop = await ship(pending.day, pending.body);
+        if (stop) return stop;
+        budget -= 1;
+      }
+    }
+
+    // 2. The days to build: after last_day (or the 7 before the previous day on a first run), up to the previous day.
+    const prevStart = Date.parse(`${previous}T00:00:00Z`);
+    let firstStart = prevStart - HISTORY_BACKFILL_DAYS * DAY_MS;
+    if (isDay(last)) firstStart = Math.max(firstStart, Date.parse(`${last}T00:00:00Z`) + DAY_MS);
+    const priorBlocked = db.getKv(HISTORY_BLOCKED_KEY);
+    const blockedDays = new Set((Array.isArray(priorBlocked) ? priorBlocked : []).map((b) => b?.day));
+    const todo = [];
+    for (let t = firstStart; t <= prevStart; t += DAY_MS) {
+      const d = dayOfMs(t);
+      if (have.has(d) || blockedDays.has(d)) continue;
+      const kept8 = t >= nowMs - HISTORY_EVENTS_KEPT_MS;
+      const whole = oldest <= t;
+      const first = dayOfMs(oldest) === d;
+      if (kept8 && (whole || first)) todo.push(d);
+    }
     for (const d of todo) {
+      if (budget <= 0) return { ok: true, more: true, written, blocked };
+      budget -= 1;
       if (signal?.aborted) return failed({ deadline: true });
       if (db?.inTx) return { ok: false, skipped: 'in_tx', written, blocked };
       const { day, problems } = await build(db, { day: d, now: nowMs, config });
@@ -340,17 +383,17 @@ export async function publishHistory({ db, buildDay, oldestEventMs, buildModule 
         for (const line of describeProblems(problems)) log(`live: history day ${d} blocked by the scan: ${line}`);
         blocked.push(d);
         const prior = db.getKv(HISTORY_BLOCKED_KEY);
-        db.setKv(HISTORY_BLOCKED_KEY, [...(Array.isArray(prior) ? prior : []), { day: d, at: new Date(nowMs).toISOString(), rules: [...new Set(problems.map((p) => safeToken(p?.rule)))] }].slice(-30), { now: nowMs });
+        const list = (Array.isArray(prior) ? prior : []).filter((b) => b?.day !== d);
+        db.setKv(HISTORY_BLOCKED_KEY, [...list, { day: d, at: new Date(nowMs).toISOString(), rules: [...new Set(problems.map((p) => safeToken(p?.rule)))] }].slice(-30), { now: nowMs });
         continue;
       }
-      const key = historyDayKey(d);
-      try { await put(key, JSON.stringify(day)); } catch (err) { return failed(err, key); }
-      have.add(d);
-      recent = [...recent.filter((x) => x.day !== d), day].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)).slice(-HISTORY_RECENT_DAYS);
-      db.setKv(HISTORY_DAYS_KEY, [...have].sort(), { now: nowMs });
-      db.setKv(HISTORY_RECENT_KEY, recent, { now: nowMs });
-      written.push(d);
+      const body = JSON.stringify(day);
+      db.setKv(HISTORY_PENDING_KEY, { day: d, body }, { now: nowMs });
+      const stop = await ship(d, body);
+      if (stop) return stop;
     }
+
+    // 3. recent, then index, then last_day.
     const recentText = JSON.stringify({ schema: HISTORY_RECENT_SCHEMA, days: recent });
     const indexText = JSON.stringify({ schema: HISTORY_INDEX_SCHEMA, days: [...have].sort() });
     for (const [key, body] of [[HISTORY_RECENT_FILE, recentText], [HISTORY_INDEX_FILE, indexText]]) {
@@ -360,7 +403,7 @@ export async function publishHistory({ db, buildDay, oldestEventMs, buildModule 
     return { ok: true, written, blocked };
   } catch (err) {
     log(`live: history not built (${String(err?.name ?? 'Error').slice(0, 40)}); retrying next publish`);
-    return { ok: false, error: 'build' };
+    return { ok: false, error: 'build', written, blocked };
   }
 }
 
