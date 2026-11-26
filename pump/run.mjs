@@ -104,6 +104,7 @@ import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.
 import { planShards, runTick } from './tick.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
+import { HISTORY_TIMES_KEY, HISTORY_TIMES_REFRESH_MS, historyList, historyTimesDue, refreshHistoryTimes } from './history-times.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
 // How long the first pull may keep retrying, and how long past its deadline the
@@ -122,6 +123,8 @@ export const CONFORMANCE_KEY = 'pump.conformance';
 export const LIVE_RETRY_UPLOAD_MS = 20_000;
 export const LIVE_DEADLINE_MS = 20_000;
 export const LIVE_FINAL_DEADLINE_MS = 5_000;
+// The history time lookup (pump/history-times.mjs) gets this long within a tick.
+export const HISTORY_TIMES_WINDOW_MS = 15_000;
 export const LANE_NOTES_FILE = fileURLToPath(new URL('../live/lane-notes.json', import.meta.url));
 // The values the run read that the snapshot builder shows (build plan section 3).
 export const LIVE_SWITCH_VARS = ['LOOP_ENABLED', 'LOOP_PAUSE_UNTIL', 'LOOP_SLOTS', 'RESULTS_PUBLISH_ENABLED', 'LANE_HISTORY_REGISTRY_ENABLED', 'LANE_HISTORY_PACKAGES_ENABLED', 'LANE_HISTORY_POPULARITY_ENABLED'];
@@ -383,12 +386,45 @@ export async function runPump({
       say(`pump: could not record retry events (continuing): ${err?.message ?? err}`);
     }
   };
+  // config.history for the snapshot: when registry-full, packages and popularity
+  // last succeeded, from kv `pump.history_times`, refreshed at most every 30
+  // minutes (never at the end-of-run upload). Nothing at all unless the live
+  // switch is on. Never throws; a failed read keeps the cached values.
+  let historyClient = null;
+  let historyUntil = deadline;
+  let lastHistoryTry = -Infinity;
+  const historyStep = async ({ final = false } = {}) => {
+    if (!liveEnabled(env)) return [];
+    let cached = null;
+    try {
+      cached = db.getKv(HISTORY_TIMES_KEY) ?? null;
+      if (!final && repo && now() - lastHistoryTry >= HISTORY_TIMES_REFRESH_MS && historyTimesDue(cached, now())) {
+        lastHistoryTry = now();
+        const until = Math.min(deadline, now() + HISTORY_TIMES_WINDOW_MS);
+        if (until > now()) {
+          if (!historyClient) {
+            const { token } = await lazyMint({ repositories: [repo.split('/')[1]], permissions: { actions: 'read' } });
+            historyClient = createClient({ token, fetch, apiUrl, budget: bud, now, sleep, log: say, retryTotalMs: HISTORY_TIMES_WINDOW_MS, requestTimeoutMs: 10_000, retryUntil: () => historyUntil, onRetry: retryHook('github_api') });
+          }
+          historyUntil = until;
+          const r = await refreshHistoryTimes({ client: historyClient, repo, now: now(), cached, until, clock: now, log: say });
+          if (r.refreshed) {
+            cached = r.record;
+            db.setKv(HISTORY_TIMES_KEY, r.record, { now: now() });
+          }
+        }
+      }
+    } catch (err) {
+      say(`pump: history times unavailable (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
+    }
+    return historyList(cached);
+  };
   // The snapshot at a tick boundary, or the last one of the run (capped at 5 s).
   const liveStep = async (reason, { final = false } = {}) => {
     try {
       const deadlineMs = final ? Math.min(live.finalDeadlineMs ?? LIVE_FINAL_DEADLINE_MS, live.deadlineMs ?? LIVE_DEADLINE_MS) : liveCap();
       await (live.publish ?? publishLive)({
-        db, ...(live.build ? { build: live.build } : {}), ...liveCommon(), config: { ...cfg, switches: liveSwitches(), history: [], lane_notes: laneNotes() }, retry: openRetry,
+        db, ...(live.build ? { build: live.build } : {}), ...liveCommon(), config: { ...cfg, switches: liveSwitches(), history: await historyStep({ final }), lane_notes: laneNotes() }, retry: openRetry,
         version: env.GITHUB_SHA ? String(env.GITHUB_SHA).slice(0, 7) : undefined, deadlineMs,
       });
     } catch (err) {
