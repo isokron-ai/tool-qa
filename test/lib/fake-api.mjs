@@ -56,7 +56,7 @@ export function fakeApi(routes = []) {
     }
     return toResponse({ status: 404, body: { message: `fake api: no route for ${method} ${url.pathname}` } });
   }
-  return { fetch, calls };
+  return { fetch, calls, routes };
 }
 
 /** A clock whose sleep() advances time instantly. */

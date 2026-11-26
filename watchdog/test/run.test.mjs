@@ -432,3 +432,64 @@ test('R-RET-19: the health issue carries the keep-forever copy and the seal reco
   w.cleanup();
   off.cleanup();
 });
+
+
+test('R-WD-15: a history capture that fell off the newest-300 artifact list is found through its workflow runs, not reported red', async () => {
+  const w = world({ seed: () => {} });
+  const ago = (m) => new Date(w.c.t - m * MIN).toISOString();
+  // The global list is all lane results: no history capture in it.
+  w.api.routes.unshift(['GET', `/repos/${REPO}/actions/artifacts`, () => ({ body: { artifacts: [{ id: 9, name: 'registry-delta-x', created_at: ago(10), expired: false }, { id: 10, name: 'result-abc', created_at: ago(1), expired: false }] } })]);
+  w.api.routes.unshift(['GET', /\/actions\/workflows\/history-(registry|packages|popularity)\.yml\/runs$/, (req) => {
+    if (req.path.includes('history-registry')) {
+      return { body: { workflow_runs: [{ id: 501, display_title: 'history-registry delta' }, { id: 502, display_title: 'history-registry full' }] } };
+    }
+    return { body: { workflow_runs: [{ id: req.path.includes('packages') ? 601 : 701, display_title: 'x' }] } };
+  }]);
+  w.api.routes.unshift(['GET', /\/actions\/runs\/(502|601|701)\/artifacts$/, (req) => {
+    const id = Number(req.path.match(/runs\/(\d+)\//)[1]);
+    const name = { 502: 'registry-full-7', 601: 'history-packages-7', 701: 'history-popularity-7' }[id];
+    return { body: { artifacts: [{ id: id * 10, name, created_at: ago(600), expired: false }] } };
+  }]);
+  const out = await runWatchdog(w.opts);
+  const body = parseBody(w.issues[0].body);
+  for (const id of ['history-registry-full', 'history-packages', 'history-popularity']) {
+    const c = body.checks.find((x) => x.id === id);
+    assert.equal(c.status, 'green', `${id}: ${c.summary}`);
+  }
+  // the delta run (501) is not opened for the full capture
+  assert.equal(w.api.calls.some((r) => r.path.endsWith('/runs/501/artifacts')), false);
+  assert.notEqual(out.overall, 'red');
+  w.cleanup();
+});
+
+test('R-WD-15: when the history lookups fail, the check reads as before (red, no artifact found) and the watchdog still runs', async () => {
+  const w = world({ seed: () => {} });
+  w.api.routes.unshift(['GET', `/repos/${REPO}/actions/artifacts`, () => ({ body: { artifacts: [] } })]);
+  w.api.routes.unshift(['GET', /\/actions\/workflows\/history-(registry|packages|popularity)\.yml\/runs$/, (req) => (req.query.get('status') === 'success' ? { status: 500, body: {} } : { body: { workflow_runs: [] } })]);
+  await runWatchdog(w.opts);
+  const body = parseBody(w.issues[0].body);
+  assert.equal(body.checks.find((x) => x.id === 'history-packages').status, 'red');
+  w.cleanup();
+});
+
+
+test('R-WD-15: the daily registry-full run is found under many pages of delta runs', async () => {
+  const w = world({ seed: () => {} });
+  const ago = (m) => new Date(w.c.t - m * MIN).toISOString();
+  w.api.routes.unshift(['GET', `/repos/${REPO}/actions/artifacts`, () => ({ body: { artifacts: [{ id: 1, name: 'registry-delta-x', created_at: ago(5), expired: false }, { id: 2, name: 'history-packages-1', created_at: ago(60), expired: false }, { id: 3, name: 'history-popularity-1', created_at: ago(60), expired: false }] } })]);
+  // 150 delta runs, then the full run on page 2.
+  const runs = Array.from({ length: 150 }, (_, i) => ({ id: 1000 + i, display_title: 'history-registry delta' }));
+  runs.splice(130, 0, { id: 999, display_title: 'history-registry full' });
+  w.api.routes.unshift(['GET', /\/actions\/workflows\/history-registry\.yml\/runs$/, (req) => {
+    if (req.query.get('status') !== 'success') return { body: { workflow_runs: [] } };
+    const page = Number(req.query.get('page') || 1);
+    return { body: { workflow_runs: runs.slice((page - 1) * 100, page * 100) } };
+  }]);
+  w.api.routes.unshift(['GET', /\/actions\/runs\/999\/artifacts$/, () => ({ body: { artifacts: [{ id: 9990, name: 'registry-full-9', created_at: ago(20 * 60), expired: false }] } })]);
+  await runWatchdog(w.opts);
+  const c = parseBody(w.issues[0].body).checks.find((x) => x.id === 'history-registry-full');
+  assert.equal(c.status, 'green', c.summary);
+  const pages = w.api.calls.filter((r) => r.path.endsWith('/history-registry.yml/runs') && r.query.get('status') === 'success').map((r) => r.query.get('page'));
+  assert.deepEqual(pages, ['1', '2']);
+  w.cleanup();
+});
