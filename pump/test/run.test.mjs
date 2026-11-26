@@ -605,6 +605,7 @@ function liveHarness(over = {}) {
   const bodies = [];
   const live = {
     deadlineMs: 80,
+    publishEveryMs: 0, // the 60 s publishes between ticks have their own tests (live-between-ticks.test.mjs)
     scan: () => ({ ok: true, hits: [] }),
     build: async (db, a) => {
       builds.push({ retry: a.retry, now: a.now });
@@ -790,6 +791,66 @@ test('R-LIVE-42: the final state push keeps its full grace after a slow end-of-r
   assert.ok(last.at > start + 11 * 60_000, 'the slow upload ran past the run deadline');
   assert.equal(last.until - last.at, 90_000, 'the final push still has all of its grace');
   h.cleanup();
+});
+
+// ---- publishing between ticks (R-LIVE-47) ----
+
+async function betweenRun(over = {}, tweak = () => {}) {
+  const { h } = liveHarness(over);
+  const start = h.c.t;
+  const at = [];
+  let db = null;
+  h.opts.live.publish = async (a) => { db = a.db; at.push(h.c.t - start); return { ok: true }; };
+  h.opts.live.publishEveryMs = 60_000;
+  h.opts.live.deadlineMs = 20_000;
+  const baseSleep = h.opts.sleep;
+  h.opts.sleep = async (ms) => { await baseSleep(ms); if (db) tweak(db, h.c.t - start); };
+  const out = await runPump(h.opts);
+  h.cleanup();
+  return { at, out };
+}
+
+test('R-LIVE-47: an 11 minute run publishes about every 60 s between its 150 s ticks, and once more at the end', async () => {
+  const { at, out } = await betweenRun();
+  assert.equal(out.ok, true);
+  const S = 1000;
+  assert.deepEqual(at.map((t) => t / S), [0, 60, 120, 150, 210, 270, 300, 360, 420, 450, 510, 570, 600, 600]);
+});
+
+test('R-LIVE-47: no publish starts when the next tick is due before its cap (20 s) would end, or past the run deadline', async () => {
+  // ticks every 130 s: 60 s fits (60 + 20 <= 130), 120 s does not (120 + 20 > 130)
+  const { h } = liveHarness();
+  const start = h.c.t;
+  const times = [];
+  h.opts.live.publish = async () => { times.push(h.c.t - start); return { ok: true }; };
+  h.opts.live.publishEveryMs = 60_000;
+  h.opts.live.deadlineMs = 20_000;
+  h.opts.tickIntervalMs = 130_000;
+  h.opts.maxRunMs = 11 * 60_000;
+  await runPump(h.opts);
+  h.cleanup();
+  assert.ok(times.includes(60_000));
+  assert.ok(!times.includes(120_000), 'would end at 140 s, after the tick due at 130 s');
+  const ticks = [0, 130_000, 260_000, 390_000, 520_000, 650_000];
+  for (const t of times.slice(0, -1)) {
+    const nextTick = ticks.find((k) => k > t);
+    assert.ok(nextTick === undefined || ticks.includes(t) || nextTick - t >= 20_000, `publish at ${t} overlaps the tick due at ${nextTick}`);
+    assert.ok(t + 20_000 <= 11 * 60_000 || ticks.includes(t), `publish at ${t} runs past the deadline`);
+  }
+  assert.ok(times.length > 5);
+});
+
+test('R-LIVE-47: with the switch off nothing is published between ticks', async () => {
+  const on = await betweenRun();
+  const off = await betweenRun({ env: { LANE_LIVE_SNAPSHOT_ENABLED: 'false' } });
+  assert.equal(off.at.length, 6, 'only the tick boundaries and the end of the run (a no-op while off), as before');
+  assert.ok(on.at.length > off.at.length);
+});
+
+test('R-LIVE-47: no publish between ticks while the state is inside a transaction', async () => {
+  const { at } = await betweenRun({}, (db, elapsed) => { db.inTx = elapsed === 60_000; });
+  assert.ok(!at.slice(1).includes(60_000), 'skipped at 60 s');
+  assert.ok(at.includes(120_000), 'and tried again at the next wake');
 });
 
 test('live: the R2 credentials and account id are scrubbed from the log', async () => {
