@@ -184,7 +184,8 @@ function scanStatic() {
   const cfg = loadConfig();
   const workflows = {};
   for (const [name, w] of Object.entries(cfg.workflows)) workflows[name] = { ...w, enabled: false };
-  workflows['scan-static'] = { ...cfg.workflows['scan-static'], enabled: true, versions: { tool: { 'mcp-check': 'ec3c801' }, oracle: {}, probe: {} } };
+  // pin_check label: these tests are about subjects, not version pins (R-PIN-01 has its own), so no commit lookup.
+  workflows['scan-static'] = { ...cfg.workflows['scan-static'], enabled: true, pin_check: 'label', versions: { tool: { 'mcp-check': 'ec3c801' }, oracle: {}, probe: {} } };
   return { tiers: cfg.tiers, workflows };
 }
 
