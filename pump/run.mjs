@@ -123,6 +123,8 @@ export const CONFORMANCE_KEY = 'pump.conformance';
 export const LIVE_RETRY_UPLOAD_MS = 20_000;
 export const LIVE_DEADLINE_MS = 20_000;
 export const LIVE_FINAL_DEADLINE_MS = 5_000;
+// Between ticks the snapshot is published about this often (live.publishEveryMs in tests; 0 turns it off).
+export const LIVE_PUBLISH_MS = 60_000;
 // The history time lookup (pump/history-times.mjs) gets this long within a tick.
 export const HISTORY_TIMES_WINDOW_MS = 15_000;
 export const LANE_NOTES_FILE = fileURLToPath(new URL('../live/lane-notes.json', import.meta.url));
@@ -431,6 +433,26 @@ export async function runPump({
       say(`pump: live snapshot (${reason}) failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
     }
   };
+  // The wait between ticks, with the same snapshot publish as at a tick boundary
+  // about every LIVE_PUBLISH_MS (never more often: an unchanged body is not
+  // uploaded again anyway, and the history lookup keeps its own 30 minute
+  // cache). A publish is skipped when the live switch is not exactly "true",
+  // inside a state transaction, when it could run past the deadline, or when
+  // the next tick is due before its cap would end, so it never delays a tick.
+  const sleepToNextTick = async (next, from) => {
+    const every = live.publishEveryMs ?? LIVE_PUBLISH_MS;
+    let last = from;
+    while (every > 0 && liveEnabled(env)) {
+      const at = Math.max(now(), last + every);
+      const cap = Math.min(live.deadlineMs ?? LIVE_DEADLINE_MS, LIVE_DEADLINE_MS);
+      if (at + cap > next || at + cap > deadline) break;
+      await sleep(Math.max(0, at - now()));
+      last = at;
+      if (db.inTx) continue;
+      await liveStep('between ticks');
+    }
+    await sleep(Math.max(0, next - now()));
+  };
   let ticks = 0;
   let dispatched = 0;
   let failed = 0;
@@ -588,7 +610,7 @@ export async function runPump({
       // A failed push: one housekeeping tick (ingest, reap, no dispatch), then stop.
       const next = tickStart + tickIntervalMs;
       if (next >= deadline) break;
-      await sleep(Math.max(0, next - now()));
+      await sleepToNextTick(next, tickStart);
     }
     // Prune closed history and record the state's size (pump/prune.mjs). Not
     // after a failed push: this run's state may not be the one on the release.

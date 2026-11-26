@@ -21,6 +21,8 @@ export const HISTORY_WORKFLOWS = Object.freeze({
 });
 // registry-full needs a wider page: delta runs (every 15 minutes) share the workflow.
 const FULL_PAGE = 50;
+// The UTC hour of the daily full capture's cron (history-registry.yml: "17 3 * * *").
+export const FULL_CRON_HOUR = 3;
 const isoSeconds = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z');
 const timeOf = (v) => {
   const t = Date.parse(v);
@@ -34,6 +36,7 @@ const timeOf = (v) => {
  * missing) are told apart by the schedule instead: the daily full capture is
  * cron "17 3 * * *", so a scheduled run created in the 03:xx UTC hour is the
  * full one (the delta cron runs every 15 minutes and its runs are titled "... delta").
+ * If this cron changes, update FULL_CRON_HOUR here; test R-LIVE-48 guards it.
  * `runs` come newest first from the API; the newest match wins either way.
  */
 export function pickFullRun(runs) {
@@ -42,7 +45,7 @@ export function pickFullRun(runs) {
     const title = String(r?.display_title ?? r?.name ?? '');
     const created = timeOf(r?.created_at);
     const byTitle = / full$/.test(title);
-    const byCron = r?.event === 'schedule' && created !== null && new Date(created).getUTCHours() === 3 && !/ delta$/.test(title);
+    const byCron = r?.event === 'schedule' && created !== null && new Date(created).getUTCHours() === FULL_CRON_HOUR && !/ delta$/.test(title);
     if (!byTitle && !byCron) continue;
     const at = timeOf(r?.updated_at);
     if (at !== null && (best === null || at > best)) best = at;

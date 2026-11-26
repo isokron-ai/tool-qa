@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { pickFullRun, refreshHistoryTimes, historyList } from '../history-times.mjs';
+import { FULL_CRON_HOUR, pickFullRun, refreshHistoryTimes, historyList } from '../history-times.mjs';
 import { runPump } from '../run.mjs';
 import { createClient } from '../github.mjs';
 import { openState } from '../../state/db.mjs';
@@ -157,4 +157,11 @@ test('R-LIVE-46: a lookup cut by the tick deadline keeps what it has and tries a
   const r = await refreshHistoryTimes({ client: boom, repo: REPO, now: NOW, cached: { at: iso(NOW - 31 * MIN), kinds: { packages: { last_capture_at: '2026-11-26T01:00:00Z' } } }, log: (l) => lines.push(l) });
   assert.equal(r.record.kinds.packages.last_capture_at, '2026-11-26T01:00:00Z');
   assert.equal(w.api.calls.length, 0);
+});
+
+test('R-LIVE-48: the daily full-capture cron of history-registry.yml is exactly "17 3 * * *", the hour pickFullRun relies on', () => {
+  const yml = readFileSync(new URL('../../.github/workflows/history-registry.yml', import.meta.url), 'utf8');
+  const crons = [...yml.matchAll(/^\s*-\s*cron:\s*['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+  assert.ok(crons.includes('17 3 * * *'), `history-registry.yml no longer has the daily full cron "17 3 * * *" (found: ${crons.join(' | ') || 'none'}). pump/history-times.mjs picks the registry-full run by its hour (FULL_CRON_HOUR): update it there to match`);
+  assert.equal(FULL_CRON_HOUR, 3);
 });
