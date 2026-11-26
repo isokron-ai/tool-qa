@@ -31,6 +31,8 @@
 
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 
+import { expectedPins } from '../pump/pins.mjs';
+
 const ATTEMPT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const WORKFLOW_FILE_RE = /^\.github\/workflows\/[A-Za-z0-9_.-]{1,100}\.ya?ml$/;
@@ -91,9 +93,15 @@ function normalizeItem(it, position, bad) {
   };
   const repoIdRaw = pick(it, 'repo_id');
   const repoId = Number.isSafeInteger(repoIdRaw) && repoIdRaw > 0 ? repoIdRaw : null;
+  // The tool and probe versions the run_key is filed under (R-PIN-01): null
+  // when the store has no label for it, false when it has one that cannot be
+  // read (R-PIN-02), left out when the ledger does not say (a hand-made
+  // ledger); ingest checks the bundle against them.
+  const has = Object.prototype.hasOwnProperty.call(it, 'pins');
+  const pins = !has ? {} : { pins: it.pins === null ? null : (expectedPins(it.pins) ?? false) };
   return {
     index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries,
-    throttled, throttled_since: since,
+    throttled, throttled_since: since, ...pins,
     ...Object.fromEntries(Object.entries({ subject: text('subject'), subject_name: text('subject_name'), repo_id: repoId, name: text('name') })
       .filter(([, v]) => v !== null)),
   };

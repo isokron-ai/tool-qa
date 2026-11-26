@@ -85,6 +85,7 @@ import { normalizeAttempt, openLedger } from './ledger.mjs';
 import { maskText, scanText } from './redact.mjs';
 import { loadRegistry } from './registry.mjs';
 import { oracleFactsFromFiles } from '../state/oracle.mjs';
+import { lanePinModes } from '../pump/pins.mjs';
 
 export const REPORT_SCHEMA_VERSION = 1;
 /**
@@ -119,6 +120,17 @@ export function laneThrottleStages(file = new URL('../pump/workflows.json', impo
     laneStages.set(key, out);
   }
   return laneStages.get(key);
+}
+const laneModes = new Map();
+/**
+ * Each lane's pin_check mode from pump/workflows.json (R-PIN-01): "label" or
+ * "enforce". Read once per file. The pump passes the modes of the config it
+ * dispatched with instead (pump/run.mjs).
+ */
+export function lanePinModesFile(file = new URL('../pump/workflows.json', import.meta.url)) {
+  const key = String(file);
+  if (!laneModes.has(key)) laneModes.set(key, lanePinModes(JSON.parse(readFileSync(file, 'utf8')).workflows));
+  return laneModes.get(key);
 }
 // The size caps live in the result contract (worker-kit/contract.mjs).
 export { MAX_ARTIFACT_BYTES, MAX_BUNDLE_BYTES, MAX_FILE_BYTES };
@@ -181,6 +193,7 @@ export async function openAttempt(input, deps) {
     maxArtifactBytes = MAX_ARTIFACT_BYTES, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES,
     analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS, maxRetries = MAX_RETRIES, retryWindowMs = RETRY_WINDOW_MS,
     throttleStages = laneThrottleStages(),
+    pinModes = lanePinModesFile(),
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
 
@@ -423,7 +436,10 @@ export async function openAttempt(input, deps) {
       run_attempt: base.run.run_attempt,
     };
     const stages = row.workflow_name && Array.isArray(throttleStages?.[row.workflow_name]) ? throttleStages[row.workflow_name] : [];
-    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes, maxFileBytes, throttleStages: stages };
+    // The lane's pin_check mode; a lane the config does not name is held to
+    // "enforce" (R-PIN-01). item.pins: the run_key's pinned versions.
+    const pinMode = row.workflow_name && pinModes?.[row.workflow_name] === 'label' ? 'label' : 'enforce';
+    const ctx = { exp, registry, canaries: row.canaries, allowNoControls, maxBundleBytes, maxFileBytes, throttleStages: stages, pins: { mode: pinMode, expected: item.pins, self: row.repo.split('/')[1] ?? null } };
     const verdict = await analyze(plaintext, ctx, { timeoutMs: judgeTimeoutMs });
     if (verdict?.timedOut) {
       return reject('ingest_timeout', [{ reason: 'ingest_timeout', detail: `judging took longer than ${judgeTimeoutMs / 1000} s and was stopped` }]);
@@ -509,6 +525,7 @@ function checkRun(run, row, seen) {
  * @param {number} [deps.maxRetries]  retry_later decisions per run_key before a retryable bundle is kept
  * @param {number} [deps.retryWindowMs]  how long a throttled bundle keeps being sent back (retry_throttled)
  * @param {Record<string, string[]>} [deps.throttleStages]  lane -> throttle_stages (default: pump/workflows.json)
+ * @param {Record<string, string>} [deps.pinModes]  lane -> pin_check mode, label or enforce (default: pump/workflows.json)
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
  *   outcome and reason are the items' own when they all agree; otherwise outcome

@@ -20,6 +20,7 @@ import {
   MANIFEST_NAME, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, resultFault, sha256Hex, validateManifest,
 } from '../worker-kit/contract.mjs';
 import { readTar, TarError } from '../worker-kit/tar.mjs';
+import { pinDecision } from '../pump/pins.mjs';
 import { checkBundle } from './forgery.mjs';
 import { cleanHit, cleanProblem, makeLabeler, MAX_LISTED } from './hygiene.mjs';
 import { scanFiles } from './redact.mjs';
@@ -104,7 +105,7 @@ export function readBundle(plaintext, { maxBundleBytes } = {}) {
  *   throttled (accepted only): retryable, and every skip is rate_limited or upstream_unavailable
  */
 export function analyzeBundle(plaintext, ctx) {
-  const { exp, registry, canaries = [], allowNoControls = false, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES, throttleStages = [] } = ctx;
+  const { exp, registry, canaries = [], allowNoControls = false, maxBundleBytes = MAX_BUNDLE_BYTES, maxFileBytes = MAX_FILE_BYTES, throttleStages = [], pins = null } = ctx;
   const label = makeLabeler(canaries);
   const report = {};
   const done = (outcome, reason, problems = []) => ({
@@ -191,7 +192,24 @@ export function analyzeBundle(plaintext, ctx) {
   };
   if (hits.length > 0) return done('quarantined', 'secret_scan');
 
+  // 9. version pins (R-PIN-01): the tool and probe versions the run_key is
+  // filed under must be what ran, or the result is refused (pump/pins.mjs).
+  // Last, so it only ever turns what would be accepted into a refusal.
+  if (pins) {
+    const d = pinDecision({ mode: pins.mode, expected: pins.expected, tools: manifest.tools, self: pins.self ?? null });
+    report.pins = labelPins(d.report, label);
+    if (d.reason) return reject(d.reason, d.problems);
+  }
+
   return { ...done('accepted', null), retryable, throttled };
+}
+
+/** The pins section of the report, with every string from the bundle through the labeler. */
+function labelPins(r, label) {
+  const entry = (e) => ({ kind: e.kind, name: label(e.name), pin: label(e.pin), got: e.got === null ? null : label(e.got), ...(e.note ? { note: label(e.note, 200) } : {}) });
+  const out = { ...r };
+  for (const k of ['verified', 'unverified', 'mismatched']) if (Array.isArray(r[k])) out[k] = r[k].slice(0, MAX_LISTED).map(entry);
+  return out;
 }
 
 /**

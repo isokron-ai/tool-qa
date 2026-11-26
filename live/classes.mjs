@@ -83,6 +83,10 @@ const TABLE = {
   field_type: 'worker_output',
   rejected_by_ingest: 'worker_output',
   ledger_refused: 'worker_output',
+  // Version pins (R-PIN-01, pump/pins.mjs): the worker's manifest reports, or
+  // fails to prove, other tool or probe versions than the run_key names.
+  pin_mismatch: 'worker_output',
+  pin_unverified: 'worker_output',
 
   // infra: our runner, GitHub or a third party, not the worker's output.
   ingest_timeout: 'infra',

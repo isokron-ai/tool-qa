@@ -850,6 +850,15 @@ none of it, and every pump run fails with `pump: <workflow> is paused until
 ...`, so the health issue shows the pump red. Find out who moves the branch or
 runs the workflow; the pause ends on its own (kv `pump.paused:<workflow>`).
 
+A result refused for its version pins (`pin_mismatch` or `pin_unverified`;
+R-PIN-01, "Version pins" below) pauses its workflow the same way, for an hour,
+at the first refusal: `pump: <workflow> is paused until ...: a result was
+refused for its version pins`. The worker ran, or did not prove it ran, other
+code than `versions` in `pump/workflows.json` names. Bump the pin to what the
+worker runs (usually: the worker repository merged without a pin bump), or
+fix the worker; nothing was parked, so the work goes out again when the pause
+ends.
+
 If any push fails, the run dispatches nothing more, does one housekeeping
 tick (reap and ingest), tries a final push and fails (red). Look at the
 `pump: state push (...) failed` line; the next run starts from the last state
@@ -1799,4 +1808,50 @@ run it again later (or let the pump judge it). Running it again for a recorded
 attempt does nothing. A result whose lease has expired is stored as rejected.
 If the dispatch is still open afterwards, the pump closes it on its first tick
 back.
+
+## Version pins (R-PIN-01)
+
+`versions.tool` and `versions.probe` of a lane in `pump/workflows.json` go
+into every run_key: they are what a result is filed under. A worker workflow
+is dispatched on a branch (`ref`, GitHub takes no commit there), so without
+more the worker runs its branch head, whatever the pin says. `pin_check` on
+each lane says how the label is made true:
+
+| `pin_check` | Pump | Ingest |
+|---|---|---|
+| `enforce` | When `versions.tool` pins a commit of the worker repository itself (the entry named after the repository, such as `mcp-check` for isokron-ai/mcp-check), resolves it to the full commit (`GET /repos/{repo}/commits/{sha}`, once per run) and sends it as the `tool_sha` dispatch input; the worker checks out and runs that commit. A pin that cannot be resolved is not dispatched (`cannot resolve <lane>'s pinned commit ...`). | Refuses a result unless its manifest `tools` prove every pinned tool and probe component: a commit pin by the full commit it starts, any other pin by the same version string (`pin_unverified`), and refuses any that reports another version (`pin_mismatch`). |
+| `label` | Sends nothing new. Says once a tick when the worker branch head is not the pin (`pin_check is "label" and ... is at ..., not the pinned ...`): those results run the head. | Refuses a contradiction (`pin_mismatch`), except on the lane's own commit pin (the worker repository's entry), which a `label` worker runs at its branch head: that one is listed under `pins.unverified` with a note `self_pin_moved: reported <x>, pinned <y>` and accepted (R-PIN-02). Accepts an unproven pin with it listed under `pins.unverified` in the item's `ingest.json`. Pins recorded for the run_key that cannot be read are refused (`pin_unverified`) on `enforce` only. |
+
+A lane without `pin_check` is held to `enforce`. `label` is the rollout
+setting for a worker repository that does not take `tool_sha` and report its
+commits yet. Move a lane to `enforce` only after its worker workflow declares
+the optional `tool_sha` input (GitHub refuses a dispatch with an input the
+workflow does not declare, so an early switch only fails the dispatches, red,
+and records nothing), checks out that commit, and reports its own code in
+manifest `tools` at the full commit it ran (worker-kit/README.md). A pin
+written as a full 40-character SHA needs no lookup.
+
+Today: tool-qa's own lanes (meta-github, meta-registry, release-diff) are
+`enforce`: their bundles report `tool-qa-<lane>` at the lane `VERSION`, which
+is their pin. scan-static, live-probe and writecheck are `label` until
+isokron-ai/mcp-check and isokron-ai/mcp-writecheck-action take `tool_sha`
+and report what they ran (live-probe also pins its `fuzz` probe stage, which
+its bundles must then report at the full mcp-check commit).
+On a `label` lane, a worker repository that merges without a pin bump does
+not stop its lane: writecheck reports `mcp-writecheck-action` at the commit
+it runs (its branch head), and that contradiction of the lane's own pin is
+only a `self_pin_moved` note (R-PIN-02). Every other pin is still refused
+when contradicted on a `label` lane: writecheck's `mcp-writecheck` (CLI_REF),
+`mcp-surface-corpus`, live-probe's corpus commit.
+
+A lane `VERSION` bump (tool-qa's meta lanes, and any lane whose pin is a
+version string) must merge in the same commit as its pin change in
+`pump/workflows.json` (R-SUB-13 checks they agree). Even so, shards
+dispatched by a pump run that started before such a merge carry the old pin
+while their worker runs the new code: expect a one-off `pin_mismatch` and a
+one-hour pause of that lane right after the merge. It ends on its own and
+loses no work.
+
+A refusal pauses the lane for an hour (above, "The pump"); pin refusals are
+not counted towards parking, so a fixed pin or worker loses no work.
 

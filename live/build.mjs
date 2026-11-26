@@ -306,7 +306,7 @@ export function toPublicEvent(row, { seq = null, subjectName = null, lanes = nul
         n: intIn(pick(d, 'attempts', 'attempt'), 0, 1000) ?? n,
       });
     }
-    // workflow_paused comes from integrity incidents (run_sha_mismatch): never public.
+    // workflow_paused comes from integrity incidents (run_sha_mismatch) and version-pin refusals (R-PIN-01): never public.
     default:
       return null;
   }

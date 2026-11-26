@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto';
 import { BudgetExceededError } from './budgets.mjs';
 import { workerInputs } from './dispatch.mjs';
 import { dueFromState, NO_HOOKS } from './due.mjs';
+import { pinCheckMode, selfPin } from './pins.mjs';
 import { acquireDispatchSlot, leaseTtlMs, occupancy, reapExpired } from './slots.mjs';
 
 /**
@@ -135,6 +136,8 @@ export async function runTick({
   // leases and record the dispatch as pending. Nothing is sent yet.
   const reserved = [];
   const shaByRef = new Map(); // `${repo}@${ref}` -> commit SHA, once per tick
+  const toolShaByLane = new Map(); // lane -> the full commit of its own pin (R-PIN-01), once per tick
+  const labelWarned = new Set();
   const refSkip = new Set();
   for (const shard of shards) {
     const wf = config.workflows[shard.workflow];
@@ -162,6 +165,36 @@ export async function runTick({
         summary.skippedWorkflows.push(shard.workflow);
         continue;
       }
+    }
+    // R-PIN-01: the worker runs its branch head unless told otherwise. On a
+    // pin_check "enforce" lane the pump sends the full commit of the lane's
+    // own pin (tool_sha), which the worker checks out and runs; a pin that
+    // cannot be resolved is not dispatched. On a "label" lane nothing is sent,
+    // and a pin that is not the branch head is said once a tick: until the
+    // worker runs the pin, ingest refuses only what contradicts it.
+    let toolSha = null;
+    const own = selfPin(wf);
+    if (own && pinCheckMode(wf) === 'enforce') {
+      try {
+        if (!toolShaByLane.has(shard.workflow)) {
+          if (typeof dispatcher?.resolveCommit !== 'function') throw new Error('the dispatcher cannot resolve a commit pin');
+          toolShaByLane.set(shard.workflow, await dispatcher.resolveCommit({ repo: wf.repo, sha: own.pin }));
+        }
+        toolSha = toolShaByLane.get(shard.workflow);
+      } catch (err) {
+        log(`cannot resolve ${shard.workflow}'s pinned commit ${own.name} ${own.pin}; not dispatching it this tick: ${err?.message ?? err}`);
+        const stop = stopReason(err);
+        if (stop) {
+          summary.stopped = stop;
+          break;
+        }
+        refSkip.add(shard.workflow);
+        summary.skippedWorkflows.push(shard.workflow);
+        continue;
+      }
+    } else if (own && workflowSha && !workflowSha.startsWith(own.pin) && !labelWarned.has(shard.workflow)) {
+      labelWarned.add(shard.workflow);
+      log(`${shard.workflow}: pin_check is "label" and ${wf.repo} ${wf.ref} is at ${workflowSha.slice(0, 12)}, not the pinned ${own.name} ${own.pin}: its results are filed under the pin but run the branch head (R-PIN-01)`);
     }
     const attemptId = String(newId());
     const shardId = `${shard.workflow}-${attemptId.replace(/[^A-Za-z0-9]/g, '').slice(0, 12)}`;
@@ -193,7 +226,7 @@ export async function runTick({
       for (const r of reserved) db.failDispatch(r.attemptId, { error: 'not sent: the tick failed before sending', withdrawn: true, now: now() });
       throw err;
     }
-    reserved.push({ shard, wf, attemptId, shardId, leased, workflowSha });
+    reserved.push({ shard, wf, attemptId, shardId, leased, workflowSha, toolSha });
   }
   if (reserved.length === 0) return summary;
 
@@ -226,7 +259,7 @@ export async function runTick({
   // and slot freed, so the work is due again on the next tick.
   const skip = new Set();
   for (let i = 0; i < reserved.length; i++) {
-    const { shard, wf, attemptId, shardId, leased, workflowSha } = reserved[i];
+    const { shard, wf, attemptId, shardId, leased, workflowSha, toolSha } = reserved[i];
     if (skip.has(shard.workflow)) {
       withdraw([reserved[i]], `an earlier ${shard.workflow} dispatch failed this tick`);
       continue;
@@ -246,7 +279,7 @@ export async function runTick({
           log(`${wf.repo} ${wf.ref} moved to ${fresh} since this tick began; ${shardId} expects that commit`);
         }
       }
-      const inputs = workerInputs({ shardId, attemptId, items: leased });
+      const inputs = workerInputs({ shardId, attemptId, items: leased, toolSha });
       const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile: wf.file, ref: wf.ref, inputs, shardId });
       // The expected commit was recorded at creation; markDispatched keeps it.
       db.markDispatched(attemptId, { runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, correlatedBy: out?.correlatedBy ?? null, now: now() });
