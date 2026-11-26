@@ -147,7 +147,12 @@ export async function runWatchdog({
     });
     runs[file] = res.status === 404 ? [] : res.data?.workflow_runs ?? [];
   }
-  const artifacts = await client.paginate(`/repos/${repo}/actions/artifacts`, { key: 'artifacts', maxPages: 3, essential: true });
+  const listed = await client.paginate(`/repos/${repo}/actions/artifacts`, { key: 'artifacts', maxPages: 3, essential: true });
+  // R-WD-15: on a busy day the newest 300 artifacts are all lane results, and a
+  // day-old history capture falls off the list: the check read "no artifact
+  // found" (red) while the capture was fine. Each history capture missing from
+  // the list is looked up through its own workflow's latest successful runs.
+  const artifacts = [...listed, ...(await historyArtifacts(client, repo, listed))];
 
   const dir = stateDir ?? mkdtempSync(join(env.RUNNER_TEMP || tmpdir(), 'watchdog-'));
   let state = null;
@@ -279,4 +284,51 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
   process.exitCode = await main();
+}
+
+/** History captures, by the workflow that makes them (R-WD-15). */
+export const HISTORY_SOURCES = Object.freeze([
+  { file: 'history-registry.yml', prefix: 'registry-full-', match: /^history-registry full$/ },
+  { file: 'history-registry.yml', prefix: 'registry-delta-', match: /^history-registry delta$/ },
+  { file: 'history-packages.yml', prefix: 'history-packages-' },
+  { file: 'history-popularity.yml', prefix: 'history-popularity-' },
+]);
+
+/**
+ * Artifacts of the newest successful runs of each history workflow whose
+ * capture is not in `listed` (R-WD-15). At most 2 runs per capture, one
+ * runs list per workflow; a failed lookup adds nothing (the check then reads
+ * as before), it never fails the watchdog.
+ */
+export async function historyArtifacts(client, repo, listed) {
+  const have = (prefix) => listed.some((x) => !x.expired && String(x.name).startsWith(prefix));
+  const missing = HISTORY_SOURCES.filter((h) => !have(h.prefix));
+  const runsByFile = new Map();
+  const out = [];
+  const seen = new Set(listed.map((x) => x.id).filter((id) => id !== undefined));
+  for (const h of missing) {
+    try {
+      if (!runsByFile.has(h.file)) {
+        const res = await client.request('GET', `/repos/${repo}/actions/workflows/${h.file}/runs`, {
+          allow: [404], query: { status: 'success', branch: 'main', per_page: 50, exclude_pull_requests: true },
+        });
+        runsByFile.set(h.file, res.status === 404 ? [] : res.data?.workflow_runs ?? []);
+      }
+      const runs = runsByFile.get(h.file)
+        .filter((r) => !h.match || h.match.test(String(r.display_title ?? r.name ?? '').trim()))
+        .slice(0, 2);
+      for (const r of runs) {
+        const res = await client.request('GET', `/repos/${repo}/actions/runs/${r.id}/artifacts`, { allow: [404], query: { per_page: 100 } });
+        for (const a of res.status === 404 ? [] : res.data?.artifacts ?? []) {
+          if (a.id !== undefined && seen.has(a.id)) continue;
+          if (a.id !== undefined) seen.add(a.id);
+          out.push(a);
+        }
+        if (out.some((a) => !a.expired && String(a.name).startsWith(h.prefix))) break;
+      }
+    } catch {
+      // nothing added: the history check reads from the listed artifacts only
+    }
+  }
+  return out;
 }

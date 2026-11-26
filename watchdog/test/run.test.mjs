@@ -432,3 +432,42 @@ test('R-RET-19: the health issue carries the keep-forever copy and the seal reco
   w.cleanup();
   off.cleanup();
 });
+
+
+test('R-WD-15: a history capture that fell off the newest-300 artifact list is found through its workflow runs, not reported red', async () => {
+  const w = world({ seed: () => {} });
+  const ago = (m) => new Date(w.c.t - m * MIN).toISOString();
+  // The global list is all lane results: no history capture in it.
+  w.api.routes.unshift(['GET', `/repos/${REPO}/actions/artifacts`, () => ({ body: { artifacts: [{ id: 9, name: 'registry-delta-x', created_at: ago(10), expired: false }, { id: 10, name: 'result-abc', created_at: ago(1), expired: false }] } })]);
+  w.api.routes.unshift(['GET', /\/actions\/workflows\/history-(registry|packages|popularity)\.yml\/runs$/, (req) => {
+    if (req.path.includes('history-registry')) {
+      return { body: { workflow_runs: [{ id: 501, display_title: 'history-registry delta' }, { id: 502, display_title: 'history-registry full' }] } };
+    }
+    return { body: { workflow_runs: [{ id: req.path.includes('packages') ? 601 : 701, display_title: 'x' }] } };
+  }]);
+  w.api.routes.unshift(['GET', /\/actions\/runs\/(502|601|701)\/artifacts$/, (req) => {
+    const id = Number(req.path.match(/runs\/(\d+)\//)[1]);
+    const name = { 502: 'registry-full-7', 601: 'history-packages-7', 701: 'history-popularity-7' }[id];
+    return { body: { artifacts: [{ id: id * 10, name, created_at: ago(600), expired: false }] } };
+  }]);
+  const out = await runWatchdog(w.opts);
+  const body = parseBody(w.issues[0].body);
+  for (const id of ['history-registry-full', 'history-packages', 'history-popularity']) {
+    const c = body.checks.find((x) => x.id === id);
+    assert.equal(c.status, 'green', `${id}: ${c.summary}`);
+  }
+  // the delta run (501) is not opened for the full capture
+  assert.equal(w.api.calls.some((r) => r.path.endsWith('/runs/501/artifacts')), false);
+  assert.notEqual(out.overall, 'red');
+  w.cleanup();
+});
+
+test('R-WD-15: when the history lookups fail, the check reads as before (red, no artifact found) and the watchdog still runs', async () => {
+  const w = world({ seed: () => {} });
+  w.api.routes.unshift(['GET', `/repos/${REPO}/actions/artifacts`, () => ({ body: { artifacts: [] } })]);
+  w.api.routes.unshift(['GET', /\/actions\/workflows\/history-(registry|packages|popularity)\.yml\/runs$/, (req) => (req.query.get('status') === 'success' ? { status: 500, body: {} } : { body: { workflow_runs: [] } })]);
+  await runWatchdog(w.opts);
+  const body = parseBody(w.issues[0].body);
+  assert.equal(body.checks.find((x) => x.id === 'history-packages').status, 'red');
+  w.cleanup();
+});
