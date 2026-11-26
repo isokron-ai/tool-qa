@@ -6,6 +6,8 @@ import { createHash } from 'node:crypto';
 import { liveEnabled, publishLive, publishRetry } from '../publish.mjs';
 
 const NOW = Date.parse('2026-11-25T13:30:05Z');
+// A put that never answers, and gives up when it is told to stop (as fetch does).
+const hangUntilAbort = (_key, _body, o) => new Promise((_, reject) => { o?.signal?.addEventListener('abort', () => reject(new Error('aborted'))); });
 const ENV = { LANE_LIVE_SNAPSHOT_ENABLED: 'true', LIVE_R2_ACCESS_KEY_ID: 'AKIA_SYN', LIVE_R2_SECRET_ACCESS_KEY: 'syn-secret-xyz', R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef' };
 
 function fakeDb() {
@@ -264,7 +266,7 @@ test('R-LIVE-43: never alongside a transaction: inside one, publishLive neither 
 
 test('a deadline is logged once', async () => {
   const lines = [];
-  await run({ put: () => new Promise(() => {}), deadlineMs: 40, log: (l) => lines.push(l) });
+  await run({ put: hangUntilAbort, deadlineMs: 40, log: (l) => lines.push(l) });
   assert.equal(lines.filter((l) => /deadline/.test(l)).length, 1);
 });
 
@@ -344,7 +346,7 @@ test('publishRetry: a scan hit, a missing scanner or a hang uploads nothing or i
   assert.equal((await publishRetry({ retry: null, put, scanModule: './no-such-scan.mjs', env: ENV, now: () => NOW, log: () => {} })).error, 'scan_unavailable');
   assert.equal(puts, 0);
   const t0 = Date.now();
-  const r = await publishRetry({ retry: null, put: () => new Promise(() => {}), scan: () => ({ ok: true, hits: [] }), env: ENV, now: () => NOW, deadlineMs: 40 });
+  const r = await publishRetry({ retry: null, put: hangUntilAbort, scan: () => ({ ok: true, hits: [] }), env: ENV, now: () => NOW, deadlineMs: 40 });
   assert.equal(r.error, 'deadline');
   assert.ok(Date.now() - t0 < 1500);
 });

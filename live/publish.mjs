@@ -89,13 +89,16 @@ function makePutter({ put, env, fetch, now, until, putOptions }) {
   });
 }
 
-/** A deadline: an abort controller, a timer, and a promise that settles when it passes. */
+/**
+ * A deadline: an abort controller, a timer, and a promise that settles when it
+ * passes. The timer is deliberately not unref'd: it is what keeps the event
+ * loop alive while an upload hangs, and it is always cleared when the call ends.
+ */
 function deadlineOf(ms) {
   const ctl = new AbortController();
   let timer;
   const passed = new Promise((resolve) => {
     timer = setTimeout(() => { ctl.abort(); resolve('deadline'); }, Math.max(1, ms));
-    timer.unref?.();
   });
   return { ctl, passed, clear: () => clearTimeout(timer) };
 }

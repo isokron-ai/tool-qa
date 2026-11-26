@@ -652,7 +652,7 @@ test('live: an upload that throws does not fail the run', async () => {
 });
 
 test('live: an upload that hangs is cut at its deadline and does not delay or fail the run', async () => {
-  const { h } = liveHarness({ put: () => new Promise(() => {}), deadlineMs: 40 });
+  const { h } = liveHarness({ put: (_k, _b, o) => new Promise((_, reject) => { o?.signal?.addEventListener('abort', () => reject(new Error('aborted'))); }), deadlineMs: 40 });
   const t0 = Date.now();
   const out = await runPump(h.opts);
   assert.equal(out.ok, true);
@@ -721,8 +721,8 @@ test('live: retry uploads are at most one per 20 s', async () => {
 
 test('live: a retry upload that hangs holds nothing: ticks, the final snapshot and the run go on', async () => {
   const { h, builds, bodies } = liveHarness();
-  const hang = (key) => (key === 'v1/retry.json' ? new Promise(() => {}) : Promise.resolve({ status: 200 }));
-  h.opts.live.put = async (key, body) => { bodies.push({ key, body: key.endsWith('.ndjson') ? body : JSON.parse(body) }); return hang(key); };
+  const hang = (key, o) => (key === 'v1/retry.json' ? new Promise((_, reject) => { o?.signal?.addEventListener('abort', () => reject(new Error('aborted'))); }) : Promise.resolve({ status: 200 }));
+  h.opts.live.put = async (key, body, o) => { bodies.push({ key, body: key.endsWith('.ndjson') ? body : JSON.parse(body) }); return hang(key, o); };
   let first = true;
   const push = h.opts.push;
   h.opts.push = async (args) => {
