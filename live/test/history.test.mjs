@@ -331,3 +331,33 @@ test('publishLive: the history goes after the pointer; switch off makes no call;
   assert.equal(db4.getKv('live.history.last_day'), undefined);
   for (const d of [db, db3, db4]) d.close();
 });
+
+test('publishLive every 60 s across midnight: the rollover runs once per day, only after a good snapshot upload', async () => {
+  const good = async (_db, { now }) => ({ snapshot: { schema: 'isokron-loop-live/1', seq: Math.floor(now / 1000), generated_at: new Date(now).toISOString(), recent: [] }, hourEvents: [], problems: [] });
+  const db = loopState();
+  db.setKv('live.history.last_day', '2026-11-23', { now: AFTER - DAY });
+  db.setKv('live.history.days', ['2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23'], { now: AFTER - DAY });
+  const puts = [];
+  let failSnap = false;
+  const put = async (key) => {
+    puts.push(key);
+    if (failSnap && key.startsWith('v1/snap/')) throw Object.assign(new Error('HTTP 503'), { status: 503 });
+    return { status: 200 };
+  };
+  const midnight = Date.parse('2026-11-25T00:00:00Z');
+  for (let t = midnight - 5 * 60_000; t < midnight + 30 * 60_000; t += 60_000) {
+    failSnap = t < midnight + 3 * 60_000; // the first post-midnight snapshots fail
+    const before = puts.length;
+    const r = await publishLive({ db, build: good, put, env: ENV, now: () => t, config: config(), deadlineMs: 5000 });
+    const hist = puts.slice(before).filter((k) => k.startsWith('v1/history/'));
+    if (failSnap) assert.deepEqual(hist, [], `history after a failed snapshot at ${new Date(t).toISOString()}`);
+    if (t === midnight + 3 * 60_000) {
+      assert.equal(r.ok, true);
+      assert.deepEqual(hist, ['v1/history/days/2026-11-24.json', 'v1/history/recent.json', 'v1/history/index.json']);
+    }
+  }
+  assert.equal(puts.filter((k) => k.startsWith('v1/history/days/')).length, 1);
+  assert.equal(puts.filter((k) => k === 'v1/history/index.json').length, 1);
+  assert.equal(db.getKv('live.history.last_day'), '2026-11-24');
+  db.close();
+});
