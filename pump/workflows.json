@@ -5,7 +5,7 @@
     "scan-static": {
       "enabled": true,
       "runs_untrusted": false,
-      "pin_check": "label",
+      "pin_check": "enforce",
       "repo": "isokron-ai/mcp-check",
       "file": "scan-static.yml",
       "throttle_stages": ["static:rate_limited"],
@@ -14,14 +14,14 @@
       "setup_minutes": 3,
       "minutes_per_subject": 1,
       "slots_max": 3,
-      "versions": { "tool": { "mcp-check": "75503c1" }, "oracle": {}, "probe": {} },
+      "versions": { "tool": { "mcp-check": "4029d45" }, "oracle": {}, "probe": {} },
       "image_digest": null,
       "settings_state": "default"
     },
     "live-probe": {
       "enabled": true,
       "runs_untrusted": true,
-      "pin_check": "label",
+      "pin_check": "enforce",
       "sandbox_sha": "4c16b586e8e5886acb098285b6ec405fd4db4ac7",
       "repo": "isokron-ai/mcp-check",
       "file": "live-probe.yml",
@@ -30,7 +30,7 @@
       "setup_minutes": 8,
       "minutes_per_subject": 3,
       "slots_max": 12,
-      "versions": { "tool": { "mcp-check": "d4a373a" }, "oracle": { "conformance": "0.2.0-alpha.12+f44482b", "sdk-typescript": "1.32.2", "client-typescript": "2.4.0", "sdk-python": "2.3.0", "sdk-go": "v1.8.0" }, "probe": { "mcp-surface-corpus": "4c16b58", "fuzz": "d4a373a" } },
+      "versions": { "tool": { "mcp-check": "4029d45" }, "oracle": { "conformance": "0.2.0-alpha.12+f44482b", "sdk-typescript": "1.32.2", "client-typescript": "2.4.0", "sdk-python": "2.3.0", "sdk-go": "v1.8.0" }, "probe": { "mcp-surface-corpus": "4c16b58", "fuzz": "4029d45" } },
       "image_digest": null,
       "settings_state": "default"
     },
