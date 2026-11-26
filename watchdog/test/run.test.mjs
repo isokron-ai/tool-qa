@@ -495,7 +495,7 @@ test('R-WD-15: the daily registry-full run is found under many pages of delta ru
 });
 
 
-test('R-WD-16: run.mjs declares every module-level const before its script entry, so `node watchdog/run.mjs` cannot hit a temporal dead zone', () => {
+test('R-WD-16: run.mjs declares every module-level const before its script entry, so running it as a script cannot hit a temporal dead zone', () => {
   const src = readFileSync(new URL('../run.mjs', import.meta.url), 'utf8');
   const entry = src.indexOf('if (process.argv[1] && fileURLToPath(import.meta.url)');
   assert.ok(entry > 0, 'script entry found');
