@@ -460,3 +460,10 @@ test('scheduled: tick plus report stay within the 50-subrequest limit in the wor
   const total = tickCalls + fetches + r2.gets + r2.puts.length;
   assert.ok(total <= 50, `total subrequests ${total}`);
 });
+
+test('R-LIVE-60: a check the watchdog reports as off stays off (switched off on purpose is never turned into unknown)', async () => {
+  const body = '<!-- loop-health:v1 {"overall":"green","updated":"2026-11-26T00:20:45.168Z","checks":[{"id":"pump","status":"off","summary":"LOOP_SLOTS is 0: the pump only does housekeeping on its schedule"},{"id":"slots","status":"green"}]} -->';
+  const h = allowlistHealth(body);
+  assert.equal(h.checks.find((c) => c.id === 'pump').status, 'off');
+  assert.equal(h.checks.find((c) => c.id === 'slots').status, 'green');
+});
