@@ -1280,6 +1280,24 @@ export class StateDb {
     `).get(runKey, runKey).n;
   }
 
+  /**
+   * Attempts at run_keys that HAVE an accepted result, made after it: a
+   * re-run of the same run_key (the backfill filler, pump/backfill.mjs).
+   * Map run_key -> {n: counted rejections since the result, last: newest
+   * attempt received since the result}. rejectedRunKeys() leaves these out
+   * on purpose (they still have their result), so the filler parks them
+   * itself (R-FILL-07).
+   */
+  attemptsSinceResult() {
+    const rows = this.raw.prepare(`
+      SELECT a.run_key, SUM(CASE WHEN a.accepted = 0 AND a.reason NOT IN (${NOT_COUNTED}) THEN 1 ELSE 0 END) AS n, MAX(a.received) AS last
+      FROM attempts a JOIN results r ON r.run_key = a.run_key
+      WHERE a.run_key IS NOT NULL AND a.received > r.accepted_at
+      GROUP BY a.run_key
+    `).all();
+    return new Map(rows.map((r) => [r.run_key, { n: Number(r.n) || 0, last: r.last }]));
+  }
+
   /** [{run_key, n}] for run_keys with no accepted result and at least `min` counted rejections. */
   rejectedRunKeys(min = 1) {
     return this.raw.prepare(`
