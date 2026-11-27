@@ -15,6 +15,17 @@
 
 export const CLASSES = Object.freeze(['lease', 'integrity', 'worker_output', 'infra']);
 
+/**
+ * Classes that are not on the public ring. `control_miss`: a T0 control lane's control did not hold (a seeded defect
+ * missed, a known-good build failed; pump/controls.mjs): a lead against OUR tool, fault `tool`, never a forgery. It must
+ * reach the check-in and lead ranking as such. In the public daily totals it counts as integrity, so the public format
+ * does not change (dailyClassOf).
+ */
+export const INTERNAL_CLASSES = Object.freeze(['control_miss']);
+
+/** The fault side of a class that names one: control_miss is the tool's. */
+export const CLASS_FAULT = Object.freeze({ control_miss: 'tool' });
+
 /** The class unknown codes fall into. */
 export const DEFAULT_CLASS = 'worker_output';
 
@@ -61,7 +72,8 @@ const TABLE = {
   forgery_marker_leaked: 'integrity',
   foreign_identity_claim: 'integrity',
   control_output_in_raw: 'integrity',
-  control_failed: 'integrity',
+  // A T0 control lane's own control did not hold: our tool's miss, not an integrity incident (R-CTL-10).
+  control_failed: 'control_miss',
   control_missing: 'integrity',
   forgery_control_unverified: 'integrity',
   no_manifest: 'integrity',
@@ -117,5 +129,7 @@ export function isQuarantine({ reason = null, outcome = null } = {}) {
  * quarantine apart from another rejection (R-LIVE-25).
  */
 export function dailyClassOf({ reason = null, outcome = null } = {}) {
-  return isQuarantine({ reason, outcome }) ? 'integrity' : classOf(reason);
+  if (isQuarantine({ reason, outcome })) return 'integrity';
+  const c = classOf(reason);
+  return INTERNAL_CLASSES.includes(c) ? 'integrity' : c;
 }

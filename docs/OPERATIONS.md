@@ -2004,3 +2004,48 @@ The first good snapshot upload of each UTC day also writes the day before, once 
 | Rebuild a day | Delete the day from kv `live.history.days`, `live.history.recent` and `live.history.blocked`, clear `live.history.pending` and `live.history.last_day` (a state edit, see "State store: one writer at a time"), while its events are still kept. Its key is cached as immutable, so a rebuilt body may take a while to reach readers. |
 
 To stop publishing: set `LANE_LIVE_SNAPSHOT_ENABLED` to anything but `true` (`gh variable set LANE_LIVE_SNAPSHOT_ENABLED --body false --repo isokron-ai/tool-qa`); the next pump tick makes no call, and the watchdog item turns `off`. The last objects stay in the bucket until their lifecycle rules expire them; to take the page down at once, delete `v1/latest.json` in the bucket, or revoke the key.
+
+## T0 control lanes (`t0-defects`, `t0-self`, `t0-dogfood`)
+
+Pump lanes that dispatch T0 workers: dispatch-only workflows that test OUR tools against OUR own fixtures and servers. They
+are built by [`pump/controls.mjs`](../pump/controls.mjs) and shipped switched off.
+
+| Lane | Worker | Subjects (pseudo repositories, kind `control`) | Trust |
+|---|---|---|---|
+| `t0-defects` | `isokron-ai/mcp-write-safety` `defect-matrix.yml` with `defects=all`: every correct build and every distinct defect of the tiny-tracker 0.4.0 list (each defect judged on its single-defect builds: reproduced and detected, or documented as not detected) | `isokron-ai/mcp-write-safety.defect-matrix` | trusted: our code, `--ignore-scripts` |
+| `t0-self` | `isokron-ai/mcp-writecheck-action` `selftest.yml` and `dogfood-tiny-tracker.yml` | `isokron-ai/mcp-writecheck-action.<selftest or dogfood-tiny-tracker>` | trusted: our code, `--ignore-scripts` |
+| `t0-dogfood` | the six other dogfood workers: kronicle-lite, sea-lite, writesafe, grafana, kubernetes, payload | `isokron-ai/mcp-writecheck-action.dogfood-<name>` | untrusted (`runs_untrusted` true with a `sandbox_sha`): they run third-party code (npm install scripts, Strapi, upstream builds, kind, pnpm) |
+
+**Switches.** A control lane is dispatched only while its repository variable is exactly `true` (unset, empty or anything
+else is off; unlike the other lane switches the default is off): `LANE_T0_DEFECTS_ENABLED`, `LANE_T0_SELF_ENABLED`,
+`LANE_T0_DOGFOOD_ENABLED`. The pump and the watchdog both read them (an off lane is not an enabled lane to the lane checks).
+The worker repositories also have their own kill switch, `LOOP_ENABLED` (the workers' first job does nothing unless it is
+`true`). To turn a lane on: set `LOOP_ENABLED` to `true` in the worker repository; for the writecheck-action workers run the
+`gh workflow enable` commands (the PR that added the lane lists them); then
+`gh variable set LANE_T0_DEFECTS_ENABLED --body true -R isokron-ai/tool-qa` (or the lane's own variable).
+
+**Do not turn on `LANE_T0_DOGFOOD_ENABLED` yet.** The lane is untrusted in its settings, so the sandbox breaker gates it, but
+its six workers do not run inside the sandbox: they run third-party code on the plain runner. Until each worker runs the
+server inside the sandbox (a follow-up item), leave the variable unset.
+
+**How it runs.** Each control subject stands for one worker file with fixed inputs (`control_subjects` in
+`pump/workflows.json`). A control subject is due only for its own lane and a control lane only for its own subjects.
+`shard_size` is 1 and `dispatch_style` is `t0`: the pump sends the T0 inputs `shard_id`, `attempt_id`, `fence`, `run_key` and
+the subject's fixed inputs (never an `items` list). The tier cell is T0 `always`, `max_age_days` 1: one run a day per
+subject. `pin_check` is `label`; the lane's version pin (`tool-qa-<lane>`) is bumped to run everything again.
+
+**Results.** Each worker builds a normal worker-kit bundle, sealed to `worker-kit/ingest.pub`, and ingest judges it like any
+other. The bundle carries one or two controls: `known_good` (`green_or_infra` for a dogfood or selftest worker, `match` for
+the matrix) and, for the matrix, `known_bad` (`detected_or_documented`). A control that did not hold is rejected as
+`control_failed`: **a missed seeded defect, or a failing worker, is a lead against our own tool (writecheck, the matrix or the
+worker), never a fault of a subject.** The reason is class `control_miss` (`live/classes.mjs`; the public ring counts it as
+integrity) and the check-in reads such rejections of control subjects as tool-side fingerprints of that class
+(`longitudinal/checkin.mjs`, ranked at the top tier). A run that failed only at steps that fetch from the network is
+infrastructure: a retryable infra skip, not a lead (mcp-writecheck-action `loop/t0-bundle.mjs`). After three counted
+rejections of the same run_key the pump parks it, as for any lane; fix the tool, then bump the lane's version pin.
+
+**Health.** Item `t0:<lane>` (`watchdog/t0-lanes.mjs`, from kv `t0.lanes` that the pump writes after every tick), judged per
+subject: `off` while the switch is off; `red` while any subject has a `control_failed` rejection newer than its own last
+accepted result (also while its run_key is parked); `amber` when any subject has no accepted result for 36 hours, or its
+newest result is infrastructure-only (a `skips_only` result does not count as a result); `green` otherwise. `lane-fresh:<lane>`
+uses 36 hours amber and 72 hours red for a control lane.

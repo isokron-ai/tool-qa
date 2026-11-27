@@ -96,6 +96,10 @@ jobs:
           LANE_HEADS_ENABLED: ${{ vars.LANE_HEADS_ENABLED }}
           # The live loop view snapshot (live/publish.mjs): off unless the variable is exactly "true".
           LANE_LIVE_SNAPSHOT_ENABLED: ${{ vars.LANE_LIVE_SNAPSHOT_ENABLED }}
+          # The T0 control lanes (pump/controls.mjs): each is dispatched only while its variable is exactly "true" (default off).
+          LANE_T0_DEFECTS_ENABLED: ${{ vars.LANE_T0_DEFECTS_ENABLED }}
+          LANE_T0_SELF_ENABLED: ${{ vars.LANE_T0_SELF_ENABLED }}
+          LANE_T0_DOGFOOD_ENABLED: ${{ vars.LANE_T0_DOGFOOD_ENABLED }}
           # Shown by the live view's publish gate node (config.switches).
           RESULTS_PUBLISH_ENABLED: ${{ vars.RESULTS_PUBLISH_ENABLED }}
           LIVE_R2_ACCESS_KEY_ID: ${{ secrets.LIVE_R2_ACCESS_KEY_ID }}

@@ -876,4 +876,25 @@ test('R-WD-34: through the whole watchdog, a tool-side skip holds the coverage i
   // the health issue's coverage table says the same number
   assert.equal(body.coverage.lanes.find((l) => l.id === 'scan-static').assessment, 0.7);
   w.cleanup();
+test('R-CTL-13: the watchdog applies the T0 lane switches: an untrusted control lane that is switched off is not an enabled lane for the sandbox breaker, and watchdog.yml passes the switches', async () => {
+  const lanes = { 't0-dogfood': { enabled: true, switch: 'LANE_T0_DOGFOOD_ENABLED', runs_untrusted: true, sandbox_sha: 'a'.repeat(40), dispatch_style: 't0', shard_size: 1, control_subjects: { 'o/r.x': {} }, repo: 'o/r', file: 'x.yml' } };
+  const run = async (env) => {
+    const w = world({ seed: () => {} });
+    w.opts.workerWorkflows = lanes;
+    w.opts.readConformance = async () => ({ status: greenStatus(w.c.t - 40 * 3_600_000) }); // stale: the breaker is open
+    Object.assign(w.opts.env, env);
+    const out = await runWatchdog(w.opts);
+    w.cleanup();
+    return out.checks.find((c) => c.id === 'sandbox-breaker');
+  };
+  const off = await run({});
+  assert.equal(off.status, 'amber', 'switched off: nothing enabled for the breaker to hold');
+  assert.match(off.summary, /none enabled/);
+  const on = await run({ LANE_T0_DOGFOOD_ENABLED: 'true' });
+  assert.equal(on.status, 'red');
+  assert.match(on.summary, /the pump holds t0-dogfood/);
+  const yml = readFileSync(new URL('../../.github/workflows/watchdog.yml', import.meta.url), 'utf8');
+  for (const v of ['LANE_T0_DEFECTS_ENABLED', 'LANE_T0_SELF_ENABLED', 'LANE_T0_DOGFOOD_ENABLED']) assert.match(yml, new RegExp(`${v}: \\$\\{\\{ vars\\.${v} \\}\\}`));
+  const pump = readFileSync(new URL('../../.github/workflows/pump.yml', import.meta.url), 'utf8');
+  for (const v of ['LANE_T0_DEFECTS_ENABLED', 'LANE_T0_SELF_ENABLED', 'LANE_T0_DOGFOOD_ENABLED']) assert.match(pump, new RegExp(`${v}: \\$\\{\\{ vars\\.${v} \\}\\}`));
 });

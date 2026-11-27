@@ -24,7 +24,15 @@ const TOKEN_MARGIN_MS = 5 * 60_000;
  * worker clones or reads what the repository is called now; the result is
  * still recorded under the subject key, by run_key (state schema v8).
  */
-export function workerInputs({ shardId, attemptId, items, toolSha = null }) {
+export function workerInputs({ shardId, attemptId, items, toolSha = null, style = null, extra = null }) {
+  if (style === 't0') {
+    // A T0 worker (pump/controls.mjs) takes one item as plain inputs: shard_id,
+    // attempt_id, fence and run_key, plus the lane's own fixed inputs. The
+    // lane's inputs never override the four.
+    if (items.length !== 1) throw new Error(`shard ${shardId}: a T0 worker takes exactly one item, got ${items.length}`);
+    const [it] = items;
+    return { ...(extra ?? {}), shard_id: String(shardId), attempt_id: String(attemptId), fence: String(it.fence), run_key: String(it.run_key) };
+  }
   const list = items.map(({ subject, subject_name: name, run_key, fence }) => ({ subject: name ?? subject, run_key, fence }));
   const json = JSON.stringify(list);
   if (json.length > MAX_ITEMS_CHARS) throw new Error(`shard ${shardId}: items input is too large (${json.length} characters); use a smaller shard_size`);

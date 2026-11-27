@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { CLASSES, classOf, DEFAULT_CLASS, isQuarantine, QUARANTINE_REASONS, REASON_CLASSES } from '../classes.mjs';
+import { CLASSES, CLASS_FAULT, INTERNAL_CLASSES, classOf, dailyClassOf, DEFAULT_CLASS, isQuarantine, QUARANTINE_REASONS, REASON_CLASSES } from '../classes.mjs';
 import { NOT_COUNTED_REASONS } from '../../state/db.mjs';
 
 const read = (p) => readFileSync(new URL(`../../${p}`, import.meta.url), 'utf8');
@@ -66,7 +66,7 @@ test('unknown, empty and odd codes fall into worker_output; every class is one o
   assert.equal(DEFAULT_CLASS, 'worker_output');
   for (const c of ['brand_new_reason', '', null, undefined, 42, '__proto__', 'constructor', 'toString']) assert.equal(classOf(c), 'worker_output', String(c));
   assert.deepEqual([...CLASSES], ['lease', 'integrity', 'worker_output', 'infra']);
-  for (const [code, cls] of Object.entries(REASON_CLASSES)) assert.ok(CLASSES.includes(cls), `${code} -> ${cls}`);
+  for (const [code, cls] of Object.entries(REASON_CLASSES)) assert.ok(CLASSES.includes(cls) || INTERNAL_CLASSES.includes(cls), `${code} -> ${cls}`);
   assert.ok(Object.isFrozen(REASON_CLASSES));
 });
 
@@ -76,4 +76,12 @@ test('a quarantine is no class: secret_scan is not in the table, and isQuarantin
   assert.equal(isQuarantine({ reason: 'something_new', outcome: 'quarantined' }), true);
   assert.equal(isQuarantine({ reason: 'digest_mismatch', outcome: 'rejected' }), false);
   assert.equal(isQuarantine({}), false);
+});
+
+test('R-CTL-10: control_failed is its own class, control_miss (fault tool), not integrity; the public daily totals still count it as integrity', () => {
+  assert.equal(classOf('control_failed'), 'control_miss');
+  assert.equal(CLASS_FAULT.control_miss, 'tool');
+  assert.equal(dailyClassOf({ reason: 'control_failed' }), 'integrity', 'the public ring keeps its four classes');
+  assert.equal(classOf('forgery_control_injected'), 'integrity', 'a real forgery stays integrity');
+  assert.ok(!CLASSES.includes('control_miss'));
 });
