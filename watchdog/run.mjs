@@ -162,6 +162,7 @@ export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {
         'pump.conformance': db.getKv('pump.conformance') ?? null,
         'pump.subjects': db.getKv('pump.subjects') ?? null,
         'pump.identity': db.getKv('pump.identity') ?? null,
+        'pump.heads': db.getKv('pump.heads') ?? null,
         'pump.last_tick': db.getKv('pump.last_tick') ?? null,
         'pump.api_budget': db.getKv('pump.api_budget') ?? null,
         'pump.last_run': db.getKv('pump.last_run') ?? null,

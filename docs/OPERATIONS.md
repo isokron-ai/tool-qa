@@ -832,6 +832,70 @@ but no tool for it is shipped, so if v8 has run for long, prefer fixing
 forward (or switching the lookups off with `LANE_SUBJECT_IDS_ENABLED=false`)
 to a restore.
 
+## Change detection: subject heads (design audit A3)
+
+Until this, `subjects.sha` and `changed_at` were null on every subject: a
+subject was looked at again only on its tier's age, so a release or a new
+commit went unseen for up to 30 days. The head poll (`pump/heads.mjs`) writes
+both.
+
+**Where it runs.** In the pump, the state's only writer, right after the
+subject id pass at the start of every run (so on the pump's own schedule and
+self-chain, free public Actions). One GraphQL query reads up to 100 bound
+subjects by node id: `databaseId`, `isEmpty`, the default branch's head commit
+and `latestRelease`. It costs one point.
+
+**What it writes** (`state/db.mjs` `noteHead`, `noteChange`):
+
+| Seen | Written | Due as |
+|---|---|---|
+| a head, and the subject has no sha yet | `sha`, `changed_at`, `change_reason = head_first_seen` | `new_version` (the run_key moves once) |
+| a head other than the subject's sha | `sha`, `changed_at`, `change_reason = new_sha` | `new_version` |
+| the same head, a release published after `changed_at` | `changed_at`, `change_reason = new_release` | `change_event` |
+| a node not found, another repository id, a name other than `subjects.name` (renamed since the id pass), an empty repository, an error for that node | nothing (counted in kv `pump.heads`) | not due for it |
+
+Only subjects whose id the id pass vouches for (`id_status = ok`) are polled:
+one in conflict keeps an id that may not be the repository its name clones.
+A GraphQL error under one node (FORBIDDEN, say) concerns that entry only; an
+error only under its `latestRelease` loses the release and keeps the head; an
+error with no node path fails the query, which is asked again next run.
+
+A head it cannot read is never a fault of the server: nothing is recorded
+against the subject, and gone or renamed repositories stay the id pass's
+call ("Subject ids").
+
+**Cadence.** `pump/tiers.json` `head_poll_hours`: T0 every run, T1 hourly, T2
+every 6 hours, T3 daily, T4 every 3 days. Each tier is walked in key order from
+a cursor in kv `pump.heads` (`tiers`); a new cycle starts once the last one has
+finished and started at least that many hours ago. One query mixes tiers, and
+T0 takes at most a quarter of a run's picks, so it can never starve the rest.
+
+**Budget.** At most 3 queries a run (300 subjects), through the pump's API
+budget (family `graphql`, 30 an hour and 5 a minute, shared with the id pass)
+on the job's `GITHUB_TOKEN`, leaving the last 8 of the hourly 30 calls to the
+id pass. Before the first query a pass checks GitHub's last known GraphQL
+points (kept with the budget across runs) and makes none below 200; it also
+stops once an answer reports fewer than 200. The 997 seed subjects need 10 queries
+a day plus about one an hour for T0 to T2. A refused or failed query leaves
+the cursor where it was: the next run asks again.
+
+**Switch.** `LANE_HEADS_ENABLED`: only the exact value `true` runs the poll.
+Off, kv `pump.heads` says `off: true`, and subjects come due on their tier's
+age as before. Turning it on makes every bound subject due once
+(`head_first_seen`), in tier order: that is the backlog the loop has not been
+running.
+
+**Health.** The watchdog's `subject-heads` item (`watchdog/heads.mjs`) reads
+kv `pump.heads`: amber when no poll has been written for 6 hours or the last
+pass stopped on an error or the budget, red after 24 hours, off when switched
+off. A first pass that has not written yet is amber until it is a day old.
+Holding points or calls back for others is not an error. The pump logs `pump: subject heads: ...` every run.
+
+**Dry run against the live state.** Pull and decrypt the state into a 0700
+temporary folder, then run the pass with a read-only token against a copy:
+`node scripts/heads-dry-run.mjs --state <copy>` prints what it would write
+and the due list before and after, and never pushes.
+
 ## The pump
 
 `.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
