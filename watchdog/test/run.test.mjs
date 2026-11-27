@@ -6,6 +6,8 @@ import { join } from 'node:path';
 
 import { runWatchdog } from '../run.mjs';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const SHIPPED = JSON.parse(readFileSync(new URL('../../pump/workflows.json', import.meta.url), 'utf8')).workflows;
 /** The sandbox commit the enabled runs_untrusted lanes pin (the shipped config unless a test gives its own lanes). */
@@ -501,4 +503,103 @@ test('R-WD-16: run.mjs declares every module-level const before its script entry
   assert.ok(entry > 0, 'script entry found');
   const after = src.slice(entry);
   assert.doesNotMatch(after, /^(export )?(const|let|class) /m, 'a module-level binding after the script entry is not initialised when main() runs');
+});
+
+// R-WD-17: the lanes' own sandbox self tests.
+const LOG = (version) => `﻿2026-11-26T02:55:09.8860752Z Current runner version: '2.338.2'\n2026-11-26T02:55:09.8885760Z ##[group]Runner Image Provisioner\n2026-11-26T02:55:09.8887245Z Version: 20261111.635\n2026-11-26T02:55:09.8889454Z ##[endgroup]\n2026-11-26T02:55:09.8896537Z ##[group]Runner Image\n2026-11-26T02:55:09.8897123Z Image: ubuntu-24.04\n2026-11-26T02:55:09.8897696Z Version: ${version}\n2026-11-26T02:55:09.8900549Z ##[endgroup]\n`;
+
+/** A world whose lanes show `fails` self-test failures (minutes ago, image version) on live-probe. */
+function selftestWorld(fails, { logStatus = 200 } = {}) {
+  const w = world({ seed: () => {} });
+  const ago = (m) => new Date(w.c.t - m * MIN).toISOString();
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/workflows\/live-probe\.yml\/runs$/, () => ({
+    body: { workflow_runs: fails.map((f, i) => ({ id: 800 + i, html_url: `https://github.com/isokron-ai/mcp-check/actions/runs/${800 + i}`, updated_at: ago(f.min) })) },
+  })]);
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/runs\/(\d+)\/jobs$/, (req) => {
+    const i = Number(req.path.match(/runs\/(\d+)\//)[1]) - 800;
+    return { body: { jobs: [
+      { id: 7000 + i, name: 'live-probe-guard', conclusion: 'success', completed_at: ago(fails[i].min + 5) },
+      { id: 9000 + i, name: 'sandbox / sandbox-selftest', conclusion: 'failure', completed_at: ago(fails[i].min), html_url: `https://github.com/isokron-ai/mcp-check/actions/runs/${800 + i}/job/${9000 + i}` },
+    ] } };
+  }]);
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/jobs\/(\d+)\/logs$/, (req) => {
+    if (logStatus !== 200) return { status: logStatus, body: { message: 'x' } };
+    return { body: LOG(fails[Number(req.path.match(/jobs\/(\d+)\//)[1]) - 9000].image) };
+  }]);
+  return w;
+}
+const selftestOf = async (w) => {
+  await runWatchdog(w.opts);
+  return parseBody(w.issues[0].body).checks.find((x) => x.id === 'sandbox-selftest');
+};
+// greenStatus() says the nightly passed on ubuntu24/20261117.1, so the image to match is 20261117.1.
+
+test('R-WD-17: no self test failure in the last 6 hours is green, and costs one run list per lane that runs third-party code', async () => {
+  const w = selftestWorld([]);
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'green', c.summary);
+  const reads = w.api.calls.filter((r) => /isokron-ai\/(mcp-check|mcp-writecheck-action)\//.test(r.path));
+  assert.deepEqual(reads.map((r) => r.path).sort(), ['/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/runs', '/repos/isokron-ai/mcp-writecheck-action/actions/workflows/corpus.yml/runs']);
+  // the job token, not the App token, reads the other repositories
+  assert.equal(reads[0].headers.get('authorization'), 'Bearer ghs_synthetic_job_token');
+  // only failed runs of the last 7 hours, one page
+  assert.equal(reads[0].query.get('status'), 'failure');
+  assert.equal(reads[0].query.get('created'), '>=2026-03-02T05:00:00Z');
+  assert.equal(reads[0].query.get('per_page'), '30');
+  w.cleanup();
+});
+
+test('R-WD-17: one failure on the image the nightly passed on is green; a failure on another image is amber, with the count, the image and the run link', async () => {
+  const same = await selftestOf(selftestWorld([{ min: 30, image: '20261117.1' }]));
+  assert.equal(same.status, 'green', same.summary);
+  assert.match(same.summary, /1 sandbox self test failure in the last 6 hours/);
+  const other = await selftestOf(selftestWorld([{ min: 30, image: '20261122.23.1' }]));
+  assert.equal(other.status, 'amber', other.summary);
+  assert.match(other.summary, /1 sandbox self test failure .* on runner image 20261122\.23\.1; the nightly last passed on 20261117\.1/);
+  assert.equal(other.link, 'https://github.com/isokron-ai/mcp-check/actions/runs/800/job/9000');
+});
+
+test('R-WD-17: two failures in 6 hours are amber even on the nightly image; one older than 6 hours does not count', async () => {
+  const two = await selftestOf(selftestWorld([{ min: 20, image: '20261117.1' }, { min: 200, image: '20261117.1' }]));
+  assert.equal(two.status, 'amber', two.summary);
+  assert.match(two.summary, /2 sandbox self test failures/);
+  const old = await selftestOf(selftestWorld([{ min: 20, image: '20261117.1' }, { min: 7 * 60, image: '20261117.1' }]));
+  assert.equal(old.status, 'green', old.summary);
+});
+
+test('R-WD-17: a log that cannot be read leaves the image unknown, which counts as an image the nightly has not passed on', async () => {
+  const c = await selftestOf(selftestWorld([{ min: 30, image: 'x' }], { logStatus: 403 }));
+  assert.equal(c.status, 'amber');
+  assert.match(c.summary, /on runner image unknown/);
+});
+
+test('R-WD-17: a failed lookup reads amber (could not read), never red, and the watchdog still writes the issue', async () => {
+  const w = world({ seed: () => {} });
+  w.api.routes.unshift(['GET', /\/actions\/workflows\/(live-probe|corpus)\.yml\/runs$/, () => ({ status: 500, body: {} })]);
+  const out = await runWatchdog(w.opts);
+  const c = parseBody(w.issues[0].body).checks.find((x) => x.id === 'sandbox-selftest');
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /could not read/);
+  assert.notEqual(out.overall, 'red');
+  w.cleanup();
+});
+
+test('R-WD-17: with no lane that runs third-party code enabled the item is off and nothing is read', async () => {
+  const w = world({ seed: () => {} });
+  w.opts.workerWorkflows = Object.fromEntries(Object.entries(SHIPPED).map(([k, v]) => [k, { ...v, enabled: v.runs_untrusted === false }]));
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'off');
+  assert.equal(w.api.calls.some((r) => /mcp-check|mcp-writecheck-action/.test(r.path)), false);
+  w.cleanup();
+});
+
+test('R-WD-17: the watchdog starts as a script with a stubbed environment (no module-level binding is used before it is initialised)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wd17-'));
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL('../run.mjs', import.meta.url))], {
+    env: { PATH: process.env.PATH, HOME: dir, GITHUB_REPOSITORY: REPO, GITHUB_TOKEN: 'x', APP_ID: '1', APP_INSTALLATION_ID: '1', APP_PRIVATE_KEY: 'not a key', GITHUB_API_URL: 'http://127.0.0.1:9' },
+    encoding: 'utf8', timeout: 20_000,
+  });
+  rmSync(dir, { recursive: true, force: true });
+  assert.doesNotMatch(r.stderr, /before initialization|ReferenceError|SyntaxError|Cannot find module/, r.stderr);
+  assert.equal(r.status, 1, 'it gets as far as minting the token, which the stub key refuses');
 });

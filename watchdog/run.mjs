@@ -52,6 +52,7 @@ import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 import { archiveCheck } from './archive.mjs';
 import { offsiteCheck } from './offsite.mjs';
+import { nightlyImage, readSelftestFailures } from './selftest.mjs';
 import { keepCheck, readKeepStatus } from '../keep/health.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
@@ -272,8 +273,18 @@ export async function runWatchdog({
   }
   if (snapshot?.error) snapshot = { ...snapshot, error: scrub(String(snapshot.error), secrets).slice(0, 200) };
 
+  // The lanes' own sandbox self tests (R-WD-17): public repositories, read with the
+  // job token (the App token is narrowed to this repository), on the same API budget.
+  let selftest;
+  try {
+    const reader = env.GITHUB_TOKEN ? createClient({ token: env.GITHUB_TOKEN, fetch, apiUrl, budget, sleep, now }) : client;
+    selftest = { read: await readSelftestFailures({ client: reader, workflows: wfs, now }), passedImage: verdict.tripped ? null : nightlyImage(conformance?.status) };
+  } catch (err) {
+    selftest = { read: { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) }, passedImage: null };
+  }
+
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot, selftest });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
