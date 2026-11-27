@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { openState } from '../../state/db.mjs';
 import { ApiBudget, BudgetExceededError } from '../budgets.mjs';
 import { dueFromState, loadConfig } from '../due.mjs';
-import { BATCH, buildHeadsQuery, HEADS_KV_KEY, headsEnabled, MAX_QUERIES, pickHeads, pollHours, refreshHeads } from '../heads.mjs';
+import { BATCH, buildHeadsQuery, HEADS_KV_KEY, headsEnabled, headsRoom, ID_PASS_CALLS, MAX_QUERIES, MAX_TIER_SHARE, parseHeads, pickHeads, pollHours, refreshHeads } from '../heads.mjs';
 import { runPump } from '../run.mjs';
 import { headsCheck, HEADS_AMBER_HOURS, HEADS_RED_HOURS } from '../../watchdog/heads.mjs';
 import { evaluate } from '../../watchdog/checks.mjs';
@@ -48,10 +48,13 @@ function fakeHeads(repos, { remaining = 4999 } = {}) {
     const nodes = variables.ids.map((id, i) => {
       const r = repos[Number(id.slice(2))];
       if (!r || r.missing) { errors.push({ type: 'NOT_FOUND', path: ['nodes', i] }); return null; }
+      if (r.forbidden) { errors.push({ type: 'FORBIDDEN', path: ['nodes', i], message: 'Resource not accessible' }); return null; }
+      if (r.releaseError) errors.push({ type: 'INTERNAL', path: ['nodes', i, 'latestRelease'], message: 'Something went wrong' });
       return {
         __typename: 'Repository', databaseId: r.other ?? Number(id.slice(2)), isEmpty: r.empty === true,
+        ...(r.nameWithOwner ? { nameWithOwner: r.nameWithOwner } : {}),
         defaultBranchRef: r.empty ? null : { target: { oid: r.oid } },
-        latestRelease: r.release ? { tagName: r.release.tag ?? 'v1', publishedAt: r.release.at } : null,
+        latestRelease: r.releaseError ? null : r.release ? { tagName: r.release.tag ?? 'v1', publishedAt: r.release.at } : null,
       };
     });
     const data = { rateLimit: { cost: 1, remaining }, nodes };
@@ -145,7 +148,7 @@ test('R-CHG-04: a head that cannot be read (not found, another repository id, em
   const g = fakeHeads({ 11: { missing: true }, 12: { oid: sha(2), other: 99 }, 13: { empty: true }, 14: { oid: 'not-a-sha' }, 15: { oid: sha(5) } });
   const before = db.listSubjects();
   const out = await refreshHeads(db, { client: g.client, now: () => T });
-  assert.deepEqual(out.skipped, { not_found: 1, mismatch: 1, empty: 1, error: 1 });
+  assert.deepEqual(out.skipped, { not_found: 1, mismatch: 1, renamed: 0, empty: 1, error: 1 });
   const after = db.listSubjects();
   for (const s of after.filter((x) => x.id !== 'org/ok')) assert.deepEqual(s, before.find((x) => x.id === s.id), `${s.id} unchanged`);
   assert.ok(after.every((s) => s.gone_at === null));
@@ -187,7 +190,7 @@ test('R-CHG-05: the budget guard: at most MAX_QUERIES a run, a budget refusal or
   const { createClient } = await import('../github.mjs');
   const client = createClient({ token: 'ghs_synthetic', fetch: api.fetch, apiUrl: API, budget: bud, now: c.now, sleep: c.sleep });
   out = await refreshHeads(db, { client, now: c.now });
-  assert.equal(out.stopped, 'budget');
+  assert.equal(out.stopped, 'id_reserve', 'the hourly graphql calls are used up: none is taken');
   assert.equal(api.calls.length, 0);
   db.close();
 });
@@ -283,7 +286,10 @@ test('R-CHG-08: the watchdog subject-heads item: green while polls are written, 
   assert.equal(headsCheck({ now: T + HOUR, heads: base }).status, 'green');
   assert.equal(headsCheck({ now: T + 6 * HOUR + 1, heads: base }).status, 'amber');
   assert.equal(headsCheck({ now: T + 24 * HOUR + 1, heads: base }).status, 'red');
-  assert.equal(headsCheck({ now: T, heads: { ...base, last_write_at: null } }).status, 'red');
+  // A first pass that has never written is amber, and red only once it is a day old.
+  assert.equal(headsCheck({ now: T, heads: { ...base, last_write_at: null, first_at: at } }).status, 'amber');
+  assert.equal(headsCheck({ now: T + 25 * HOUR, heads: { ...base, last_write_at: null, first_at: at } }).status, 'red');
+  assert.equal(headsCheck({ now: T + HOUR, heads: { ...base, stopped: 'id_reserve' } }).status, 'green', 'holding calls for the id pass is the guard working');
   assert.equal(headsCheck({ now: T + HOUR, heads: { ...base, stopped: 'api_error', error: 'HTTP 502' } }).status, 'amber');
   assert.equal(headsCheck({ now: T + HOUR, heads: { ...base, stopped: 'points_reserve' } }).status, 'green', 'leaving points for others is the guard working');
   assert.equal(headsCheck({ now: T + 48 * HOUR, heads: { ...base, off: true } }).status, 'off');
@@ -296,5 +302,75 @@ test('the heads query passes node ids as a variable and asks for the head, the r
   const q = buildHeadsQuery(['R_1', 'R_2']);
   assert.deepEqual(q.variables, { ids: ['R_1', 'R_2'] });
   assert.ok(!q.query.includes('R_1'));
-  assert.match(q.query, /databaseId isEmpty defaultBranchRef \{ target \{ oid \} \} latestRelease \{ tagName publishedAt \}/);
+  assert.match(q.query, /databaseId nameWithOwner isEmpty defaultBranchRef \{ target \{ oid \} \} latestRelease \{ tagName publishedAt \}/);
+});
+
+test('R-CHG-09: one bad node never wedges the poll: a FORBIDDEN node is an error for that entry only, an error under latestRelease loses only the release, an error with no node path fails the batch', async () => {
+  const db = openState(':memory:');
+  seed(db, { 'org/a': { tier: 0, repo_id: 11 }, 'org/b': { tier: 0, repo_id: 12 }, 'org/c': { tier: 0, repo_id: 13 } });
+  const repos = { 11: { oid: sha(1) }, 12: { forbidden: true }, 13: { oid: sha(3), releaseError: true } };
+  const g = fakeHeads(repos);
+  for (let run = 0; run < 3; run++) await refreshHeads(db, { client: g.client, now: () => T + run * HOUR });
+  assert.equal(db.getSubject('org/a').sha, sha(1));
+  assert.equal(db.getSubject('org/b').sha, null);
+  assert.equal(db.getSubject('org/c').sha, sha(3), 'the head is kept when only the release errored');
+  const kv = db.getKv(HEADS_KV_KEY);
+  assert.equal(kv.skipped.error, 1);
+  assert.equal(kv.tiers.T0.cursor, null, 'the cycle ended past the bad node');
+  assert.ok(kv.last_write_at);
+  // Pure checks of the parse.
+  const list = [{ repo_id: 1 }, { repo_id: 2 }];
+  const nodes = [{ databaseId: 1, defaultBranchRef: { target: { oid: sha(1) } }, latestRelease: null }, null];
+  assert.deepEqual(parseHeads({ data: { nodes }, errors: [{ type: 'FORBIDDEN', path: ['nodes', 1] }] }, list).map((a) => a.status), ['ok', 'error']);
+  assert.deepEqual(parseHeads({ data: { nodes }, errors: [{ type: 'RATE_LIMITED', message: 'no path' }] }, list).map((a) => a.status), ['error', 'error']);
+  assert.deepEqual(parseHeads({ data: { nodes }, errors: [{ type: 'X', path: ['nodes', 7] }] }, list).map((a) => a.status), ['error', 'error'], 'a path outside the list is a whole-answer problem');
+  db.close();
+});
+
+test('R-CHG-10: only subjects the id pass vouches for (id_status ok) are polled, and a node renamed since then is skipped as renamed', async () => {
+  const db = openState(':memory:');
+  seed(db, { 'org/ok': { repo_id: 11 }, 'org/conflict': { repo_id: 12 }, 'org/err': { repo_id: 13 }, 'org/moved': { repo_id: 14 } });
+  db.raw.prepare("UPDATE subjects SET id_status = 'conflict' WHERE id = 'org/conflict'").run();
+  db.raw.prepare("UPDATE subjects SET id_status = 'error' WHERE id = 'org/err'").run();
+  const g = fakeHeads({ 11: { oid: sha(1), nameWithOwner: 'org/ok' }, 12: { oid: sha(2) }, 13: { oid: sha(3) }, 14: { oid: sha(4), nameWithOwner: 'neworg/moved' } });
+  const out = await refreshHeads(db, { client: g.client, now: () => T });
+  assert.deepEqual(g.calls[0].body.variables.ids.sort(), ['R_11', 'R_14']);
+  assert.equal(out.skipped.renamed, 1);
+  assert.equal(db.getSubject('org/ok').sha, sha(1));
+  assert.equal(db.getSubject('org/moved').sha, null, 'left for the id pass to rename first');
+  assert.equal(db.getSubject('org/conflict').sha, null);
+  db.close();
+});
+
+test('R-CHG-11: the budget is checked before the first query (points reserve, calls held for the id pass), and T0 takes at most a quarter of a run', async () => {
+  assert.equal(ID_PASS_CALLS, 8);
+  assert.equal(MAX_TIER_SHARE.T0, 0.25);
+  const db = openState(':memory:');
+  seed(db, { 'org/a': { tier: 3, repo_id: 11 } });
+  const g = fakeHeads({ 11: { oid: sha(1) } });
+  // GitHub said 150 points left at the last call, reset an hour away: no query at all.
+  const c = fakeClock(T);
+  const low = new ApiBudget({ now: c.now, sleep: c.sleep });
+  low.resources.set('graphql', { limit: 1000, remaining: 150, reset: T + HOUR });
+  let out = await refreshHeads(db, { client: { ...g.client, budget: low }, now: c.now });
+  assert.deepEqual([out.queries, out.stopped, g.calls.length], [0, 'points_reserve', 0]);
+  // Past the reset the old count is not believed.
+  assert.equal(headsRoom(low, T + 2 * HOUR).points, null);
+  // 22 of the 30 hourly calls used: the last 8 are the id pass's.
+  const busy = new ApiBudget({ now: c.now, sleep: c.sleep });
+  for (let i = 0; i < 22; i++) await busy.take('graphql');
+  assert.equal(headsRoom(busy, c.now()).calls, 0);
+  out = await refreshHeads(db, { client: { ...g.client, budget: busy }, now: c.now });
+  assert.deepEqual([out.queries, out.stopped, g.calls.length], [0, 'id_reserve', 0]);
+  // 20 used: 2 left for heads, so at most 2 queries.
+  const some = new ApiBudget({ now: c.now, sleep: c.sleep });
+  for (let i = 0; i < 20; i++) await some.take('graphql');
+  assert.equal(headsRoom(some, c.now()).calls, 2);
+  // T0 share: 300 T0 subjects and 50 T3 ones, one run of 3 x 100.
+  const subjects = [...Array.from({ length: 300 }, (_, i) => ({ id: `a/t0-${String(i).padStart(3, '0')}`, tier: 0 })), ...Array.from({ length: 50 }, (_, i) => ({ id: `c/t3-${i}`, tier: 3 }))];
+  const p = pickHeads({ subjects, cursors: {}, tiers: scanStatic().tiers, now: T, limit: 300 });
+  assert.equal(p.picks.filter((x) => x.tier === 'T0').length, 75);
+  assert.equal(p.picks.filter((x) => x.tier === 'T3').length, 50);
+  assert.equal(p.plan.T0.ends, false, 'T0 resumes from its cursor next run');
+  db.close();
 });

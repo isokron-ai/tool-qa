@@ -41,11 +41,17 @@
 // at least head_poll_hours ago and has finished. One query mixes tiers, so a
 // tier with five subjects costs nothing extra.
 //
+// Only subjects with id_status ok are polled (one in conflict keeps an id that
+// may not be the repository its name clones), and a node whose nameWithOwner
+// is not subjects.name (renamed since the id pass) is skipped as renamed.
+//
 // Budget guard: at most MAX_QUERIES (3) queries a run, through the pump's API
 // budget (family `graphql`, 30 an hour and 5 a minute, shared with the id
-// pass), with the job's GITHUB_TOKEN (1,000 points an hour). A pass also stops
-// when GitHub reports fewer than POINTS_RESERVE points left, so the id pass,
-// the identity re-checks and anything else on that token keep their share.
+// pass), with the job's GITHUB_TOKEN (1,000 points an hour). Before the first
+// query, ID_PASS_CALLS (8) of the hourly calls are left to the id pass, and
+// no query is made while GitHub's last known point count is under
+// POINTS_RESERVE (200); a pass also stops when an answer reports fewer. T0
+// takes at most MAX_TIER_SHARE (a quarter) of a run's picks.
 // The 997 seed subjects take 10 queries a day at steady state, plus about one
 // an hour for T0 to T2.
 //
@@ -67,6 +73,10 @@ export const BATCH = 100;
 export const MAX_QUERIES = 3;
 /** Stop when GitHub says fewer GraphQL points than this are left on the token. */
 export const POINTS_RESERVE = 200;
+/** Calls of the pump's hourly `graphql` budget left untouched for the id pass (pump/identity.mjs, 4 a run). */
+export const ID_PASS_CALLS = 8;
+/** The largest share of one run's picks a tier may take (the rest of it waits at its cursor). */
+export const MAX_TIER_SHARE = Object.freeze({ T0: 0.25 });
 /** Used when tiers.json has no head_poll_hours for a tier. */
 export const DEFAULT_POLL_HOURS = Object.freeze({ T0: 0, T1: 1, T2: 6, T3: 24, T4: 72 });
 
@@ -87,7 +97,7 @@ export function pollHours(tiers, tierName) {
 /** The GraphQL query for heads by node id (ids as a variable, never in the text). */
 export function buildHeadsQuery(nodeIds) {
   return {
-    query: 'query($ids: [ID!]!) { rateLimit { cost remaining } nodes(ids: $ids) { __typename ... on Repository { databaseId isEmpty defaultBranchRef { target { oid } } latestRelease { tagName publishedAt } } } }',
+    query: 'query($ids: [ID!]!) { rateLimit { cost remaining } nodes(ids: $ids) { __typename ... on Repository { databaseId nameWithOwner isEmpty defaultBranchRef { target { oid } } latestRelease { tagName publishedAt } } } }',
     variables: { ids: [...nodeIds] },
   };
 }
@@ -123,30 +133,74 @@ export function pickHeads({ subjects, cursors = {}, tiers, now, limit }) {
       startedAt = new Date(now).toISOString();
     }
     const left = list.filter((s) => s.id > after);
-    const take = left.slice(0, limit - picks.length);
+    // A tier with a share cap (T0) never takes the whole run from the others.
+    const share = MAX_TIER_SHARE[tierName];
+    const room = share === undefined ? limit - picks.length : Math.min(limit - picks.length, Math.max(1, Math.floor(limit * share)));
+    const take = left.slice(0, room);
     for (const s of take) picks.push({ subject: s, tier: tierName });
     plan[tierName] = { started_at: startedAt, ends: take.length === left.length, picked: take.map((s) => s.id) };
   }
   return { picks, plan };
 }
 
-/** Parse one heads answer into per-entry {status, oid, release} in the order asked. */
+/**
+ * Parse one heads answer into per-entry {status, oid, release} in the order
+ * asked. As pump/identity.mjs parseAnswer: an error whose path is under
+ * nodes[i] concerns entry i only (NOT_FOUND: not_found; anything else, a
+ * FORBIDDEN node say: error). An error only under nodes[i].latestRelease
+ * loses the release, not the head. An error with no such path, or an answer
+ * without the node list, makes every entry an error.
+ */
 export function parseHeads(doc, list) {
   const errors = Array.isArray(doc?.errors) ? doc.errors : [];
   const nodes = Array.isArray(doc?.data?.nodes) ? doc.data.nodes : null;
   const all = (status) => list.map(() => ({ status }));
   if (!nodes || nodes.length !== list.length) return all('error');
-  if (errors.some((e) => !(e?.type === 'NOT_FOUND' && Array.isArray(e?.path) && e.path[0] === 'nodes'))) return all('error');
+  const at = new Map(); // i -> 'not_found' | 'error' | 'release'
+  for (const e of errors) {
+    const p = e?.path;
+    if (!Array.isArray(p) || p[0] !== 'nodes' || !Number.isInteger(p[1]) || p[1] < 0 || p[1] >= list.length) return all('error');
+    const kind = p.length === 2 && e.type === 'NOT_FOUND' ? 'not_found' : p[2] === 'latestRelease' ? 'release' : 'error';
+    const prev = at.get(p[1]);
+    // The worst error for an entry wins: error over not_found over a lost release.
+    const rank = { release: 0, not_found: 1, error: 2 };
+    if (prev === undefined || rank[kind] > rank[prev]) at.set(p[1], kind);
+  }
   return list.map((s, i) => {
+    const flagged = at.get(i);
+    if (flagged === 'error') return { status: 'error' };
     const n = nodes[i];
-    if (!n || typeof n !== 'object' || (n.__typename !== undefined && n.__typename !== 'Repository')) return { status: 'not_found' };
+    if (flagged === 'not_found' || !n || typeof n !== 'object' || (n.__typename !== undefined && n.__typename !== 'Repository')) return { status: 'not_found' };
     if (n.databaseId !== s.repo_id) return { status: 'mismatch' };
+    // Renamed since the id pass last looked: the worker would be sent the old name. Left to the id pass.
+    if (typeof n.nameWithOwner === 'string' && typeof s.name === 'string' && n.nameWithOwner !== s.name) return { status: 'renamed' };
     const oid = n.defaultBranchRef?.target?.oid;
     if (n.isEmpty === true || !n.defaultBranchRef) return { status: 'empty' };
     if (typeof oid !== 'string' || !OID_RE.test(oid)) return { status: 'error' };
-    const pub = Date.parse(n.latestRelease?.publishedAt ?? '');
+    const pub = flagged === 'release' ? NaN : Date.parse(n.latestRelease?.publishedAt ?? '');
     return { status: 'ok', oid, release: Number.isFinite(pub) ? { tag: String(n.latestRelease.tagName ?? '').slice(0, 100), published_at: new Date(pub).toISOString() } : null };
   });
+}
+
+/**
+ * What the pump's API budget leaves for this pass, before any query: calls
+ * of the hourly `graphql` family past the ID_PASS_CALLS held for the id pass,
+ * and GitHub's last known GraphQL points (budget.resources, restored from the
+ * state across runs; unknown once its reset has passed). null fields are
+ * unknown. Pure.
+ */
+export function headsRoom(budget, now) {
+  const out = { calls: null, points: null };
+  if (!budget || typeof budget !== 'object') return out;
+  try {
+    const spec = budget.families?.graphql;
+    const used = (budget.state?.get?.('graphql')?.hour ?? []).filter((t) => t > now - HOUR).length;
+    if (Number.isFinite(Number(spec?.perHour))) out.calls = Math.max(0, Number(spec.perHour) - (Number(spec.reserve) || 0) - used - ID_PASS_CALLS);
+    const r = budget.resources?.get?.('graphql');
+    const reset = Number(r?.reset);
+    if (r && Number.isFinite(Number(r.remaining)) && (!Number.isFinite(reset) || reset > now)) out.points = Number(r.remaining);
+  } catch { /* unknown */ }
+  return out;
 }
 
 /**
@@ -174,21 +228,35 @@ export async function refreshHeads(db, { client, tiers = {}, now = Date.now, log
   const out = {
     queries: 0, cost: 0, remaining: null, polled: 0, written: 0,
     changes: { head_first_seen: 0, new_sha: 0, new_release: 0 },
-    skipped: { empty: 0, not_found: 0, mismatch: 0, error: 0 },
+    skipped: { empty: 0, not_found: 0, mismatch: 0, renamed: 0, error: 0 },
     stopped: null, error: null,
   };
   let prev = {};
   try { prev = db.getKv(HEADS_KV_KEY) ?? {}; } catch { /* none */ }
   const cursors = { ...(prev.tiers ?? {}) };
   let lastWrite = prev.last_write_at ?? null;
+  const firstAt = prev.first_at ?? new Date(now()).toISOString();
   const size = Math.max(1, Math.min(BATCH, Math.trunc(Number(batch)) || BATCH));
-  const queries = Math.max(0, Math.trunc(Number(maxQueries)) || 0);
+  let queries = Math.max(0, Math.trunc(Number(maxQueries)) || 0);
   try {
     if (!client) {
       out.stopped = 'no_token';
     } else {
+      // Only subjects whose id the id pass vouches for (id_status ok): one in
+      // conflict keeps an id that may not be the repository its name clones.
       const subjects = db.listSubjects().filter((s) => s.kind === 'github' && s.retired_at == null && s.alias_of == null && s.gone_at == null
-        && Number.isSafeInteger(s.repo_id) && typeof s.node_id === 'string' && s.node_id !== '');
+        && s.id_status === 'ok' && Number.isSafeInteger(s.repo_id) && typeof s.node_id === 'string' && s.node_id !== '');
+      // The budget guard, before the first query.
+      const room = headsRoom(client.budget, now());
+      if (room.calls !== null && room.calls < queries) queries = room.calls;
+      if (room.points !== null && room.points < reserve) {
+        out.stopped = 'points_reserve';
+        out.error = `${room.points} GraphQL points left (reserve ${reserve})`;
+        queries = 0;
+      } else if (queries === 0 && room.calls === 0) {
+        out.stopped = 'id_reserve';
+        out.error = `the graphql calls left this hour are held for the id pass (${ID_PASS_CALLS})`;
+      }
       const { picks, plan } = pickHeads({ subjects, cursors, tiers, now: now(), limit: size * queries });
       const done = new Set(); // keys whose answer was applied
       for (let i = 0; i < picks.length && out.stopped === null; i += size) {
@@ -273,7 +341,7 @@ export async function refreshHeads(db, { client, tiers = {}, now = Date.now, log
   const sk = Object.entries(out.skipped).filter(([, v]) => v > 0).map(([k, v]) => `${k} ${v}`).join(', ');
   out.summary = `${out.queries} head queries (${out.polled} repositories${out.cost ? `, ${out.cost} points` : ''}${out.remaining !== null ? `, ${out.remaining} left` : ''})${ch ? `: ${ch}` : ''}${sk ? `; not written: ${sk}` : ''}; ${out.with_sha ?? '?'} of ${out.active ?? '?'} active subjects have a sha${out.stopped ? `; stopped (${out.stopped}${out.error ? `: ${out.error}` : ''})` : ''}`;
   try {
-    db.setKv(HEADS_KV_KEY, { at: new Date(now()).toISOString(), off: false, last_write_at: lastWrite, ...out, tiers: cursors }, { now: now() });
+    db.setKv(HEADS_KV_KEY, { at: new Date(now()).toISOString(), off: false, first_at: firstAt, last_write_at: lastWrite, ...out, tiers: cursors }, { now: now() });
   } catch { /* the summary is still returned and logged */ }
   return { ...out, last_write_at: lastWrite, tiers: cursors };
 }
