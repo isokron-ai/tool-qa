@@ -48,6 +48,9 @@
 //                        keep_gaps) has its ingest-keepgap-<run>-<attempt> artifact
 //                        (keep/health.mjs markerCheck): red when the marker is missing
 //                        an hour after the seal, amber when it cannot be matched.
+//   leads                the lead pipeline (watchdog/leads.mjs): amber when the pump's lead
+//                        step stopped writing kv leads.last, had errors, or its queue grows
+//                        without bound; off unless LANE_LEADS_ENABLED is on.
 //   state-size           the state database's size, rows and last prune pass
 //                        as the pump recorded them (kv state.size), the asset
 //                        it was pulled from, and the snapshot release's total
@@ -59,6 +62,7 @@ import { snapshotCheck } from '../snapshot/health.mjs';
 import { sizeCheck } from './size.mjs';
 import { markerCheck, sealCheck } from '../keep/health.mjs';
 import { identityCheck } from './identity.mjs';
+import { leadsCheck } from './leads.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -152,7 +156,7 @@ const baseName = (path) => String(path).split('/').pop();
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
+export function evaluate({ now, slots, lanes = {}, liveSwitch, leadsMode = 'off', runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -251,6 +255,7 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
     }
     checks.push(liveSnapshotCheck({ now, on: liveSwitch === 'true', last: state.kv?.['live.last_upload'] ?? null }));
     const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
+    checks.push(leadsCheck({ now, mode: leadsMode, last: state.kv?.['leads.last'] ?? null, recheck: state.kv?.['leads.recheck'] ?? null })); // the lead pipeline (watchdog/leads.mjs)
   }
 
   // latest loop run per workflow

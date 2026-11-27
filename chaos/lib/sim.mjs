@@ -155,6 +155,8 @@ export class Sim {
     this.prune = prune;
     this.lateMs = lateMs;
     this.archiveUpload = true;
+    // Variables the pump step is not given although the repository has them (a pump.yml that does not pass one).
+    this.pumpEnvDrop = new Set();
     this.archived = new Set(); // `${table}:${key}` of every row an uploaded archive holds
     this.archives = [];
     this.t = start;
@@ -532,7 +534,7 @@ export class Sim {
         env: {
           GITHUB_REPOSITORY: TOOLQA, GITHUB_TOKEN: `ghs_jobtoken${run.id}`, LOOP_SLOTS: String(g.slots), AGE_IDENTITY: this.identity, GITHUB_API_URL: API_HOST,
           GITHUB_RUN_ID: String(run.id), GITHUB_RUN_ATTEMPT: '1', ...(this.vars().LANE_STATE_PRUNE_ENABLED !== undefined ? { LANE_STATE_PRUNE_ENABLED: this.vars().LANE_STATE_PRUNE_ENABLED } : {}),
-          ...(this.vars().LANE_LEADS_ENABLED !== undefined ? { LANE_LEADS_ENABLED: this.vars().LANE_LEADS_ENABLED } : {}),
+          ...(this.vars().LANE_LEADS_ENABLED !== undefined && !this.pumpEnvDrop.has('LANE_LEADS_ENABLED') ? { LANE_LEADS_ENABLED: this.vars().LANE_LEADS_ENABLED } : {}),
         },
         now: clock,
         sleep: task.sleep,

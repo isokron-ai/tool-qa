@@ -55,6 +55,7 @@ import { offsiteCheck } from './offsite.mjs';
 import { keepCheck, readKeepStatus } from '../keep/health.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
+import { leadsMode } from '../state/leads.mjs';
 
 const EXPECTED_FILE = new URL('./expected-workflows.json', import.meta.url);
 
@@ -149,6 +150,8 @@ export function readState(file) {
         'state.size': db.getKv('state.size') ?? null,
         'live.last_upload': db.getKv('live.last_upload') ?? null,
         'retention.seal': db.getKv('retention.seal') ?? null,
+        'leads.last': db.getKv('leads.last') ?? null,
+        'leads.recheck': db.getKv('leads.recheck') ?? null,
       },
     };
   } finally {
@@ -273,7 +276,7 @@ export async function runWatchdog({
   if (snapshot?.error) snapshot = { ...snapshot, error: scrub(String(snapshot.error), secrets).slice(0, 200) };
 
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, leadsMode: leadsMode(env), runs, artifacts, state, workflows, expected, breaker, snapshot });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
