@@ -53,12 +53,37 @@ export function parseGithubUrl(raw, subfolder = '') {
   return { repo: `${owner}/${name}`, subfolder: sub };
 }
 
-/** A repository-relative folder: no leading or trailing slash, no dot segments, at most 200 characters. */
+/** The feeds a key may name. */
+export const FEEDS = Object.freeze(['registry', 'npm', 'pypi', 'crates', 'go']);
+/** Keys kept per candidate. */
+export const MAX_KEYS = 50;
+/** A folder: segments of letters, digits and . _ @ + -, joined by /; no dot segments, no spaces, backslashes or control characters. */
+export const SUBFOLDER_RE = /^(?:[A-Za-z0-9_@+-][A-Za-z0-9._@+-]{0,99}|\.[A-Za-z0-9_@+-][A-Za-z0-9._@+-]{0,98})(?:\/(?:[A-Za-z0-9_@+-][A-Za-z0-9._@+-]{0,99}|\.[A-Za-z0-9_@+-][A-Za-z0-9._@+-]{0,98}))*$/;
+/** A package URL as purlFor() writes them. */
+export const PURL_RE = /^pkg:(?:npm|pypi|cargo|nuget|oci|golang)\/[A-Za-z0-9%._~+-]+(?:\/[A-Za-z0-9%._~+-]+)*$/;
+
+/** A repository-relative folder: no leading or trailing slash, no dot segments, at most 200 characters, SUBFOLDER_RE or ''. */
 export function cleanSubfolder(p) {
   if (typeof p !== 'string') return '';
   const parts = p.split('/').filter((x) => x && x !== '.');
   if (parts.some((x) => x === '..')) return '';
-  return parts.join('/').slice(0, 200);
+  const out = parts.join('/');
+  return out.length <= 200 && (out === '' || SUBFOLDER_RE.test(out)) ? out : '';
+}
+
+/** Whether one key is well formed: a subfolder ('' or SUBFOLDER_RE, at most 200), a purl ('' or PURL_RE, at most 300), a known feed. */
+export function validKey(k) {
+  return !!k && typeof k === 'object'
+    && typeof k.subfolder === 'string' && k.subfolder.length <= 200 && (k.subfolder === '' || SUBFOLDER_RE.test(k.subfolder))
+    && typeof k.purl === 'string' && k.purl.length <= 300 && (k.purl === '' || PURL_RE.test(k.purl))
+    && FEEDS.includes(k.feed);
+}
+
+/** A candidate's keys the pump keeps: the well-formed ones, at most MAX_KEYS. {keys, dropped}. */
+export function cleanKeys(keys) {
+  const list = Array.isArray(keys) ? keys : [];
+  const ok = list.filter(validKey).map((k) => ({ subfolder: k.subfolder, purl: k.purl, feed: k.feed })).slice(0, MAX_KEYS);
+  return { keys: ok, dropped: list.length - ok.length };
 }
 
 /** A package URL (purl) for a registry package type and name, or null for types we do not key. */
@@ -163,7 +188,7 @@ const hashOf = (repo) => createHash('sha256').update(repo.toLowerCase()).digest(
  * its keys and class, sorted by class then hash.
  * @returns {{name:string, class:number, hash:string, feeds:string[], keys:{subfolder:string, purl:string, feed:string}[]}[]}
  */
-export function buildCandidates(observations, { maxKeys = 50 } = {}) {
+export function buildCandidates(observations, { maxKeys = MAX_KEYS } = {}) {
   const by = new Map();
   for (const o of observations) {
     const k = o.repo.toLowerCase();
@@ -180,7 +205,8 @@ export function buildCandidates(observations, { maxKeys = 50 } = {}) {
     const purls = o.purls.length ? o.purls : [''];
     for (const p of purls) {
       const key = `${o.subfolder}\u0000${p}\u0000${o.feed}`;
-      if (!c.keys.has(key) && c.keys.size < maxKeys) c.keys.set(key, { subfolder: o.subfolder, purl: p, feed: o.feed });
+      const k = { subfolder: o.subfolder, purl: p, feed: o.feed };
+      if (!c.keys.has(key) && c.keys.size < maxKeys && validKey(k)) c.keys.set(key, k);
     }
   }
   const out = [];
@@ -204,7 +230,8 @@ export function candidatesProblems(doc) {
     if (typeof c?.name !== 'string' || !/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(c.name)) p.push(`candidates[${i}].name is not owner/name`);
     if (![0, 1, 2].includes(c?.class)) p.push(`candidates[${i}].class must be 0, 1 or 2`);
     if (typeof c?.hash !== 'string' || !/^[0-9a-f]{64}$/.test(c.hash)) p.push(`candidates[${i}].hash must be a sha256`);
-    if (!Array.isArray(c?.keys) || c.keys.some((k) => typeof k?.subfolder !== 'string' || typeof k?.purl !== 'string' || typeof k?.feed !== 'string' || k.subfolder.length > 200 || k.purl.length > 300)) p.push(`candidates[${i}].keys are malformed`);
+    // Each key is checked on its own where it is used (cleanKeys): a bad key is dropped, not the whole file.
+    if (!Array.isArray(c?.keys)) p.push(`candidates[${i}].keys must be a list`);
   });
   return p;
 }

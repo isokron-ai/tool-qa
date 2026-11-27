@@ -9,7 +9,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { openState } from '../../state/db.mjs';
 import { BudgetExceededError } from '../budgets.mjs';
-import { applyDiscovery, buildLookupQuery, DISCOVER_KV_KEY, discoverEnabled, FRAME_KV_KEY, loadDiscoverConfig, walkFrom } from '../discover.mjs';
+import { applyDiscovery, buildLookupQuery, DISCOVER_KV_KEY, discoverEnabled, EXCLUDED_KV_KEY, FRAME_KV_KEY, loadDiscoverConfig, walkFrom } from '../discover.mjs';
+import { cleanKeys, cleanSubfolder, MAX_KEYS, validKey } from '../../discover/extract.mjs';
 import { runPump } from '../run.mjs';
 import { loadConfig } from '../due.mjs';
 import { ApiBudget } from '../budgets.mjs';
@@ -183,4 +184,58 @@ test('the lookup query passes names as variables and asks for isFork', () => {
   assert.deepEqual(q.variables, { o0: 'acme', n0: 'one' });
   assert.ok(!q.query.includes('acme'));
   assert.match(q.query, /databaseId id nameWithOwner createdAt isFork/);
+});
+
+test('R-DISC-08: only the current name of an active subject is known; a frozen key that now names a re-created repository is looked up and becomes its own subject', async () => {
+  const db = seeded();
+  // seed/known was renamed to seed/renamed (same repository, id 500); someone then created a new seed/known (id 900).
+  db.applyIdentityLookup('seed/known', { status: 'ok', via: 'id', node: { databaseId: 500, id: 'R_500', nameWithOwner: 'seed/renamed', createdAt: '2025-01-01T00:00:00Z' } }, { now: T - DAY });
+  assert.equal(db.getSubject('seed/known').name, 'seed/renamed');
+  // A gone subject's name is not known either.
+  db.setSubjectVersion({ id: 'g/gone', kind: 'github', source: 'seed-v1', tier: 3, now: T - 30 * DAY });
+  db.raw.prepare("UPDATE subjects SET gone_at = ? WHERE id = 'g/gone'").run(new Date(T - DAY).toISOString());
+  const g = fakeGraph({ 'seed/known': { id: 900 }, 'seed/renamed': { id: 500 }, 'g/gone': { id: 901 } });
+  const out = await applyDiscovery(db, { client: g.client, config: cfg(), now: () => T, getCandidates: async () => ({ artifact_id: 8, doc: doc([cand('seed/known'), cand('seed/renamed'), cand('g/gone')]) }) });
+  assert.equal(out.known, 1, 'only seed/renamed, the current name');
+  const looked = g.calls.flatMap((c) => Object.keys(c.body.variables).filter((k) => k.startsWith('o')).map((k) => `${c.body.variables[k]}/${c.body.variables[`n${k.slice(1)}`]}`));
+  assert.deepEqual(looked.sort(), ['g/gone', 'seed/known']);
+  const fresh = db.listSubjects().find((s) => s.repo_id === 900);
+  assert.ok(fresh && fresh.id !== 'seed/known' && fresh.source === 'discover-v1', 'the re-created repository is a new subject, not the old one');
+  assert.equal(db.getSubject('seed/known').repo_id, 500);
+  db.close();
+});
+
+test('R-DISC-09: feed data is checked in the pump as well: a malformed key is dropped (control characters, newlines, backslashes, spaces, an unknown feed, a bad purl), at most MAX_KEYS a candidate, and the rest of the file is used', async () => {
+  assert.equal(MAX_KEYS, 50);
+  for (const sub of ['a\nb', 'a\\b', 'a b', 'a\u0000', '../x', 'x/../y', '/abs']) assert.equal(validKey({ subfolder: sub, purl: '', feed: 'registry' }), false, JSON.stringify(sub));
+  assert.equal(validKey({ subfolder: 'packages/@scope/srv', purl: 'pkg:npm/%40scope/srv', feed: 'npm' }), true);
+  assert.equal(validKey({ subfolder: '', purl: '', feed: 'docker' }), false);
+  assert.equal(validKey({ subfolder: '', purl: 'pkg:npm/x y', feed: 'npm' }), false);
+  assert.equal(cleanSubfolder('a b'), '');
+  assert.equal(cleanSubfolder('servers/one'), 'servers/one');
+  const many = Array.from({ length: 70 }, (_, i) => ({ subfolder: `s${i}`, purl: '', feed: 'registry' }));
+  assert.equal(cleanKeys(many).keys.length, 50);
+  const db = seeded();
+  const g = fakeGraph({ 'a/b': { id: 20 } });
+  const keys = [{ subfolder: 'ok', purl: 'pkg:npm/ok', feed: 'registry' }, { subfolder: 'bad\nline', purl: '', feed: 'registry' }, { subfolder: '', purl: '', feed: 'docker' }];
+  const out = await applyDiscovery(db, { client: g.client, config: cfg(), now: () => T, getCandidates: async () => ({ artifact_id: 9, doc: doc([cand('a/b', { keys })]) }) });
+  assert.deepEqual([out.added, out.keys_dropped], [1, 2]);
+  assert.deepEqual(db.listDiscoveryKeys('a/b').map((k) => k.subfolder), ['ok']);
+  db.close();
+});
+
+test('R-DISC-10: a fork left out is remembered and not looked up again', async () => {
+  const db = seeded();
+  const g = fakeGraph({ 'f/fork': { id: 13, fork: true }, 'n/one': { id: 14 }, 'n/two': { id: 15 } });
+  const get = (names) => async () => ({ artifact_id: 10, doc: doc(names.map((n) => cand(n))) });
+  let out = await applyDiscovery(db, { client: g.client, config: cfg(), now: () => T, getCandidates: get(['f/fork', 'n/one']) });
+  assert.equal(out.fork_excluded, 1);
+  assert.equal(db.getKv(EXCLUDED_KV_KEY)['f/fork'].why, 'fork');
+  g.calls.length = 0;
+  db.setKv(DISCOVER_KV_KEY, { cursor: null }, { now: T });
+  out = await applyDiscovery(db, { client: g.client, config: cfg(), now: () => T + DAY + 1, getCandidates: get(['f/fork', 'n/one', 'n/two']) });
+  assert.equal(out.excluded_before, 1);
+  const looked = g.calls.flatMap((c) => Object.keys(c.body.variables).filter((k) => k.startsWith('o')).map((k) => `${c.body.variables[k]}/${c.body.variables[`n${k.slice(1)}`]}`));
+  assert.deepEqual(looked, ['n/two']);
+  db.close();
 });

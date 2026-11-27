@@ -41,11 +41,15 @@ import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 
 import { BudgetExceededError } from './budgets.mjs';
-import { candidatesProblems, FRAME_SOURCE } from '../discover/extract.mjs';
+import { candidatesProblems, cleanKeys, FRAME_SOURCE } from '../discover/extract.mjs';
 import { readZip } from '../scripts/lib/unzip.mjs';
 
 const DAY = 86_400_000;
 export const DISCOVER_KV_KEY = 'pump.discover';
+/** Names looked up and left out (forks), so they are not looked up again: {name lower-case: {repo_id, why, at}}. */
+export const EXCLUDED_KV_KEY = 'pump.discover.excluded';
+/** At most this many are remembered (the oldest go first). */
+export const MAX_EXCLUDED = 20_000;
 export const FRAME_KV_KEY = 'frame';
 export const CONFIG_FILE = new URL('./discover.json', import.meta.url);
 /** Largest artifact the pump downloads (the file was 2.4 MB gzipped on 27 Nov). */
@@ -150,7 +154,7 @@ export async function fetchCandidates({ client, fetch = globalThis.fetch, repo, 
  */
 export async function applyDiscovery(db, { client, getCandidates, config = loadDiscoverConfig(), now = Date.now, log = () => {} } = {}) {
   const out = {
-    room: 0, walked: 0, known: 0, looked_up: 0, queries: 0, cost: 0, added: 0, duplicate: 0, fork_excluded: 0, not_found: 0, errors: 0,
+    room: 0, walked: 0, known: 0, excluded_before: 0, keys_dropped: 0, looked_up: 0, queries: 0, cost: 0, added: 0, duplicate: 0, fork_excluded: 0, not_found: 0, errors: 0,
     keys_recorded: 0, artifact_id: null, generated_at: null, stopped: null, error: null,
   };
   let prev = {};
@@ -175,12 +179,17 @@ export async function applyDiscovery(db, { client, getCandidates, config = loadD
         const bad = candidatesProblems(got.doc);
         if (bad.length) throw new Error(`candidates refused: ${bad.slice(0, 3).join('; ')}`);
         const cands = got.doc.candidates;
-        // What the state knows: names and keys (case aside) and repository ids.
+        // Known: the CURRENT name of an active subject (case aside). A match on
+        // a frozen key, or on a retired, merged or gone subject, is looked up:
+        // the name may now be another repository (renamed, then re-created).
         const byName = new Map();
         for (const s of db.listSubjects()) {
-          const target = s.alias_of ?? s.id;
-          for (const k of [s.id, s.name]) if (typeof k === 'string' && !byName.has(k.toLowerCase())) byName.set(k.toLowerCase(), target);
+          if (s.retired_at != null || s.alias_of != null || s.gone_at != null || typeof s.name !== 'string') continue;
+          if (!byName.has(s.name.toLowerCase())) byName.set(s.name.toLowerCase(), s.id);
         }
+        let excluded = {};
+        try { excluded = db.getKv(EXCLUDED_KV_KEY) ?? {}; } catch { /* none */ }
+        const excludedBefore = Object.keys(excluded).length;
         const unknown = [];
         const limit = Math.min(out.room, config.max_queries * 100);
         let lastPos = cursor;
@@ -188,13 +197,17 @@ export async function applyDiscovery(db, { client, getCandidates, config = loadD
           if (unknown.length >= limit) break;
           out.walked += 1;
           lastPos = pos(c);
+          const { keys, dropped } = cleanKeys(c.keys);
+          out.keys_dropped += dropped;
+          const cc = { ...c, keys };
+          if (excluded[c.name.toLowerCase()]) { out.excluded_before += 1; continue; }
           const hit = byName.get(c.name.toLowerCase());
           if (hit) {
             out.known += 1;
-            out.keys_recorded += recordKeys(db, hit, null, c, t0);
+            out.keys_recorded += recordKeys(db, hit, null, cc, t0);
             continue;
           }
-          unknown.push(c);
+          unknown.push(cc);
         }
         for (let i = 0; i < unknown.length && out.stopped === null; i += 100) {
           const chunk = unknown.slice(i, i + 100);
@@ -222,7 +235,11 @@ export async function applyDiscovery(db, { client, getCandidates, config = loadD
               if (a.status === 'not_found') { out.not_found += 1; return; }
               if (a.status !== 'ok') { out.errors += 1; return; }
               const n = a.node;
-              if (n.isFork === true) { out.fork_excluded += 1; return; }
+              if (n.isFork === true) {
+                out.fork_excluded += 1;
+                excluded[c.name.toLowerCase()] = { repo_id: n.databaseId, why: 'fork', at: new Date(t).toISOString() };
+                return;
+              }
               const holder = db.getSubjectByRepoId(n.databaseId);
               if (holder) {
                 out.duplicate += 1;
@@ -243,6 +260,10 @@ export async function applyDiscovery(db, { client, getCandidates, config = loadD
           });
         }
         cursor = lastPos;
+        if (Object.keys(excluded).length !== excludedBefore) {
+          const entries = Object.entries(excluded).sort((a, b) => (a[1].at < b[1].at ? -1 : 1)).slice(-MAX_EXCLUDED);
+          db.setKv(EXCLUDED_KV_KEY, Object.fromEntries(entries), { now: now() });
+        }
         if (out.added > 0) noteFrame(db, { added: out.added, artifact: out.artifact_id, now: now() });
       }
     }
@@ -251,7 +272,7 @@ export async function applyDiscovery(db, { client, getCandidates, config = loadD
     out.error = String(err?.message ?? err).slice(0, 200);
   }
   const counts = frameCounts(db);
-  out.summary = `room ${out.room}; walked ${out.walked} (${out.known} known), looked up ${out.looked_up} in ${out.queries} queries${out.cost ? ` (${out.cost} points)` : ''}: added ${out.added}, duplicate ${out.duplicate}, forks left out ${out.fork_excluded}, not found ${out.not_found}, errors ${out.errors}; keys ${out.keys_recorded}; frame ${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(', ')}${out.stopped ? `; stopped (${out.stopped}${out.error ? `: ${out.error}` : ''})` : ''}`;
+  out.summary = `room ${out.room}; walked ${out.walked} (${out.known} known${out.excluded_before ? `, ${out.excluded_before} left out before` : ''}${out.keys_dropped ? `, ${out.keys_dropped} malformed keys dropped` : ''}), looked up ${out.looked_up} in ${out.queries} queries${out.cost ? ` (${out.cost} points)` : ''}: added ${out.added}, duplicate ${out.duplicate}, forks left out ${out.fork_excluded}, not found ${out.not_found}, errors ${out.errors}; keys ${out.keys_recorded}; frame ${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(', ')}${out.stopped ? `; stopped (${out.stopped}${out.error ? `: ${out.error}` : ''})` : ''}`;
   try {
     db.setKv(DISCOVER_KV_KEY, { at: new Date(now()).toISOString(), off: false, ...out, cursor }, { now: now() });
   } catch { /* the summary is still returned */ }

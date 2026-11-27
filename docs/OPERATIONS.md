@@ -860,8 +860,15 @@ turned those rows into subjects. Two steps do now:
    13,762).
 2. **The pump** (`pump/discover.mjs`, at the start of a run after the id
    pass). It reads the newest successful `discover.yml` run on main and walks
-   its candidates from a cursor (kv `pump.discover`). A name a subject
-   already has is known: its keys go to that subject. Unknown names are
+   its candidates from a cursor (kv `pump.discover`). Only the current name
+   of an active subject counts as known, and its keys go to that subject. A
+   match on a frozen subject key, or on a retired, merged or gone subject, is
+   looked up like any unknown name, because a renamed repository's old name
+   may now belong to a new one (R-DISC-08). Each key is checked again in the
+   pump, and a malformed one is dropped: a subfolder with control characters,
+   spaces or backslashes, an unknown feed, a bad purl, or more than 50 keys
+   (R-DISC-09). A fork that was left out is remembered in kv
+   `pump.discover.excluded` and not looked up again (R-DISC-10). Unknown names are
    looked up by GraphQL (100 a query, `discover.json` `max_queries`, the
    pump's `graphql` budget):
    - not found: skipped, nothing recorded against anyone;
