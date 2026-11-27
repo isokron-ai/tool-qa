@@ -809,6 +809,37 @@ but no tool for it is shipped, so if v8 has run for long, prefer fixing
 forward (or switching the lookups off with `LANE_SUBJECT_IDS_ENABLED=false`)
 to a restore.
 
+## Backfill: free slots never sit idle (design audit A1)
+
+The due list says what must run. On 27 Nov it was empty on 18 of 30 hours
+while slots stood free, because every result was younger than its tier's max
+age (T3: 30 days). With the filler on, a tick that has free worker slots
+after the due list gives them to the frame's oldest results
+(`pump/backfill.mjs`, reason `backfill`).
+
+**What is eligible.** An active subject on an enabled lane, not paused and
+not held by the breaker, whose tier cell is `always` (a `sample` cell is not
+the frame). It needs an accepted result at least
+`pump/tiers.json` `backfill_min_age_hours` old (T0 6 h, T1 12 h, T2 24 h,
+T3 48 h, T4 96 h). Not a `skips_only` result inside its wait, not a run_key
+that is parked, in a retry backoff, held for a late judgment or in flight,
+and not on the due list already. A pair with no result is due as
+`first_sight` and needs no filler.
+
+**Order and room.** Priority is the tier weight plus the result's age in days
+(at most `priority.age_max`), minus 1000, so backfill ranks below every due
+pair in every lane. The filler first tops up a lane's last partial due shard,
+then opens new shards, best candidate first, only into slots the due list
+does not need, and within each lane's `slots_max`. The tick log line says
+`backfill N`, and kv `pump.last_tick` holds `backfill`.
+
+**Switch.** `LANE_BACKFILL_ENABLED`: only the exact value `true` turns it on.
+Off, a tick is exactly what it was before.
+
+**Dry run.** `node scripts/backfill-dry-run.mjs --state <decrypted copy> --slots 5`
+prints the due list, the free slots and what the filler would add, by lane
+and tier. It is read-only and makes no network call.
+
 ## The pump
 
 `.github/workflows/pump.yml` runs every 30 minutes and can be started by hand

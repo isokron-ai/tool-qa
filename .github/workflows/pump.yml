@@ -83,6 +83,8 @@ jobs:
           LANE_STATE_PRUNE_ENABLED: ${{ vars.LANE_STATE_PRUNE_ENABLED }}
           LANE_HISTORY_REGISTRY_ENABLED: ${{ vars.LANE_HISTORY_REGISTRY_ENABLED }}
           LANE_SUBJECT_IDS_ENABLED: ${{ vars.LANE_SUBJECT_IDS_ENABLED }}
+          # The backfill filler (pump/backfill.mjs): off unless the variable is exactly "true".
+          LANE_BACKFILL_ENABLED: ${{ vars.LANE_BACKFILL_ENABLED }}
           # The live loop view snapshot (live/publish.mjs): off unless the variable is exactly "true".
           LANE_LIVE_SNAPSHOT_ENABLED: ${{ vars.LANE_LIVE_SNAPSHOT_ENABLED }}
           # Shown by the live view's publish gate node (config.switches).
