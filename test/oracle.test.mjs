@@ -463,3 +463,111 @@ test('R-ORD-18: a settled record keeps the reason it settled for; recheck_budget
   assert.deepEqual([row().status, row().reason], ['settled', 'recheck_budget'], 'unchanged results do not overwrite the reason');
   db.close();
 });
+
+// ---------------------------------------------------------------- the ast-grep oracle (O3, mcp-check corpus/ast-grep/)
+
+const NAMES = sha('names-a');
+const agFact = (over = {}) => ({ oracle: 'ast-grep', version: '0.51.1', status: 'read', confidence: 'high', tool_count: 3, unreadable_count: 0, tool_set_sha256: NAMES, name_sources: { literal: 3 }, idioms: ['ts-server-tool'], ...over });
+const entry = (cls, over = {}) => ({ class: cls, kind: 'tool_set', oracles: ['ast-grep', 'reader'], attribution: 'tool', direction: cls === 'D1' ? 'reader_missing' : 'reader_phantom', confidence: 'high', count: 2, fingerprint: 'abcdef012345', ast_grep_count: 5, reader_count: 3, ...over });
+const stResult = (over = {}) => ({ status: 'graded', catalog_hash: H1, tool_count: 3, oracle_ast_grep: agFact(), ...over });
+const obs = (rows) => (k) => rows[k] ?? null;
+
+test('R-ORD-19: scan-static facts carry what ast-grep read and the worker\'s own comparison, bounded and without free text; a skipped scan with an oracle answer still counts', () => {
+  const f = oracleFacts('scan-static', obs({ oracle_disagreements: [entry('D1', { note: 'free text', oracles: ['ast-grep', 'reader'] })] }), stResult());
+  assert.deepEqual(f.ast_grep, { status: 'read', confidence: 'high', tool_count: 3, unreadable_count: 0, tool_set_sha256: NAMES });
+  assert.deepEqual(f.worker, [{ class: 'D1', kind: 'tool_set', oracles: ['ast-grep', 'reader'], attribution: 'tool', fingerprint: 'abcdef012345', direction: 'reader_missing', oracle_confidence: 'high', count: 2 }]);
+  assert.ok(!JSON.stringify(f).includes('free text'));
+  assert.equal(f.tool_list_sha256, H1);
+  // no ast-grep answer: the facts are exactly what they were before the oracle existed
+  assert.deepEqual(oracleFacts('scan-static', () => null, { status: 'graded', catalog_hash: H1, tool_count: 3 }), staticFacts(H1, 3, { complete: false }));
+  // a reader that found no list, with an ast-grep answer and a comparison: facts with no hash
+  const skipped = oracleFacts('scan-static', obs({ oracle_disagreements: [entry('D1')] }), { status: 'skipped', detail: 'no_tools', oracle_ast_grep: agFact() });
+  assert.deepEqual([skipped.tool_list_sha256, skipped.tool_count, skipped.complete, skipped.ast_grep.status, skipped.worker.length], [null, null, false, 'read', 1]);
+  assert.equal(oracleFacts('scan-static', () => null, { status: 'skipped', detail: 'no_tools' }), null);
+  // an entry with a bad fingerprint or a made-up confidence keeps neither
+  const bad = oracleFacts('scan-static', obs({ oracle_disagreements: [entry('D2', { fingerprint: 'NOT-HEX', confidence: 'certain' })] }), stResult());
+  assert.deepEqual(Object.keys(bad.worker[0]).sort(), ['attribution', 'class', 'direction', 'kind', 'oracles']);
+  // another oracle's answer under that key is not ast-grep's
+  assert.equal(oracleFacts('scan-static', () => null, stResult({ oracle_ast_grep: { ...agFact(), oracle: 'something-else' } })).ast_grep, undefined);
+  assert.equal(oracleFacts('scan-static', () => null, stResult({ oracle_ast_grep: agFact({ status: 'made-up' }) })).ast_grep, undefined);
+});
+
+test('R-ORD-20: a tool the reader missed (D1) or invented (D2) against ast-grep is a tool_set disagreement with its class and fingerprint; unreadable, none and error never are', () => {
+  const st = (worker, ag = agFact()) => ({ ...staticFacts(H1, 3), ast_grep: { status: ag.status, confidence: ag.confidence, tool_count: ag.tool_count, unreadable_count: 0 }, worker });
+  const w = (cls, over = {}) => ({ class: cls, kind: 'tool_set', oracles: ['ast-grep', 'reader'], attribution: 'tool', fingerprint: 'abcdef012345', direction: cls === 'D1' ? 'reader_missing' : 'reader_phantom', oracle_confidence: 'high', count: 2, ...over });
+  const d = dd({ static: st([w('D1'), w('D2', { fingerprint: '0123456789ab' })]) });
+  assert.deepEqual(d.kinds.map((k) => [k.kind, k.oracles, k.class, k.fingerprint]), [['tool_set', ['ast-grep', 'reader'], 'D1', 'abcdef012345'], ['tool_set', ['ast-grep', 'reader'], 'D2', '0123456789ab']], 'D1 and D2 of one pair are two entries');
+  assert.match(d.signature, /^[0-9a-f]{64}$/);
+  // no worker entry (the oracle did not read, or agreed): nothing opens
+  assert.deepEqual(dd({ static: st([]) }).kinds, []);
+  assert.deepEqual(dd({ static: st([], agFact({ status: 'unreadable', confidence: null })) }).kinds, []);
+  // the same shape of bug in another subject is the same fingerprint, so the same record; another fingerprint reopens
+  assert.equal(dd({ static: st([w('D1')]) }).signature, dd({ static: st([w('D1', { count: 9 })]) }).signature, 'counts do not change the record');
+  assert.notEqual(dd({ static: st([w('D1')]) }).signature, dd({ static: st([w('D1', { fingerprint: 'ffffffffffff' })]) }).signature);
+  // an entry blamed on the server by anything but the oracle pair of ast-grep and the reader opens nothing
+  const s = dd({ static: st([w('D1', { attribution: 'server' })]) });
+  assert.deepEqual([s.kinds.length, s.server_side], [1, []], 'an ast-grep entry is about our reader whatever its attribution says');
+  const other = dd({ live: liveFacts({ worker: [{ class: 'D4', kind: 'schema', oracles: [], attribution: 'server' }] }) });
+  assert.deepEqual([other.kinds, other.server_side], [[], ['schema']], 'another oracle\'s server-attributed entry is still server-side evidence');
+});
+
+test('R-ORD-21: three-way agreement from counts: live = ast-grep != reader is a high-confidence reader bug; ast-grep = reader != live is dynamic or gated; all different goes to a human', () => {
+  const st = (count, agCount, conf = 'high') => ({ ...staticFacts(H1, count), ast_grep: { status: 'read', confidence: conf, tool_count: agCount, unreadable_count: 0, tool_set_sha256: NAMES } });
+  const liveN = (n, names = NAMES) => liveFacts({ tool_count: n, tool_names_sha256: names });
+  const kind = (d) => d.kinds.find((k) => k.oracles.join() === 'live,reader');
+  const bug = kind(dd({ static: st(3, 5), live: liveN(5) }));
+  assert.deepEqual([bug.confidence, bug.explanation, bug.basis], ['high', 'reader_bug', 'ast-grep=live']);
+  // equal counts are not equal tools: names that differ, or no live names to compare, never make it high
+  const differ = kind(dd({ static: st(3, 5), live: liveN(5, sha('names-b')) }));
+  assert.deepEqual([differ.confidence, differ.explanation], [undefined, 'counts_agree_names_differ']);
+  const noNames = kind(dd({ static: st(3, 5), live: liveFacts({ tool_count: 5 }) }));
+  assert.deepEqual([noNames.confidence, noNames.explanation, noNames.basis], [undefined, 'reader_bug_candidate', 'ast-grep=live (counts; live names not given)']);
+  const gated = kind(dd({ static: st(3, 3), live: liveFacts({ tool_count: 5 }) }));
+  assert.deepEqual([gated.explanation, gated.basis, gated.confidence], ['dynamic_or_gated_registration', 'ast-grep=reader', undefined]);
+  const human = kind(dd({ static: st(3, 4), live: liveFacts({ tool_count: 5 }) }));
+  assert.deepEqual([human.triage, human.basis], ['human', 'all_differ']);
+  // medium confidence is a candidate, not a high-confidence bug
+  const medium = kind(dd({ static: st(3, 5, 'medium'), live: liveN(5) }));
+  assert.deepEqual([medium.confidence, medium.explanation], [undefined, 'reader_bug_candidate']);
+  // no ast-grep answer, an unreadable one, or an incomplete reader list: the entry is exactly what it was
+  assert.deepEqual(dd({ static: staticFacts(H1, 3), live: liveFacts({ tool_count: 5 }) }).kinds, [{ kind: 'tool_count', oracles: ['live', 'reader'] }]);
+  const unread = { ...staticFacts(H1, 3), ast_grep: { status: 'unreadable', confidence: null, tool_count: 0, unreadable_count: 2 } };
+  assert.deepEqual(dd({ static: unread, live: liveFacts({ tool_count: 5 }) }).kinds, [{ kind: 'tool_count', oracles: ['live', 'reader'] }]);
+  assert.deepEqual(dd({ static: { ...st(3, 5), complete: false }, live: liveFacts({ tool_count: 5 }) }).kinds, []);
+  // ast-grep disagrees with the reader while the live list agrees with the reader: ast-grep's rule gap, labelled so
+  const w = { class: 'D1', kind: 'tool_set', oracles: ['ast-grep', 'reader'], attribution: 'tool', fingerprint: 'abcdef012345', direction: 'reader_missing' };
+  const gap = dd({ static: { ...st(3, 4), worker: [w] }, live: liveFacts({ tool_count: 3 }) }).kinds[0];
+  assert.deepEqual([gap.explanation, gap.basis], ['oracle_rule_gap', 'live=reader']);
+  const confirmed = dd({ static: { ...st(3, 5), worker: [w] }, live: liveN(5) }).kinds.find((k) => k.class === 'D1');
+  assert.deepEqual([confirmed.confidence, confirmed.explanation], ['high', 'reader_bug']);
+});
+
+test('R-ORD-22: through the state store, a scan-static result with a D1 entry opens one record by itself and a later clean result clears it; the live lane alone is unchanged', () => {
+  const db = openState(':memory:');
+  seed(db, ['repo:a', 'repo:b']);
+  const entryFacts = (over = {}) => oracleFacts('scan-static', obs({ oracle_disagreements: [entry('D1')] }), stResult(over));
+  accept(db, 'repo:a', 'scan-static', entryFacts(), T0);
+  let [row] = db.listOracleDisagreements();
+  assert.deepEqual([row.subject, row.status, row.kinds.map((k) => [k.kind, k.class, k.fingerprint])], ['repo:a', 'open', [['tool_set', 'D1', 'abcdef012345']]]);
+  assert.equal(JSON.parse(db.raw.prepare('SELECT facts FROM oracle_facts WHERE subject = ?').get('repo:a').facts).ast_grep.status, 'read', 'the answer is kept with the lane\'s facts');
+  accept(db, 'repo:a', 'scan-static', oracleFacts('scan-static', () => null, stResult()), T0 + 1000);
+  [row] = db.listOracleDisagreements();
+  assert.equal(row.status, 'cleared');
+  // a live-probe-only subject: exactly the old behaviour
+  accept(db, 'repo:b', 'live-probe', liveFacts(), T0);
+  assert.deepEqual(db.listOracleDisagreements().filter((r) => r.subject === 'repo:b'), []);
+  db.close();
+});
+
+test('R-ORD-23: high confidence needs the names to agree: the live list\'s name-set hash is read when it is a hash, and only equal hashes (ast-grep and live) make a reader bug high; an ast-grep entry is never blamed on the server', () => {
+  const get = (v) => (k) => ({ tool_count: 3, tool_list_sha256: H1, tool_names_sha256: v }[k] ?? null);
+  assert.equal(oracleFacts('live-probe', get(NAMES), null).tool_names_sha256, NAMES);
+  assert.equal(oracleFacts('live-probe', get('nope'), null).tool_names_sha256, undefined);
+  const st = { ...staticFacts(H1, 3), ast_grep: { status: 'read', confidence: 'high', tool_count: 5, unreadable_count: 0, tool_set_sha256: NAMES } };
+  const kind = (live) => dd({ static: st, live }).kinds[0];
+  assert.equal(kind(liveFacts({ tool_count: 5, tool_names_sha256: NAMES })).confidence, 'high');
+  assert.equal(kind(liveFacts({ tool_count: 5, tool_names_sha256: sha('other') })).confidence, undefined);
+  assert.equal(kind(liveFacts({ tool_count: 5 })).confidence, undefined);
+  const w = { class: 'D2', kind: 'tool_set', oracles: ['ast-grep', 'reader'], attribution: 'server', fingerprint: 'abcdef012345' };
+  assert.equal(dd({ static: { ...staticFacts(H1, 3), worker: [w] } }).kinds.length, 1);
+});

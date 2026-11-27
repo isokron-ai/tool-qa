@@ -12,6 +12,7 @@
 // arrives. mode 'merge' (other jobs): add or update the given items only.
 
 import { overallStatus } from './checks.mjs';
+import { coverageChanged, renderCoverageMarkdown } from '../state/coverage.mjs';
 
 export const LABEL = 'loop-health';
 export const TITLE = 'Loop health';
@@ -21,9 +22,9 @@ const MARK_RE = /<!-- loop-health:v1 (\{[\s\S]*?\}) -->/;
 const iso = (now) => new Date(now).toISOString();
 const cell = (text) => String(text ?? '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
 
-export function renderBody({ checks, now }) {
+export function renderBody({ checks, now, coverage = null }) {
   const overall = overallStatus(checks);
-  const json = JSON.stringify({ overall, updated: iso(now), checks }).replace(/--/g, '-\\u002d');
+  const json = JSON.stringify({ overall, updated: iso(now), checks, ...(coverage ? { coverage } : {}) }).replace(/--/g, '-\\u002d');
   const rows = checks.map((c) => `| ${cell(c.id)} | ${cell(c.status)} | ${cell(c.summary)}${c.link ? ` ([run](${c.link}))` : ''} |`);
   return [
     `<!-- ${MARK} ${json} -->`,
@@ -40,6 +41,7 @@ export function renderBody({ checks, now }) {
     'This body is rewritten in place. A comment is added only when the overall status turns red or recovers.',
     'What each check means and what to do: docs/OPERATIONS.md.',
     '',
+    ...(coverage ? ['## Tool coverage', '', ...renderCoverageMarkdown(coverage), ''] : []),
   ].join('\n');
 }
 
@@ -104,10 +106,18 @@ async function pin(client, nodeId) {
   }
 }
 
-function comment(prevOverall, overall, checks) {
-  if (overall === 'red' && prevOverall !== 'red') {
-    const reds = checks.filter((c) => c.status === 'red').map((c) => `- **${c.id}**: ${c.summary}`);
-    return ['Loop health turned **red**.', '', ...reds, '', 'See the table in the issue body; what to do is in docs/OPERATIONS.md.'].join('\n');
+/**
+ * The comment for this run, or null. A red item that was not red on the previous run
+ * is announced, named, whatever the overall status was: an item that stays red for days
+ * (a coverage number) must not hide the next real one (R-WD-29).
+ */
+function comment(prevOverall, overall, checks, prevChecks = []) {
+  const wasRed = new Set((prevChecks ?? []).filter((c) => c.status === 'red').map((c) => c.id));
+  const fresh = checks.filter((c) => c.status === 'red' && !wasRed.has(c.id));
+  if (fresh.length) {
+    const lines = fresh.map((c) => `- **${c.id}**: ${c.summary}`);
+    const head = prevOverall !== 'red' ? 'Loop health turned **red**.' : `Loop health is red and has ${fresh.length === 1 ? 'a new red item' : 'new red items'}: ${fresh.map((c) => c.id).join(', ')}.`;
+    return [head, '', ...lines, '', 'See the table in the issue body; what to do is in docs/OPERATIONS.md.'].join('\n');
   }
   if (prevOverall === 'red' && overall !== 'red') return `Loop health recovered: overall is now **${overall}**.`;
   return null;
@@ -118,24 +128,26 @@ function comment(prevOverall, overall, checks) {
  * @returns {Promise<{ number: number, created: boolean, updated: boolean, commented: boolean,
  *   pinned: boolean|null, overall: string, previous: string|null }>}
  */
-export async function applyHealth({ client, repo, checks, mode = 'replace', now = Date.now() }) {
+export async function applyHealth({ client, repo, checks, mode = 'replace', now = Date.now(), coverage = null }) {
   const issue = await findIssue(client, repo);
   const prevState = issue ? parseBody(issue.body) : null;
   const merged = mergeChecks(prevState?.checks ?? [], checks, mode);
   const overall = overallStatus(merged);
   const previous = prevState?.overall ?? null;
-  const body = renderBody({ checks: merged, now });
+  // The coverage block (state/coverage.mjs) is kept from the last write when a job passes none (mode merge).
+  const cov = coverage ?? prevState?.coverage ?? null;
+  const body = renderBody({ checks: merged, now, coverage: cov });
   const out = { number: issue?.number ?? null, created: false, updated: false, commented: false, pinned: null, overall, previous };
   if (!issue) {
     const res = await client.request('POST', `/repos/${repo}/issues`, { essential: true, body: { title: TITLE, body, labels: [LABEL] } });
     out.number = res.data.number;
     out.created = true;
     out.pinned = await pin(client, res.data.node_id);
-  } else if (!prevState || JSON.stringify(prevState.checks) !== JSON.stringify(merged)) {
+  } else if (!prevState || JSON.stringify(prevState.checks) !== JSON.stringify(merged) || coverageChanged(prevState.coverage ?? null, cov)) {
     await client.request('PATCH', `/repos/${repo}/issues/${issue.number}`, { essential: true, body: { body } });
     out.updated = true;
   }
-  const text = comment(previous, overall, merged);
+  const text = comment(previous, overall, merged, prevState?.checks);
   if (text && (out.created ? overall === 'red' : true)) {
     await client.request('POST', `/repos/${repo}/issues/${out.number}/comments`, { essential: true, body: { body: text } });
     out.commented = true;

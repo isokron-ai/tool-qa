@@ -13,8 +13,12 @@ const CHECK_STATUS = new Set(['green', 'amber', 'yellow', 'red', 'off', 'unknown
 const ACTIONS = new Set(['ok', 'restarted', 'failed', 'check_failed', 'deferred', 'skipped_switch']);
 export const MAX_EXISTING_BYTES = 64 * 1024;
 const TIMEOUT_MS = 5000;
-const SUMMARY_IDS = (id) => ['pump', 'slots', 'dispatches', 'sandbox-breaker'].includes(id) || id.startsWith('history-');
-const MAX_CHECKS = 40;
+const SUMMARY_IDS = (id) => ['pump', 'slots', 'dispatches', 'sandbox-breaker', 'more-checks'].includes(id) || id.startsWith('history-');
+const MAX_CHECKS = 80;
+// What is kept first when there are more checks than MAX_CHECKS: red, then amber, then the core liveness and
+// backup items, then the lane items, then the rest (R-WD-30).
+const CORE = new Set(['pump', 'slots', 'dispatches', 'state', 'sandbox-breaker', 'state-snapshot', 'archive', 'offsite-backup', 'keep-forever', 'pump-successor', 'state-size', 'subjects']);
+const importance = (c) => (c.status === 'red' ? 0 : c.status === 'amber' || c.status === 'yellow' ? 1 : CORE.has(c.id) || c.id.startsWith('history-') ? 2 : /^(lane-fresh|coverage|tool-failures|pump-idle|oracle-|ingest-|external-|sandbox-selftest)/.test(c.id) ? 3 : 4);
 const iso = (x) => (typeof x === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})$/.test(x) && Number.isFinite(Date.parse(x)) ? x : undefined);
 const unavailable = (checked_at) => ({ error: 'unavailable', checked_at });
 const signal = () => (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? { signal: AbortSignal.timeout(TIMEOUT_MS) } : {});
@@ -62,13 +66,18 @@ export function allowlistHealth(body) {
   let raw; try { raw = JSON.parse(m[1]); } catch { return null; }
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.checks)) return null;
   const checks = [];
-  for (const c of raw.checks.slice(0, MAX_CHECKS)) {
+  // Most important first, the order within a rank as written; what does not fit is counted, not silently dropped.
+  const ranked = raw.checks.map((c, i) => ({ c, i, r: c && typeof c === 'object' ? importance({ id: String(c.id), status: c.status }) : 9 })).sort((a, b) => a.r - b.r || a.i - b.i);
+  const kept = ranked.slice(0, MAX_CHECKS).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.c);
+  for (const c of kept) {
     if (!c || typeof c.id !== 'string' || !/^[a-z0-9:_-]{1,40}$/.test(c.id)) continue;
     const e = { id: c.id, status: CHECK_STATUS.has(c.status) ? c.status : 'unknown' };
     if (iso(c.at)) e.at = c.at;
     if (SUMMARY_IDS(c.id) && typeof c.summary === 'string') e.summary = c.summary.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
     checks.push(e);
   }
+  const dropped = raw.checks.length - kept.length;
+  if (dropped > 0) checks.push({ id: 'more-checks', status: 'unknown', summary: `${dropped} more checks not shown` });
   return { updated: iso(raw.updated) ?? null, overall: CHECK_STATUS.has(raw.overall) ? raw.overall : 'unknown', checks };
 }
 

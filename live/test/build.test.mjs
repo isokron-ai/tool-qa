@@ -118,7 +118,7 @@ test('allowlist: every public event has only the public keys and types; the snap
     assert.ok(PUBLIC_TYPES.includes(e.type), e.type);
     for (const k of Object.keys(e)) assert.ok(PUBLIC_EVENT_KEYS.includes(k), `event key ${k}`);
   }
-  assert.deepEqual(Object.keys(snapshot), ['schema', 'seq', 'generated_at', 'version', 'mode', 'mode_reason', 'pump', 'retry', 'breaker', 'lanes', 'history', 'edges', 'publish', 'counts', 'now_checking', 'just_checked', 'recent']);
+  assert.deepEqual(Object.keys(snapshot), ['schema', 'seq', 'generated_at', 'version', 'mode', 'mode_reason', 'pump', 'retry', 'breaker', 'lanes', 'history', 'edges', 'publish', 'counts', 'now_checking', 'just_checked', 'recent', 'coverage']);
   assert.deepEqual(Object.keys(snapshot.pump), ['run_started_at', 'tick_at', 'tick_s', 'runs_24h', 'successor', 'slots', 'registry_delta']);
   assert.deepEqual(Object.keys(snapshot.pump.slots), ['budget', 'open', 'max', 'ramp']);
   assert.deepEqual(Object.keys(snapshot.pump.registry_delta), ['at', 'w24h']);

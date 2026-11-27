@@ -266,7 +266,8 @@ export class ApiBudget {
   /**
    * Seed the budget with an earlier snapshot() (from another process): its
    * calls of the last hour count against the hourly caps, and its blocks stay
-   * in force. Anything malformed is ignored. Per-minute windows and spacing
+   * in force, and so do GitHub's last reported limits (resources) until their
+   * reset. Anything malformed is ignored. Per-minute windows and spacing
    * start afresh.
    */
   restore(snap) {
@@ -283,6 +284,17 @@ export class ApiBudget {
     }
     for (const [k, until] of Object.entries(snap.blocked ?? {})) {
       if (Number.isFinite(until) && until > now) this.block(k, until);
+    }
+    // GitHub's last reported limits (x-ratelimit-*), while their window lasts
+    // and nothing newer was seen in this process: the head poll's point
+    // reserve (pump/heads.mjs) is then checked before a run's first query.
+    for (const [k, r] of Object.entries(snap.resources ?? {})) {
+      if (this.resources.has(k) || !r || typeof r !== 'object') continue;
+      const remaining = Number(r.remaining);
+      const limit = Number(r.limit);
+      const reset = Number(r.reset);
+      if (!Number.isFinite(remaining) || remaining < 0 || !Number.isFinite(reset) || reset <= now || reset > now + 2 * HOUR) continue;
+      this.resources.set(k, { limit: Number.isFinite(limit) ? limit : 0, remaining, reset });
     }
     if (Number.isSafeInteger(snap.secondaryHits) && snap.secondaryHits > 0 && Number(snap.at) > now - HOUR) {
       this.secondaryHits = Math.max(this.secondaryHits, snap.secondaryHits);

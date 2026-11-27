@@ -74,6 +74,9 @@
 //   LANE_LEADS_ENABLED   the lead pipeline (state/leads.mjs): off unless "dry-run",
 //                      "recheck" or "true"; ingest keeps each accepted result's
 //                      leads in the state (StateDb.noteLeads)
+//   LANE_HEADS_ENABLED   only the exact value "true" runs the head poll
+//                      (pump/heads.mjs): new default-branch heads and releases
+//                      move subjects' sha and changed_at
 //   LANE_LIVE_SNAPSHOT_ENABLED   only the exact value "true" publishes the live
 //                      loop snapshot to R2 (live/publish.mjs); with
 //                      LIVE_R2_ACCESS_KEY_ID, LIVE_R2_SECRET_ACCESS_KEY,
@@ -95,7 +98,8 @@ import { appTokenMinter } from './app-token.mjs';
 import { ApiBudget, budgetedFetch } from './budgets.mjs';
 import { allowedWorkflows, judgeConformance, pinMismatches, readConformance as readConformanceStatus, untrustedWorkflows, verifyRun } from './breaker.mjs';
 import { createDispatcher } from './dispatch.mjs';
-import { dueFromState, isEnabled, loadConfig } from './due.mjs';
+import { dueFromState, isEnabled, loadConfig, NO_HOOKS } from './due.mjs';
+import { samplingHooks, activeSubjects } from './sampling.mjs';
 import { lanePinModes } from './pins.mjs';
 import { createClient, scrub } from './github.mjs';
 import { POLICY } from './retry.mjs';
@@ -104,9 +108,12 @@ import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.
 import { computeBudget, reapExpired } from './slots.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
+import { HEADS_KV_KEY, headsEnabled, refreshHeads } from './heads.mjs';
 import { planShards, runTick } from './tick.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
+import { NOT_BUILT_LANES } from '../live/build.mjs';
+import { computeCoverage, recordCoverageDay } from '../state/coverage.mjs';
 import { HISTORY_TIMES_KEY, HISTORY_TIMES_REFRESH_MS, historyList, historyTimesDue, refreshHistoryTimes } from './history-times.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
@@ -145,6 +152,10 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
  * for the defaults, null for none, or options for refreshIdentities()
  * (batch, maxQueries, retryMs). They use GITHUB_TOKEN through the run's API
  * budget and never hold the run.
+ * heads: the head poll at start-up (pump/heads.mjs): undefined for the
+ * defaults, null for none, or options for refreshHeads() (batch, maxQueries,
+ * reserve). Only with LANE_HEADS_ENABLED exactly "true"; GITHUB_TOKEN through
+ * the run's API budget; never holds the run.
  * ingest: undefined for the pump's own collector (ingest/collect.mjs, built
  * with `ingestOptions`), null for none, a function (called as collect()), or an
  * object with collect() and optionally check().
@@ -165,6 +176,7 @@ export async function runPump({
   stateFile = DEFAULT_STATE,
   seedFile = SEED_FILE,
   identity,
+  heads,
   config,
   pull = pullState,
   push = pushState,
@@ -300,6 +312,8 @@ export async function runPump({
   // starts the next one at once, a failing run a minute until a person steps
   // in. The schedule and the watchdog still try every 30 minutes.
   let db;
+  // Sampling for `mode: sample` tier cells: SAMPLE_RATE_T<n> / SAMPLE_CAP_T<n>; unset is rate 0 (nothing picked).
+  const sampleHooks = samplingHooks({ env, population: () => activeSubjects(db) });
   let pulled;
   try {
     pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, clock: now, retryUntil: start + PULL_RETRY_MS, onRetry: retryHook('state_asset'), ...stateKeys });
@@ -319,6 +333,12 @@ export async function runPump({
     // A GitHub outage or rate limit may pass by the next run: the chain goes on.
     if (err?.transient !== true) await cancelSuccessor({ successorFile, repo, mint: lazyMint, fetch, apiUrl, budget: bud, now, sleep, say, retryUntil: () => deadline });
     throw err;
+  }
+  // Coverage history (state/coverage.mjs): one compact entry per UTC day, so a score is kept against the frame of its day.
+  try {
+    recordCoverageDay(db, computeCoverage(db, { tiers: cfg.tiers, workflows: cfg.workflows, skipLanes: [...NOT_BUILT_LANES] }), { now: now() });
+  } catch (err) {
+    say(`pump: coverage history not recorded: ${String(err?.message ?? err).slice(0, 120)}`);
   }
   // The hourly API caps hold across runs (R-ING-11): this run starts with the
   // calls earlier runs made in the last hour, and leaves its own for the next.
@@ -512,6 +532,17 @@ export async function runPump({
       // The watchdog shows the item off, not the last pass's colour (R-SUBJ-18).
       db.setKv(IDENTITY_KV_KEY, { ...(db.getKv(IDENTITY_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
     }
+    // Change detection (pump/heads.mjs): default-branch heads and latest
+    // releases of bound subjects, so a change makes them due. A few GraphQL
+    // queries at most, after the id pass; never fails or holds the run (A3).
+    if (heads !== null && headsEnabled(env)) {
+      const client = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => deadline, onRetry: retryHook('github_api') }) : null;
+      const h = await refreshHeads(db, { client, tiers: cfg.tiers, now, log: say, ...(heads ?? {}) });
+      say(`pump: subject heads: ${h.summary}`);
+    } else if (heads !== null) {
+      // The watchdog shows the item off, not the last pass's colour.
+      db.setKv(HEADS_KV_KEY, { ...(db.getKv(HEADS_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
+    }
     // Registry delta capture (pump/registry-delta.mjs): GitHub's */15 cron for it
     // fires hours late, so the pump dispatches it when the newest capture is
     // stale. registryDelta: undefined for the real check, null for none, or a
@@ -580,7 +611,7 @@ export async function runPump({
       // judges it first (R-CHAOS-02).
       const holdRunKeys = slots > 0 && collector && !(ingested && !ingested.stopped) ? unjudgedLateRunKeys(db, { now: now() }) : null;
       const summary = await runTick({
-        db, now, config: tickConfig, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
+        db, now, config: tickConfig, hooks: sampleHooks, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
         // The pending dispatches are saved before any is sent (R-ING-10).
         beforeSend: () => save(`tick ${ticks}, before dispatching`),
       });
@@ -701,7 +732,7 @@ export async function cancelSuccessor({ successorFile, repo, mint, fetch, apiUrl
 export function plan({ stateFile = DEFAULT_STATE, now = Date.now(), config = loadConfig(), out = (l) => process.stdout.write(`${l}\n`) } = {}) {
   const db = openState(stateFile);
   try {
-    const due = dueFromState(db, { now, tiers: config.tiers, workflows: config.workflows });
+    const due = dueFromState(db, { now, tiers: config.tiers, workflows: config.workflows, hooks: { ...NO_HOOKS, ...samplingHooks({ env: process.env, population: () => activeSubjects(db) }) } });
     out(`${due.length} due`);
     for (const d of due.slice(0, 50)) out(`  ${d.priority.toFixed(1).padStart(6)}  T${d.tier}  ${d.workflow.padEnd(14)} ${d.subject}${d.name && d.name !== d.subject ? ` (now ${d.name})` : ''}  (${d.reasons.join(', ')})`);
     const shards = planShards(due, config.workflows);
