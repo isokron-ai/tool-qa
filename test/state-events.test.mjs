@@ -357,7 +357,7 @@ test('the v10 migration of a real-shaped v9 state keeps every row and the due li
     const file = join(dir, 'state.sqlite');
     const built = buildHistory({ seed: 11, days: 14, subjects: 8, file });
     assert.ok(built.db.listEvents({ limit: 1 }).length === 1, 'the history writes events');
-    built.db.raw.exec("DROP TABLE events; DELETE FROM sqlite_sequence WHERE name = 'events'; PRAGMA user_version = 9;");
+    built.db.raw.exec("DROP TABLE discovery_keys; DROP TABLE events; DELETE FROM sqlite_sequence WHERE name = 'events'; PRAGMA user_version = 9;");
     built.db.close();
 
     const v9 = new StateDb(file);
