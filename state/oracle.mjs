@@ -105,7 +105,7 @@ function astGrepFact(v) {
   if (!v || typeof v !== 'object' || v.oracle !== 'ast-grep') return null;
   const status = ['read', 'none', 'unreadable', 'error'].includes(v.status) ? v.status : null;
   if (!status) return null;
-  return { status, confidence: ['high', 'medium', 'low'].includes(v.confidence) ? v.confidence : null, tool_count: int(v.tool_count), unreadable_count: int(v.unreadable_count) };
+  return { status, confidence: ['high', 'medium', 'low'].includes(v.confidence) ? v.confidence : null, tool_count: int(v.tool_count), unreadable_count: int(v.unreadable_count), tool_set_sha256: hash(v.tool_set_sha256) };
 }
 
 /** The three-way rule for one subject's facts: ast-grep must have read the source (status read) and the reader's list must be complete. Medium confidence gives a candidate, not a high-confidence bug. */
@@ -113,7 +113,15 @@ function wayOf(st, live, sameTime) {
   const ag = st?.ast_grep;
   if (!sameTime || !st || st.complete !== true || st.tool_count == null || ag?.status !== 'read' || ag.tool_count == null || live?.tool_count == null) return null;
   const t = threeWay(st.tool_count, ag.tool_count, live.tool_count);
-  if (t && t.confidence && ag.confidence !== 'high') { const { confidence, ...rest } = t; return { ...rest, explanation: 'reader_bug_candidate' }; }
+  if (t && t.confidence) {
+    // Equal counts are not equal tools: high needs ast-grep's name-set hash to equal the live list's (names, not counts).
+    const namesAgree = ag.tool_set_sha256 && live.tool_names_sha256 && ag.tool_set_sha256 === live.tool_names_sha256;
+    if (ag.confidence !== 'high' || !namesAgree) {
+      const { confidence, ...rest } = t;
+      const differ = ag.tool_set_sha256 && live.tool_names_sha256 && !namesAgree;
+      return { ...rest, explanation: differ ? 'counts_agree_names_differ' : 'reader_bug_candidate', basis: differ ? 'ast-grep=live (counts only)' : t.basis + (live.tool_names_sha256 ? '' : ' (counts; live names not given)') };
+    }
+  }
   return t;
 }
 
@@ -152,6 +160,7 @@ export function oracleFacts(lane, get, result = null) {
   }
   if (lane !== 'live-probe') return null;
   const h = hash(get('tool_list_sha256'));
+  const namesHash = hash(get('tool_names_sha256')); // sha256 of the JSON array of the live list's tool names, sorted: the same hash ast-grep's tool_set_sha256 is
   const sdk = (Array.isArray(get('sdk_client_results')) ? get('sdk_client_results') : []).slice(0, MAX_ITEMS).filter((e) => e && typeof e === 'object').map((e) => ({
     client: text(e.client) ?? '?', outcome: text(e.outcome), tool_count: int(e.tool_count), catalog_vs_reader: text(e.catalog_vs_reader),
   }));
@@ -159,7 +168,7 @@ export function oracleFacts(lane, get, result = null) {
   const worker = workerEntries(get('oracle_disagreements'));
   if (!h && sdk.length === 0 && checks.length === 0 && worker.length === 0) return null;
   return {
-    lane, tool_list_sha256: h, tool_count: int(get('tool_count')), sdk,
+    lane, tool_list_sha256: h, ...(namesHash ? { tool_names_sha256: namesHash } : {}), tool_count: int(get('tool_count')), sdk,
     conformance_failed: checks.filter((c) => c && c.status === 'fail' && c.scored !== false).length, worker,
   };
 }
@@ -207,7 +216,8 @@ export function deriveDisagreements({ static: st = null, live = null, version = 
   // The worker's own comparisons, of either lane (live-probe: SDK clients and conformance; scan-static: the reader against ast-grep).
   for (const [lane, side] of [['scan-static', st], ['live-probe', live]]) {
     for (const w of side?.worker ?? []) {
-      if (w.attribution === 'server') { server.add(w.kind ?? w.class ?? 'worker_entry'); continue; }
+      // an entry that compares our reader with ast-grep (D1/D2) is about our tool whatever its attribution says
+      if (w.attribution === 'server' && !w.oracles.includes('ast-grep')) { server.add(w.kind ?? w.class ?? 'worker_entry'); continue; }
       const kind = KINDS.includes(w.kind) ? w.kind : CLASS_KIND[w.class] ?? null;
       if (!kind) continue;
       const extra = {};
