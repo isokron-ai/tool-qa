@@ -12,6 +12,7 @@
 // arrives. mode 'merge' (other jobs): add or update the given items only.
 
 import { overallStatus } from './checks.mjs';
+import { coverageChanged, renderCoverageMarkdown } from '../state/coverage.mjs';
 
 export const LABEL = 'loop-health';
 export const TITLE = 'Loop health';
@@ -21,9 +22,9 @@ const MARK_RE = /<!-- loop-health:v1 (\{[\s\S]*?\}) -->/;
 const iso = (now) => new Date(now).toISOString();
 const cell = (text) => String(text ?? '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
 
-export function renderBody({ checks, now }) {
+export function renderBody({ checks, now, coverage = null }) {
   const overall = overallStatus(checks);
-  const json = JSON.stringify({ overall, updated: iso(now), checks }).replace(/--/g, '-\\u002d');
+  const json = JSON.stringify({ overall, updated: iso(now), checks, ...(coverage ? { coverage } : {}) }).replace(/--/g, '-\\u002d');
   const rows = checks.map((c) => `| ${cell(c.id)} | ${cell(c.status)} | ${cell(c.summary)}${c.link ? ` ([run](${c.link}))` : ''} |`);
   return [
     `<!-- ${MARK} ${json} -->`,
@@ -40,6 +41,7 @@ export function renderBody({ checks, now }) {
     'This body is rewritten in place. A comment is added only when the overall status turns red or recovers.',
     'What each check means and what to do: docs/OPERATIONS.md.',
     '',
+    ...(coverage ? ['## Tool coverage', '', ...renderCoverageMarkdown(coverage), ''] : []),
   ].join('\n');
 }
 
@@ -126,20 +128,22 @@ function comment(prevOverall, overall, checks, prevChecks = []) {
  * @returns {Promise<{ number: number, created: boolean, updated: boolean, commented: boolean,
  *   pinned: boolean|null, overall: string, previous: string|null }>}
  */
-export async function applyHealth({ client, repo, checks, mode = 'replace', now = Date.now() }) {
+export async function applyHealth({ client, repo, checks, mode = 'replace', now = Date.now(), coverage = null }) {
   const issue = await findIssue(client, repo);
   const prevState = issue ? parseBody(issue.body) : null;
   const merged = mergeChecks(prevState?.checks ?? [], checks, mode);
   const overall = overallStatus(merged);
   const previous = prevState?.overall ?? null;
-  const body = renderBody({ checks: merged, now });
+  // The coverage block (state/coverage.mjs) is kept from the last write when a job passes none (mode merge).
+  const cov = coverage ?? prevState?.coverage ?? null;
+  const body = renderBody({ checks: merged, now, coverage: cov });
   const out = { number: issue?.number ?? null, created: false, updated: false, commented: false, pinned: null, overall, previous };
   if (!issue) {
     const res = await client.request('POST', `/repos/${repo}/issues`, { essential: true, body: { title: TITLE, body, labels: [LABEL] } });
     out.number = res.data.number;
     out.created = true;
     out.pinned = await pin(client, res.data.node_id);
-  } else if (!prevState || JSON.stringify(prevState.checks) !== JSON.stringify(merged)) {
+  } else if (!prevState || JSON.stringify(prevState.checks) !== JSON.stringify(merged) || coverageChanged(prevState.coverage ?? null, cov)) {
     await client.request('PATCH', `/repos/${repo}/issues/${issue.number}`, { essential: true, body: { body } });
     out.updated = true;
   }

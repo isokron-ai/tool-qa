@@ -850,3 +850,15 @@ test('R-WD-33: without GITHUB_TOKEN the external workflows are not read with the
   assert.equal(w.api.calls.some((r) => /\/(mcp-check|mcp-writecheck-action|mcp-surface-corpus)\/actions\/workflows\/[^/]+\.ya?ml$/.test(r.path)), false);
   w.cleanup();
 });
+
+test('R-COV-46: the watchdog reads coverage from the state copy, and a config it cannot read gives null instead of stopping the run', async () => {
+  const { readCoverage } = await import('../run.mjs');
+  const { openState } = await import('../../state/db.mjs');
+  const { loadConfig } = await import('../../pump/due.mjs');
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 's1', kind: 'repo', source: 'seed-v1', tier: 0, name: 'o/s1', now: Date.parse('2026-11-27T00:00:00Z') });
+  const cov = readCoverage(db, loadConfig());
+  assert.equal(cov.schema, 'isokron-loop-coverage/1');
+  assert.ok(cov.lanes.every((l) => l.id !== 'scan-deep' && l.id !== 'build-probe'), 'lanes not built are left out');
+  assert.equal(readCoverage(db, { get tiers() { throw new Error('bad config'); }, workflows: {} }), null);
+});
