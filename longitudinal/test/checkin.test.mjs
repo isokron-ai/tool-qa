@@ -365,7 +365,7 @@ test('R-ORD-16: the check-in compares unversioned lanes only when observed withi
 });
 
 
-test('R-CHECKIN-10: the archive keeps one sealed file per item; the items of every file are read, not only those of the first file', { skip: !haveAge && 'age is not installed' }, () => {
+test('R-CHECKIN-13: the archive keeps one sealed file per item; the items of every file are read, not only those of the first file', { skip: !haveAge && 'age is not installed' }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'checkin-perfile-'));
   try {
     const key = spawnSync(KEYGEN, [], { encoding: 'utf8' });
