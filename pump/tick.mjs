@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 import { BudgetExceededError } from './budgets.mjs';
 import { workerInputs } from './dispatch.mjs';
 import { computeDue, loadDueInputs, NO_HOOKS } from './due.mjs';
-import { backfillCandidates, backfillFor } from './backfill.mjs';
+import { backfillCandidates, backfillFor, reserveSlots } from './backfill.mjs';
 import { pinCheckMode, selfPin } from './pins.mjs';
 import { acquireDispatchSlot, leaseTtlMs, occupancy, reapExpired } from './slots.mjs';
 
@@ -139,8 +139,9 @@ export async function runTick({
   let fill = [];
   if (backfill) {
     const lanes = Object.fromEntries(Object.entries(config.workflows).filter(([name]) => !paused.has(name)));
-    const candidates = backfillCandidates({ ...inputs, workflows: lanes }, { exclude: new Set(due.map((d) => `${d.subject}\u0000${d.workflow}`)), holdRunKeys });
-    fill = backfillFor({ candidates, due, workflows: lanes, freeSlots: workerSlots - occ.slots, openByWorkflow });
+    const since = typeof db.attemptsSinceResult === 'function' ? db.attemptsSinceResult() : new Map();
+    const candidates = backfillCandidates({ ...inputs, workflows: lanes }, { exclude: new Set(due.map((d) => `${d.subject}\u0000${d.workflow}`)), holdRunKeys, since });
+    fill = backfillFor({ candidates, due, workflows: lanes, freeSlots: workerSlots - occ.slots, openByWorkflow, reserve: reserveSlots(config.tiers) });
     summary.backfill = fill.length;
   }
   if (due.length === 0 && fill.length === 0) return summary;

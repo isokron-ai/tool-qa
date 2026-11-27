@@ -20,6 +20,10 @@
 //   - its last result is not skips_only inside its skips_only wait (R-SUB-06),
 //     and its run_key is not parked, in a retry backoff, held for a late
 //     judgment or already in flight;
+//   - its run_key has fewer than max_rejections counted rejections since its
+//     result (a re-run that keeps being refused stops, R-FILL-07), and the
+//     floor runs from its newest attempt as well as from its result, so a
+//     refused re-run waits a whole floor before it is tried again;
 //   - it is not on the tick's due list already.
 //
 // Reason `backfill`. Priority: the tier weight plus the age of the last
@@ -30,7 +34,10 @@
 // How much: backfillFor() is given the room the tick has, in shards: the free
 // worker slots, the lanes' slots_max, less what the due list will take. It
 // fills the last partial due shard of a lane first (no extra slot), then
-// opens new shards, best candidate first, until the free slots are used.
+// opens new shards, best candidate first, while more than
+// tiers.json backfill_reserve_slots (1) free slots are left: one slot always
+// waits for due work that comes up next tick (T0/T1 would otherwise wait a
+// whole lease, R-FILL-08).
 //
 // Switch: LANE_BACKFILL_ENABLED. Only the exact value "true" turns it on.
 
@@ -43,6 +50,14 @@ const SEP = '\u0000';
 export const BACKFILL_BAND = 1000;
 /** Used when tiers.json has no backfill_min_age_hours for a tier. */
 export const DEFAULT_MIN_AGE_HOURS = Object.freeze({ T0: 6, T1: 12, T2: 24, T3: 48, T4: 96 });
+/** Free slots backfill never takes, when tiers.json does not say. */
+export const DEFAULT_RESERVE_SLOTS = 1;
+
+/** Free worker slots the filler leaves for due work (tiers.json backfill_reserve_slots). */
+export function reserveSlots(tiers) {
+  const n = Number(tiers?.backfill_reserve_slots);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_RESERVE_SLOTS;
+}
 
 /** Whether the filler may run: LANE_BACKFILL_ENABLED is exactly "true". */
 export function backfillEnabled(env = {}) {
@@ -64,11 +79,13 @@ const toMs = (t) => (typeof t === 'number' ? t : Date.parse(t));
  * @param {object} input  what loadDueInputs() returns (subjects, workflows, tiers, lastResults, inFlight, parked, now)
  * @param {{ exclude?: Set<string>, holdRunKeys?: Set<string>|null }} opts
  *   exclude: "<subject>\0<workflow>" pairs already on the due list
+ *   since: db.attemptsSinceResult(), run_key -> {n, last}: re-runs since the result (R-FILL-07)
  */
-export function backfillCandidates(input, { exclude = new Set(), holdRunKeys = null } = {}) {
+export function backfillCandidates(input, { exclude = new Set(), holdRunKeys = null, since = new Map() } = {}) {
   const { now, subjects, workflows, tiers, lastResults, inFlight, parked } = input;
   const weights = tiers.weights || {};
   const prio = tiers.priority || {};
+  const maxRejections = Number.isInteger(tiers.max_rejections) && tiers.max_rejections > 0 ? tiers.max_rejections : 3;
   const out = [];
   const names = Object.keys(workflows).sort();
   for (const s of subjects) {
@@ -93,6 +110,10 @@ export function backfillCandidates(input, { exclude = new Set(), holdRunKeys = n
       const fields = runKeyFields(s, name, wf);
       const key = runKey(fields);
       if (parked.has(key) || holdRunKeys?.has(key)) continue;
+      // A re-run refused max_rejections times stops; any re-run restarts the floor (R-FILL-07).
+      const re = since.get(key);
+      if (re && re.n >= maxRejections) continue;
+      if (re?.last && now - toMs(re.last) < floorMs) continue;
       const ageDays = age / DAY;
       const priority = Number(weights[tierName] || 0) + Math.min(Number(prio.age_max ?? 30), ageDays * Number(prio.age_per_day ?? 1)) - BACKFILL_BAND;
       out.push({ subject: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, workflow: name, tier: s.tier, run_key: key, fields, reasons: ['backfill'], priority, gap: null });
@@ -113,7 +134,7 @@ export function backfillCandidates(input, { exclude = new Set(), holdRunKeys = n
  * shards while a free slot is left that the due list does not need. Returns
  * the items, best first (never more than the room). Pure.
  */
-export function backfillFor({ candidates, due, workflows, freeSlots, openByWorkflow = new Map() }) {
+export function backfillFor({ candidates, due, workflows, freeSlots, openByWorkflow = new Map(), reserve = DEFAULT_RESERVE_SLOTS }) {
   const dueBy = new Map();
   for (const d of due) dueBy.set(d.workflow, (dueBy.get(d.workflow) ?? 0) + 1);
   const lane = new Map(); // workflow -> {size, cap (shards it may still open), shards (due shards), partial (item room in its last due shard)}
@@ -127,7 +148,7 @@ export function backfillFor({ candidates, due, workflows, freeSlots, openByWorkf
     usedByDue += shards;
     lane.set(name, { size, cap, shards, partial: shards > 0 && n < shards * size ? shards * size - n : 0 });
   }
-  let spare = Math.max(0, Math.trunc(Number(freeSlots) || 0) - usedByDue);
+  let spare = Math.max(0, Math.trunc(Number(freeSlots) || 0) - usedByDue - Math.max(0, Math.trunc(Number(reserve) || 0)));
   const out = [];
   for (const c of candidates) {
     const l = lane.get(c.workflow);

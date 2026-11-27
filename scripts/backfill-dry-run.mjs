@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import { openState } from '../state/db.mjs';
 import { computeDue, isEnabled, loadConfig, loadDueInputs } from '../pump/due.mjs';
-import { backfillCandidates, backfillFor } from '../pump/backfill.mjs';
+import { backfillCandidates, backfillFor, reserveSlots } from '../pump/backfill.mjs';
 import { occupancy } from '../pump/slots.mjs';
 
 const count = (list, key) => {
@@ -47,8 +47,8 @@ export function main(argv = process.argv.slice(2)) {
     const occ = occupancy(db, { now });
     const openBy = new Map();
     for (const d of occ.dispatches) openBy.set(d.workflow, (openBy.get(d.workflow) ?? 0) + 1);
-    const candidates = backfillCandidates(inputs, { exclude: new Set(due.map((d) => `${d.subject}\u0000${d.workflow}`)) });
-    const fill = backfillFor({ candidates, due, workflows: lanes, freeSlots: slots - occ.slots, openByWorkflow: openBy });
+    const candidates = backfillCandidates(inputs, { exclude: new Set(due.map((d) => `${d.subject}\u0000${d.workflow}`)), since: db.attemptsSinceResult() });
+    const fill = backfillFor({ candidates, due, workflows: lanes, freeSlots: slots - occ.slots, openByWorkflow: openBy, reserve: reserveSlots(tiers) });
     say(`state copy at ${new Date(now).toISOString()}; enabled lanes ${Object.keys(lanes).join(', ')}${paused.size ? `; paused ${[...paused].join(', ')}` : ''}`);
     say(`due ${due.length} (${count(due, (d) => d.workflow)})`);
     say(`worker slots ${slots}, open ${occ.slots}, free ${Math.max(0, slots - occ.slots)}`);

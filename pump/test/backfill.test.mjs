@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { openState } from '../../state/db.mjs';
 import { runTick } from '../tick.mjs';
 import { computeDue, loadDueInputs, runKey, runKeyFields } from '../due.mjs';
-import { BACKFILL_BAND, backfillCandidates, backfillEnabled, backfillFor, minAgeHours } from '../backfill.mjs';
+import { BACKFILL_BAND, backfillCandidates, backfillEnabled, backfillFor, minAgeHours, reserveSlots } from '../backfill.mjs';
 import { fakeClock } from '../../test/lib/fake-api.mjs';
 
 const tiers = JSON.parse(readFileSync(new URL('../tiers.json', import.meta.url), 'utf8'));
@@ -56,7 +56,8 @@ const sentItems = (d) => d.calls.flatMap((r) => JSON.parse(r.inputs.items).map((
 
 test('R-FILL-01: with nothing due, free slots go to the frame\'s oldest results; switched off they sat idle', async () => {
   const subjects = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`org/r${i}`, 3]));
-  const { c, db, config, newId } = setup(subjects);
+  const { c, db, config: base, newId } = setup(subjects);
+  const config = { ...base, tiers: { ...tiers, backfill_reserve_slots: 0 } }; // every free slot (R-FILL-08 has the reserve)
   resultsFor(db, config, { now: c.t, ageMs: 3 * DAY });
   // Off (the 27 Nov loop): due 0, nothing sent.
   const off = recorder();
@@ -70,13 +71,13 @@ test('R-FILL-01: with nothing due, free slots go to the frame\'s oldest results;
   assert.equal(s.dispatched, 2);
   assert.equal(sentItems(on).length, 4);
   // The invariant: every slot is busy, or nothing a run could refresh is left.
-  const left = backfillCandidates(loadDueInputs(db, { now: c.t, tiers, workflows: config.workflows }));
+  const left = backfillCandidates(loadDueInputs(db, { now: c.t, tiers, workflows: config.workflows }), { since: db.attemptsSinceResult() });
   assert.ok(db.openSlots().length === 2 || left.length === 0);
   // And with room to spare, nothing eligible is left behind.
   const wide = recorder();
   s = await runTick({ db, now: c.now, config, workerSlots: 12, dispatcher: wide, newId, backfill: true });
   assert.equal(s.backfill, 2);
-  assert.equal(backfillCandidates(loadDueInputs(db, { now: c.t, tiers, workflows: config.workflows })).length, 0, 'every eligible pair is in flight');
+  assert.equal(backfillCandidates(loadDueInputs(db, { now: c.t, tiers, workflows: config.workflows }), { since: db.attemptsSinceResult() }).length, 0, 'every eligible pair is in flight');
   db.close();
 });
 
@@ -165,7 +166,8 @@ test('R-FILL-05: the filler is off unless LANE_BACKFILL_ENABLED is exactly "true
 
 test('R-FILL-06: a lane\'s slots_max and the slots already open bound the filler', async () => {
   const subjects = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`org/r${i}`, 3]));
-  const { c, db, config, newId } = setup(subjects, { 'live-probe': wf({ slots_max: 2 }) });
+  const { c, db, config: base, newId } = setup(subjects, { 'live-probe': wf({ slots_max: 2 }) });
+  const config = { ...base, tiers: { ...tiers, backfill_reserve_slots: 0 } };
   resultsFor(db, config, { now: c.t, ageMs: 3 * DAY });
   const d = recorder();
   let s = await runTick({ db, now: c.now, config, workerSlots: 5, dispatcher: d, newId, backfill: true });
@@ -176,5 +178,51 @@ test('R-FILL-06: a lane\'s slots_max and the slots already open bound the filler
   // Open slots held by another lane count against the free ones.
   const fill = backfillFor({ candidates: backfillCandidates(loadDueInputs(db, { now: c.t, tiers, workflows: { x: wf({ slots_max: 9 }) } })), due: [], workflows: { x: wf({ slots_max: 9 }) }, freeSlots: 5 - 4 });
   assert.ok(fill.length <= 2);
+  db.close();
+});
+
+test('R-FILL-07: a re-run that keeps being refused stops: a refusal restarts the floor, and max_rejections refusals since the result park the pair for backfill', async () => {
+  const { c, db, config: base, newId } = setup({ 'org/r': 3 });
+  const config = { ...base, tiers: { ...tiers, backfill_reserve_slots: 0 } };
+  resultsFor(db, config, { now: c.t, ageMs: 3 * DAY });
+  let sent = 0;
+  for (let round = 0; round < 6; round++) {
+    const d = recorder();
+    const s = await runTick({ db, now: c.now, config, workerSlots: 2, dispatcher: d, newId, backfill: true });
+    sent += s.dispatched;
+    if (s.dispatched) {
+      // Ingest refuses it, and the dispatch closes.
+      const att = db.getAttempt(d.calls[0].inputs.attempt_id);
+      for (const it of att.items) db.recordResult({ run_key: it.run_key, attempt_id: att.attempt_id, fence: it.fence, outcome: 'rejected', accepted: false, reason: 'rejected_by_ingest', now: c.t + 1000 });
+    }
+    // Right after a refusal the floor holds it back.
+    const again = await runTick({ db, now: () => c.t + 2000, config, workerSlots: 2, dispatcher: recorder(), newId, backfill: true });
+    assert.equal(again.backfill, 0, `round ${round}: not re-sent inside the floor`);
+    c.t += 49 * 3_600_000; // past the T3 floor
+  }
+  assert.equal(sent, 3, 'refused max_rejections (3) times, then never sent again');
+  const [k] = db.attemptsSinceResult().keys();
+  assert.equal(db.attemptsSinceResult().get(k).n, 3);
+  db.close();
+});
+
+test('R-FILL-08: one free slot is always left for due work; tiers.json backfill_reserve_slots sets how many', async () => {
+  assert.equal(tiers.backfill_reserve_slots, 1);
+  assert.equal(reserveSlots({}), 1);
+  assert.equal(reserveSlots({ backfill_reserve_slots: 0 }), 0);
+  const subjects = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`org/r${i}`, 3]));
+  const { c, db, config, newId } = setup(subjects);
+  resultsFor(db, config, { now: c.t, ageMs: 3 * DAY });
+  const s = await runTick({ db, now: c.now, config, workerSlots: 3, dispatcher: recorder(), newId, backfill: true });
+  assert.deepEqual([s.backfill, s.dispatched], [4, 2], 'three free slots: two backfill shards, one kept back');
+  assert.equal(db.openSlots().length, 2);
+  // A due pair that comes up next still finds its slot.
+  db.setSubjectVersion({ id: 'org/new', kind: 'github', source: 'seed-v1', tier: 0, sha: 'f'.repeat(40), now: c.t });
+  const d = recorder();
+  const s2 = await runTick({ db, now: c.now, config: { ...config, workflows: config.workflows }, workerSlots: 3, dispatcher: d, newId, backfill: true });
+  assert.equal(s2.dispatched, 1);
+  assert.ok(JSON.parse(d.calls[0].inputs.items).some((i) => i.subject === 'org/new'));
+  // With one free slot and nothing due, backfill takes none.
+  assert.equal(backfillFor({ candidates: backfillCandidates(loadDueInputs(db, { now: c.t, tiers, workflows: config.workflows })), due: [], workflows: config.workflows, freeSlots: 1 }).length, 0);
   db.close();
 });

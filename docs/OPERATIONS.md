@@ -847,13 +847,18 @@ the frame). It needs an accepted result at least
 T3 48 h, T4 96 h). Not a `skips_only` result inside its wait, not a run_key
 that is parked, in a retry backoff, held for a late judgment or in flight,
 and not on the due list already. A pair with no result is due as
-`first_sight` and needs no filler.
+`first_sight` and needs no filler. A re-run that ingest refuses restarts the
+floor, and once a run_key has `max_rejections` (3) counted refusals since its
+result the filler leaves it alone (R-FILL-07). `rejectedRunKeys` does not park
+a run_key that still has a result, so the filler parks it itself.
 
 **Order and room.** Priority is the tier weight plus the result's age in days
 (at most `priority.age_max`), minus 1000, so backfill ranks below every due
 pair in every lane. The filler first tops up a lane's last partial due shard,
 then opens new shards, best candidate first, only into slots the due list
-does not need, and within each lane's `slots_max`. The tick log line says
+does not need, and within each lane's `slots_max`. It always leaves
+`backfill_reserve_slots` (1) free slots alone, so due work that comes up on
+the next tick (a T0 push, a T1 release) never waits a whole lease (R-FILL-08). The tick log line says
 `backfill N`, and kv `pump.last_tick` holds `backfill`.
 
 **Switch.** `LANE_BACKFILL_ENABLED`: only the exact value `true` turns it on.
