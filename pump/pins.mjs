@@ -39,6 +39,24 @@ export function pinCheckMode(wf) {
   return wf?.pin_check === 'label' ? 'label' : 'enforce';
 }
 
+/**
+ * A lane's sha_check mode (R-SHA-01): what ingest does when the commit a
+ * worker says it read (manifest subject.sha) is not the commit the run_key
+ * names (the subject's sha when it was dispatched, pump/heads.mjs):
+ *   label    (the default) accept it and record the mismatch in the report
+ *   enforce  refuse it as subject_sha_mismatch: a result is never filed under
+ *            a commit nobody read
+ * A run_key with no sha (the subject's head not known yet) is not checked.
+ */
+export function shaCheckMode(wf) {
+  return wf?.sha_check === 'enforce' ? 'enforce' : 'label';
+}
+
+/** lane name -> sha_check mode, for every lane of a workflows map. */
+export function laneShaModes(workflows) {
+  return Object.fromEntries(Object.entries(workflows ?? {}).map(([name, wf]) => [name, shaCheckMode(wf)]));
+}
+
 /** lane name -> pin_check mode, for every lane of a workflows map. */
 export function lanePinModes(workflows) {
   return Object.fromEntries(Object.entries(workflows ?? {}).map(([name, wf]) => [name, pinCheckMode(wf)]));

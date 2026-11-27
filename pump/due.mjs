@@ -435,6 +435,10 @@ export function workflowProblems(workflows) {
     if (!wf || typeof wf !== 'object') { p.push(`${name}: not an object`); continue; }
     if (typeof wf.enabled !== 'boolean') p.push(`${name}: enabled must be true or false`);
     if (typeof wf.runs_untrusted !== 'boolean') p.push(`${name}: runs_untrusted must be true or false`);
+    if (wf.sha_check !== undefined && wf.sha_check !== 'label' && wf.sha_check !== 'enforce') p.push(`${name}: sha_check must be "label" or "enforce"`);
+    if (wf.send_sha !== undefined && typeof wf.send_sha !== 'boolean') p.push(`${name}: send_sha must be true or false`);
+    // R-SHA-05: a lane is held to the commit only once its worker is sent the commit and reads exactly it.
+    if (wf.sha_check === 'enforce' && wf.send_sha !== true) p.push(`${name}: sha_check "enforce" needs send_sha true (its worker must be sent the commit and read exactly it)`);
     if (wf.runs_untrusted !== false && !(wf.sandbox_sha === null || /^[0-9a-f]{40}$/.test(String(wf.sandbox_sha)))) p.push(`${name}: sandbox_sha must be a full commit SHA or null`);
   }
   return p;
