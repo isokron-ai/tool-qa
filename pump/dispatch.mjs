@@ -24,7 +24,7 @@ const TOKEN_MARGIN_MS = 5 * 60_000;
  * worker clones or reads what the repository is called now; the result is
  * still recorded under the subject key, by run_key (state schema v8).
  */
-export function workerInputs({ shardId, attemptId, items, toolSha = null, style = null, extra = null }) {
+export function workerInputs({ shardId, attemptId, items, toolSha = null, sendSha = false, style = null, extra = null }) {
   if (style === 't0') {
     // A T0 worker (pump/controls.mjs) takes one item as plain inputs: shard_id,
     // attempt_id, fence and run_key, plus the lane's own fixed inputs. The
@@ -33,7 +33,12 @@ export function workerInputs({ shardId, attemptId, items, toolSha = null, style 
     const [it] = items;
     return { ...(extra ?? {}), shard_id: String(shardId), attempt_id: String(attemptId), fence: String(it.fence), run_key: String(it.run_key) };
   }
-  const list = items.map(({ subject, subject_name: name, run_key, fence }) => ({ subject: name ?? subject, run_key, fence }));
+  // R-SHA-05: an item names its run_key's commit only on a lane whose worker
+  // reads exactly that commit (workflows.json send_sha); other workers refuse
+  // a key they do not know.
+  const list = items.map(({ subject, subject_name: name, run_key, fence, sha }) => ({
+    subject: name ?? subject, run_key, fence, ...(sendSha === true && typeof sha === 'string' && FULL_SHA_RE.test(sha) ? { sha } : {}),
+  }));
   const json = JSON.stringify(list);
   if (json.length > MAX_ITEMS_CHARS) throw new Error(`shard ${shardId}: items input is too large (${json.length} characters); use a smaller shard_size`);
   const inputs = { shard_id: String(shardId), attempt_id: String(attemptId), items: json };

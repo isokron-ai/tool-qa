@@ -6,13 +6,17 @@
 // own servers and seeded defects:
 //
 //   t0-defects  isokron-ai/mcp-write-safety defect-matrix.yml: the tiny-tracker
-//               defect matrix (every seeded defect build must be caught).
-//   t0-self     isokron-ai/mcp-writecheck-action dogfood-*.yml and selftest.yml:
-//               the action and CLI against our own servers.
+//               defect matrix (every correct build reproduces its row; every
+//               defect is detected, or documented as not detected).
+//   t0-self     isokron-ai/mcp-writecheck-action selftest.yml and
+//               dogfood-tiny-tracker.yml: the action and CLI against our own code.
+//   t0-dogfood  the six other dogfood workers, which run third-party code
+//               (untrusted; not to be turned on until they run in the sandbox).
+//   t0-fuzz     isokron-ai/mcp-check fuzz-calls.yml (tools/call fuzz over our own fixtures).
 //
 // A miss or a failure there is a lead against OUR tool, never a subject fault:
 // the worker declares one control in its bundle (known_good, or known_bad for
-// "every seeded defect caught"), and ingest rejects the bundle as
+// "every defect detected or documented"), and ingest rejects the bundle as
 // control_failed when it did not hold. The watchdog item
 // (watchdog/t0-lanes.mjs) reads what this module writes to kv `t0.lanes`.
 //

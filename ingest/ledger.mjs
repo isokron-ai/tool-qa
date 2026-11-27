@@ -99,9 +99,13 @@ function normalizeItem(it, position, bad) {
   // ledger); ingest checks the bundle against them.
   const has = Object.prototype.hasOwnProperty.call(it, 'pins');
   const pins = !has ? {} : { pins: it.pins === null ? null : (expectedPins(it.pins) ?? false) };
+  // The commit the run_key names (R-SHA-01): only a full sha is kept; anything
+  // else, or none, means the item is not checked against the commit read.
+  const shaRaw = pick(it, 'sha');
+  const sha = typeof shaRaw === 'string' && /^[0-9a-f]{40}$/.test(shaRaw) ? { sha: shaRaw } : {};
   return {
     index, run_key: runKey, fence, current_fence: current, outcome: outcome === null ? null : String(outcome), retries,
-    throttled, throttled_since: since, ...pins,
+    throttled, throttled_since: since, ...pins, ...sha,
     ...Object.fromEntries(Object.entries({ subject: text('subject'), subject_name: text('subject_name'), repo_id: repoId, name: text('name') })
       .filter(([, v]) => v !== null)),
   };

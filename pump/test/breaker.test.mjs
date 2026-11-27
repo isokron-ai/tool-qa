@@ -119,7 +119,7 @@ test('R-WD-02: one isEnabled everywhere: only enabled === true dispatches; loadC
   assert.throws(() => loadConfig({ workflowsPath: f }), /pump\/workflows\.json: a: enabled must be true or false/);
 });
 
-test('R-WD-04: the trusted set is pinned: exactly scan-static, meta-github, meta-registry and release-diff say runs_untrusted false', () => {
+test('R-WD-04: the trusted set is pinned: exactly scan-static, meta-github, meta-registry, release-diff, t0-defects and t0-self say runs_untrusted false', () => {
   const trusted = Object.entries(workflows).filter(([, wf]) => wf.runs_untrusted === false).map(([n]) => n).sort();
   // release-diff reads package archives and source archives as data with our own readers; nothing from them runs.
   // t0-defects (tiny-tracker defect matrix) and t0-self (selftest, dogfood-tiny-tracker) run only our own code, installed with --ignore-scripts, in jobs with no secrets, one item per dispatch. The six dogfood workers that install npm trees with scripts, start Strapi or build upstream servers are t0-dogfood, which is untrusted (sandbox breaker gated).
