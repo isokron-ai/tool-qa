@@ -57,12 +57,29 @@ can't read (no zone, a typo) keeps the loop paused, so a mistake fails safe.
 
 ## Which variable affects which workflow
 
-| Variable | `history-registry` | `history-packages` | `history-popularity` | `pump` | `watchdog` | `ingest` (manual) | Workers (later) |
-|---|---|---|---|---|---|---|---|
-| `LOOP_ENABLED` | yes | yes | yes | yes | yes | yes | yes |
-| `LOOP_PAUSE_UNTIL` | yes | yes | yes | yes | yes | yes | yes |
-| `LANE_<JOB>_ENABLED` | `LANE_HISTORY_REGISTRY_ENABLED` | `LANE_HISTORY_PACKAGES_ENABLED` | `LANE_HISTORY_POPULARITY_ENABLED` | `LANE_PUMP_ENABLED` | `LANE_WATCHDOG_ENABLED` | `LANE_INGEST_ENABLED`; also refuses to run unless `LANE_PUMP_ENABLED` is off | their own lane |
-| `LOOP_SLOTS` | no | no | no | 0 = housekeeping only | 0 = no pump expected | no | yes |
+Every loop workflow runs the guard first (`scripts/guard.mjs --job <job>`), so `LOOP_ENABLED` and
+`LOOP_PAUSE_UNTIL` stop all of them, and each has its own lane switch. In this repository:
+
+| Workflow | Lane switch | Slots |
+|---|---|---|
+| `pump.yml` | `LANE_PUMP_ENABLED` (also `LANE_STATE_PRUNE_ENABLED`, `LANE_SUBJECT_IDS_ENABLED`, `LANE_HISTORY_REGISTRY_ENABLED` and `LANE_LIVE_SNAPSHOT_ENABLED` for the steps the pump runs) | `LOOP_SLOTS`: 0 = housekeeping only |
+| `watchdog.yml` | `LANE_WATCHDOG_ENABLED` | no; `LOOP_SLOTS=0` means no pump is expected |
+| `ingest.yml` (manual) | `LANE_INGEST_ENABLED`; also refuses to run unless `LANE_PUMP_ENABLED` is off | no |
+| `history-registry.yml`, `history-packages.yml`, `history-popularity.yml` | `LANE_HISTORY_REGISTRY_ENABLED`, `LANE_HISTORY_PACKAGES_ENABLED`, `LANE_HISTORY_POPULARITY_ENABLED` | no |
+| `meta-github.yml`, `meta-registry.yml`, `release-diff.yml` | `LANE_META_GITHUB_ENABLED`, `LANE_META_REGISTRY_ENABLED`, `LANE_RELEASE_DIFF_ENABLED` | no (source-only lanes) |
+| `state-snapshot.yml` | `LANE_STATE_SNAPSHOT_ENABLED` | no |
+| `offsite-backup.yml`, `keep-forever.yml` | `LANE_OFFSITE_ENABLED`, `LANE_KEEP_FOREVER_ENABLED` | no |
+| `ledger.yml`, `perf-baselines.yml` | `LANE_LEDGER_ENABLED`, `LANE_PERF_ENABLED` | no |
+| `publish-results.yml` | `LANE_PUBLISH_RESULTS_ENABLED`, and `RESULTS_PUBLISH_ENABLED` must be exactly `true` | no |
+
+The worker lanes that run third-party code or scan servers live in their own repositories and
+read variables there, not here: `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` and the lane switch in
+`mcp-check` (`LANE_SCAN_STATIC_ENABLED`, `LANE_LIVE_PROBE_ENABLED`) and in
+`mcp-writecheck-action` (`LANE_WRITECHECK_ENABLED`). Whether the pump dispatches a lane at
+all is `enabled` in `pump/workflows.json`. A lane switched off in its repository fails nothing: its
+runs end as a notice.
+
+`chaos-soak.yml`, `test.yml`, `lint.yml`, `lint-workflows.yml` and `meta-fixture.yml` are CI: they read no switch and never touch the live loop (the soak plays schedules against a simulated GitHub; the fixture run reads public data and uploads a 3-day artifact the pump never ingests).
 
 The three history workflows capture public data and don't work in slots, so
 they run the guard with `--no-slots`: `LOOP_SLOTS=0` does not stop them. Use
