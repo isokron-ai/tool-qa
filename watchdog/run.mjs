@@ -43,6 +43,8 @@ import { fileURLToPath } from 'node:url';
 import { laneVariable, parseSlots } from '../scripts/guard.mjs';
 import { pullState } from '../scripts/state-asset.mjs';
 import { openState } from '../state/db.mjs';
+import { computeCoverage } from '../state/coverage.mjs';
+import { NOT_BUILT_LANES } from '../live/build.mjs';
 import { appTokenMinter } from '../pump/app-token.mjs';
 import { ApiBudget } from '../pump/budgets.mjs';
 import { createClient, scrub } from '../pump/github.mjs';
@@ -136,6 +138,16 @@ export function readLanes(env) {
   return lanes;
 }
 
+/** Coverage from an open state database against the pump's tiers and workflows; null on any failure, so the health issue is never held back by it. */
+export function readCoverage(db, config) {
+  try {
+    const cfg = config ?? loadConfig();
+    return computeCoverage(db, { tiers: cfg.tiers, workflows: cfg.workflows, skipLanes: [...NOT_BUILT_LANES] });
+  } catch {
+    return null;
+  }
+}
+
 /** Read what the checks need from a pulled copy of the state database. */
 export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {}) {
   const db = openState(file);
@@ -159,6 +171,8 @@ export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {
         'retention.seal': db.getKv('retention.seal') ?? null,
       },
       lanes: readLaneData(db, now, { cfg, tiers }),
+      // The four coverage numbers per lane (state/coverage.mjs); null when the config or state cannot answer.
+      coverage: readCoverage(db),
     };
   } finally {
     db.close();
@@ -335,7 +349,7 @@ export async function runWatchdog({
   }
 
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot, selftest, laneHealth: { cfg: wfs, data: state?.lanes ?? null, external } });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot, selftest, laneHealth: { cfg: wfs, data: state?.lanes ?? null, coverage: state?.coverage ?? null, external } });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
@@ -382,7 +396,7 @@ export async function runWatchdog({
   }
 
   for (const c of checks) say(`watchdog: ${c.status.padEnd(5)} ${c.id}: ${c.summary}`);
-  const health = await applyHealth({ client, repo, checks, mode: 'replace', now: now() });
+  const health = await applyHealth({ client, repo, checks, mode: 'replace', now: now(), coverage: state?.coverage ?? null });
   say(`watchdog: overall ${health.overall} (issue #${health.number}${health.created ? ', created' : health.updated ? ', updated' : ', unchanged'})`);
   return { overall: health.overall, checks, actions, health };
 }

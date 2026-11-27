@@ -109,6 +109,8 @@ import { HEADS_KV_KEY, headsEnabled, refreshHeads } from './heads.mjs';
 import { planShards, runTick } from './tick.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
+import { NOT_BUILT_LANES } from '../live/build.mjs';
+import { computeCoverage, recordCoverageDay } from '../state/coverage.mjs';
 import { HISTORY_TIMES_KEY, HISTORY_TIMES_REFRESH_MS, historyList, historyTimesDue, refreshHistoryTimes } from './history-times.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
@@ -328,6 +330,12 @@ export async function runPump({
     // A GitHub outage or rate limit may pass by the next run: the chain goes on.
     if (err?.transient !== true) await cancelSuccessor({ successorFile, repo, mint: lazyMint, fetch, apiUrl, budget: bud, now, sleep, say, retryUntil: () => deadline });
     throw err;
+  }
+  // Coverage history (state/coverage.mjs): one compact entry per UTC day, so a score is kept against the frame of its day.
+  try {
+    recordCoverageDay(db, computeCoverage(db, { tiers: cfg.tiers, workflows: cfg.workflows, skipLanes: [...NOT_BUILT_LANES] }), { now: now() });
+  } catch (err) {
+    say(`pump: coverage history not recorded: ${String(err?.message ?? err).slice(0, 120)}`);
   }
   // The hourly API caps hold across runs (R-ING-11): this run starts with the
   // calls earlier runs made in the last hour, and leaves its own for the next.
