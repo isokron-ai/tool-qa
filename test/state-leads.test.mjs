@@ -215,3 +215,19 @@ test('R-LEAD-13: reproduced means a re-run after a run that carried it; a flap a
   assert.deepEqual([row.status, row.reproduced_at], ['open', null]);
   assert.equal(filingDecision(row, { pairs: [], now: new Date(t).toISOString() }).file, false);
 });
+
+test('R-LEAD-21: a pair whose latest result fails at the same stage with another cause no longer carries the old lead (it is no clean re-check); a skip at another stage changes nothing', () => {
+  const db = openState(':memory:');
+  const A = lead(60, { component: 'start', signature: 'class=timeout_start;detail=start_env_limited' });
+  const B = lead(61, { component: 'start', signature: 'class=timeout_start;detail=start_dependency_drift' });
+  const C = lead(62, { component: 'resolve', signature: 'class=no_runnable_artifact;detail=no_package' });
+  accept(db, { failures: [A], runId: 1, now: T0 });
+  accept(db, { failures: [C], runId: 2, now: T0 + HOUR });
+  let pa = db.leadSubjects(A.fingerprint)[0];
+  assert.equal(pa.current, 1, 'a failure at another stage (resolve) says nothing about start');
+  accept(db, { failures: [B], runId: 3, now: T0 + 2 * HOUR });
+  pa = db.leadSubjects(A.fingerprint)[0];
+  assert.deepEqual([pa.current, pa.clean], [0, 0], 'replaced at the same stage: not current, not clean');
+  assert.equal(db.listLeads().find((l) => l.fingerprint === A.fingerprint).clean_rechecks, 0);
+  assert.equal(db.leadSubjects(B.fingerprint)[0].current, 1);
+});

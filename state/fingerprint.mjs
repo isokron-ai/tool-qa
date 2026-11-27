@@ -46,7 +46,17 @@ export const ENUMS = Object.freeze({
   fidelity: ['exact', 'derived', 'literal', 'names'],
   via: ['github', 'git', 'api', 'archive', 'tarball', 'zip', 'local'],
   language: ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'c#', 'c++', 'c', 'swift', 'php', 'ruby', 'scala', 'dart', 'elixir', 'shell', 'ts/js', 'java/kotlin', 'other'],
-  detail: ['no_tools', 'multiple_servers', 'unsupported_language', 'names_only', 'too_large', 'tool_error', 'rate_limited', 'needs_credentials', 'quarantined'],
+  // result.detail: scan-static's words, and live-probe's fine causes (mcp-check corpus/live-probe.mjs DETAILS, the
+  // codes its items are skipped with). Our own codes only; anything else (a graded result's free text) is <other>.
+  detail: ['no_tools', 'multiple_servers', 'unsupported_language', 'names_only', 'too_large', 'tool_error', 'rate_limited', 'needs_credentials', 'quarantined',
+    'bad_subject', 'no_package', 'unsupported_package', 'private_registry', 'unverified_registry_entry', 'oci_host_not_allowed', 'image_too_large',
+    'launch_invalid', 'remote_only', 'unsupported_transport', 'registry_lookup_truncated', 'image_unavailable', 'image_registry_unreadable',
+    'image_pull_failed', 'install_failed', 'install_blocked', 'install_resource_limit', 'install_build_failed', 'install_timeout', 'package_not_runnable',
+    'package_error_unowned', 'entry_ambiguous', 'platform_unsupported', 'bundle_host_not_allowed', 'bundle_runtime_unsupported', 'bundle_unreadable',
+    'bundle_too_large', 'bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'bundle_unowned', 'entry_unresolved', 'start_needs_network',
+    'start_failed', 'start_needs_config', 'start_env_limited', 'start_needs_extra', 'start_dependency_drift', 'missing_own_module', 'undeclared_dependency',
+    'unsupported_platform', 'start_timeout', 'list_failed', 'list_probe_limited', 'list_rejected', 'upstream_error', 'harness_error', 'shard_deadline',
+    'sandbox_evidence_missing', 'disk_low'],
 });
 export const CLASSES = Object.freeze([...SKIP_REASONS]);
 

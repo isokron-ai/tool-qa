@@ -118,3 +118,27 @@ test('R-CHECKIN-17: a worker that reports one reason again at every later stage 
   assert.deepEqual(fl.map((f) => `${f.stage}:${f.cls}`), ['install:no_runnable_artifact', 'full:timeout_start']);
   assert.equal(leadFailures(itemFromBundle(b)).length, 2);
 });
+
+test('R-CHECKIN-18: the signature carries live-probe\'s fine cause (an allow-listed code of ours): two timeout_start items with different causes are two fingerprints; free text is never one', () => {
+  const skips = [{ stage: 'start', reason: 'timeout_start', fault: 'tool' }];
+  const item = (detail) => itemFromBundle(bundle({ lane: 'live-probe', skips, result: { status: 'skipped', detail } }));
+  const [drift] = failuresOf(item('start_dependency_drift'), { faults: ['tool'] });
+  const [env] = failuresOf(item('start_env_limited'), { faults: ['tool'] });
+  assert.match(drift.signature, /;detail=start_dependency_drift;/);
+  assert.match(env.signature, /;detail=start_env_limited;/);
+  assert.notEqual(fingerprintOf(drift).id, fingerprintOf(env).id, 'the check-in fingerprint tells them apart');
+  assert.notEqual(leadKeyOf(drift).id, leadKeyOf(env).id, 'and so does the lead');
+  // The check-in reads the same: its archive items go through the same module.
+  const enc2 = (o) => Buffer.from(JSON.stringify(o));
+  const b = bundle({ lane: 'live-probe', skips, result: { status: 'skipped', detail: 'start_dependency_drift' } });
+  const [ci] = itemsFromEntries([
+    { path: 'accepted/att-1/0/manifest.json', data: enc2(b.manifest) },
+    { path: 'accepted/att-1/0/results/live-probe.json', data: b.files.get('results/live-probe.json') },
+  ]);
+  assert.equal(fingerprintOf(failuresOf(ci, { faults: ['tool'] })[0]).id, fingerprintOf(drift).id);
+  // A detail that is not one of our codes (a graded result's free text, a subject word) is <other>.
+  for (const free of ['acme-widget failed to start', 'start_acme_widget', 'Start_Env_Limited']) {
+    const [f] = failuresOf(item(free), { faults: ['tool'] }, { names: nameTokens(['acme/widget-mcp']) });
+    assert.match(f.signature, /;detail=<other>;/, free);
+  }
+});

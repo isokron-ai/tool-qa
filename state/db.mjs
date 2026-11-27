@@ -1306,7 +1306,21 @@ export class StateDb {
     }
 
     // Clean re-checks: only an assessed result says a stage ran and did not show the lead.
-    if (coverage !== 'assessed') return out;
+    if (coverage !== 'assessed') {
+      // Another failure at the same stage replaced it: the pair's latest result no longer carries it (current), but
+      // that is no clean re-check. A skip at another stage says nothing about this one, and changes nothing.
+      const stages = new Set([...carried.values()].map((f) => f.component));
+      for (const p of pairs) {
+        if (carried.has(p.fingerprint) || p.current !== 1 || (run != null && p.last_run_id === run)) continue;
+        const lead = getLead(p.fingerprint);
+        if (lead && lead.status !== 'closed' && stages.has(lead.component)) {
+          this.raw.prepare('UPDATE lead_subjects SET current = 0, last_checked = ?, last_run_id = COALESCE(?, last_run_id) WHERE fingerprint = ? AND subject = ? AND lane = ?')
+            .run(at, run, p.fingerprint, subject, lane);
+          out.replaced = (out.replaced ?? 0) + 1;
+        }
+      }
+      return out;
+    }
     const fresh = iso(toMs(at) - STALE_PAIR_DAYS * 86_400_000);
     for (const p of pairs) {
       if (carried.has(p.fingerprint)) continue;
