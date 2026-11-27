@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 import { openState } from '../state/db.mjs';
 import {
-  computeCoverage, compactCoverage, RULES, recordTruth, recordCoverageDay, frameOf, renderCoverageMarkdown, NOT_MEASURABLE, HISTORY_KEY, TRUTH_KEY,
+  computeCoverage, compactCoverage, coverageChanged, RULES, recordTruth, recordCoverageDay, frameOf, renderCoverageMarkdown, NOT_MEASURABLE, HISTORY_KEY, TRUTH_KEY,
 } from '../state/coverage.mjs';
 
 const NOW = Date.parse('2026-11-27T12:00:00Z');
@@ -245,4 +245,19 @@ test('R-COV-33: coverage-truth: the QA table makes judgments for matched subject
   assert.deepEqual(Object.entries(kv.entries).map(([k, v]) => [k, v.state, v.source]).sort(), [['rk-0', 'correct', 'qa_gate'], ['rk-1', 'incorrect', 'qa_gate']]);
   assert.equal(judgmentsFromQa([{ repo: 'x/y', truth_count: '3', missed: '0', phantom: '1', error: '' }], new Map([['x/y', 's']])).judgments[0].state, 'incorrect');
   assert.equal(main(['--state', file], () => {}), 2, 'no input is a usage error');
+});
+
+test('R-COV-48: the health issue is rewritten for a new frame, a lane, a number turning measurable, or a ratio moving 0.1 point, and not for counts that drift', () => {
+  const lane = (o = {}) => ({ id: 'l', on: true, judged: 0, assessment: 0.5, conditional: null, frame_coverage: null, gross: null, ...o });
+  const cov = (lanes, over = {}) => ({ frame: { version: 'f1' }, lanes, milestones: { m3: { met: null } }, ...over });
+  const base = cov([lane()]);
+  assert.equal(coverageChanged(base, structuredClone(base)), false);
+  assert.equal(coverageChanged(base, cov([lane({ assessment: 0.5004, assessed: 999 })])), false, 'under 0.1 point');
+  assert.equal(coverageChanged(base, cov([lane({ assessment: 0.501 })])), true, '0.1 point');
+  assert.equal(coverageChanged(base, cov([lane()], { frame: { version: 'f2' } })), true, 'new frame');
+  assert.equal(coverageChanged(base, cov([lane(), lane({ id: 'm' })])), true, 'a lane came');
+  assert.equal(coverageChanged(base, cov([lane({ conditional: 0.9, judged: 3 })])), true, 'became measurable');
+  assert.equal(coverageChanged(base, cov([lane()], { milestones: { m3: { met: false } } })), true, 'M3 flipped');
+  assert.equal(coverageChanged(null, base), true);
+  assert.equal(coverageChanged(null, null), false);
 });

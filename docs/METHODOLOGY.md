@@ -60,6 +60,6 @@ The contingency table on the health issue splits each lane by tier: frame, exclu
 
 ## Where it is published
 
-- The **Loop health** issue, section "Tool coverage", written by the watchdog from its read-only copy of the state. The body is rewritten when a check or a coverage number changes; a job that passes no coverage (mode merge) keeps the last one.
+- The **Loop health** issue, section "Tool coverage", written by the watchdog from its read-only copy of the state. The body is rewritten when a check changes or the coverage changes materially (a new frame version, a lane, a number turning measurable, M3 flipping, or a ratio moving by 0.1 percentage point; counts that drift alone do not rewrite it, so the shown counts can lag a little); a job that passes no coverage (mode merge) keeps the last one.
 - The live view snapshot, as a new last key `coverage` (compact: frame version, date, size, per lane the counts and the four numbers, M1 and M3). Every earlier key is unchanged and the schema name stays `isokron-loop-live/1`. It is `null` when the state cannot answer.
 - Importable by other jobs: `import { computeCoverage, compactCoverage } from '../state/coverage.mjs'`.

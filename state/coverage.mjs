@@ -228,3 +228,29 @@ export function recordCoverageDay(db, coverage, { now = Date.now() } = {}) {
     .run(HISTORY_KEY, JSON.stringify({ version: 1, days: kept }), new Date(now).toISOString());
   return true;
 }
+
+/** Smallest move of a ratio worth rewriting the health issue for: 0.1 percentage point. */
+export const MIN_RATIO_MOVE = 0.001;
+const RATIOS = ['assessment', 'conditional', 'frame_coverage', 'gross'];
+
+/**
+ * Whether the health issue should be rewritten for a new coverage block: the
+ * frame version changed, a lane came or went, a number became (un)measurable,
+ * a ratio moved by at least MIN_RATIO_MOVE, the judged count changed, or M3
+ * flipped. Counts that move alone (a few more assessed) do not.
+ */
+export function coverageChanged(prev, next) {
+  if (!prev || !next) return Boolean(prev) !== Boolean(next);
+  if (prev.frame?.version !== next.frame?.version) return true;
+  if (prev.lanes.length !== next.lanes.length) return true;
+  for (let i = 0; i < next.lanes.length; i++) {
+    const a = prev.lanes[i];
+    const b = next.lanes[i];
+    if (a.id !== b.id || a.on !== b.on || a.judged !== b.judged) return true;
+    for (const k of RATIOS) {
+      if ((a[k] === null) !== (b[k] === null)) return true;
+      if (a[k] !== null && Math.abs(a[k] - b[k]) >= MIN_RATIO_MOVE - 1e-9) return true;
+    }
+  }
+  return prev.milestones?.m3?.met !== next.milestones?.m3?.met;
+}

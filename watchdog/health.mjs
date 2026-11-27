@@ -12,7 +12,7 @@
 // arrives. mode 'merge' (other jobs): add or update the given items only.
 
 import { overallStatus } from './checks.mjs';
-import { renderCoverageMarkdown } from '../state/coverage.mjs';
+import { coverageChanged, renderCoverageMarkdown } from '../state/coverage.mjs';
 
 export const LABEL = 'loop-health';
 export const TITLE = 'Loop health';
@@ -143,7 +143,7 @@ export async function applyHealth({ client, repo, checks, mode = 'replace', now 
     out.number = res.data.number;
     out.created = true;
     out.pinned = await pin(client, res.data.node_id);
-  } else if (!prevState || JSON.stringify(prevState.checks) !== JSON.stringify(merged) || JSON.stringify(prevState.coverage ?? null) !== JSON.stringify(cov)) {
+  } else if (!prevState || JSON.stringify(prevState.checks) !== JSON.stringify(merged) || coverageChanged(prevState.coverage ?? null, cov)) {
     await client.request('PATCH', `/repos/${repo}/issues/${issue.number}`, { essential: true, body: { body } });
     out.updated = true;
   }

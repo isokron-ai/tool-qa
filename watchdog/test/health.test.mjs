@@ -180,8 +180,15 @@ test('R-COV-45: the health issue is rewritten when only the coverage changed, an
   const same = await applyHealth({ client, repo: REPO, checks: green, now: NOW + 60_000, coverage: COVERAGE });
   assert.equal(same.updated, false);
   assert.equal(writes(), w0);
+  // counts moving without a ratio moving by 0.1 point: no rewrite
+  const drift = structuredClone(COVERAGE);
+  drift.lanes[0].assessed = 61;
+  drift.lanes[0].assessment = 0.6125;
+  assert.equal((await applyHealth({ client, repo: REPO, checks: green, now: NOW + 90_000, coverage: drift })).updated, false, 'a 0.03 point move is not worth a rewrite');
+  assert.equal(writes(), w0);
   const next = structuredClone(COVERAGE);
   next.lanes[0].assessed = 61;
+  next.lanes[0].assessment = 0.6224;
   const changed = await applyHealth({ client, repo: REPO, checks: green, now: NOW + 120_000, coverage: next });
   assert.equal(changed.updated, true);
   assert.equal(parseBody(issues[0].body).coverage.lanes[0].assessed, 61);
