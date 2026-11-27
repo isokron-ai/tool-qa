@@ -141,3 +141,24 @@ test('R-LEAD-19: a re-check that comes back unassessed is sent again, up to the 
   db2.recordResult({ run_key: d.run_key, attempt_id: 'att-off', fence: lease.fence, verdict: 'accepted', outcome: 'accepted', now: T0 + HOUR + 1 });
   assert.deepEqual(dueFromState(db2, { now: T0 + 2 * HOUR, tiers, workflows, hooks: { leadReverify: leadRecheckHook(recheckPairs(db2)) } }), []);
 });
+
+test('R-LEAD-22: re-check dispatches that never come back (lapsed, refused, rejected) count as attempts: after three the pair is no longer sent', () => {
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'acme/a', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 - DAY });
+  accept(db, 'acme/a', [lead(70)], { runId: 1, now: T0 });
+  const hook = () => ({ leadReverify: leadRecheckHook(recheckPairs(db)) });
+  let t = T0 + HOUR;
+  for (let i = 1; i <= 3; i++) {
+    const [d] = due(db, t, hook());
+    assert.ok(d, `re-check ${i} is due`);
+    // Sent, and its worker never answers: the lease lapses and the dispatch is reaped.
+    const att = `att-lost-${i}`;
+    const lease = db.acquireLease(d.run_key, att, { ttlMs: HOUR, now: t });
+    db.createDispatch({ attemptId: att, shardId: 's', workflow: 'scan-static', repo: 'o/r', workflowFile: 'f.yml', ref: 'main', expires: t + HOUR, items: [{ run_key: d.run_key, subject: 'acme/a', fence: lease.fence }], now: t });
+    db.failDispatch(att, { error: 'lost', now: t + 1 });
+    t += 2 * HOUR;
+  }
+  assert.deepEqual(due(db, t, hook()), [], 'not sent a fourth time');
+  const rc = recheckPairs(db);
+  assert.deepEqual([rc.pairs.size, rc.waiting, rc.given_up], [0, 0, 1]);
+});

@@ -977,8 +977,10 @@ export class Sim {
       // Its dispatch pruned (and archived) while the attempt stays: nothing to compare with.
       if (!item && this.archived.has(this.archiveKey('dispatches', { attempt_id: a.attempt_id }))) continue;
       if (!item || item.fence !== a.fence) this.violate(`${key}: accepted ${a.attempt_id.slice(0, 8)} with fence ${a.fence} that its dispatch did not carry`);
-      // A newer fence granted before this result was received makes it stale. One granted at the same instant is the
-      // re-dispatch of a run_key right after its result was accepted (ingest runs before the tick in one pump tick).
+      // A newer fence granted before this result was received makes it stale. One granted at the same instant is taken
+      // as the re-dispatch of a run_key right after its result was accepted: the sim's clock is the same for a whole
+      // pump tick, and ingest runs before the tick's dispatches (pump/run.mjs), so a same-tick ordering bug in that one
+      // code path would not be told apart here; ingest's own fence check (stale_fence) and R-CHAOS-02 cover it.
       const newer = s.items.filter((i) => i.run_key === a.run_key && i.fence > a.fence && (created.get(i.attempt_id) ?? '') < a.received);
       if (newer.length) this.violate(`${key}: accepted a stale fence ${a.fence} for ${a.run_key.slice(0, 12)} after fence ${newer[0].fence} was granted`);
       if (!this.uploaded.has(`${a.attempt_id}:${a.run_key}:${a.fence}`)) this.violate(`${key}: accepted ${a.attempt_id.slice(0, 8)}/${a.fence}, which no worker uploaded`);

@@ -27,28 +27,35 @@ export const RECHECK_MAX_DUE = 20;
 const SEP = '\u0000';
 
 /**
- * The pairs to re-check now: `${subject}\0${lane}` -> recheck_after (ISO), and
- * how many leads wait for one in all (`waiting`, for the watchdog).
- * @returns {{pairs: Map<string, string>, waiting: number}}
+ * The pairs to re-check now: `${subject}\0${lane}` -> recheck_after (ISO), how
+ * many leads wait for one in all (`waiting`, for the watchdog), and how many
+ * stopped because their re-check dispatches never came back (`given_up`).
+ * @returns {{pairs: Map<string, string>, waiting: number, given_up: number}}
  */
 export function recheckPairs(db, { max = RECHECK_MAX_DUE } = {}) {
-  if (db.schemaVersion() < 11) return { pairs: new Map(), waiting: 0 };
+  if (db.schemaVersion() < 11) return { pairs: new Map(), waiting: 0, given_up: 0 };
+  // `sent`: dispatches of the pair since the sighting asked for the re-check. Any result folded in moves the lead on
+  // (reproduced, moved, or an attempt counted), so dispatches that are still open, failed, lapsed or were rejected
+  // are what this counts: a re-check whose worker never answers is not sent again after RECHECK_MAX_ATTEMPTS of them.
   const rows = db.raw.prepare(`
-    SELECT l.fingerprint, l.recheck_subject AS subject, l.recheck_lane AS lane, l.recheck_after AS after,
-      (SELECT COUNT(*) FROM lead_subjects s WHERE s.fingerprint = l.fingerprint AND s.current = 1) AS carried
+    SELECT l.fingerprint, l.recheck_subject AS subject, l.recheck_lane AS lane, l.recheck_after AS after, l.recheck_attempts AS attempts,
+      (SELECT COUNT(*) FROM lead_subjects s WHERE s.fingerprint = l.fingerprint AND s.current = 1) AS carried,
+      (SELECT COUNT(*) FROM dispatch_items i JOIN dispatches d ON d.attempt_id = i.attempt_id
+        WHERE i.subject = l.recheck_subject AND i.workflow = l.recheck_lane AND d.created > l.recheck_after) AS sent
     FROM leads l
     WHERE l.status = 'open' AND l.issue_number IS NULL AND l.reproduced_at IS NULL AND l.fault != 'infra'
       AND l.recheck_subject IS NOT NULL AND l.recheck_lane IS NOT NULL AND l.recheck_after IS NOT NULL AND l.recheck_attempts < ?
     ORDER BY carried DESC, l.first_seen, l.fingerprint
   `).all(RECHECK_MAX_ATTEMPTS);
+  const live = rows.filter((r) => r.attempts + r.sent < RECHECK_MAX_ATTEMPTS);
   const pairs = new Map();
-  for (const r of rows) {
+  for (const r of live) {
     if (pairs.size >= max) break;
     const k = `${r.subject}${SEP}${r.lane}`;
     const prev = pairs.get(k);
     if (prev === undefined || r.after < prev) pairs.set(k, r.after);
   }
-  return { pairs, waiting: rows.length };
+  return { pairs, waiting: live.length, given_up: rows.length - live.length };
 }
 
 /**

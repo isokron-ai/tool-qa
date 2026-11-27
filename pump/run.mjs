@@ -590,8 +590,8 @@ export async function runPump({
       if (rechecksLeads(leadsMode(env))) {
         try {
           const rc = recheckPairs(db);
+          db.setKv(LEADS_RECHECK_KEY, { at: new Date(now()).toISOString(), mode: leadsMode(env), due: rc.pairs.size, waiting: rc.waiting, given_up: rc.given_up }, { now: now() });
           hooks = { leadReverify: leadRecheckHook(rc) };
-          db.setKv(LEADS_RECHECK_KEY, { at: new Date(now()).toISOString(), mode: leadsMode(env), due: rc.pairs.size, waiting: rc.waiting }, { now: now() });
         } catch (err) {
           say(`pump: lead re-checks unavailable this tick (continuing): ${err?.message ?? err}`);
         }

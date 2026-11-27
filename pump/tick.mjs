@@ -318,6 +318,10 @@ export async function runTick({
         withdraw(reserved.slice(i + 1), `dispatching stopped (${stop})`);
         break;
       }
+      // A lead re-check shard sent with its own runner input (leads/recheck.mjs) may fail for that input alone (a
+      // worker that does not declare it): the lane's other shards still go. Its dispatch counts against the lead's
+      // re-check attempts (recheckPairs), so it is not sent for ever.
+      if (runner) continue;
       skip.add(shard.workflow);
       summary.skippedWorkflows.push(shard.workflow);
     }
