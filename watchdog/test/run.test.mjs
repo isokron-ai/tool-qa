@@ -876,6 +876,8 @@ test('R-WD-34: through the whole watchdog, a tool-side skip holds the coverage i
   // the health issue's coverage table says the same number
   assert.equal(body.coverage.lanes.find((l) => l.id === 'scan-static').assessment, 0.7);
   w.cleanup();
+});
+
 test('R-CTL-13: the watchdog applies the T0 lane switches: an untrusted control lane that is switched off is not an enabled lane for the sandbox breaker, and watchdog.yml passes the switches', async () => {
   const lanes = { 't0-dogfood': { enabled: true, switch: 'LANE_T0_DOGFOOD_ENABLED', runs_untrusted: true, sandbox_sha: 'a'.repeat(40), dispatch_style: 't0', shard_size: 1, control_subjects: { 'o/r.x': {} }, repo: 'o/r', file: 'x.yml' } };
   const run = async (env) => {

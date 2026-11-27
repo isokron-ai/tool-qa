@@ -18,7 +18,7 @@ test('R-DOC-01: every workflow file and every LANE_*_ENABLED switch used in .git
   assert.deepEqual(missing, [], 'lane switches the runbook never mentions');
 });
 
-test('R-DOC-01: every `switch` of a control lane in pump/workflows.json is named in docs/OPERATIONS.md, and one with a digit in its name is found by the workflow scan', () => {
+test('R-DOC-01: every switch of a control lane in pump/workflows.json is named in docs/OPERATIONS.md, and one with a digit in its name is found by the workflow scan', () => {
   const cfg = JSON.parse(readFileSync(new URL('pump/workflows.json', root), 'utf8')).workflows;
   const switches = Object.values(cfg).map((w) => w.switch).filter(Boolean);
   assert.ok(switches.length >= 3);
