@@ -356,6 +356,12 @@ test('R-CHG-11: the budget is checked before the first query (points reserve, ca
   assert.deepEqual([out.queries, out.stopped, g.calls.length], [0, 'points_reserve', 0]);
   // Past the reset the old count is not believed.
   assert.equal(headsRoom(low, T + 2 * HOUR).points, null);
+  // The count is carried to the next pump run with the budget (kv pump.api_budget), so its first query is checked too.
+  const next = new ApiBudget({ now: () => T + 60_000, sleep: c.sleep }).restore(JSON.parse(JSON.stringify(low.snapshot())));
+  assert.equal(headsRoom(next, T + 60_000).points, 150);
+  assert.equal(new ApiBudget({ now: () => T + 2 * HOUR }).restore(JSON.parse(JSON.stringify(low.snapshot()))).resources.has('graphql'), false, 'a window that has reset is not carried');
+  out = await refreshHeads(db, { client: { ...g.client, budget: next }, now: () => T + 60_000 });
+  assert.deepEqual([out.queries, out.stopped, g.calls.length], [0, 'points_reserve', 0]);
   // 22 of the 30 hourly calls used: the last 8 are the id pass's.
   const busy = new ApiBudget({ now: c.now, sleep: c.sleep });
   for (let i = 0; i < 22; i++) await busy.take('graphql');
