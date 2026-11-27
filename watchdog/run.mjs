@@ -52,6 +52,7 @@ import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 import { archiveCheck } from './archive.mjs';
 import { offsiteCheck } from './offsite.mjs';
+import { nightlyImage, readSelftestFailures, selftestLanes } from './selftest.mjs';
 import { keepCheck, readKeepStatus } from '../keep/health.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
@@ -272,8 +273,35 @@ export async function runWatchdog({
   }
   if (snapshot?.error) snapshot = { ...snapshot, error: scrub(String(snapshot.error), secrets).slice(0, 200) };
 
+  // The lanes' own sandbox self tests (R-WD-17). The job's GITHUB_TOKEN is scoped to this
+  // repository: for the lanes' repositories it is a public caller, which can list runs and jobs
+  // but gets 403 on job logs (where the runner image is). So a second App installation token,
+  // for those repositories and actions: read only, reads them; if it cannot be minted the
+  // reads fall back to the job token and the item says so (amber). Same API budget throughout.
+  let selftest;
+  try {
+    const owner = repo.split('/')[0];
+    const laneRepos = [...new Set(selftestLanes(wfs).map((l) => l.repo).filter((r) => r.split('/')[0] === owner).map((r) => r.split('/')[1]))];
+    let logToken = null;
+    let tokenError = null;
+    if (laneRepos.length) {
+      try {
+        ({ token: logToken } = await minter({ repositories: laneRepos, permissions: { actions: 'read' } }));
+        secrets.push(logToken);
+        if (env.GITHUB_ACTIONS === 'true') process.stdout.write(`::add-mask::${logToken}\n`);
+      } catch (err) {
+        tokenError = scrub(String(err?.message ?? err), secrets).slice(0, 160);
+      }
+    }
+    const readToken = logToken ?? env.GITHUB_TOKEN;
+    const reader = readToken ? createClient({ token: readToken, fetch, apiUrl, budget, sleep, now }) : client;
+    selftest = { read: { ...(await readSelftestFailures({ client: reader, workflows: wfs, now })), tokenError }, passedImage: verdict.tripped ? null : nightlyImage(conformance?.status) };
+  } catch (err) {
+    selftest = { read: { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) }, passedImage: null };
+  }
+
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot, selftest });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');

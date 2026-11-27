@@ -38,6 +38,10 @@
 //                        it would hold lanes but none is enabled, or when it is
 //                        closed but an enabled lane pins another sandbox commit
 //                        than the one the nightly tested.
+//   sandbox-selftest     per-lane sandbox self tests (watchdog/selftest.mjs): amber when
+//                        2 or more `sandbox-selftest` jobs of the enabled third-party-code
+//                        lanes failed in 6 hours, or one failed on a runner image the
+//                        nightly has not passed on, or the lookup failed; never red.
 //   state-snapshot       the hourly state snapshots (snapshot/health.mjs): amber
 //                        when no snapshot run has confirmed the live state is
 //                        captured for 3 hours (or there is no snapshot yet, the
@@ -59,6 +63,7 @@ import { snapshotCheck } from '../snapshot/health.mjs';
 import { sizeCheck } from './size.mjs';
 import { markerCheck, sealCheck } from '../keep/health.mjs';
 import { identityCheck } from './identity.mjs';
+import { selftestCheck } from './selftest.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -152,7 +157,7 @@ const baseName = (path) => String(path).split('/').pop();
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
+export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot, selftest }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -283,6 +288,17 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
 
   // the sandbox breaker
   if (breaker) checks.push(breakerCheck(breaker));
+
+  // the lanes' own sandbox self tests (watchdog/selftest.mjs, R-WD-17); fenced like the snapshot item
+  if (selftest) {
+    let item;
+    try {
+      item = selftestCheck(selftest);
+    } catch (err) {
+      item = { id: 'sandbox-selftest', status: 'amber', summary: `could not judge the lanes' sandbox self tests: ${String(err?.message ?? err).slice(0, 200)}` };
+    }
+    checks.push(item);
+  }
 
   // the hourly state snapshots
   // snapshotCheck does not throw, but a bad manifest must never take the
