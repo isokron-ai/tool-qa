@@ -435,6 +435,10 @@ export class FakeGitHub {
       const all = [...r.workflows.values()].map((w) => ({ ...w }));
       return { body: { total_count: all.length, workflows: all } };
     }
+    // one workflow file's state (the watchdog's external-workflows item): the simulated one's, else active
+    if (method === 'GET' && (m = /^\/actions\/workflows\/([^/]+\.ya?ml)$/.exec(rest))) {
+      return { body: { state: r.workflows.get(decodeURIComponent(m[1]))?.state ?? 'active' } };
+    }
     if (method === 'PUT' && (m = /^\/actions\/workflows\/(\d+)\/enable$/.exec(rest))) {
       const w = [...r.workflows.values()].find((x) => x.id === Number(m[1]));
       if (!w) return notFound();
