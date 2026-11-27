@@ -73,6 +73,9 @@
 //                      subject id lookups (pump/identity.mjs)
 //   LANE_DISCOVER_ENABLED   only the exact value "true" turns discover.yml
 //                      candidates into subjects (pump/discover.mjs)
+//   LANE_BACKFILL_ENABLED   only the exact value "true" gives worker slots
+//                      the due list leaves free to the frame's oldest results
+//                      (pump/backfill.mjs)
 //   LANE_HEADS_ENABLED   only the exact value "true" runs the head poll
 //                      (pump/heads.mjs): new default-branch heads and releases
 //                      move subjects' sha and changed_at
@@ -110,6 +113,7 @@ import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.
 import { applyDiscovery, DISCOVER_KV_KEY, discoverEnabled, fetchCandidates } from './discover.mjs';
 import { HEADS_KV_KEY, headsEnabled, refreshHeads } from './heads.mjs';
 import { planShards, runTick } from './tick.mjs';
+import { backfillEnabled } from './backfill.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
 import { NOT_BUILT_LANES } from '../live/build.mjs';
@@ -638,6 +642,7 @@ export async function runPump({
       const holdRunKeys = slots > 0 && collector && !(ingested && !ingested.stopped) ? unjudgedLateRunKeys(db, { now: now() }) : null;
       const summary = await runTick({
         db, now, config: tickConfig, hooks: sampleHooks, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
+        backfill: backfillEnabled(env),
         // The pending dispatches are saved before any is sent (R-ING-10).
         beforeSend: () => save(`tick ${ticks}, before dispatching`),
       });
@@ -662,7 +667,7 @@ export async function runPump({
         ? { checked: ingested.checked, judged: ingested.judged, recorded: ingested.recorded, outcomes: ingested.outcomes, errors: ingested.errors, stopped: ingested.stopped }
         : null;
       db.setKv('pump.last_tick', { ...summary, loopBudget, requested, ingest: ingestNote, blocked, breaker: breaker ? { tripped: breaker.tripped, reason: breaker.reason, held: breaker.held } : null }, { now: now() });
-      say(`pump: tick ${ticks}: due ${summary.due ?? '-'}, dispatched ${summary.dispatched}, failed ${summary.failed}, reaped ${summary.reaped}${summary.stopped ? `, stopped (${summary.stopped})` : ''}`);
+      say(`pump: tick ${ticks}: due ${summary.due ?? '-'}${summary.backfill !== undefined ? `, backfill ${summary.backfill}` : ''}, dispatched ${summary.dispatched}, failed ${summary.failed}, reaped ${summary.reaped}${summary.stopped ? `, stopped (${summary.stopped})` : ''}`);
       flushRetries();
       await liveStep(`tick ${ticks}`);
       if (summary.dispatched || summary.failed || summary.withdrawn || summary.reaped || summary.reapedSlots || ingested?.changed) await save(`tick ${ticks}`);
