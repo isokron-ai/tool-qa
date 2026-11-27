@@ -100,7 +100,7 @@ import { allowedWorkflows, judgeConformance, pinMismatches, readConformance as r
 import { createDispatcher } from './dispatch.mjs';
 import { dueFromState, isEnabled, loadConfig, NO_HOOKS } from './due.mjs';
 import { samplingHooks, activeSubjects } from './sampling.mjs';
-import { lanePinModes } from './pins.mjs';
+import { lanePinModes, laneShaModes } from './pins.mjs';
 import { createClient, scrub } from './github.mjs';
 import { POLICY } from './retry.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
@@ -261,7 +261,7 @@ export async function runPump({
     // Ingest holds each lane to the pin_check of the config the pump dispatched with (R-PIN-01).
     collector = createCollector({
       env, fetch: budgetedFetch(fetch, bud, { apiUrl }), apiUrl, sleep, ...ingestOptions,
-      judge: { pinModes: lanePinModes(cfg.workflows), ...(ingestOptions.judge ?? {}) },
+      judge: { pinModes: lanePinModes(cfg.workflows), shaModes: laneShaModes(cfg.workflows), ...(ingestOptions.judge ?? {}) },
     });
   } else if (typeof ingest === 'function') {
     collector = { collect: ingest };

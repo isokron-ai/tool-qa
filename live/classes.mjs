@@ -87,6 +87,8 @@ const TABLE = {
   // fails to prove, other tool or probe versions than the run_key names.
   pin_mismatch: 'worker_output',
   pin_unverified: 'worker_output',
+  // The commit read is not the commit the run_key names (R-SHA-01).
+  subject_sha_mismatch: 'worker_output',
 
   // infra: our runner, GitHub or a third party, not the worker's output.
   ingest_timeout: 'infra',
