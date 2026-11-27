@@ -294,8 +294,13 @@ export async function runWatchdog({
       }
     }
     const readToken = logToken ?? env.GITHUB_TOKEN;
-    const reader = readToken ? createClient({ token: readToken, fetch, apiUrl, budget, sleep, now }) : client;
-    selftest = { read: { ...(await readSelftestFailures({ client: reader, workflows: wfs, now })), tokenError }, passedImage: verdict.tripped ? null : nightlyImage(conformance?.status) };
+    if (laneRepos.length && !readToken) {
+      // The tool-qa App token is narrowed to this repository: not a fallback for the lanes' repositories (R-WD-21).
+      selftest = { read: { error: `no token to read the lanes' runs (${tokenError ?? 'no log token'}; GITHUB_TOKEN is unset)` }, passedImage: null };
+    } else {
+      const reader = readToken ? createClient({ token: readToken, fetch, apiUrl, budget, sleep, now }) : client;
+      selftest = { read: { ...(await readSelftestFailures({ client: reader, workflows: wfs, now, fetch })), tokenError }, passedImage: verdict.tripped ? null : nightlyImage(conformance?.status) };
+    }
   } catch (err) {
     selftest = { read: { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) }, passedImage: null };
   }

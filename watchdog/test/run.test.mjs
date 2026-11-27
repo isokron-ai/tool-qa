@@ -517,19 +517,29 @@ function selftestWorld(fails, { logStatus = 200 } = {}) {
   const w = world({ seed: () => {} });
   const ago = (m) => new Date(w.c.t - m * MIN).toISOString();
   w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/workflows\/live-probe\.yml\/runs$/, () => ({
-    body: { workflow_runs: fails.map((f, i) => ({ id: 800 + i, html_url: `https://github.com/isokron-ai/mcp-check/actions/runs/${800 + i}`, updated_at: ago(f.min) })) },
+    body: { workflow_runs: fails.map((f, i) => ({ id: 800 + i, status: 'completed', conclusion: f.conclusion ?? 'failure', html_url: `https://github.com/isokron-ai/mcp-check/actions/runs/${800 + i}`, updated_at: ago(f.min) })) },
   })]);
   w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/runs\/(\d+)\/jobs$/, (req) => {
     const i = Number(req.path.match(/runs\/(\d+)\//)[1]) - 800;
     return { body: { jobs: [
       { id: 7000 + i, name: 'live-probe-guard', conclusion: 'success', completed_at: ago(fails[i].min + 5) },
-      { id: 9000 + i, name: 'sandbox / sandbox-selftest', conclusion: 'failure', completed_at: ago(fails[i].min), html_url: `https://github.com/isokron-ai/mcp-check/actions/runs/${800 + i}/job/${9000 + i}` },
+      { id: 9000 + i, name: fails[i].jobName ?? 'sandbox / sandbox-selftest', conclusion: 'failure', completed_at: ago(fails[i].min), html_url: `https://github.com/isokron-ai/mcp-check/actions/runs/${800 + i}/job/${9000 + i}` },
     ] } };
   }]);
+  // The log: the API answers 302 to a second origin (the blob store), which serves the head as 206 (R-WD-19).
+  w.blobCalls = [];
   w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/jobs\/(\d+)\/logs$/, (req) => {
     if (logStatus !== 200) return { status: logStatus, body: { message: 'x' } };
-    return { body: LOG(fails[Number(req.path.match(/jobs\/(\d+)\//)[1]) - 9000].image) };
+    return { status: 302, headers: { location: `https://blob.test/actions-results/${Number(req.path.match(/jobs\/(\d+)\//)[1]) - 9000}` } };
   }]);
+  const apiFetch = w.api.fetch;
+  w.opts.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url);
+    if (url.host !== 'blob.test') return apiFetch(input, init);
+    const h = new Headers(init.headers ?? {});
+    w.blobCalls.push({ url: url.href, authorization: h.get('authorization'), range: h.get('range'), redirect: init.redirect });
+    return new Response(LOG(fails[Number(url.pathname.split('/').pop())].image), { status: 206 });
+  };
   return w;
 }
 const selftestOf = async (w) => {
@@ -544,12 +554,12 @@ test('R-WD-17: no self test failure in the last 6 hours is green, and costs one 
   assert.equal(c.status, 'green', c.summary);
   const reads = w.api.calls.filter((r) => /isokron-ai\/(mcp-check|mcp-writecheck-action)\//.test(r.path));
   assert.deepEqual(reads.map((r) => r.path).sort(), ['/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/runs', '/repos/isokron-ai/mcp-writecheck-action/actions/workflows/corpus.yml/runs']);
-  // the job token, not the App token, reads the other repositories
+  // the minted actions: read token (not the tool-qa App token, not the job token) reads the other repositories
   assert.equal(reads[0].headers.get('authorization'), 'Bearer ghs_synthetic_log_token');
-  // only failed runs of the last 7 hours, one page
-  assert.equal(reads[0].query.get('status'), 'failure');
+  // completed runs of the last 7 hours (the API takes one status, so the conclusions are filtered here: R-WD-20), 100 a page
+  assert.equal(reads[0].query.get('status'), 'completed');
   assert.equal(reads[0].query.get('created'), '>=2026-03-02T05:00:00Z');
-  assert.equal(reads[0].query.get('per_page'), '30');
+  assert.equal(reads[0].query.get('per_page'), '100');
   w.cleanup();
 });
 
@@ -615,7 +625,6 @@ test('R-WD-17: the self-test reads use a second App token for the lanes\' reposi
   assert.equal(w.mints.length, 2);
   const log = w.api.calls.find((r) => r.path.endsWith('/logs'));
   assert.equal(log.headers.get('authorization'), 'Bearer ghs_synthetic_log_token');
-  assert.match(log.headers.get('range'), /^bytes=0-\d+$/);
   assert.match(c.summary, /runner image 20261122\.23\.1/);
   w.cleanup();
 });
@@ -635,5 +644,97 @@ test('R-WD-17: with no lane enabled no log token is minted', async () => {
   w.opts.workerWorkflows = Object.fromEntries(Object.entries(SHIPPED).map(([k, v]) => [k, { ...v, enabled: v.runs_untrusted === false }]));
   await runWatchdog(w.opts);
   assert.equal(w.mints.length, 1);
+  w.cleanup();
+});
+
+const readsOf = (w) => w.api.calls.filter((r) => /isokron-ai\/(mcp-check|mcp-writecheck-action)\//.test(r.path));
+
+test('R-WD-18: no failure found in a truncated run list is amber (list truncated), not green; a complete list stays green', async () => {
+  const w = selftestWorld([]);
+  // three full pages of finished, passing runs: the list is cut off at the page limit
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/workflows\/live-probe\.yml\/runs$/, () => ({
+    body: { workflow_runs: Array.from({ length: 100 }, (_, i) => ({ id: 5000 + i, status: 'completed', conclusion: 'success' })) },
+  })]);
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /truncated/);
+  assert.equal(w.api.calls.filter((r) => r.path.endsWith('/live-probe.yml/runs')).length, 3, 'three pages, then it stops');
+  w.cleanup();
+});
+
+test('R-WD-18: more failed runs than are examined and none showing a self-test failure is amber (list truncated)', async () => {
+  const w = selftestWorld(Array.from({ length: 12 }, () => ({ min: 30, image: '20261117.1', jobName: 'sandbox / sandbox-selftest' })));
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/runs\/(\d+)\/jobs$/, () => ({ body: { jobs: [{ id: 1, name: 'sandbox / sandbox-selftest', conclusion: 'success', completed_at: new Date(w.c.t - 30 * MIN).toISOString() }] } })]);
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /truncated/);
+  w.cleanup();
+});
+
+test('R-WD-19: the job log is read over two origins: the token goes to the API host only, the blob store gets no Authorization, and Range is sent on both hops', async () => {
+  const w = selftestWorld([{ min: 30, image: '20261122.23.1' }]);
+  const c = await selftestOf(w);
+  const api = w.api.calls.find((r) => r.path.endsWith('/logs'));
+  assert.match(api.headers.get('authorization'), /^Bearer ghs_synthetic_log_token$/);
+  assert.match(api.headers.get('range'), /^bytes=0-\d+$/);
+  assert.equal(w.blobCalls.length, 1);
+  assert.equal(w.blobCalls[0].authorization, null, 'no token to the blob store');
+  assert.match(w.blobCalls[0].range, /^bytes=0-\d+$/);
+  assert.equal(w.blobCalls[0].redirect, 'error', 'the blob hop does not follow further redirects');
+  assert.match(c.summary, /runner image 20261122\.23\.1/);
+  w.cleanup();
+});
+
+test('R-WD-19: a blob answer that is not 200 or 206 leaves the image unknown', async () => {
+  const w = selftestWorld([{ min: 30, image: '20261122.23.1' }]);
+  const apiFetch = w.opts.fetch;
+  w.opts.fetch = async (input, init) => (new URL(typeof input === 'string' ? input : input.url).host === 'blob.test' ? new Response('nope', { status: 403 }) : apiFetch(input, init));
+  const c = await selftestOf(w);
+  assert.match(c.summary, /runner image unknown/);
+  w.cleanup();
+});
+
+test('R-WD-20: runs that timed out, failed to start or were cancelled are read too; a passing run is not', async () => {
+  const w = selftestWorld([{ min: 10, image: '20261117.1', conclusion: 'timed_out' }, { min: 20, image: '20261117.1', conclusion: 'startup_failure' }, { min: 30, image: '20261117.1', conclusion: 'cancelled' }, { min: 40, image: '20261117.1', conclusion: 'success' }]);
+  const c = await selftestOf(w);
+  assert.match(c.summary, /3 sandbox self test failures/);
+  const jobsRead = w.api.calls.filter((r) => /\/runs\/\d+\/jobs$/.test(r.path)).map((r) => r.path.match(/runs\/(\d+)/)[1]).sort();
+  assert.deepEqual(jobsRead, ['800', '801', '802']);
+  w.cleanup();
+});
+
+test('R-WD-20: the self-test job name pattern matches the real reusable-workflow job and not its siblings', async () => {
+  const { SELFTEST } = await import('../selftest.mjs');
+  // names from mcp-check run 45745127857
+  assert.equal(SELFTEST.job.test('sandbox / sandbox-selftest'), true);
+  for (const other of ['live-probe-guard', 'sandbox / selftest-mutation (${{ matrix.disable }})', 'sandbox / verdict', 'live-probe']) assert.equal(SELFTEST.job.test(other), false, other);
+});
+
+test('R-WD-20: failed runs on a lane with no self-test job among their jobs read amber (self-test job not found), never green', async () => {
+  const w = selftestWorld([{ min: 30, image: '20261117.1', jobName: 'sandbox / renamed-check' }]);
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /self-test job not found/);
+  w.cleanup();
+});
+
+test('R-WD-21: a log token that cannot be minted with GITHUB_TOKEN unset reads amber with the reason, and the tool-qa App token is never used for the lanes\' repositories', async () => {
+  const w = selftestWorld([{ min: 30, image: '20261117.1' }]);
+  w.opts.logMintError = 'installation does not cover mcp-check';
+  delete w.opts.env.GITHUB_TOKEN;
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /no token to read the lanes' runs/);
+  assert.match(c.summary, /installation does not cover mcp-check/);
+  assert.equal(readsOf(w).length, 0, 'nothing was read with the narrowed App token');
+  w.cleanup();
+});
+
+test('R-WD-21: a 404 on a lane\'s runs list is amber (could not read), not an empty list', async () => {
+  const w = selftestWorld([]);
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/workflows\/live-probe\.yml\/runs$/, () => ({ status: 404, body: { message: 'Not Found' } })]);
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /404/);
   w.cleanup();
 });

@@ -20,9 +20,11 @@
 //   off     no enabled lane runs third-party code.
 // Never red: a self test that fails closed is the sandbox doing its job.
 //
-// API cost per watchdog run: 1 run list per lane (status=failure, last 7
-// hours), plus 1 jobs call per failed run (at most 10 per lane) and 1 log call
-// per failing self-test job (at most 3 in all). Nothing failed: 2 calls.
+// API cost per watchdog run: 1 to 3 pages of completed runs per lane (last 7
+// hours, 100 a page; a third full page marks the list truncated), plus 1 jobs
+// call per failed, timed out, startup-failed or cancelled run (at most 10 per
+// lane) and 2 calls per failing self-test job (the API's 302, then the blob
+// store, at most 3 jobs in all). Nothing failed: 2 calls.
 // The reads are of public repositories, made with the job's own GITHUB_TOKEN
 // (the App token is narrowed to this repository) for run and job lists. Job logs return
 // 403 to that token for other repositories, so run.mjs mints an App installation token
@@ -38,6 +40,7 @@ export const SELFTEST = Object.freeze({
   lookbackMs: 7 * HOUR, // a run is created before its self-test job ends
   amberCount: 2,
   maxRunsPerLane: 10,
+  maxPages: 3,
   maxLogs: 3,
   logBytes: 12_288,
   job: /sandbox-selftest/i,
@@ -80,11 +83,34 @@ export function selftestLanes(workflows = {}) {
   return out;
 }
 
+/** Run conclusions that can mean a self-test job did not pass (status=completed lists them all; the API takes one status only). */
+const BAD_RUN = new Set(['failure', 'timed_out', 'startup_failure', 'cancelled']);
+
+/** The first bytes of a job log. The API answers 302 to the blob store; follow it by hand so the token goes to the API host only (R-WD-19). */
+async function readLogHead({ client, fetch, repo, jobId }) {
+  const res = await client.request('GET', `/repos/${repo}/actions/jobs/${jobId}/logs`, { allow: [403, 404, 410], redirect: 'manual', headers: { range: `bytes=0-${SELFTEST.logBytes - 1}` } });
+  const where = res.headers?.get?.('location');
+  if (res.status < 300 || res.status >= 400 || !where) return null;
+  let url;
+  try {
+    url = new URL(where);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  const got = await fetch(url.href, { redirect: 'error', headers: { range: `bytes=0-${SELFTEST.logBytes - 1}` }, signal: AbortSignal.timeout(15_000) });
+  if (got.status !== 200 && got.status !== 206) return null;
+  return (await got.text()).slice(0, SELFTEST.logBytes);
+}
+
 /**
  * Read the self-test failures of the last 6 hours. Never throws.
+ * `more` is true when a list was cut off (R-WD-18); `errors` holds what could not be read,
+ * a 404 included (R-WD-21), and a lane whose examined runs show no self-test job at all
+ * (R-WD-20).
  * @returns {Promise<{ on: boolean, failures: object[], errors: string[], more: boolean }>}
  */
-export async function readSelftestFailures({ client, workflows, now }) {
+export async function readSelftestFailures({ client, workflows, now, fetch = globalThis.fetch }) {
   const lanes = selftestLanes(workflows);
   const out = { on: lanes.length > 0, failures: [], errors: [], more: false };
   if (!out.on) return out;
@@ -92,21 +118,36 @@ export async function readSelftestFailures({ client, workflows, now }) {
   const since = new Date(t - SELFTEST.lookbackMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
   for (const lane of lanes) {
     try {
-      const res = await client.request('GET', `/repos/${lane.repo}/actions/workflows/${lane.file}/runs`, {
-        allow: [404], query: { status: 'failure', created: `>=${since}`, per_page: 30, exclude_pull_requests: true },
-      });
-      const runs = res.status === 404 ? [] : res.data?.workflow_runs ?? [];
-      if (runs.length > SELFTEST.maxRunsPerLane) out.more = true;
-      for (const run of runs.slice(0, SELFTEST.maxRunsPerLane)) {
-        const jobs = await client.request('GET', `/repos/${lane.repo}/actions/runs/${run.id}/jobs`, { allow: [404], query: { per_page: 30 } });
-        for (const job of jobs.status === 404 ? [] : jobs.data?.jobs ?? []) {
-          if (!SELFTEST.job.test(String(job.name)) || !SELFTEST.failed.includes(job.conclusion)) continue;
+      const runs = [];
+      for (let page = 1; page <= SELFTEST.maxPages; page++) {
+        const res = await client.request('GET', `/repos/${lane.repo}/actions/workflows/${lane.file}/runs`, {
+          allow: [404], query: { status: 'completed', created: `>=${since}`, per_page: 100, page, exclude_pull_requests: true },
+        });
+        if (res.status === 404) throw new Error(`the runs list of ${lane.file} answered 404 (not found, or the token cannot see it)`);
+        const got = res.data?.workflow_runs ?? [];
+        runs.push(...got);
+        if (got.length < 100) break;
+        if (page === SELFTEST.maxPages) out.more = true;
+      }
+      const bad = runs.filter((r) => BAD_RUN.has(r.conclusion));
+      if (bad.length > SELFTEST.maxRunsPerLane) out.more = true;
+      let seen = 0;
+      let named = 0;
+      for (const run of bad.slice(0, SELFTEST.maxRunsPerLane)) {
+        const jobs = await client.request('GET', `/repos/${lane.repo}/actions/runs/${run.id}/jobs`, { allow: [404], query: { per_page: 100 } });
+        if (jobs.status === 404) throw new Error(`the jobs of run ${run.id} answered 404`);
+        seen += 1;
+        for (const job of jobs.data?.jobs ?? []) {
+          if (!SELFTEST.job.test(String(job.name))) continue;
+          named += 1;
+          if (!SELFTEST.failed.includes(job.conclusion)) continue;
           const at = job.completed_at ?? run.updated_at;
           const ms = Date.parse(at);
           if (!Number.isFinite(ms) || t - ms > SELFTEST.windowMs) continue;
           out.failures.push({ lane: lane.name, repo: lane.repo, at, job_id: job.id, url: String(job.html_url ?? run.html_url ?? ''), run_url: String(run.html_url ?? ''), image: null });
         }
       }
+      if (seen > 0 && named === 0) out.errors.push(`${lane.name}: self-test job not found in ${seen} failed run${seen === 1 ? '' : 's'} (renamed?)`);
     } catch (err) {
       out.errors.push(`${lane.name}: ${String(err?.message ?? err).slice(0, 120)}`);
     }
@@ -114,8 +155,7 @@ export async function readSelftestFailures({ client, workflows, now }) {
   out.failures.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   for (const f of out.failures.slice(0, SELFTEST.maxLogs)) {
     try {
-      const res = await client.request('GET', `/repos/${f.repo}/actions/jobs/${f.job_id}/logs`, { allow: [403, 404, 410], headers: { range: `bytes=0-${SELFTEST.logBytes - 1}` } });
-      if (res.status < 300) f.image = imageFromLog(typeof res.data === 'string' ? res.data.slice(0, SELFTEST.logBytes) : '');
+      f.image = imageFromLog(await readLogHead({ client, fetch, repo: f.repo, jobId: f.job_id }));
     } catch {
       // the image stays unknown
     }
@@ -141,7 +181,9 @@ export function selftestCheck({ read, passedImage = null }) {
     if (read.tokenError && !errs.length) return { id, status: 'amber', summary: `no self test failure found, but no log token could be minted, so a failure's runner image could not be read: ${read.tokenError}` };
     return errs.length
       ? { id, status: 'amber', summary: `could not read the lanes' sandbox self tests${gaps.slice(1)}` }
-      : { id, status: 'green', summary: 'no sandbox self test failed on a lane in the last 6 hours' };
+      : read.more
+        ? { id, status: 'amber', summary: 'no self test failure found, but the list of runs was truncated (more runs than were read), so one may be missed' }
+        : { id, status: 'green', summary: 'no sandbox self test failed on a lane in the last 6 hours' };
   }
   const images = [...new Set(f.map((x) => x.image ?? 'unknown'))];
   const off = f.filter((x) => !x.image || x.image !== passedImage);
