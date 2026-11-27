@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { analyse, byTime, failuresOf, itemsFromEntries, loadSeed, main, readArchive, renderMarkdown, subjectWeight, DEFAULT_CONFIG } from '../checkin.mjs';
+import { analyse, byTime, failuresOf, itemsFromEntries, loadSeed, main, nameTokens, readArchive, renderMarkdown, subjectWeight, DEFAULT_CONFIG } from '../checkin.mjs';
 import { ageEncrypt } from '../../ingest/age.mjs';
 import { packBundle } from '../../worker-kit/bundle.mjs';
 import { writeTar } from '../../worker-kit/tar.mjs';
@@ -362,4 +362,46 @@ test('R-ORD-16: the check-in compares unversioned lanes only when observed withi
   const pinned = oracleItems(5, { staticSha: 'a'.repeat(40), liveSha: 'a'.repeat(40) });
   pinned[1] = { ...pinned[1], at: '2026-11-22T10:00:00Z' };
   assert.equal(run([...fixture.items, ...pinned]).summary.oracle_disagreements.subjects, 1, 'a pinned version is compared however far apart');
+});
+
+
+test('R-CHECKIN-13: the archive keeps one sealed file per item; the items of every file are read, not only those of the first file', { skip: !haveAge && 'age is not installed' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'checkin-perfile-'));
+  try {
+    const key = spawnSync(KEYGEN, [], { encoding: 'utf8' });
+    const identity = /AGE-SECRET-KEY-1[0-9A-Z]+/.exec(key.stdout + key.stderr)[0];
+    const recipient = /(age1[0-9a-z]+)/.exec(key.stderr + key.stdout)[1];
+    const all = entriesOf().map((e) => ({ path: e.path, data: e.data }));
+    // Split into one sealed file per item, as the pump writes them (ingest-<attempt>-<index>.tar.age).
+    const byItem = new Map();
+    for (const e of all) {
+      const m = /^accepted\/([^/]+)\/(\d+)\//.exec(e.path);
+      const k = `${m[1]}-${m[2]}`;
+      if (!byItem.has(k)) byItem.set(k, []);
+      byItem.get(k).push(e);
+    }
+    assert.ok(byItem.size >= 2, 'the fixture has several items');
+    const d = join(dir, 'ingest', '2026-11-27', 'ingest-9-1');
+    mkdirSync(d, { recursive: true });
+    for (const [k, entries] of byItem) writeFileSync(join(d, `ingest-${k}.tar.age`), ageEncrypt({ plaintext: packBundle(writeTar(entries)), recipients: [recipient], ageBin: AGE }));
+    const { items, stats } = readArchive(dir, { identity });
+    assert.equal(stats.sealed, byItem.size);
+    assert.equal(stats.failed, 0);
+    assert.equal(items.length, fixture.items.length, 'one item per sealed file, all of them read');
+    assert.equal(new Set(items.map((x) => x.key)).size, items.length, 'every item carries its own dedupe key');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-CHECKIN-14: the lane is our own workflow name and is shown even when a subject name shares a word with it', () => {
+  const item = itemsFromEntries(entriesOf()).find((it) => failuresOf(it).length > 0);
+  assert.ok(item, 'the fixture has an item with a tool-side failure');
+  const names = nameTokens(['acme/live-tools', 'x/probe-mcp', 'y/static-scan']);
+  for (const lane of ['live-probe', 'scan-static']) {
+    const fl = failuresOf({ ...item, lane }, DEFAULT_CONFIG, { names });
+    assert.ok(fl.length > 0);
+    assert.ok(fl.every((f) => f.lane === lane), `${lane} is not redacted`);
+  }
+  assert.ok(failuresOf({ ...item, lane: 'bad lane;' }, DEFAULT_CONFIG, { names }).every((f) => f.lane === '<other>'), 'a malformed lane is still refused');
 });
