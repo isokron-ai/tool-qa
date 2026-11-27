@@ -52,7 +52,7 @@ import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 import { archiveCheck } from './archive.mjs';
 import { offsiteCheck } from './offsite.mjs';
-import { nightlyImage, readSelftestFailures } from './selftest.mjs';
+import { nightlyImage, readSelftestFailures, selftestLanes } from './selftest.mjs';
 import { keepCheck, readKeepStatus } from '../keep/health.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
@@ -273,12 +273,29 @@ export async function runWatchdog({
   }
   if (snapshot?.error) snapshot = { ...snapshot, error: scrub(String(snapshot.error), secrets).slice(0, 200) };
 
-  // The lanes' own sandbox self tests (R-WD-17): public repositories, read with the
-  // job token (the App token is narrowed to this repository), on the same API budget.
+  // The lanes' own sandbox self tests (R-WD-17). The job's GITHUB_TOKEN is scoped to this
+  // repository: for the lanes' repositories it is a public caller, which can list runs and jobs
+  // but gets 403 on job logs (where the runner image is). So a second App installation token,
+  // for those repositories and actions: read only, reads them; if it cannot be minted the
+  // reads fall back to the job token and the item says so (amber). Same API budget throughout.
   let selftest;
   try {
-    const reader = env.GITHUB_TOKEN ? createClient({ token: env.GITHUB_TOKEN, fetch, apiUrl, budget, sleep, now }) : client;
-    selftest = { read: await readSelftestFailures({ client: reader, workflows: wfs, now }), passedImage: verdict.tripped ? null : nightlyImage(conformance?.status) };
+    const owner = repo.split('/')[0];
+    const laneRepos = [...new Set(selftestLanes(wfs).map((l) => l.repo).filter((r) => r.split('/')[0] === owner).map((r) => r.split('/')[1]))];
+    let logToken = null;
+    let tokenError = null;
+    if (laneRepos.length) {
+      try {
+        ({ token: logToken } = await minter({ repositories: laneRepos, permissions: { actions: 'read' } }));
+        secrets.push(logToken);
+        if (env.GITHUB_ACTIONS === 'true') process.stdout.write(`::add-mask::${logToken}\n`);
+      } catch (err) {
+        tokenError = scrub(String(err?.message ?? err), secrets).slice(0, 160);
+      }
+    }
+    const readToken = logToken ?? env.GITHUB_TOKEN;
+    const reader = readToken ? createClient({ token: readToken, fetch, apiUrl, budget, sleep, now }) : client;
+    selftest = { read: { ...(await readSelftestFailures({ client: reader, workflows: wfs, now })), tokenError }, passedImage: verdict.tripped ? null : nightlyImage(conformance?.status) };
   } catch (err) {
     selftest = { read: { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) }, passedImage: null };
   }

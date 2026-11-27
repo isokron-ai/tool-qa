@@ -24,7 +24,10 @@
 // hours), plus 1 jobs call per failed run (at most 10 per lane) and 1 log call
 // per failing self-test job (at most 3 in all). Nothing failed: 2 calls.
 // The reads are of public repositories, made with the job's own GITHUB_TOKEN
-// (the App token is narrowed to this repository); the log needs a token.
+// (the App token is narrowed to this repository) for run and job lists. Job logs return
+// 403 to that token for other repositories, so run.mjs mints an App installation token
+// for the lanes' repositories with actions: read for them, and falls back (amber, with
+// the reason) when it cannot.
 
 import { isEnabled } from '../pump/due.mjs';
 import { runsUntrusted } from '../pump/breaker.mjs';
@@ -133,8 +136,9 @@ export function selftestCheck({ read, passedImage = null }) {
   if (!read.on) return { id, status: 'off', summary: 'no lane that runs third-party code is enabled' };
   const f = read.failures ?? [];
   const errs = read.errors ?? [];
-  const gaps = errs.length ? `; could not read ${errs.join('; ').slice(0, 240)}` : '';
+  const gaps = (errs.length ? `; could not read ${errs.join('; ').slice(0, 240)}` : '') + (read.tokenError ? `; no log token (${read.tokenError}), so runner images cannot be read` : '');
   if (!f.length) {
+    if (read.tokenError && !errs.length) return { id, status: 'amber', summary: `no self test failure found, but no log token could be minted, so a failure's runner image could not be read: ${read.tokenError}` };
     return errs.length
       ? { id, status: 'amber', summary: `could not read the lanes' sandbox self tests${gaps.slice(1)}` }
       : { id, status: 'green', summary: 'no sandbox self test failed on a lane in the last 6 hours' };
@@ -145,7 +149,7 @@ export function selftestCheck({ read, passedImage = null }) {
   const lanes = [...new Set(f.map((x) => x.lane))].join(', ');
   const link = safeUrl(f[0].url) ?? safeUrl(f[0].run_url);
   const head = `${read.more ? 'at least ' : ''}${f.length} sandbox self test failure${f.length === 1 ? '' : 's'} in the last 6 hours (${lanes}) on runner image ${images.join(', ')}; the nightly last passed on ${passedImage ?? 'no image (it is not green)'}; the lane failed closed, nothing ran`;
-  const item = { id, status: many || off.length ? 'amber' : 'green', summary: `${head}${gaps}`, at: f[0].at };
+  const item = { id, status: many || off.length || read.tokenError ? 'amber' : 'green', summary: `${head}${gaps}`, at: f[0].at };
   if (link) item.link = link;
   return item;
 }

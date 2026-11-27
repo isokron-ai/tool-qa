@@ -83,6 +83,10 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
     verifyConformanceRun: backed,
     mintToken: async (args) => {
       mints.push(args);
+      if (args.permissions.actions === 'read') {
+        if (opts.logMintError) throw new Error(opts.logMintError);
+        return { token: 'ghs_synthetic_log_token', expiresAt: c.t + 3_600_000 };
+      }
       return { token: 'ghs_synthetic_app_token', expiresAt: c.t + 3_600_000 };
     },
     readSnapshot: async () => ({ manifest: { version: 1, current_at: ago(40), snapshots: [{ name: 'state-20260302T112000Z-0123abcd.sqlite.age', created: ago(40), sha256: 'a'.repeat(64), size: 1 }] } }),
@@ -100,7 +104,7 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
 test('a healthy loop: one narrowed token, nothing dispatched, a green issue', async () => {
   const w = world({ seed: () => {} });
   const out = await runWatchdog(w.opts);
-  assert.deepEqual(w.mints, [{ repositories: ['tool-qa'], permissions: { issues: 'write', actions: 'write' } }]);
+  assert.deepEqual(w.mints[0], { repositories: ['tool-qa'], permissions: { issues: 'write', actions: 'write' } });
   assert.equal(out.overall, 'green');
   assert.equal(w.api.calls.filter((r) => r.path.endsWith('/dispatches')).length, 0);
   assert.equal(parseBody(w.issues[0].body).overall, 'green');
@@ -541,7 +545,7 @@ test('R-WD-17: no self test failure in the last 6 hours is green, and costs one 
   const reads = w.api.calls.filter((r) => /isokron-ai\/(mcp-check|mcp-writecheck-action)\//.test(r.path));
   assert.deepEqual(reads.map((r) => r.path).sort(), ['/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/runs', '/repos/isokron-ai/mcp-writecheck-action/actions/workflows/corpus.yml/runs']);
   // the job token, not the App token, reads the other repositories
-  assert.equal(reads[0].headers.get('authorization'), 'Bearer ghs_synthetic_job_token');
+  assert.equal(reads[0].headers.get('authorization'), 'Bearer ghs_synthetic_log_token');
   // only failed runs of the last 7 hours, one page
   assert.equal(reads[0].query.get('status'), 'failure');
   assert.equal(reads[0].query.get('created'), '>=2026-03-02T05:00:00Z');
@@ -602,4 +606,34 @@ test('R-WD-17: the watchdog starts as a script with a stubbed environment (no mo
   rmSync(dir, { recursive: true, force: true });
   assert.doesNotMatch(r.stderr, /before initialization|ReferenceError|SyntaxError|Cannot find module/, r.stderr);
   assert.equal(r.status, 1, 'it gets as far as minting the token, which the stub key refuses');
+});
+
+test('R-WD-17: the self-test reads use a second App token for the lanes\' repositories with actions: read only, and the job log read carries it', async () => {
+  const w = selftestWorld([{ min: 30, image: '20261122.23.1' }]);
+  const c = await selftestOf(w);
+  assert.deepEqual(w.mints[1], { repositories: ['mcp-check', 'mcp-writecheck-action'], permissions: { actions: 'read' } });
+  assert.equal(w.mints.length, 2);
+  const log = w.api.calls.find((r) => r.path.endsWith('/logs'));
+  assert.equal(log.headers.get('authorization'), 'Bearer ghs_synthetic_log_token');
+  assert.match(log.headers.get('range'), /^bytes=0-\d+$/);
+  assert.match(c.summary, /runner image 20261122\.23\.1/);
+  w.cleanup();
+});
+
+test('R-WD-17: when the log token cannot be minted the reads fall back to the job token and the item is amber with the reason (never red)', async () => {
+  const w = selftestWorld([]);
+  w.opts.logMintError = 'installation does not cover mcp-check';
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /installation does not cover mcp-check/);
+  assert.equal(w.api.calls.find((r) => r.path.includes('/mcp-check/')).headers.get('authorization'), 'Bearer ghs_synthetic_job_token');
+  w.cleanup();
+});
+
+test('R-WD-17: with no lane enabled no log token is minted', async () => {
+  const w = world({ seed: () => {} });
+  w.opts.workerWorkflows = Object.fromEntries(Object.entries(SHIPPED).map(([k, v]) => [k, { ...v, enabled: v.runs_untrusted === false }]));
+  await runWatchdog(w.opts);
+  assert.equal(w.mints.length, 1);
+  w.cleanup();
 });
