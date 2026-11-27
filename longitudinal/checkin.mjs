@@ -124,6 +124,9 @@ export function itemsFromEntries(entries, stats = { unreadable: 0 }) {
       observed_at: man.finished_at,
       attempt_id: String(man.attempt_id ?? g.attempt),
       item_index: g.index,
+      // Dedupe key (R-LT-CK-01): an item is in its full bundle and in its keep-forever
+      // file; without a key every item after the first was dropped as already seen.
+      key: `${man.attempt_id ?? g.attempt}/${g.index}/${man.run_key ?? ''}`,
       run_id: Number.isSafeInteger(ing?.run?.id) ? ing.run.id : Number.isSafeInteger(ing?.input?.run_id) ? ing.input.run_id : man.workflow?.run_id ?? null,
       tools: Array.isArray(man.tools) ? man.tools.map((t) => `${t?.name ?? '?'}@${t?.version ?? '?'}`) : [],
       skips: Array.isArray(man.skips) ? man.skips : [],
