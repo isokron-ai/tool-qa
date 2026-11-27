@@ -446,6 +446,20 @@ export class StateDb {
   }
 
   /**
+   * A new default-branch head seen by the head poll (pump/heads.mjs): the sha
+   * becomes `sha` and changed_at moves, with `reason` (head_first_seen or
+   * new_sha) as the change_reason. The subject's run_keys move with the sha,
+   * so its pairs are due as new_version. Nothing is written when the sha is
+   * the one held. Returns whether a row changed.
+   */
+  noteHead(id, { sha, reason, now } = {}) {
+    if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) throw new TypeError(`noteHead needs a full commit sha, got ${JSON.stringify(sha)}`);
+    const r = this.raw.prepare('UPDATE subjects SET sha = ?, changed_at = ?, change_reason = ? WHERE id = ? AND sha IS NOT ?')
+      .run(sha, iso(now), String(reason || 'new_sha'), id, sha);
+    return r.changes > 0;
+  }
+
+  /**
    * Retire every active subject first seen from a source starting with
    * `sourcePrefix` that is not in `keep`: it stays, with its results, but the
    * due list no longer picks it. Returns how many were retired.

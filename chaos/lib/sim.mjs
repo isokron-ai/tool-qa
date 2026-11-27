@@ -190,6 +190,8 @@ export class Sim {
       workflow_run: { id: 1 },
     }));
     this.gh.addRepo(WORKER, { branches: { main: 'b'.repeat(40) }, workflows: [WORKER_FILE] });
+    // the nightly sandbox conformance's repository: the watchdog's external-workflows item reads its workflow (R-WD-28)
+    this.gh.addRepo('isokron-ai/mcp-surface-corpus', { workflows: ['conformance-nightly.yml'] });
     this.gh.hooks.onDispatch = (repo, file, run, inputs) => this.onDispatch(repo, file, run, inputs);
     this.gh.hooks.onChange = () => this.observeState();
     this.gh.hooks.onCancel = (repo, run) => this.cancelRun(run);
@@ -1037,9 +1039,9 @@ export class Sim {
    * Everything that is wrong once the loop has had time to recover: the
    * invariant violations seen on the way, plus the end state. `allow` widens
    * what a scenario expects (worker runs the state cannot know after a
-   * restore, extra runs from an answer that lied).
+   * restore, extra runs from an answer that lied). `ignoreChecks`: health item id prefixes not judged.
    */
-  problems({ health = ['green'], allowOrphans = false, extraRuns = 0, allowParked = false } = {}) {
+  problems({ health = ['green'], allowOrphans = false, extraRuns = 0, allowParked = false, ignoreChecks = [] } = {}) {
     const out = [...this.violations];
     const s = this.readLive();
     if (!s || s.unreadable) {
@@ -1052,8 +1054,12 @@ export class Sim {
     if (lost.length) out.push(`no accepted result at the end for ${lost.map((m) => m.id).join(', ')}`);
     if (parked.size && !allowParked) out.push(`parked run_keys: ${[...parked].map((k) => k.slice(0, 12)).join(', ')}`);
     const h = this.health();
-    if (!health.includes(h.overall)) {
-      out.push(`health is ${h.overall}, expected ${health.join(' or ')}: ${Object.values(h.checks).filter((c) => c.status !== 'green').map((c) => `${c.id}=${c.status} (${c.summary})`).join('; ')}`);
+    // ignoreChecks: id prefixes left out of the judgement (the soak's simulated subjects never age, R-WD-23)
+    const rank = { off: 0, green: 1, amber: 2, red: 3 };
+    const judged = Object.values(h.checks).filter((c) => !ignoreChecks.some((p) => c.id.startsWith(p)));
+    const overall = ignoreChecks.length ? judged.reduce((b, c) => (rank[c.status] > rank[b] ? c.status : b), 'off') : h.overall;
+    if (!health.includes(overall)) {
+      out.push(`health is ${overall}, expected ${health.join(' or ')}: ${judged.filter((c) => c.status !== 'green').map((c) => `${c.id}=${c.status} (${c.summary})`).join('; ')}`);
     }
     const orphans = this.orphanRuns(s);
     if (orphans.length && !allowOrphans) out.push(`${orphans.length} worker run(s) the state does not know: ${orphans.map((r) => r.display_title).join(', ')}`);

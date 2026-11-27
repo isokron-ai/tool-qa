@@ -91,7 +91,9 @@
 // as retry_later or retry_throttled that are still in their backoff
 // (retry_backoff_minutes in pump/tiers.json, doubled for each retry, at most
 // retry_backoff_max_minutes) are skipped. A tier
-// cell in `sample` mode is due only through a sampling hook.
+// cell in `sample` mode is due only through the cellSample hook
+// (pump/sampling.mjs: a stable hash of subject, workflow and week under a
+// rate set by SAMPLE_RATE_T<n>; rate 0 picks nothing).
 //
 // computeDue() is pure. dueFromState() reads its inputs from the state store.
 
@@ -181,12 +183,14 @@ export function isOracleLane(tiers, workflowName) {
 
 /**
  * The default hooks. Each takes (subject, workflowName, ctx). The sampling
- * hooks pick nothing for now; coverageGap is the coverage-gap boost.
+ * hooks pick nothing by default (cellSample is pump/sampling.mjs when the pump
+ * passes it); coverageGap is the coverage-gap boost.
  */
 export const NO_HOOKS = Object.freeze({
   leadReverify: () => false,
   determinism: () => false,
   rawSample: () => false,
+  cellSample: () => false,
   coverageGap: coverageGapBoost,
   oracleDisagreement: oracleBoost,
 });
@@ -341,6 +345,7 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       if (h.leadReverify(s, name, ctx)) reasons.push('lead_reverify');
       if (h.determinism(s, name, ctx)) reasons.push('determinism_sample');
       if (h.rawSample(s, name, ctx)) reasons.push('raw_sample');
+      if (cell.mode === 'sample' && h.cellSample(s, name, ctx)) reasons.push('cell_sample');
       if (reasons.length === 0) continue;
 
       const ageDays = last ? Math.max(0, (now - toMs(last.accepted_at)) / DAY_MS) : 0;

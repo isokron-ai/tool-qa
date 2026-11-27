@@ -57,12 +57,35 @@ can't read (no zone, a typo) keeps the loop paused, so a mistake fails safe.
 
 ## Which variable affects which workflow
 
-| Variable | `history-registry` | `history-packages` | `history-popularity` | `pump` | `watchdog` | `ingest` (manual) | Workers (later) |
-|---|---|---|---|---|---|---|---|
-| `LOOP_ENABLED` | yes | yes | yes | yes | yes | yes | yes |
-| `LOOP_PAUSE_UNTIL` | yes | yes | yes | yes | yes | yes | yes |
-| `LANE_<JOB>_ENABLED` | `LANE_HISTORY_REGISTRY_ENABLED` | `LANE_HISTORY_PACKAGES_ENABLED` | `LANE_HISTORY_POPULARITY_ENABLED` | `LANE_PUMP_ENABLED` | `LANE_WATCHDOG_ENABLED` | `LANE_INGEST_ENABLED`; also refuses to run unless `LANE_PUMP_ENABLED` is off | their own lane |
-| `LOOP_SLOTS` | no | no | no | 0 = housekeeping only | 0 = no pump expected | no | yes |
+Every loop workflow runs the guard first (`scripts/guard.mjs --job <job>`), so `LOOP_ENABLED` and
+`LOOP_PAUSE_UNTIL` stop all of them, and each has its own lane switch. In this repository:
+
+| Workflow | Lane switch | Slots |
+|---|---|---|
+| `pump.yml` | `LANE_PUMP_ENABLED` (also `LANE_STATE_PRUNE_ENABLED`, `LANE_SUBJECT_IDS_ENABLED`, `LANE_HISTORY_REGISTRY_ENABLED` and `LANE_LIVE_SNAPSHOT_ENABLED` for the steps the pump runs) | `LOOP_SLOTS`: 0 = housekeeping only |
+| `watchdog.yml` | `LANE_WATCHDOG_ENABLED` | no; `LOOP_SLOTS=0` means no pump is expected |
+| `ingest.yml` (manual) | `LANE_INGEST_ENABLED`; also refuses to run unless `LANE_PUMP_ENABLED` is off | no |
+| `history-registry.yml`, `history-packages.yml`, `history-popularity.yml` | `LANE_HISTORY_REGISTRY_ENABLED`, `LANE_HISTORY_PACKAGES_ENABLED`, `LANE_HISTORY_POPULARITY_ENABLED` | no |
+| `meta-github.yml`, `meta-registry.yml`, `release-diff.yml` | `LANE_META_GITHUB_ENABLED`, `LANE_META_REGISTRY_ENABLED`, `LANE_RELEASE_DIFF_ENABLED` | no (source-only lanes) |
+| `state-snapshot.yml` | `LANE_STATE_SNAPSHOT_ENABLED` | no |
+| `offsite-backup.yml`, `keep-forever.yml` | `LANE_OFFSITE_ENABLED`, `LANE_KEEP_FOREVER_ENABLED` | no |
+| `ledger.yml`, `perf-baselines.yml` | `LANE_LEDGER_ENABLED`, `LANE_PERF_ENABLED` | no |
+| `publish-results.yml` | `LANE_PUBLISH_RESULTS_ENABLED`, and `RESULTS_PUBLISH_ENABLED` must be exactly `true` | no |
+
+The worker lanes that run third-party code or scan servers live in their own repositories and
+read variables there, not here: `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` and the lane switch in
+`mcp-check` (`LANE_SCAN_STATIC_ENABLED`, `LANE_LIVE_PROBE_ENABLED`) and in
+`mcp-writecheck-action` (`LANE_WRITECHECK_ENABLED`). Whether the pump dispatches a lane at
+all is `enabled` in `pump/workflows.json`. A lane switched off in its repository fails nothing: its
+runs end as a notice.
+
+One more variable of `mcp-check` is not a lane switch but an add-on of scan-static: `LANE_SCAN_STATIC_AST_GREP`, exactly
+`true` turns on the ast-grep oracle (O3). It is off by default. On, each scan-static bundle also carries `oracle_ast_grep`
+in its result and, where the reader and ast-grep differ, an `oracle_disagreements` field record; this repository's
+ingest (`state/oracle.mjs`) turns those into D1/D2 disagreements and applies the three-way rule. Turn it on only after
+the ingest that understands it is merged (it is inert without the variable, and without the facts).
+
+`chaos-soak.yml`, `test.yml`, `lint.yml`, `lint-workflows.yml` and `meta-fixture.yml` are CI: they read no switch and never touch the live loop (the soak plays schedules against a simulated GitHub; the fixture run reads public data and uploads a 3-day artifact the pump never ingests).
 
 The three history workflows capture public data and don't work in slots, so
 they run the guard with `--no-slots`: `LOOP_SLOTS=0` does not stop them. Use
@@ -76,6 +99,9 @@ copy (`keep-forever`, "Data retention") does the same, with
 The publish workflow (`publish-results`, docs/PUBLISHING.md) is off unless
 `RESULTS_PUBLISH_ENABLED` is exactly `true`, and then also obeys `LOOP_ENABLED`,
 `LOOP_PAUSE_UNTIL` and `LANE_PUBLISH_RESULTS_ENABLED`; it does not use slots.
+
+The lead pipeline (`LANE_LEADS_ENABLED`, read by the pump step; "Leads") is
+off unless set to `dry-run`, `recheck` or `true`.
 
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a
@@ -809,6 +835,70 @@ but no tool for it is shipped, so if v8 has run for long, prefer fixing
 forward (or switching the lookups off with `LANE_SUBJECT_IDS_ENABLED=false`)
 to a restore.
 
+## Change detection: subject heads (design audit A3)
+
+Until this, `subjects.sha` and `changed_at` were null on every subject: a
+subject was looked at again only on its tier's age, so a release or a new
+commit went unseen for up to 30 days. The head poll (`pump/heads.mjs`) writes
+both.
+
+**Where it runs.** In the pump, the state's only writer, right after the
+subject id pass at the start of every run (so on the pump's own schedule and
+self-chain, free public Actions). One GraphQL query reads up to 100 bound
+subjects by node id: `databaseId`, `isEmpty`, the default branch's head commit
+and `latestRelease`. It costs one point.
+
+**What it writes** (`state/db.mjs` `noteHead`, `noteChange`):
+
+| Seen | Written | Due as |
+|---|---|---|
+| a head, and the subject has no sha yet | `sha`, `changed_at`, `change_reason = head_first_seen` | `new_version` (the run_key moves once) |
+| a head other than the subject's sha | `sha`, `changed_at`, `change_reason = new_sha` | `new_version` |
+| the same head, a release published after `changed_at` | `changed_at`, `change_reason = new_release` | `change_event` |
+| a node not found, another repository id, a name other than `subjects.name` (renamed since the id pass), an empty repository, an error for that node | nothing (counted in kv `pump.heads`) | not due for it |
+
+Only subjects whose id the id pass vouches for (`id_status = ok`) are polled:
+one in conflict keeps an id that may not be the repository its name clones.
+A GraphQL error under one node (FORBIDDEN, say) concerns that entry only; an
+error only under its `latestRelease` loses the release and keeps the head; an
+error with no node path fails the query, which is asked again next run.
+
+A head it cannot read is never a fault of the server: nothing is recorded
+against the subject, and gone or renamed repositories stay the id pass's
+call ("Subject ids").
+
+**Cadence.** `pump/tiers.json` `head_poll_hours`: T0 every run, T1 hourly, T2
+every 6 hours, T3 daily, T4 every 3 days. Each tier is walked in key order from
+a cursor in kv `pump.heads` (`tiers`); a new cycle starts once the last one has
+finished and started at least that many hours ago. One query mixes tiers, and
+T0 takes at most a quarter of a run's picks, so it can never starve the rest.
+
+**Budget.** At most 3 queries a run (300 subjects), through the pump's API
+budget (family `graphql`, 30 an hour and 5 a minute, shared with the id pass)
+on the job's `GITHUB_TOKEN`, leaving the last 8 of the hourly 30 calls to the
+id pass. Before the first query a pass checks GitHub's last known GraphQL
+points (kept with the budget across runs) and makes none below 200; it also
+stops once an answer reports fewer than 200. The 997 seed subjects need 10 queries
+a day plus about one an hour for T0 to T2. A refused or failed query leaves
+the cursor where it was: the next run asks again.
+
+**Switch.** `LANE_HEADS_ENABLED`: only the exact value `true` runs the poll.
+Off, kv `pump.heads` says `off: true`, and subjects come due on their tier's
+age as before. Turning it on makes every bound subject due once
+(`head_first_seen`), in tier order: that is the backlog the loop has not been
+running.
+
+**Health.** The watchdog's `subject-heads` item (`watchdog/heads.mjs`) reads
+kv `pump.heads`: amber when no poll has been written for 6 hours or the last
+pass stopped on an error or the budget, red after 24 hours, off when switched
+off. A first pass that has not written yet is amber until it is a day old.
+Holding points or calls back for others is not an error. The pump logs `pump: subject heads: ...` every run.
+
+**Dry run against the live state.** Pull and decrypt the state into a 0700
+temporary folder, then run the pass with a read-only token against a copy:
+`node scripts/heads-dry-run.mjs --state <copy>` prints what it would write
+and the due list before and after, and never pushes.
+
 ## The pump
 
 `.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
@@ -1048,7 +1138,7 @@ that call needs, and refuse a token that comes back with more.
 | What | Where | Value |
 |---|---|---|
 | App permissions | App settings | Repository: Actions read and write, Issues read and write, Metadata read. Nothing else. |
-| App installation | Organisation settings | `tool-qa` and each worker repository (for example `mcp-check`, `mcp-writecheck-action`). |
+| App installation | Organisation settings | `tool-qa` and each worker repository (for example `mcp-check`, `mcp-writecheck-action`). The watchdog's `sandbox-selftest` item needs `mcp-check` and `mcp-writecheck-action` covered: the job `GITHUB_TOKEN` cannot read their job logs (403), so it mints `actions: read` for them. |
 | `APP_ID` | Variable (repository or `loop` environment) | The App's id. |
 | `APP_INSTALLATION_ID` | Variable (repository or `loop` environment) | The installation's id. |
 | `APP_PRIVATE_KEY` | Secret in the `loop` environment only | The App's private key (PEM). |
@@ -1065,6 +1155,7 @@ What each token is used for:
 | pump (successor) | `tool-qa` | `actions: write` | dispatching the next pump run |
 | pump (successor failed) | `tool-qa` | `issues: write` | marking `pump-successor` red on the health issue |
 | watchdog | `tool-qa` | `issues: write`, `actions: write` | reading runs and artifacts, dispatching the pump, re-enabling workflows, the health issue |
+| watchdog (self tests) | each enabled lane repository that runs third-party code (`mcp-check`, `mcp-writecheck-action`) | `actions: read` | the `sandbox-selftest` item: failed runs, their jobs and the head of the failing self-test job's log (the runner image). A mint failure falls back to the job `GITHUB_TOKEN` and shows amber with the reason |
 | ingest (manual) | the one worker repository | `actions: read` | reading that run and its result artifact |
 
 The state asset is pushed with the pump job's own token (`contents: write` on
@@ -1075,6 +1166,23 @@ Create the environment under Settings → Environments → `loop`. Limit
 deployment branches to `main`, so no other branch can use the key, and add no
 required reviewers (scheduled runs would wait for approval). Each pump and
 watchdog run shows up as a deployment to `loop`; that is expected.
+
+## Sampling `mode: sample` tier cells (E12)
+
+A tier cell in `mode: sample` in `pump/tiers.json` (T2 `writecheck`, T3 `scan-deep`, `build-probe` and `writecheck`) is due only when the sampling hook (`pump/sampling.mjs`) picks the pair. The pick is a stable hash of subject id, workflow and ISO week (UTC) under a rate, so every pump run in a week agrees and the sample moves when the week turns. A picked pair runs once a week: a result accepted this week is that week's sample. The due reason is `cell_sample`.
+
+Repository variables, one pair per tier (T1 to T4), passed to the Pump step:
+
+| Variable | Meaning | Unset means |
+|---|---|---|
+| `SAMPLE_RATE_T<n>` | Share of the tier's subjects sampled per workflow, 0 to 1, a plain decimal (a value above 1 reads as 0) | 0: nothing is sampled |
+| `SAMPLE_CAP_T<n>` | Most pairs per workflow per week in that tier (the lowest scores are kept) | 25 |
+
+The shipped state is no variable set, so rate 0 and the due list is unchanged. Opening a tier is a repository variable change by the owner: set `SAMPLE_RATE_T2` (for example `0.1`) and, if wanted, `SAMPLE_CAP_T2`. A lane that is not enabled in `pump/workflows.json` still dispatches nothing. To stop sampling again, unset the variable or set it to 0.
+
+## Coverage judgments (G2)
+
+The four tool coverage numbers (docs/METHODOLOGY.md) need to know which assessed results were right. Until a judgment is recorded, conditional correctness, frame coverage and gross coverage read "not yet measurable". To record judgments: pull a copy of the state (`node scripts/state-asset.mjs pull`), run `node scripts/coverage-truth.mjs --state <copy> --judgments <file>` (or `--qa-csv <per-repo-results.csv>`) without `--apply` to see the counts, then with `--apply`, and push the copy back as for any operator write to the state (one writer at a time; see "State store: one writer at a time"). The script prints counts only.
 
 ## The loop health issue
 
@@ -1104,6 +1212,14 @@ person. off: switched off on purpose.
 | `config` | Red: the pump cannot load `pump/workflows.json` (for example `enabled` or `runs_untrusted` is not a real boolean), so it dispatches nothing. | Fix the file; the details name the entry. |
 | `archive` | The Mac archive pull's last good run (repository variable `ARCHIVE_LAST_OK`, set by `scripts/archive-pull.mjs`) is more than 12 hours old, or dated in the future (amber); more than 24 hours old, or the variable is empty, not JSON or has no valid `at` (red). `off` when the variable is `off` (stop the Mac's agent first, or its next good pull sets the variable again). | On the Mac: `tail ~/Library/Logs/tool-qa-archive-pull.log`, `launchctl print gui/$(id -u)/ai.isokron.tool-qa.archive-pull`, then `launchctl kickstart` it. See "Archive of history artifacts and ingest outputs". |
 | `sandbox-breaker` | The nightly sandbox conformance status is red, stale or unreadable ("The sandbox breaker" above). Red: an enabled lane runs third-party code and the pump is holding it. Amber: it would hold lanes, but none is enabled; or it is closed but an enabled lane pins another sandbox commit than the nightly tested. | Open the linked `conformance-nightly` run and follow "To clear it" above. For a pin difference, bump the lane's sandbox pin and `sandbox_sha`. |
+| `sandbox-selftest` | The sandbox self test (`sandbox / sandbox-selftest`, the guard that fails closed) failed on the enabled lanes that run third-party code (live-probe in `mcp-check`, writecheck in `mcp-writecheck-action`). Amber: 2 or more failures in the last 6 hours, or one on a runner image the nightly has not passed on (an image whose log could not be read counts as not passed on), or the lookup failed (`could not read`). Never red: a lane that fails closed ran nothing and uploaded nothing, its items come back `no_artifact` and are retried. Also amber: the run list was truncated and no failure was found; no job named like the self test in the failed runs examined (renamed?); a 404 on a runs list; no token to read with (the log token could not be minted and `GITHUB_TOKEN` is unset: the tool-qa App token is never a fallback). Off when no such lane is enabled. The summary gives the count, the lanes, the runner image version(s), the image the nightly last passed on, and links the newest failing job. Reads: 1 to 3 pages of completed runs per lane (last 7 hours; the API takes one status, so the conclusions failure, timed_out, startup_failure and cancelled are picked here), 1 jobs call per such run (at most 10 per lane), and for each failing job (at most 3 in all) 2 calls: the API's 302 (token) and the blob store (no token, Range). Two calls when nothing failed. The run and job lists are of public repositories; job logs return 403 to the watchdog job's own `GITHUB_TOKEN` for them, so the watchdog mints a second App installation token for the lane repositories with `actions: read` only and reads with that (the App installation must cover them). If minting fails the reads fall back to the job token and the item is amber with the reason (images then read `unknown`). The image is the `Version:` line of the job log's `Runner Image` group, from a ranged read of the first 12 KiB (the Range header holds across the redirect to the blob store: HTTP 206). | Open the linked job. One failure on the image the nightly passed on is a flake: read the self-test telemetry artifact. Several, or all on one new image: a runner image rollout broke the sandbox; compare the image with the nightly status (`runner_image`), and hold the lanes (`enabled: false` in `pump/workflows.json`) until `mcp-surface-corpus` has a fix pinned. |
+| `lane-fresh:<lane>` | The newest accepted result of an enabled lane (kv-free: `results.accepted_at`) is over 6 hours old (amber) or over 24 hours (red), **whatever is due**: on 27 Nov nothing came due for 18 of 30 hours and "nothing due" must not excuse it. A lane with no result is amber, red once its first dispatch is over 24 hours old. `off` when the pump is off or the sandbox breaker holds the lane; a disabled lane has no item. | Read `pump-idle` for why nothing goes out; then the lane's last runs and the pump log. |
+| `pump-idle` | Nothing dispatched for over 3 hours (amber) or 12 hours (red) while the frame is incomplete: a subject with no sha or digest or no `changed_at` (change detection never set it), a subject with no result on an enabled `always` lane, or a newest result older than its tier's max age (`pump/tiers.json`). The summary counts them: subjects with no version, never-assessed and stale subjects per lane. Also amber when the pump's latest tick (under 30 minutes old) had subjects due, dispatched none, stopped on nothing and nothing is in flight. | A null sha everywhere means no poller sets versions: nothing becomes due until a tier's age runs out. Fix the release or SHA poller (audit A3) and the frame fill (A2); meanwhile read the pump's last tick (`pump.last_tick`) and the workflows' pause state. |
+| `coverage:<lane>` | The assessment number of `state/coverage.mjs` `computeCoverage` (the same value the health issue's "Tool coverage" table shows): assessed results over eligible subjects of the lane's whole frame, policy-excluded results leaving the denominator. Amber under 80%, red under 50%. Not the share of the last 24 hours, so a lane that skips most servers does not look covered. The other three numbers (conditional correctness, frame coverage, gross) are in the table; they are not yet measurable until results are judged. Without a computable coverage block the item `coverage` is amber; an enabled lane that has no number (every result excluded, or a lane the block skips as not built) is amber with the reason. | The lane's skips by reason and fault in the check-in; `tool-failures` says how many are ours. |
+| `tool-failures:<lane>` | Results whose skips are our tool's fault (`results.fault = tool`). Always shown as counts: now, and of the last 24 hours. Amber from 50 results now or 20% of the last 24 hours (at least 5 results), red from 50% of the last 24 hours. | Open the lane's `tool` fault skips in the check-in; they are bugs of ours to fix or reclassify. |
+| `oracle-disagreements` | Open oracle disagreements (`oracle_disagreements`): the count. Amber when the oldest has been open over 14 days (it is not settling). | `docs/INTERFACES.md`, oracle disagreement; the due list re-checks them. |
+| `ingest-rejects` | Ingest rejects for pin and schema reasons in the last 24 hours (`pin_mismatch`, `pin_unverified`, `manifest_invalid`, `manifest_not_json`, `observation_format`, `undeclared_field`, `deprecated_field`, `field_type`), by reason. Amber when each of the two newest worker runs had one. | `ingest/README.md`, rejection reasons; a pin refusal pauses its lane. |
+| `external-workflows` | The workflows the lanes depend on outside the loop's own list: the nightly `conformance-nightly.yml` and the workflow file of every enabled lane, read with the job token (public repositories, one call each). Amber: disabled by GitHub for inactivity (the watchdog's token cannot enable them: do it by hand), not found, or unreadable. `off`: disabled by hand. `watchdog/expected-workflows.json` also lists the tool-qa capture workflows (ledger, perf-baselines, chaos-soak, publish-results), which the watchdog re-enables itself, and an `external` list for more. | Enable the workflow (Actions, or `gh workflow enable`). |
 | `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
 | `state-size` | The state database (or the asset it was pulled from) is over 256 MiB, the `state-snapshots` release holds over 2 GB, the last prune pass failed or gave up its archive, or a pump run finished without recording a size (amber); the database is over 768 MiB or the snapshots over 6 GB (red). The details show the database and asset size, the main row counts, the last prune result and the snapshot total. | A failed or given-up pass needs nothing if the next one succeeds; otherwise read the pump log's `prune:` lines. If the size keeps growing, check that pruning is on (`LANE_STATE_PRUNE_ENABLED`) and that `ingest-state-archive-*` artifacts are uploaded. Red: act before it reaches 1 GiB (see "State pruning and size"). |
 | `live-snapshot` | The live loop view snapshot (kv `live.last_upload`). `off` unless `LANE_LIVE_SNAPSHOT_ENABLED` is exactly `true`. Amber: the last good upload is over 20 minutes old (or none yet); red: over 40 minutes, no good upload at all 40 minutes after the first attempt (a missing credential shows here), the builder cannot run (`error: build`), or a scan block has not been followed by a good upload. | Read the pump log's `live:` lines (they name the scan rule and path, never the text). Red from the scan: find what leaked into the snapshot and fix the builder; nothing is published meanwhile. Otherwise check the R2 credentials and the bucket. To stop: "Live loop view snapshot". |
@@ -1113,6 +1229,12 @@ person. off: switched off on purpose.
 | `keep-forever` | The keep-forever copy on the `keep-forever` release ("Data retention"): no good run for 12 hours, the last run failed, or an artifact has waited over 30 days to be copied (amber); no good run for 24 hours, or an artifact has waited over 60 days (red: GitHub deletes it at 90). Off: `LANE_KEEP_FOREVER_ENABLED` is not `true`. | Open the newest `keep-forever` run's summary. Dispatch it if no run is recent (`gh workflow run keep-forever.yml --repo isokron-ai/tool-qa`) and check the stand-in scheduler. |
 | `retention-seal` | The last seal of the pump's outputs could not compress, or could not write the keep-forever file (amber); three seals in a row failed (red). The full bundle was still sealed, as a plain tar if need be, so nothing is lost, but each such seal leaves a hole in the keep-forever set. | Read the item's summary for the error (kv `retention.seal` in the state); fix the cause, then the next clean seal turns it green. "Data retention". |
 | `keep-markers` | A seal whose keep-forever file failed has no `ingest-keepgap-<run>-<attempt>` artifact an hour later (red: the marker was lost), or cannot be matched to a run or is older than the artifact list reaches (amber). Green when every failed one has its marker, or none failed in the last 2 days. | Open the named pump run's "Upload the keep-forever gap markers" step. The prune checks every item's keep file itself ("Data retention"), so nothing expires unprotected; the marker is the second line. |
+
+The watchdog comments on the issue when a red item appears that was not red on its previous
+run (naming it), and when overall health recovers from red. An item that stays red for days
+(a coverage number, say) does not hide the next real one: each new red id is announced. A red
+item changes nothing else: the watchdog dispatches the pump only when no pump run started for
+20 minutes, and re-enables only workflows GitHub disabled for inactivity; nothing reads this issue to pause a lane.
 
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
