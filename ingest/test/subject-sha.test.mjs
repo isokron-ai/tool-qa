@@ -1,12 +1,15 @@
 // The commit read against the commit the run_key names (R-SHA-01). No network.
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
-import { openState } from '../../state/db.mjs';
+import { openState, subjectShaFact } from '../../state/db.mjs';
 import { ingestAttempt } from '../ingest.mjs';
 import { normalizeAttempt } from '../ledger.mjs';
 import { parseRegistry } from '../registry.mjs';
 import { workflowProblems } from '../../pump/due.mjs';
+import { workerInputs } from '../../pump/dispatch.mjs';
+import { runTick } from '../../pump/tick.mjs';
 import { laneShaModes, shaCheckMode } from '../../pump/pins.mjs';
 import { defaultFiles, expectedRow, fakeDecrypt, fakeEncrypt, fakeGithub, fakeLedger, makeBundle, REGISTRY_TEXT, RUN_ID, WORKER_REPO } from '../testkit.mjs';
 
@@ -79,4 +82,67 @@ test('R-SHA-04: a result that measured nothing (every skip retryable, retries us
   assert.equal(nothing.r.outcome, 'accepted');
   assert.equal(nothing.ledger.records[0].resultOutcome, 'skips_only');
   assert.equal(nothing.report.subject_sha.match, false);
+});
+
+const MIN = 60_000;
+/** One dispatched item of `lane`, the way the pump makes it. */
+function dispatched(db, { attemptId = 'att-1', runKey = 'a'.repeat(64), now = 0, lane = 'scan-static' } = {}) {
+  db.acquireSlot(attemptId, { budget: 5, ttlMs: 30 * MIN, now });
+  const l = db.acquireLease(runKey, attemptId, { ttlMs: 30 * MIN, now });
+  db.createDispatch({ attemptId, shardId: `shard-${attemptId}`, workflow: lane, repo: WORKER_REPO, workflowFile: 'qa.yml', ref: 'main', expires: now + 30 * MIN, items: [{ run_key: runKey, subject: 'a/b', fence: l.fence }], now });
+  return l.fence;
+}
+
+test('R-SHA-05: the commit goes to a worker only on a lane that says send_sha; enforce needs send_sha', () => {
+  const items = [{ subject: 'a/b', run_key: 'r'.repeat(64), fence: 1, sha: OTHER }, { subject: 'a/c', run_key: 's'.repeat(64), fence: 2, sha: null }];
+  assert.deepEqual(JSON.parse(workerInputs({ shardId: 's', attemptId: 'a', items }).items), [{ subject: 'a/b', run_key: 'r'.repeat(64), fence: 1 }, { subject: 'a/c', run_key: 's'.repeat(64), fence: 2 }]);
+  assert.deepEqual(JSON.parse(workerInputs({ shardId: 's', attemptId: 'a', items, sendSha: true }).items).map((x) => x.sha ?? null), [OTHER, null]);
+  assert.deepEqual(JSON.parse(workerInputs({ shardId: 's', attemptId: 'a', items: [{ ...items[0], sha: 'main' }], sendSha: true }).items)[0].sha, undefined, 'only a full sha is sent');
+  const lane = (over) => ({ x: { enabled: true, runs_untrusted: false, ...over } });
+  assert.ok(workflowProblems(lane({ sha_check: 'enforce' })).some((p) => /needs send_sha true/.test(p)));
+  assert.deepEqual(workflowProblems(lane({ sha_check: 'enforce', send_sha: true })), []);
+  assert.ok(workflowProblems(lane({ send_sha: 'yes' })).some((p) => /send_sha must be/.test(p)));
+  const shipped = JSON.parse(readFileSync(new URL('../../pump/workflows.json', import.meta.url), 'utf8')).workflows;
+  assert.deepEqual(workflowProblems(shipped), []);
+});
+
+test('R-SHA-05: in a tick, only the lane with send_sha sends each item its run_key\'s commit', async () => {
+  const tiers = JSON.parse(readFileSync(new URL('../../pump/tiers.json', import.meta.url), 'utf8'));
+  const wf = (file, over = {}) => ({ enabled: true, runs_untrusted: false, repo: 'isokron-ai/mcp-check', file, ref: 'main', shard_size: 5, setup_minutes: 1, minutes_per_subject: 1, slots_max: 2, pin_check: 'label', versions: { tool: {}, oracle: {}, probe: {} }, image_digest: null, settings_state: 'default', ...over });
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'a/b', kind: 'github', source: 'seed-v1', tier: 1, sha: OTHER, now: 0 });
+  const calls = [];
+  const dispatcher = { async dispatch(req) { calls.push(req); return { runId: calls.length, runUrl: null, correlatedBy: 'response' }; }, async resolveRef() { return 'f'.repeat(40); } };
+  let n = 0;
+  await runTick({ db, now: () => 1000, config: { tiers, workflows: { 'scan-static': wf('scan-static.yml', { send_sha: true }), 'live-probe': wf('live-probe.yml') } }, workerSlots: 4, dispatcher, newId: () => `att-${++n}` });
+  const sent = Object.fromEntries(calls.map((c) => [c.workflowFile, JSON.parse(c.inputs.items)[0]]));
+  assert.equal(sent['scan-static.yml'].sha, OTHER);
+  assert.equal('sha' in sent['live-probe.yml'], false);
+  db.close();
+});
+
+test('R-SHA-06: a result accepted on a label lane with the wrong commit says so in the state: the commit read is kept with its result_recorded event', async () => {
+  const label = await judge({ sha: OTHER, mode: 'label' });
+  assert.deepEqual(label.ledger.records[0].subjectSha, { expected: OTHER, got: READ });
+  const db = openState(':memory:');
+  const fence = dispatched(db);
+  db.recordResult({ run_key: 'a'.repeat(64), attempt_id: 'att-1', fence, outcome: 'accepted', accepted: true, subjectSha: { expected: OTHER, got: READ }, now: 1000 });
+  const ev = db.listEvents().find((e) => e.type === 'result_recorded');
+  assert.deepEqual(ev.data.subject_sha, { expected: OTHER, got: READ, match: false });
+  assert.equal(subjectShaFact({ expected: 'x', got: READ }), null);
+  assert.deepEqual(subjectShaFact({ expected: OTHER, got: 'HEAD' }), { expected: OTHER, got: null, match: false });
+  db.close();
+});
+
+test('R-SHA-07: subject_sha_mismatch never parks a run_key; it waits the retry backoff instead', () => {
+  const db = openState(':memory:');
+  const key = 'a'.repeat(64);
+  for (let i = 0; i < 4; i++) {
+    const fence = dispatched(db, { attemptId: `att-${i}`, now: i * 60 * MIN });
+    db.recordResult({ run_key: key, attempt_id: `att-${i}`, fence, outcome: 'rejected', accepted: false, reason: 'subject_sha_mismatch', now: i * 60 * MIN + 1 });
+  }
+  assert.equal(db.rejectedRunKeys(3).some((r) => r.run_key === key), false, 'not parked');
+  assert.ok(db.retryLaterWaiting({ now: 3 * 60 * MIN + 2, baseMs: 30 * MIN }).includes(key), 'in its backoff');
+  assert.equal(db.retryLaterWaiting({ now: 3 * 60 * MIN + 2 + 9 * 60 * MIN, baseMs: 30 * MIN, maxMs: 6 * 60 * MIN }).includes(key), false, 'and due again after it');
+  db.close();
 });

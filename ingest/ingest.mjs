@@ -316,6 +316,8 @@ export async function openAttempt(input, deps) {
         // The result's fault side and coverage state (R-COV-02): a tool-fault
         // skip is stored as unassessed_tool, never as excluded or the subject's.
         ...(outcome === 'accepted' && report.bundle?.coverage ? { fault: report.bundle.fault ?? null, coverage: report.bundle.coverage } : {}),
+        // The commit read against the commit filed (R-SHA-06), kept in the state with the result.
+        ...(report.subject_sha ? { subjectSha: { expected: report.subject_sha.expected, got: report.subject_sha.got } } : {}),
         // What the oracle lanes said, for the subject's disagreement record
         // (loop upgrade #7); it never changes the fault side or coverage.
         ...(outcome === 'accepted' && files ? (() => { const oracle = oracleFactsFromFiles(row.workflow_name, files); return oracle ? { oracle } : {}; })() : {}),

@@ -96,8 +96,21 @@ function checkTtl(ttlMs) {
 // pin_unverified (R-PIN-01): our worker ran, or did not prove it ran, other
 // code than the run_key is filed under; that is our side, and the lane is
 // paused instead (pausePinRefused), so a fixed worker never finds its work parked.
-export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch', 'pin_mismatch', 'pin_unverified']);
+// Nor does subject_sha_mismatch (R-SHA-01): the branch moved, or the worker read
+// another commit; it waits the retry backoff instead (retryLaterWaiting), and
+// the next head poll gives the subject a new run_key.
+export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch', 'pin_mismatch', 'pin_unverified', 'subject_sha_mismatch']);
 const NOT_COUNTED = NOT_COUNTED_REASONS.map((r) => `'${r}'`).join(', ');
+
+/** The commit-read fact kept with a result (R-SHA-06): {expected, got, match}, or null when it is malformed or absent. */
+export function subjectShaFact(v) {
+  if (!v || typeof v !== 'object') return null;
+  const sha = (x) => (typeof x === 'string' && /^[0-9a-f]{40}$/.test(x) ? x : null);
+  const expected = sha(v.expected);
+  if (expected === null) return null;
+  const got = sha(v.got);
+  return { expected, got, match: got === expected };
+}
 
 /** Event data strings are bounded (reasons, URLs, lane names). */
 function cap(v, max = 200) {
@@ -1071,7 +1084,7 @@ export class StateDb {
    *   It never changes fault or coverage.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, completedAt = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, subjectSha = null, completedAt = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -1117,7 +1130,11 @@ export class StateDb {
       `).run(subject, attemptId, Number.isSafeInteger(fence) ? fence : -1, d?.run_id ?? null, runKey, digest, t, ok ? 1 : 0, why, attemptId, stored);
       this.recordEvent({
         type: 'result_recorded', lane: item?.workflow ?? d?.workflow ?? this.getRunKey(runKey)?.workflow ?? null, subject: subject === 'unknown' ? null : subject,
-        data: { verdict: ok ? 'accepted' : 'rejected', reason: cap(why), outcome: ok ? resultOutcome ?? outcome : stored, fault: ok ? fault : null, coverage: ok ? coverage : null },
+        data: {
+          verdict: ok ? 'accepted' : 'rejected', reason: cap(why), outcome: ok ? resultOutcome ?? outcome : stored, fault: ok ? fault : null, coverage: ok ? coverage : null,
+          // R-SHA-06: the commit the worker read, against the one the run_key names (label lanes accept a mismatch).
+          ...(subjectShaFact(subjectSha) ? { subject_sha: subjectShaFact(subjectSha) } : {}),
+        },
       }, now);
       if (current) {
         this.raw.prepare('UPDATE dispatch_items SET resolved = ? WHERE attempt_id = ? AND run_key = ?').run(t, attemptId, runKey);
@@ -1310,7 +1327,7 @@ export class StateDb {
     const t = toMs(now);
     const rows = this.raw.prepare(`
       SELECT a.run_key, COUNT(*) AS n, MAX(a.received) AS last FROM attempts a
-      WHERE a.reason IN ('retry_later', 'retry_throttled') AND a.run_key IS NOT NULL
+      WHERE a.reason IN ('retry_later', 'retry_throttled', 'subject_sha_mismatch') AND a.run_key IS NOT NULL
         AND a.received > COALESCE((SELECT accepted_at FROM results r WHERE r.run_key = a.run_key), '')
       GROUP BY a.run_key
     `).all();
