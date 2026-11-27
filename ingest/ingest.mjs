@@ -530,13 +530,12 @@ export async function openAttempt(input, deps) {
  * The leads of an accepted bundle (state/fingerprint.mjs leadFailures), never
  * throwing: null when the manifest or the bundle cannot be read here (not
  * folded at all), [] when it carries none.
- * leads: {names: Set|() => Set} the subject-name tokens no signature word may share.
+ * leads: {langOf?} the seed's repository language per subject.
  */
 export function bundleLeads(manifestBytes, files, item, lane, leads) {
   try {
     const manifest = JSON.parse(Buffer.from(manifestBytes).toString('utf8'));
-    const names = typeof leads.names === 'function' ? leads.names() : leads.names;
-    return leadFailures(itemFromBundle({ manifest, files, subject: item.subject, lane }), { names, ...(leads.langOf ? { langOf: leads.langOf } : {}) });
+    return leadFailures(itemFromBundle({ manifest, files, subject: item.subject, lane }), { ...(leads.langOf ? { langOf: leads.langOf } : {}) });
   } catch {
     return null;
   }
@@ -579,7 +578,7 @@ function checkRun(run, row, seen) {
  * @param {Record<string, string[]>} [deps.throttleStages]  lane -> throttle_stages (default: pump/workflows.json)
  * @param {Record<string, string>} [deps.pinModes]  lane -> pin_check mode, label or enforce (default: pump/workflows.json)
  * @param {Record<string, string>} [deps.shaModes]  lane -> sha_check mode, label or enforce (default: pump/workflows.json; R-SHA-01)
- * @param {{names: Set<string>|(() => Set<string>), langOf?: Function}|null} [deps.leads]  set while the lead pipeline is on: each accepted
+ * @param {{langOf?: Function}|null} [deps.leads]  set while the lead pipeline is on: each accepted
  *   result's leads go to recordResult as `failures` (bundleLeads)
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}

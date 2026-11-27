@@ -4,9 +4,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { itemsFromEntries } from '../longitudinal/checkin.mjs';
+import { loadCodes, missing, readCheckout } from '../scripts/fingerprint-codes.mjs';
 import { bundleLeads } from '../ingest/ingest.mjs';
 import {
-  failuresOf, fingerprintOf, itemFromBundle, laneOf, leadFailures, leadKeyOf, nameTokens, toolName, toolTags,
+  CODES, failuresOf, fingerprintOf, itemFromBundle, laneOf, leadFailures, leadKeyOf, nameTokens, toolName, toolTags,
 } from '../state/fingerprint.mjs';
 
 const enc = (o) => Buffer.from(JSON.stringify(o));
@@ -141,4 +142,28 @@ test('R-CHECKIN-18: the signature carries live-probe\'s fine cause (an allow-lis
     const [f] = failuresOf(item(free), { faults: ['tool'] }, { names: nameTokens(['acme/widget-mcp']) });
     assert.match(f.signature, /;detail=<other>;/, free);
   }
+});
+
+test('R-LEAD-37: error and list-error words come from fixed lists of our codes, so a fingerprint never changes as subjects are added (SyntaxError stays syntaxerror next to a server called axe)', () => {
+  const b = bundle({ subject: 'tools/axe', result: { status: 'error', error_name: 'SyntaxError', list_error: 'too_many_tools' } });
+  const alone = failuresOf(itemFromBundle(b), { faults: ['tool'] });
+  const crowded = failuresOf(itemFromBundle(b), { faults: ['tool'] }, { names: nameTokens(['tools/axe', 'syntax-org/error-server', 'too/many-tools']) });
+  assert.match(alone[0].signature, /error=syntaxerror;list_error=too_many_tools;/);
+  assert.deepEqual(crowded.map((f) => leadKeyOf(f).id), alone.map((f) => leadKeyOf(f).id), 'the same lead whatever names exist');
+  // Our own classes and the built-ins are kept; anything else is <other>.
+  for (const n of ['McpFetchError', 'BundleTooLarge', 'TypeError', 'AbortError']) assert.ok(CODES.error_names.includes(n), n);
+  const other = failuresOf(itemFromBundle(bundle({ result: { status: 'error', error_name: 'AcmeWidgetCrash', list_error: 'acme_code' } })), { faults: ['tool'] });
+  assert.match(other[0].signature, /error=<other>;list_error=<other>;/);
+});
+
+test('R-LEAD-38: the committed codes hold every detail, list error and error class mcp-check declares (checked against a checkout when MCP_CHECK_DIR is set)', { skip: process.env.MCP_CHECK_DIR ? false : 'set MCP_CHECK_DIR to an mcp-check checkout' }, () => {
+  assert.deepEqual(missing(readCheckout(process.env.MCP_CHECK_DIR)), {});
+});
+
+test('R-LEAD-38: the committed codes include the live-probe causes the review found missing, and the module reads that file', () => {
+  const codes = loadCodes();
+  for (const d of ['registry_query_refused', 'image_access_denied', 'resolver_error', 'no_tools_capability', 'start_dependency_drift', 'repo_unavailable', 'reader_error']) assert.ok(codes.details.includes(d), d);
+  assert.deepEqual(CODES, codes);
+  const [f] = failuresOf(itemFromBundle(bundle({ lane: 'live-probe', skips: [{ stage: 'resolve', reason: 'no_runnable_artifact', fault: 'tool' }], result: { status: 'skipped', detail: 'resolver_error' } })), { faults: ['tool'] });
+  assert.match(f.signature, /;detail=resolver_error;/);
 });

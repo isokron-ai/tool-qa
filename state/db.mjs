@@ -1169,7 +1169,7 @@ export class StateDb {
             fault, coverage, assessed);
           if (oracle || ORACLE_LANES.includes(item.workflow)) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now });
           if (Array.isArray(failures)) {
-            this.noteLeads(item.subject, item.workflow, runKey, failures, {
+            this.foldLeads(item.subject, item.workflow, runKey, failures, {
               now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now, runId: d.run_id ?? null, coverage: skipsOnly ? null : coverage,
             });
           }
@@ -1393,6 +1393,38 @@ export class StateDb {
       setLead(p.fingerprint, cols);
     }
     return out;
+  }
+
+  /**
+   * noteLeads() in its own savepoint, for recordResult(): a lead that cannot be
+   * folded (a bad row, a constraint) rolls back only its own writes, is counted
+   * in kv `leads.fold_failures` ({count, last_at, last_error}) and logged as one
+   * line; the result is recorded all the same (R-LEAD-36). Only when SQLite gave
+   * up the whole transaction does the error go on, as it would for the result.
+   * @returns {object|null} noteLeads()'s answer, or null when it failed
+   */
+  foldLeads(subject, lane, runKey, failures, o = {}) {
+    this.raw.exec('SAVEPOINT lead_fold');
+    try {
+      const r = this.noteLeads(subject, lane, runKey, failures, o);
+      this.raw.exec('RELEASE lead_fold');
+      return r;
+    } catch (err) {
+      try {
+        this.raw.exec('ROLLBACK TO lead_fold');
+        this.raw.exec('RELEASE lead_fold');
+      } catch {
+        throw err;
+      }
+      const t = Number.isFinite(toMs(o.now)) ? iso(o.now) : new Date().toISOString();
+      const message = cap(String(err?.message ?? err));
+      try {
+        const prev = this.getKv('leads.fold_failures');
+        this.setKv('leads.fold_failures', { count: (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1, last_at: t, last_error: message }, { now: t });
+      } catch { /* counted where it can be */ }
+      try { this.log(`state: a lead of ${lane} could not be folded (the result is kept): ${message}`); } catch { /* the log is only a line */ }
+      return null;
+    }
   }
 
   /** The leads, parsed (versions as a list). `status` filters (default: all). */
