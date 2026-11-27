@@ -75,7 +75,9 @@
 //                      "recheck" or "true"; ingest keeps each accepted result's
 //                      leads in the state (StateDb.noteLeads); with "recheck" or
 //                      "true" the due list also re-dispatches each open lead's
-//                      re-check pair (leads/recheck.mjs)
+//                      re-check pair (leads/recheck.mjs); every run writes the
+//                      filing plan to the job summary, and only "true" files,
+//                      closes and reopens issues on our repositories (leads/step.mjs)
 //   LANE_LIVE_SNAPSHOT_ENABLED   only the exact value "true" publishes the live
 //                      loop snapshot to R2 (live/publish.mjs); with
 //                      LIVE_R2_ACCESS_KEY_ID, LIVE_R2_SECRET_ACCESS_KEY,
@@ -111,6 +113,7 @@ import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
 import { leadsMode, rechecksLeads } from '../state/leads.mjs';
 import { leadRecheckHook, recheckPairs } from '../leads/recheck.mjs';
+import { leadStep } from '../leads/step.mjs';
 import { HISTORY_TIMES_KEY, HISTORY_TIMES_REFRESH_MS, historyList, historyTimesDue, refreshHistoryTimes } from './history-times.mjs';
 
 const DEFAULT_STATE = 'state/state.sqlite';
@@ -631,6 +634,15 @@ export async function runPump({
       const next = tickStart + tickIntervalMs;
       if (next >= deadline) break;
       await sleepToNextTick(next, tickStart);
+    }
+    // The lead step (leads/step.mjs): the filing plan to the job summary, and with LANE_LEADS_ENABLED=true the
+    // issues on our repositories. Not after a failed push (the state may not be the one on the release); never throws.
+    if (!pushFailed) {
+      await leadStep({
+        db, mode: leadsMode(env), tierWeights: cfg.tiers?.weights ?? {}, now, log: say, mintToken: lazyMint,
+        save: (why) => save(why), summaryFile: env.GITHUB_STEP_SUMMARY || undefined,
+        client: { fetch, apiUrl, budget: bud, sleep, now, retryUntil: () => Math.max(deadline, now() + 60_000), onRetry: retryHook('github_api') },
+      });
     }
     // Prune closed history and record the state's size (pump/prune.mjs). Not
     // after a failed push: this run's state may not be the one on the release.

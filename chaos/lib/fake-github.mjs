@@ -520,7 +520,8 @@ export class FakeGitHub {
     // issues
     if (method === 'GET' && rest === '/issues') {
       const label = query.get('labels');
-      const list = r.issues.filter((i) => i.state === (query.get('state') ?? 'open') && (!label || i.labels.some((l) => l.name === label)));
+      const want = query.get('state') ?? 'open';
+      const list = r.issues.filter((i) => (want === 'all' || i.state === want) && (!label || i.labels.some((l) => l.name === label)));
       return { body: list.map((i) => ({ ...i })) };
     }
     if (method === 'POST' && rest === '/issues') {
@@ -533,6 +534,7 @@ export class FakeGitHub {
       const issue = r.issues.find((i) => i.number === Number(m[1]));
       if (!issue) return notFound();
       if (req.json?.body !== undefined) issue.body = req.json.body;
+      if (req.json?.state === 'open' || req.json?.state === 'closed') issue.state = req.json.state;
       return { body: { ...issue } };
     }
     if (method === 'POST' && (m = /^\/issues\/(\d+)\/comments$/.exec(rest))) {
