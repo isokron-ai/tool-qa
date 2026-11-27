@@ -42,6 +42,10 @@
 //                        2 or more `sandbox-selftest` jobs of the enabled third-party-code
 //                        lanes failed in 6 hours, or one failed on a runner image the
 //                        nightly has not passed on, or the lookup failed; never red.
+//   lane-fresh:<lane>, pump-idle, coverage:<lane>, tool-failures:<lane>, oracle-disagreements,
+//   ingest-rejects, external-workflows
+//                        whether the lanes produce, not only whether the machinery runs
+//                        (watchdog/lanes.mjs, the design audit's H7 and H8).
 //   state-snapshot       the hourly state snapshots (snapshot/health.mjs): amber
 //                        when no snapshot run has confirmed the live state is
 //                        captured for 3 hours (or there is no snapshot yet, the
@@ -64,6 +68,7 @@ import { sizeCheck } from './size.mjs';
 import { markerCheck, sealCheck } from '../keep/health.mjs';
 import { identityCheck } from './identity.mjs';
 import { selftestCheck } from './selftest.mjs';
+import { externalCheck, laneChecks } from './lanes.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -157,7 +162,7 @@ const baseName = (path) => String(path).split('/').pop();
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot, selftest }) {
+export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot, selftest, laneHealth }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -298,6 +303,17 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
       item = { id: 'sandbox-selftest', status: 'amber', summary: `could not judge the lanes' sandbox self tests: ${String(err?.message ?? err).slice(0, 200)}` };
     }
     checks.push(item);
+  }
+
+  // do the lanes produce: freshness, idle pump, coverage, our tool's failures, disagreements, rejects,
+  // and the workflows they depend on (watchdog/lanes.mjs, R-WD-23..28); fenced like the snapshot item
+  if (laneHealth) {
+    try {
+      checks.push(...laneChecks({ now, slots, pumpOn: laneOn(lanes, 'pump'), cfg: laneHealth.cfg, data: laneHealth.data ?? null, tick: state?.kv?.['pump.last_tick'] ?? null, breakerTripped: breaker?.tripped === true }));
+      if (laneHealth.external) checks.push(externalCheck(laneHealth.external));
+    } catch (err) {
+      checks.push({ id: 'lane-health', status: 'amber', summary: `could not judge the lanes: ${String(err?.message ?? err).slice(0, 200)}` });
+    }
   }
 
   // the hourly state snapshots

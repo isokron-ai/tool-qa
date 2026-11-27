@@ -53,6 +53,7 @@ import { applyHealth } from './health.mjs';
 import { archiveCheck } from './archive.mjs';
 import { offsiteCheck } from './offsite.mjs';
 import { nightlyImage, readSelftestFailures, selftestLanes } from './selftest.mjs';
+import { externalWorkflows, readExternalWorkflows, readLaneData } from './lanes.mjs';
 import { keepCheck, readKeepStatus } from '../keep/health.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
@@ -120,6 +121,11 @@ export function loadExpected(file = EXPECTED_FILE) {
   return JSON.parse(readFileSync(file, 'utf8')).workflows;
 }
 
+/** Workflows of other repositories the lanes need, beside the nightly and the lanes' own files (H8). */
+export function loadExpectedExternal(file = EXPECTED_FILE) {
+  return JSON.parse(readFileSync(file, 'utf8')).external ?? [];
+}
+
 /** Lane switches as the guard reads them: unset, empty or "true" is on. */
 export function readLanes(env) {
   const lanes = {};
@@ -131,7 +137,7 @@ export function readLanes(env) {
 }
 
 /** Read what the checks need from a pulled copy of the state database. */
-export function readState(file) {
+export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {}) {
   const db = openState(file);
   try {
     return {
@@ -151,6 +157,7 @@ export function readState(file) {
         'live.last_upload': db.getKv('live.last_upload') ?? null,
         'retention.seal': db.getKv('retention.seal') ?? null,
       },
+      lanes: readLaneData(db, now, { cfg, tiers }),
     };
   } finally {
     db.close();
@@ -175,6 +182,7 @@ export async function runWatchdog({
   verifyConformanceRun,
   workerWorkflows,
   loadWorkerConfig = () => loadConfig().workflows,
+  loadTiers = () => loadConfig().tiers,
   readSnapshot,
   readKeep,
 } = {}) {
@@ -212,6 +220,23 @@ export async function runWatchdog({
   // the list is looked up through its own workflow's latest successful runs.
   const artifacts = [...listed, ...(await historyArtifacts(client, repo, listed))];
 
+  // The lane config, read first: the lane checks and the breaker both need it.
+  // A pump/workflows.json the pump cannot load is a red `config` check, not a
+  // silent watchdog (R-WD-13).
+  let wfs = {};
+  let configError = null;
+  try {
+    wfs = workerWorkflows ?? loadWorkerConfig();
+  } catch (err) {
+    configError = scrub(String(err?.message ?? err), secrets).slice(0, 300);
+  }
+  let tiers = null;
+  try {
+    tiers = loadTiers();
+  } catch {
+    // the lane checks then count no frame; the config check above says why
+  }
+
   const dir = stateDir ?? mkdtempSync(join(env.RUNNER_TEMP || tmpdir(), 'watchdog-'));
   let state = null;
   let stateError = null;
@@ -220,7 +245,7 @@ export async function runWatchdog({
     const file = join(dir, 'state.sqlite');
     const pulled = await pull({ repo, token: env.GITHUB_TOKEN || undefined, file, fetch, apiUrl, log: say, sleep, ...stateKeys });
     if (pulled?.status !== 'absent') {
-      state = readState(file);
+      state = readState(file, now(), { cfg: wfs, tiers });
       state.asset = { bytes: Number.isSafeInteger(pulled?.bytes) ? pulled.bytes : null, compressed: pulled?.compressed ?? null };
     }
   } catch (err) {
@@ -231,16 +256,6 @@ export async function runWatchdog({
     if (!stateDir) rmSync(dir, { recursive: true, force: true });
   }
 
-  // The sandbox breaker, as the pump sees it.
-  // A pump/workflows.json the pump cannot load is a red `config` check, not a
-  // silent watchdog (R-WD-13).
-  let wfs = {};
-  let configError = null;
-  try {
-    wfs = workerWorkflows ?? loadWorkerConfig();
-  } catch (err) {
-    configError = scrub(String(err?.message ?? err), secrets).slice(0, 300);
-  }
   let conformance;
   try {
     conformance = await (readConformance ?? (() => readConformanceStatus({ fetch, sleep })))();
@@ -305,8 +320,18 @@ export async function runWatchdog({
     selftest = { read: { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) }, passedImage: null };
   }
 
+  // The workflows the lanes depend on outside the loop's own list (watchdog/lanes.mjs, H8): public
+  // repositories, their state read with the job token; a failed read is that workflow's own amber.
+  let external = null;
+  try {
+    const listed = externalWorkflows(wfs, loadExpectedExternal());
+    external = listed.length ? await readExternalWorkflows(env.GITHUB_TOKEN ? createClient({ token: env.GITHUB_TOKEN, fetch, apiUrl, budget, sleep, now }) : client, listed) : null;
+  } catch {
+    external = null;
+  }
+
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot, selftest });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot, selftest, laneHealth: { cfg: wfs, data: state?.lanes ?? null, external } });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
