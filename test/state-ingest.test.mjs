@@ -54,6 +54,7 @@ test('getAttempt describes a dispatch in the shape ingest reads', () => {
     index: 0, run_key: KEY_A, fence: item.fence, subject: 'repo:1', subject_name: null, repo_id: null, name: null,
     current_fence: item.fence, outcome: null, resolved: null, retries: 0, throttled: 0, throttled_since: null,
     pins: null, // no run_key fields recorded for this hand-made dispatch (R-PIN-01)
+    sha: null, // nor a commit the run_key names (R-SHA-01)
   }]);
 
   db.markDispatched('att-1', { runId: 4242, workflowSha: SHA, correlatedBy: 'response' });

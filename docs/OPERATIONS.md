@@ -904,6 +904,47 @@ pump run with this code. Code from before v11 refuses a v11 state, so going
 back means restoring the snapshot taken before the merge (see "State
 snapshots").
 
+## The commit read against the commit filed (R-SHA-01)
+
+A run_key names the subject's commit (its `sha`, written by the head poll,
+`pump/heads.mjs`). Workers are not sent that commit yet: they read the
+default branch's head when they run, and say which commit they read in each
+bundle's manifest (`subject.sha`). If the branch moved in between, a result
+would be filed under a commit nobody read.
+
+Ingest compares the two for every item whose run_key has a sha, and writes
+`subject_sha: {expected, got, match, mode}` into the ingest report. What it
+does about a mismatch is the lane's `sha_check` in `pump/workflows.json`:
+
+- `label` (the default): accept, recorded in the report;
+- `enforce`: refuse as `subject_sha_mismatch`. It is never the subject's fault.
+  The next head poll moves the sha, the run_key moves with it, and the pair
+  is due again.
+
+A result that measured nothing (every skip retryable, retries used up,
+`skips_only`) is not refused, because nothing is filed under the commit. A
+run_key with no sha is not checked. A refusal never parks the run_key: it waits
+the retry backoff (`retry_backoff_minutes`, doubling), like `retry_later`.
+
+**Kept in the state (R-SHA-06).** Every accepted result whose run_key names a
+commit has `subject_sha: {expected, got, match}` in the data of its
+`result_recorded` event. Events are sealed into the state archives before they
+are pruned. Publishing can therefore exclude or relabel results accepted on a
+label lane with `match: false`.
+
+**Sending the commit (R-SHA-05).** `send_sha: true` on a lane makes the pump
+send each item its run_key's commit (`items[].sha`). Only set it on a lane
+whose worker reads exactly that commit (mcp-check#71 for scan-static and
+live-probe). `sha_check: "enforce"` without `send_sha: true` is a config
+error, so a lane whose worker reports no commit, or not the one it was sent,
+can never be enforced.
+
+**Before the shas feed the published dataset:** set `sha_check: "enforce"`
+on every lane that publishes. The worker side then sends the run_key's
+commit as an item field and reads exactly that commit (mcp-check
+scan-static and live-probe accept only `subject`, `run_key` and `fence`
+today, so the pump does not send it yet).
+
 ## Change detection: subject heads (design audit A3)
 
 Until this, `subjects.sha` and `changed_at` were null on every subject: a
