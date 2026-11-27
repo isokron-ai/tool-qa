@@ -196,6 +196,26 @@
       "versions": { "tool": { "tool-qa-t0-dogfood": "1" }, "oracle": {}, "probe": {} },
       "image_digest": null,
       "settings_state": "default"
+    },
+    "t0-fuzz": {
+      "enabled": true,
+      "switch": "LANE_T0_FUZZ_ENABLED",
+      "runs_untrusted": false,
+      "pin_check": "label",
+      "repo": "isokron-ai/mcp-check",
+      "file": "fuzz-calls.yml",
+      "ref": "main",
+      "dispatch_style": "t0",
+      "control_subjects": {
+        "isokron-ai/mcp-check.fuzz-calls": {}
+      },
+      "shard_size": 1,
+      "setup_minutes": 10,
+      "minutes_per_subject": 30,
+      "slots_max": 1,
+      "versions": { "tool": { "tool-qa-t0-fuzz": "1" }, "oracle": {}, "probe": {} },
+      "image_digest": null,
+      "settings_state": "default"
     }
   }
 }

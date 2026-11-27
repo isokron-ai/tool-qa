@@ -121,13 +121,16 @@ test('R-CTL-04: control lane settings are checked: one item, T0 style, a switch,
 
 test('R-CTL-04: the shipped lanes are well formed, off in every tier but T0, and daily in T0', () => {
   const c = loadConfig();
-  for (const name of ['t0-defects', 't0-self', 't0-dogfood']) {
+  for (const name of ['t0-defects', 't0-self', 't0-dogfood', 't0-fuzz']) {
     assert.ok(c.workflows[name], name);
     assert.equal(c.workflows[name].dispatch_style, 't0');
     for (const tier of ['T1', 'T2', 'T3', 'T4']) assert.equal(c.tiers.tiers[tier][name].mode, 'never', `${name} ${tier}`);
     assert.deepEqual(c.tiers.tiers.T0[name], { mode: 'always', max_age_days: 1 });
   }
   assert.deepEqual(Object.keys(c.workflows['t0-defects'].control_subjects), ['isokron-ai/mcp-write-safety.defect-matrix']);
+  assert.deepEqual(Object.keys(c.workflows['t0-fuzz'].control_subjects), ['isokron-ai/mcp-check.fuzz-calls']);
+  assert.equal(c.workflows['t0-fuzz'].file, 'fuzz-calls.yml');
+  assert.equal(c.workflows['t0-fuzz'].runs_untrusted, false, 'seeded servers and tiny-tracker built with --ignore-scripts: our own code');
   assert.deepEqual(Object.keys(c.workflows['t0-self'].control_subjects), ['isokron-ai/mcp-writecheck-action.selftest', 'isokron-ai/mcp-writecheck-action.dogfood-tiny-tracker']);
   assert.deepEqual(Object.keys(c.workflows['t0-dogfood'].control_subjects).map((x) => x.split('.').pop()).sort(), ['dogfood-grafana', 'dogfood-kronicle-lite', 'dogfood-kubernetes', 'dogfood-payload', 'dogfood-sea-lite', 'dogfood-writesafe']);
   assert.equal(controlTarget(c.workflows['t0-dogfood'], 'isokron-ai/mcp-writecheck-action.dogfood-grafana').file, 'dogfood-grafana.yml');
@@ -261,4 +264,20 @@ test('R-CTL-15: a skips_only result (infrastructure skipped, nothing measured) i
   assert.equal(after.last_result_at, good, 'the skips_only result did not move last_result_at');
   assert.ok(after.infra_only_since, 'but it is said');
   db.close();
+});
+
+test('R-CTL-16: the t0-fuzz lane is a trusted control lane of mcp-check\'s fuzz-calls.yml, its switch reaches the pump and the watchdog, and the runbook has one T0 section that does not call the dogfood workers trusted', () => {
+  const c = loadConfig();
+  const f = c.workflows['t0-fuzz'];
+  assert.equal(f.repo, 'isokron-ai/mcp-check');
+  assert.equal(f.file, 'fuzz-calls.yml');
+  assert.equal(f.runs_untrusted, false);
+  assert.equal(f.switch, 'LANE_T0_FUZZ_ENABLED');
+  assert.deepEqual(Object.keys(f.control_subjects), ['isokron-ai/mcp-check.fuzz-calls']);
+  for (const w of ['pump.yml', 'watchdog.yml']) assert.match(readFileSync(new URL(`../../.github/workflows/${w}`, import.meta.url), 'utf8'), /LANE_T0_FUZZ_ENABLED: \$\{\{ vars\.LANE_T0_FUZZ_ENABLED \}\}/, w);
+  const doc = readFileSync(new URL('../../docs/OPERATIONS.md', import.meta.url), 'utf8');
+  assert.equal((doc.match(/^## T0 control lanes/gm) || []).length, 1, 'one T0 section, not a stale copy');
+  assert.doesNotMatch(doc, /the seven `dogfood-\*\.yml`/);
+  assert.doesNotMatch(doc, /`runs_untrusted` is false because the workers only run our own pinned builds/);
+  assert.match(doc, /^### `t0-fuzz`/m);
 });

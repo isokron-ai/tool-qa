@@ -100,6 +100,7 @@ jobs:
           LANE_T0_DEFECTS_ENABLED: ${{ vars.LANE_T0_DEFECTS_ENABLED }}
           LANE_T0_SELF_ENABLED: ${{ vars.LANE_T0_SELF_ENABLED }}
           LANE_T0_DOGFOOD_ENABLED: ${{ vars.LANE_T0_DOGFOOD_ENABLED }}
+          LANE_T0_FUZZ_ENABLED: ${{ vars.LANE_T0_FUZZ_ENABLED }}
           # Shown by the live view's publish gate node (config.switches).
           RESULTS_PUBLISH_ENABLED: ${{ vars.RESULTS_PUBLISH_ENABLED }}
           LIVE_R2_ACCESS_KEY_ID: ${{ secrets.LIVE_R2_ACCESS_KEY_ID }}
