@@ -862,3 +862,18 @@ test('R-COV-46: the watchdog reads coverage from the state copy, and a config it
   assert.ok(cov.lanes.every((l) => l.id !== 'scan-deep' && l.id !== 'build-probe'), 'lanes not built are left out');
   assert.equal(readCoverage(db, { get tiers() { throw new Error('bad config'); }, workflows: {} }), null);
 });
+
+test('R-WD-34: through the whole watchdog, a tool-side skip holds the coverage item down: 7 assessed and 3 tool-side skips of 10 read 70%, not 100%', async () => {
+  const w = world({ seed: (db, c) => {
+    seedLaneState(db, { now: c.t, subjects: 10, dispatchAgeMin: 5, lanes: { 'scan-static': { ageMin: 5, n: 10, assessed: 7, tool: 3 } } });
+  } });
+  w.opts.noLanes = true;
+  await runWatchdog(w.opts);
+  const body = parseBody(w.issues[0].body);
+  const c = body.checks.find((x) => x.id === 'coverage:scan-static');
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /^7 of 10 eligible subjects \(70%\)/);
+  // the health issue's coverage table says the same number
+  assert.equal(body.coverage.lanes.find((l) => l.id === 'scan-static').assessment, 0.7);
+  w.cleanup();
+});

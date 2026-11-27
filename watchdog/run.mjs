@@ -172,7 +172,8 @@ export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {
       },
       lanes: readLaneData(db, now, { cfg, tiers }),
       // The four coverage numbers per lane (state/coverage.mjs); null when the config or state cannot answer.
-      coverage: readCoverage(db),
+      // the same config the lane checks read (R-WD-36); the pump's own when none was given
+      coverage: readCoverage(db, tiers && Object.keys(cfg).length ? { tiers, workflows: cfg } : undefined),
     };
   } finally {
     db.close();
