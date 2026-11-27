@@ -179,9 +179,15 @@ export function laneChecks({ now, slots, pumpOn, cfg, data, tick, breakerTripped
   // and our tool's own failures, per lane
   const cov = new Map((coverage?.lanes ?? []).map((L) => [L.id, L]));
   if (!coverage) items.push({ id: 'coverage', status: 'amber', summary: 'could not compute coverage from the state (state/coverage.mjs), so the coverage items were skipped' });
-  for (const [lane, v] of fl) {
+  for (const lane of lanes) {
+    const v = data.lanes?.[lane] ?? { tool_now: 0 };
     const c = cov.get(lane);
-    if (c && c.assessment !== null) {
+    if (coverage && (!c || c.assessment === null)) {
+      // an enabled lane with no number is not covered by silence (R-WD-35)
+      items.push({ id: `coverage:${lane}`, status: 'amber', summary: c
+        ? `no assessment number: ${c.eligible} eligible subjects of a frame of ${c.frame} (${c.excluded} excluded), so coverage cannot be judged`
+        : 'the lane is enabled but not in the coverage block (state/coverage.mjs skips it as not built, or no tier runs it), so coverage cannot be judged' });
+    } else if (c && c.assessment !== null) {
       const share = c.assessment;
       items.push({ id: `coverage:${lane}`, status: share < T.coverageRed ? 'red' : share < T.coverageAmber ? 'amber' : 'green', summary: `${c.assessed} of ${c.eligible} eligible subjects (${pct(share)}) have an assessed result (frame ${c.frame}, ${c.excluded} excluded, ${c.unassessed.not_reached} not reached; amber under ${pct(T.coverageAmber)}, red under ${pct(T.coverageRed)})` });
     }
