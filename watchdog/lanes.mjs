@@ -15,9 +15,11 @@
 //                          amber; over 12 hours: red. Also amber when the pump's latest tick had
 //                          subjects due, dispatched none and nothing is in flight. The summary
 //                          counts: subjects with a null sha, never-assessed and stale subjects per lane.
-//   coverage:<lane>        the share of the whole frame (every subject the lane covers) whose newest
-//                          result is assessed: amber under 80%, red under 50%. A lane that skips most
-//                          servers does not look covered.
+//   coverage:<lane>        the assessment number of state/coverage.mjs computeCoverage (assessed over
+//                          eligible subjects of the whole frame, policy-excluded results leaving the
+//                          denominator): amber under 80%, red under 50%. One definition for the health
+//                          issue's coverage table and this item. A lane that skips most servers does not
+//                          look covered.
 //   tool-failures:<lane>   results that are our tool's fault (results.fault = tool): the absolute
 //                          counts, last 24 hours and now, are always shown; amber from 50 now or 20%
 //                          of the last 24 hours (at least 5), red from 50% of the last 24 hours.
@@ -79,7 +81,7 @@ export function readLaneData(db, now, { cfg = {}, tiers = null } = {}) {
     const lanes = {};
     for (const [lane, wf] of Object.entries(cfg)) {
       if (!isEnabled(wf)) continue;
-      const l = { frame: 0, never: 0, stale: 0, assessed: 0, tool_now: 0 };
+      const l = { frame: 0, never: 0, stale: 0, tool_now: 0 };
       for (const s of subjects) {
         const cell = tiers?.tiers?.[`T${s.tier}`]?.[lane];
         // the frame of a lane is the subjects it must keep current (mode always); a sampling lane is partial by design
@@ -87,8 +89,6 @@ export function readLaneData(db, now, { cfg = {}, tiers = null } = {}) {
         l.frame += 1;
         const r = last.get(`${s.id}\0${lane}`);
         if (!r) { l.never += 1; continue; }
-        // a result from before coverage that was not skips_only counts as assessed, as the due list reads it
-        if (r.coverage === 'assessed' || (r.coverage == null && r.outcome != null && r.outcome !== 'skips_only')) l.assessed += 1;
         if (r.fault === 'tool') l.tool_now += 1;
         const maxAge = maxAgeDays(cell, s, tiers, `T${s.tier}`);
         if (maxAge !== null && now - Date.parse(r.accepted_at) > maxAge * DAY_MS) l.stale += 1;
@@ -127,7 +127,7 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
  *   tick: object|null, breakerTripped: boolean }} input
  * @returns {object[]} health items
  */
-export function laneChecks({ now, slots, pumpOn, cfg, data, tick, breakerTripped = false }) {
+export function laneChecks({ now, slots, pumpOn, cfg, data, tick, breakerTripped = false, coverage = null }) {
   const items = [];
   if (!data) return [{ id: 'lane-health', status: 'amber', summary: 'could not read the lane results from the state, so the lane checks were skipped' }];
   const T = LANE_THRESHOLDS;
@@ -175,11 +175,21 @@ export function laneChecks({ now, slots, pumpOn, cfg, data, tick, breakerTripped
     }
   }
 
-  // coverage over the whole frame, and our tool's own failures, per lane
-  for (const [lane, v] of fl) {
-    if (v.frame > 0) {
-      const share = v.assessed / v.frame;
-      items.push({ id: `coverage:${lane}`, status: share < T.coverageRed ? 'red' : share < T.coverageAmber ? 'amber' : 'green', summary: `${v.assessed} of ${v.frame} subjects (${pct(share)}) have an assessed result; ${v.never} never ran (amber under ${pct(T.coverageAmber)}, red under ${pct(T.coverageRed)})` });
+  // coverage: the assessment number of state/coverage.mjs computeCoverage, the loop's one definition (R-WD-34),
+  // and our tool's own failures, per lane
+  const cov = new Map((coverage?.lanes ?? []).map((L) => [L.id, L]));
+  if (!coverage) items.push({ id: 'coverage', status: 'amber', summary: 'could not compute coverage from the state (state/coverage.mjs), so the coverage items were skipped' });
+  for (const lane of lanes) {
+    const v = data.lanes?.[lane] ?? { tool_now: 0 };
+    const c = cov.get(lane);
+    if (coverage && (!c || c.assessment === null)) {
+      // an enabled lane with no number is not covered by silence (R-WD-35)
+      items.push({ id: `coverage:${lane}`, status: 'amber', summary: c
+        ? `no assessment number: ${c.eligible} eligible subjects of a frame of ${c.frame} (${c.excluded} excluded), so coverage cannot be judged`
+        : 'the lane is enabled but not in the coverage block (state/coverage.mjs skips it as not built, or no tier runs it), so coverage cannot be judged' });
+    } else if (c && c.assessment !== null) {
+      const share = c.assessment;
+      items.push({ id: `coverage:${lane}`, status: share < T.coverageRed ? 'red' : share < T.coverageAmber ? 'amber' : 'green', summary: `${c.assessed} of ${c.eligible} eligible subjects (${pct(share)}) have an assessed result (frame ${c.frame}, ${c.excluded} excluded, ${c.unassessed.not_reached} not reached; amber under ${pct(T.coverageAmber)}, red under ${pct(T.coverageRed)})` });
     }
     const w = data.window?.[lane] ?? { total: 0, tool: 0 };
     const share = w.total >= T.toolMin ? w.tool / w.total : 0;

@@ -28,6 +28,8 @@
 //   subject-ids          the pump's subject id lookups (watchdog/identity.mjs):
 //                        red on a mass of NOT_FOUND or of gone subjects,
 //                        amber on any id conflict.
+//   subject-heads        the pump's head poll (watchdog/heads.mjs): amber when
+//                        nothing was written for 6 hours, red after 24.
 //   workflow:<file>      an expected workflow GitHub disabled for inactivity
 //                        (amber; the watchdog re-enables it) or one disabled by
 //                        hand (off).
@@ -67,6 +69,7 @@ import { snapshotCheck } from '../snapshot/health.mjs';
 import { sizeCheck } from './size.mjs';
 import { markerCheck, sealCheck } from '../keep/health.mjs';
 import { identityCheck } from './identity.mjs';
+import { headsCheck } from './heads.mjs';
 import { selftestCheck } from './selftest.mjs';
 import { externalCheck, laneChecks } from './lanes.mjs';
 
@@ -261,6 +264,7 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
     }
     checks.push(liveSnapshotCheck({ now, on: liveSwitch === 'true', last: state.kv?.['live.last_upload'] ?? null }));
     const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
+    const hd = headsCheck({ now, heads: state.kv?.['pump.heads'] }); if (hd) checks.push(hd); // head poll (watchdog/heads.mjs)
   }
 
   // latest loop run per workflow
@@ -309,7 +313,7 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
   // and the workflows they depend on (watchdog/lanes.mjs, R-WD-23..28); fenced like the snapshot item
   if (laneHealth) {
     try {
-      checks.push(...laneChecks({ now, slots, pumpOn: laneOn(lanes, 'pump'), cfg: laneHealth.cfg, data: laneHealth.data ?? null, tick: state?.kv?.['pump.last_tick'] ?? null, breakerTripped: breaker?.tripped === true }));
+      checks.push(...laneChecks({ now, slots, pumpOn: laneOn(lanes, 'pump'), cfg: laneHealth.cfg, data: laneHealth.data ?? null, tick: state?.kv?.['pump.last_tick'] ?? null, breakerTripped: breaker?.tripped === true, coverage: laneHealth.coverage ?? null }));
       if (laneHealth.external) checks.push(externalCheck(laneHealth.external));
     } catch (err) {
       checks.push({ id: 'lane-health', status: 'amber', summary: `could not judge the lanes: ${String(err?.message ?? err).slice(0, 200)}` });

@@ -5,8 +5,10 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { readState } from '../run.mjs';
 import { LANE_THRESHOLDS, externalCheck, externalWorkflows, laneChecks, readLaneData, readExternalWorkflows } from '../lanes.mjs';
 import { openState } from '../../state/db.mjs';
+import { computeCoverage } from '../../state/coverage.mjs';
 import { seedLaneState, tick } from '../../test/lib/lane-state.mjs';
 
 const CFG = JSON.parse(readFileSync(new URL('../../pump/workflows.json', import.meta.url), 'utf8')).workflows;
@@ -40,7 +42,7 @@ function idle27Nov(db, o = {}) {
   });
   tick(db, NOW, { due: 0, dispatched: 0 });
 }
-const run = (db, extra = {}) => laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: db.getKv('pump.last_tick'), ...extra });
+const run = (db, extra = {}) => laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: db.getKv('pump.last_tick'), coverage: computeCoverage(db, { tiers: TIERS, workflows: CFG, skipLanes: ['scan-deep', 'build-probe'] }), ...extra });
 const by = (items, id) => items.find((i) => i.id === id);
 
 test('R-WD-23: in the 27 Nov state (due 0, nothing dispatched for 7.5 hours, 997 null shas) the lane items are amber or red, not green', () => withDb((db) => {
@@ -115,8 +117,7 @@ test('R-WD-25: coverage is the assessed share of the whole frame, not of the las
   assert.equal(by(items, 'coverage:scan-static').status, 'red');
   assert.equal(by(items, 'coverage:live-probe').status, 'amber');
   assert.equal(by(items, 'coverage:meta-github').status, 'green');
-  assert.match(by(items, 'coverage:scan-static').summary, /40 of 100 subjects \(40%\)/);
-  assert.equal(by(items, 'coverage:writecheck'), undefined, 'a sampling lane has no frame');
+  assert.match(by(items, 'coverage:scan-static').summary, /40 of 100 eligible subjects \(40%\)/);
 }));
 
 test('R-WD-26: our tool\'s failures show as absolute counts: 370 results now is amber even when the 24 hour share is low, red at half of the last 24 hours', () => withDb((db) => {
@@ -216,4 +217,67 @@ test('R-WD-31: the last dispatch is the newest one that started a run: a failed 
   const p = by(run(db), 'pump-idle');
   assert.equal(p.status, 'amber', p.summary);
   assert.match(p.summary, /nothing dispatched for 5\.0 hours/);
+}));
+
+test('R-WD-34: coverage:<lane> is the assessment number of state/coverage.mjs: the same value, with policy-excluded results out of the denominator; without it the item says so', () => withDb((db) => {
+  seedLaneState(db, { now: NOW, subjects: 10, dispatchAgeMin: 5, lanes: { 'scan-static': { ageMin: 5, n: 10, assessed: 6 } } });
+  // 2 of the 4 unassessed results are policy-excluded: they leave the denominator, as in computeCoverage
+  db.raw.exec("UPDATE results SET coverage = 'excluded' WHERE workflow = 'scan-static' AND rowid IN (SELECT rowid FROM results WHERE workflow = 'scan-static' AND coverage <> 'assessed' LIMIT 2)");
+  const cov = computeCoverage(db, { tiers: TIERS, workflows: CFG, skipLanes: ['scan-deep', 'build-probe'] });
+  const L = cov.lanes.find((x) => x.id === 'scan-static');
+  assert.equal(L.assessment, 0.75, '6 of 8 eligible');
+  const item = by(laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: null, coverage: cov }), 'coverage:scan-static');
+  assert.equal(item.status, 'amber', item.summary);
+  assert.match(item.summary, /6 of 8 eligible subjects \(75%\).*2 excluded/);
+  // thresholds on the assessment number: under 80% amber, under 50% red, otherwise green
+  for (const [a, status] of [[0.9, 'green'], [0.79, 'amber'], [0.49, 'red']]) {
+    const c = { ...cov, lanes: cov.lanes.map((x) => (x.id === 'scan-static' ? { ...x, assessment: a } : x)) };
+    assert.equal(by(laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: null, coverage: c }), 'coverage:scan-static').status, status);
+  }
+  const none = laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: null, coverage: null });
+  assert.equal(by(none, 'coverage').status, 'amber');
+  assert.equal(by(none, 'coverage:scan-static'), undefined);
+}));
+
+const cover = (db, cfg = CFG) => computeCoverage(db, { tiers: TIERS, workflows: cfg, skipLanes: ['scan-deep', 'build-probe'] });
+const lanesOf = (db, coverage, cfg = CFG) => laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg, data: readLaneData(db, NOW, { cfg, tiers: TIERS }), tick: null, coverage });
+
+test('R-WD-35: an enabled lane with no coverage number is amber with the reason, not silence: all results excluded, or a lane the coverage block skips', () => withDb((db) => {
+  seedLaneState(db, { now: NOW, subjects: 4, dispatchAgeMin: 5, lanes: { 'scan-static': { ageMin: 5, n: 4, assessed: 4 }, 'live-probe': { ageMin: 5, n: 4, assessed: 4 } } });
+  db.raw.exec("UPDATE results SET coverage = 'excluded' WHERE workflow = 'scan-static'");
+  const items = lanesOf(db, cover(db));
+  const a = by(items, 'coverage:scan-static');
+  assert.equal(a.status, 'amber', a.summary);
+  assert.match(a.summary, /no assessment number: 0 eligible subjects of a frame of 4 \(4 excluded\)/);
+  assert.equal(by(items, 'coverage:live-probe').status, 'green', 'a lane with a number is judged on it');
+  // build-probe is enabled in this config but the coverage block skips it as not built
+  const cfg = { ...CFG, 'build-probe': { ...CFG['build-probe'], enabled: true } };
+  const b = by(lanesOf(db, cover(db, cfg), cfg), 'coverage:build-probe');
+  assert.equal(b.status, 'amber', b.summary);
+  assert.match(b.summary, /not in the coverage block/);
+}));
+
+test('R-WD-36: readState reads coverage against the config and tiers it is given, the one the lane checks read', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lanes-'));
+  try {
+    const file = join(dir, 's.sqlite');
+    const db = openState(file);
+    seedLaneState(db, { now: NOW, subjects: 4, dispatchAgeMin: 5, lanes: { 'scan-static': { ageMin: 5, n: 4, assessed: 4 } } });
+    db.close();
+    const given = readState(file, NOW, { cfg: { 'scan-static': CFG['scan-static'] }, tiers: TIERS });
+    assert.deepEqual(given.coverage.lanes.map((l) => l.id), ['scan-static'], 'the config given, not the pump\'s own');
+    const own = readState(file, NOW);
+    assert.ok(own.coverage === null || own.coverage.lanes.length > 1, 'with none given, the pump\'s own config');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R-WD-34: a tool-side skip holds the watchdog item\'s share down: the coverage item reads the same number as computeCoverage, and a lane that counted tool skips as assessed would read 100%', () => withDb((db) => {
+  seedLaneState(db, { now: NOW, subjects: 10, dispatchAgeMin: 5, lanes: { 'scan-static': { ageMin: 5, n: 10, assessed: 7, tool: 3 } } });
+  const cov = cover(db);
+  assert.equal(cov.lanes.find((l) => l.id === 'scan-static').assessment, 0.7);
+  const c = by(lanesOf(db, cov), 'coverage:scan-static');
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /^7 of 10 eligible subjects \(70%\)/);
 }));
