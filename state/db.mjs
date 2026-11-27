@@ -1305,7 +1305,8 @@ export class StateDb {
       `).run(fp, subject, lane, runKey, at, at, at, run, run, JSON.stringify(pushLog(pair ? JSON.parse(pair.log) : [], at, true, { now: at })));
     }
 
-    // Clean re-checks: only an assessed result says a stage ran and did not show the lead.
+    // Clean re-checks: only an assessed result says a stage ran and did not show the lead. A re-check that came
+    // back unassessed (a skip hid the stage, or another failure replaced it) is tried again, as one of its attempts.
     if (coverage !== 'assessed') {
       // Another failure at the same stage replaced it: the pair's latest result no longer carries it (current), but
       // that is no clean re-check. A skip at another stage says nothing about this one, and changes nothing.
@@ -1318,6 +1319,14 @@ export class StateDb {
             .run(at, run, p.fingerprint, subject, lane);
           out.replaced = (out.replaced ?? 0) + 1;
         }
+      }
+      const waiting = this.raw.prepare(`SELECT fingerprint, recheck_attempts FROM leads WHERE recheck_subject = ? AND recheck_lane = ? AND status = 'open'
+        AND reproduced_at IS NULL`).all(subject, lane).filter((l) => !carried.has(l.fingerprint));
+      for (const l of waiting) {
+        const attempts = l.recheck_attempts + 1;
+        setLead(l.fingerprint, attempts < RECHECK_MAX_ATTEMPTS ? { recheck_attempts: attempts, recheck_after: t }
+          : { recheck_attempts: attempts, recheck_subject: null, recheck_lane: null, recheck_after: null });
+        out.retried = (out.retried ?? 0) + 1;
       }
       return out;
     }

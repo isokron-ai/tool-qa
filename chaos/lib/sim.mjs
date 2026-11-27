@@ -34,7 +34,8 @@
 //   every state asset version the release shows decrypts with the loop
 //   identity, passes quick_check, and never moves backwards from the one
 //   before it (fence counter, attempts, results, dispatch statuses), unless a
-//   scenario marks an operator restore; no run_key has two accepted results;
+//   scenario marks an operator restore; no run_key has two accepted results
+//   from overlapping dispatches (a re-dispatch after its result is in is allowed);
 //   no accepted result carries a fence older than a lease granted before it
 //   was recorded; every accepted result is a bundle a worker really uploaded.
 //   A row may leave the state only once a state archive the pump staged
@@ -959,14 +960,26 @@ export class Sim {
     const accepted = s.attempts.filter((a) => a.accepted === 1);
     const perKey = new Map();
     for (const a of accepted) perKey.set(a.run_key, [...(perKey.get(a.run_key) ?? []), a]);
-    for (const [k, list] of perKey) if (list.length > 1) this.violate(`${key}: run_key ${k.slice(0, 12)} has ${list.length} accepted results (${list.map((a) => a.attempt_id.slice(0, 8)).join(', ')})`);
     const created = new Map(s.dispatches.map((d) => [d.attempt_id, d.created]));
+    // A run_key may be sent again on purpose after its result is in (a stale result, an oracle or lead re-check,
+    // leads/recheck.mjs): each later accepted result must come from a dispatch created once the one before was
+    // accepted. Two accepted results from dispatches that overlapped are a duplicate.
+    for (const [k, list] of perKey) {
+      const byId = [...list].sort((x, y) => x.id - y.id);
+      for (let i = 1; i < byId.length; i++) {
+        const c = created.get(byId[i].attempt_id);
+        if (c === undefined && this.archived.has(this.archiveKey('dispatches', { attempt_id: byId[i].attempt_id }))) continue;
+        if (!(c !== undefined && c >= byId[i - 1].received)) this.violate(`${key}: run_key ${k.slice(0, 12)} has ${list.length} accepted results (${list.map((a) => a.attempt_id.slice(0, 8)).join(', ')})`);
+      }
+    }
     for (const a of accepted) {
       const item = s.items.find((i) => i.attempt_id === a.attempt_id && i.run_key === a.run_key);
       // Its dispatch pruned (and archived) while the attempt stays: nothing to compare with.
       if (!item && this.archived.has(this.archiveKey('dispatches', { attempt_id: a.attempt_id }))) continue;
       if (!item || item.fence !== a.fence) this.violate(`${key}: accepted ${a.attempt_id.slice(0, 8)} with fence ${a.fence} that its dispatch did not carry`);
-      const newer = s.items.filter((i) => i.run_key === a.run_key && i.fence > a.fence && (created.get(i.attempt_id) ?? '') <= a.received);
+      // A newer fence granted before this result was received makes it stale. One granted at the same instant is the
+      // re-dispatch of a run_key right after its result was accepted (ingest runs before the tick in one pump tick).
+      const newer = s.items.filter((i) => i.run_key === a.run_key && i.fence > a.fence && (created.get(i.attempt_id) ?? '') < a.received);
       if (newer.length) this.violate(`${key}: accepted a stale fence ${a.fence} for ${a.run_key.slice(0, 12)} after fence ${newer[0].fence} was granted`);
       if (!this.uploaded.has(`${a.attempt_id}:${a.run_key}:${a.fence}`)) this.violate(`${key}: accepted ${a.attempt_id.slice(0, 8)}/${a.fence}, which no worker uploaded`);
     }
