@@ -548,6 +548,7 @@ export async function runPump({
     } else if (heads !== null) {
       // The watchdog shows the item off, not the last pass's colour.
       db.setKv(HEADS_KV_KEY, { ...(db.getKv(HEADS_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
+    }
     // The discover lane (pump/discover.mjs, A2): candidates from discover.yml
     // become subjects, deduped by repository id, forks left out, at most
     // discover.json daily_cap a day. Its own short window; never holds the run.
