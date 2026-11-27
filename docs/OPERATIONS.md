@@ -897,6 +897,70 @@ pump run with this code. Code from before v11 refuses a v11 state, so going
 back means restoring the snapshot taken before the merge (see "State
 snapshots").
 
+## Change detection: subject heads (design audit A3)
+
+Until this, `subjects.sha` and `changed_at` were null on every subject: a
+subject was looked at again only on its tier's age, so a release or a new
+commit went unseen for up to 30 days. The head poll (`pump/heads.mjs`) writes
+both.
+
+**Where it runs.** In the pump, the state's only writer, right after the
+subject id pass at the start of every run (so on the pump's own schedule and
+self-chain, free public Actions). One GraphQL query reads up to 100 bound
+subjects by node id: `databaseId`, `isEmpty`, the default branch's head commit
+and `latestRelease`. It costs one point.
+
+**What it writes** (`state/db.mjs` `noteHead`, `noteChange`):
+
+| Seen | Written | Due as |
+|---|---|---|
+| a head, and the subject has no sha yet | `sha`, `changed_at`, `change_reason = head_first_seen` | `new_version` (the run_key moves once) |
+| a head other than the subject's sha | `sha`, `changed_at`, `change_reason = new_sha` | `new_version` |
+| the same head, a release published after `changed_at` | `changed_at`, `change_reason = new_release` | `change_event` |
+| a node not found, another repository id, a name other than `subjects.name` (renamed since the id pass), an empty repository, an error for that node | nothing (counted in kv `pump.heads`) | not due for it |
+
+Only subjects whose id the id pass vouches for (`id_status = ok`) are polled:
+one in conflict keeps an id that may not be the repository its name clones.
+A GraphQL error under one node (FORBIDDEN, say) concerns that entry only; an
+error only under its `latestRelease` loses the release and keeps the head; an
+error with no node path fails the query, which is asked again next run.
+
+A head it cannot read is never a fault of the server: nothing is recorded
+against the subject, and gone or renamed repositories stay the id pass's
+call ("Subject ids").
+
+**Cadence.** `pump/tiers.json` `head_poll_hours`: T0 every run, T1 hourly, T2
+every 6 hours, T3 daily, T4 every 3 days. Each tier is walked in key order from
+a cursor in kv `pump.heads` (`tiers`); a new cycle starts once the last one has
+finished and started at least that many hours ago. One query mixes tiers, and
+T0 takes at most a quarter of a run's picks, so it can never starve the rest.
+
+**Budget.** At most 3 queries a run (300 subjects), through the pump's API
+budget (family `graphql`, 30 an hour and 5 a minute, shared with the id pass)
+on the job's `GITHUB_TOKEN`, leaving the last 8 of the hourly 30 calls to the
+id pass. Before the first query a pass checks GitHub's last known GraphQL
+points (kept with the budget across runs) and makes none below 200; it also
+stops once an answer reports fewer than 200. The 997 seed subjects need 10 queries
+a day plus about one an hour for T0 to T2. A refused or failed query leaves
+the cursor where it was: the next run asks again.
+
+**Switch.** `LANE_HEADS_ENABLED`: only the exact value `true` runs the poll.
+Off, kv `pump.heads` says `off: true`, and subjects come due on their tier's
+age as before. Turning it on makes every bound subject due once
+(`head_first_seen`), in tier order: that is the backlog the loop has not been
+running.
+
+**Health.** The watchdog's `subject-heads` item (`watchdog/heads.mjs`) reads
+kv `pump.heads`: amber when no poll has been written for 6 hours or the last
+pass stopped on an error or the budget, red after 24 hours, off when switched
+off. A first pass that has not written yet is amber until it is a day old.
+Holding points or calls back for others is not an error. The pump logs `pump: subject heads: ...` every run.
+
+**Dry run against the live state.** Pull and decrypt the state into a 0700
+temporary folder, then run the pass with a read-only token against a copy:
+`node scripts/heads-dry-run.mjs --state <copy>` prints what it would write
+and the due list before and after, and never pushes.
+
 ## The pump
 
 `.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
@@ -1213,7 +1277,7 @@ person. off: switched off on purpose.
 | `sandbox-selftest` | The sandbox self test (`sandbox / sandbox-selftest`, the guard that fails closed) failed on the enabled lanes that run third-party code (live-probe in `mcp-check`, writecheck in `mcp-writecheck-action`). Amber: 2 or more failures in the last 6 hours, or one on a runner image the nightly has not passed on (an image whose log could not be read counts as not passed on), or the lookup failed (`could not read`). Never red: a lane that fails closed ran nothing and uploaded nothing, its items come back `no_artifact` and are retried. Also amber: the run list was truncated and no failure was found; no job named like the self test in the failed runs examined (renamed?); a 404 on a runs list; no token to read with (the log token could not be minted and `GITHUB_TOKEN` is unset: the tool-qa App token is never a fallback). Off when no such lane is enabled. The summary gives the count, the lanes, the runner image version(s), the image the nightly last passed on, and links the newest failing job. Reads: 1 to 3 pages of completed runs per lane (last 7 hours; the API takes one status, so the conclusions failure, timed_out, startup_failure and cancelled are picked here), 1 jobs call per such run (at most 10 per lane), and for each failing job (at most 3 in all) 2 calls: the API's 302 (token) and the blob store (no token, Range). Two calls when nothing failed. The run and job lists are of public repositories; job logs return 403 to the watchdog job's own `GITHUB_TOKEN` for them, so the watchdog mints a second App installation token for the lane repositories with `actions: read` only and reads with that (the App installation must cover them). If minting fails the reads fall back to the job token and the item is amber with the reason (images then read `unknown`). The image is the `Version:` line of the job log's `Runner Image` group, from a ranged read of the first 12 KiB (the Range header holds across the redirect to the blob store: HTTP 206). | Open the linked job. One failure on the image the nightly passed on is a flake: read the self-test telemetry artifact. Several, or all on one new image: a runner image rollout broke the sandbox; compare the image with the nightly status (`runner_image`), and hold the lanes (`enabled: false` in `pump/workflows.json`) until `mcp-surface-corpus` has a fix pinned. |
 | `lane-fresh:<lane>` | The newest accepted result of an enabled lane (kv-free: `results.accepted_at`) is over 6 hours old (amber) or over 24 hours (red), **whatever is due**: on 27 Nov nothing came due for 18 of 30 hours and "nothing due" must not excuse it. A lane with no result is amber, red once its first dispatch is over 24 hours old. `off` when the pump is off or the sandbox breaker holds the lane; a disabled lane has no item. | Read `pump-idle` for why nothing goes out; then the lane's last runs and the pump log. |
 | `pump-idle` | Nothing dispatched for over 3 hours (amber) or 12 hours (red) while the frame is incomplete: a subject with no sha or digest or no `changed_at` (change detection never set it), a subject with no result on an enabled `always` lane, or a newest result older than its tier's max age (`pump/tiers.json`). The summary counts them: subjects with no version, never-assessed and stale subjects per lane. Also amber when the pump's latest tick (under 30 minutes old) had subjects due, dispatched none, stopped on nothing and nothing is in flight. | A null sha everywhere means no poller sets versions: nothing becomes due until a tier's age runs out. Fix the release or SHA poller (audit A3) and the frame fill (A2); meanwhile read the pump's last tick (`pump.last_tick`) and the workflows' pause state. |
-| `coverage:<lane>` | The assessment number of `state/coverage.mjs` `computeCoverage` (the same value the health issue's "Tool coverage" table shows): assessed results over eligible subjects of the lane's whole frame, policy-excluded results leaving the denominator. Amber under 80%, red under 50%. Not the share of the last 24 hours, so a lane that skips most servers does not look covered. The other three numbers (conditional correctness, frame coverage, gross) are in the table; they are not yet measurable until results are judged. Without a computable coverage block the item `coverage` is amber. | The lane's skips by reason and fault in the check-in; `tool-failures` says how many are ours. |
+| `coverage:<lane>` | The assessment number of `state/coverage.mjs` `computeCoverage` (the same value the health issue's "Tool coverage" table shows): assessed results over eligible subjects of the lane's whole frame, policy-excluded results leaving the denominator. Amber under 80%, red under 50%. Not the share of the last 24 hours, so a lane that skips most servers does not look covered. The other three numbers (conditional correctness, frame coverage, gross) are in the table; they are not yet measurable until results are judged. Without a computable coverage block the item `coverage` is amber; an enabled lane that has no number (every result excluded, or a lane the block skips as not built) is amber with the reason. | The lane's skips by reason and fault in the check-in; `tool-failures` says how many are ours. |
 | `tool-failures:<lane>` | Results whose skips are our tool's fault (`results.fault = tool`). Always shown as counts: now, and of the last 24 hours. Amber from 50 results now or 20% of the last 24 hours (at least 5 results), red from 50% of the last 24 hours. | Open the lane's `tool` fault skips in the check-in; they are bugs of ours to fix or reclassify. |
 | `oracle-disagreements` | Open oracle disagreements (`oracle_disagreements`): the count. Amber when the oldest has been open over 14 days (it is not settling). | `docs/INTERFACES.md`, oracle disagreement; the due list re-checks them. |
 | `ingest-rejects` | Ingest rejects for pin and schema reasons in the last 24 hours (`pin_mismatch`, `pin_unverified`, `manifest_invalid`, `manifest_not_json`, `observation_format`, `undeclared_field`, `deprecated_field`, `field_type`), by reason. Amber when each of the two newest worker runs had one. | `ingest/README.md`, rejection reasons; a pin refusal pauses its lane. |

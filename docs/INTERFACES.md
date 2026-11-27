@@ -395,6 +395,7 @@ after 8 days and always keeps the newest.
 | `breaker_changed` | `noteBreaker` | | `{ tripped, reason, held }` |
 | `workflow_paused` | `noteShaMismatch` when it pauses (now one transaction) | workflow, 1 | `{ until }` |
 | `frame_grew` | `pump/discover.mjs` `noteFrame`, when a discover pass added subjects | , subjects added | `{ version }`: the new frame version (kv `frame`) |
+| `heads_polled` | `pump/heads.mjs`, one per GraphQL query applied, in the same transaction as its `noteHead` / `noteChange` writes | , repositories asked | `{ changed, head_first_seen, new_sha, new_release }` for that query |
 
 State calls:
 

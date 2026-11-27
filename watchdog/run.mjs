@@ -162,6 +162,7 @@ export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {
         'pump.conformance': db.getKv('pump.conformance') ?? null,
         'pump.subjects': db.getKv('pump.subjects') ?? null,
         'pump.identity': db.getKv('pump.identity') ?? null,
+        'pump.heads': db.getKv('pump.heads') ?? null,
         'pump.last_tick': db.getKv('pump.last_tick') ?? null,
         'pump.api_budget': db.getKv('pump.api_budget') ?? null,
         'pump.last_run': db.getKv('pump.last_run') ?? null,
@@ -171,7 +172,8 @@ export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {
       },
       lanes: readLaneData(db, now, { cfg, tiers }),
       // The four coverage numbers per lane (state/coverage.mjs); null when the config or state cannot answer.
-      coverage: readCoverage(db),
+      // the same config the lane checks read (R-WD-36); the pump's own when none was given
+      coverage: readCoverage(db, tiers && Object.keys(cfg).length ? { tiers, workflows: cfg } : undefined),
     };
   } finally {
     db.close();
