@@ -26,13 +26,16 @@
 //
 // Schema v10 adds the append-only events table (state/schema-v10.sql): each
 // event is written in the same transaction as the fact it describes.
+//
+// Schema v11 adds discovery_keys (state/schema-v11.sql): the subfolder and
+// purl keys the discover lane saw each subject under (pump/discover.mjs).
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { deriveDisagreements, foldDisagreement, ORACLE_BUDGET_DAYS, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_LANES } from './oracle.mjs';
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -52,6 +55,7 @@ const MIGRATIONS = [
   { version: 8, sql: () => readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8') },
   { version: 9, sql: () => readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8') },
   { version: 10, sql: () => readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8') },
+  { version: 11, sql: () => readFileSync(new URL('./schema-v11.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -458,6 +462,30 @@ export class StateDb {
       }
       return n;
     });
+  }
+
+  /**
+   * Record that the discover lane saw `subject` under (subfolder, purl) in
+   * `feed`. Returns true when the key is new for the subject. repo_id is the
+   * subject's own when not given.
+   */
+  noteDiscoveryKey({ subject, repoId = null, subfolder = '', purl = '', feed, now }) {
+    const t = iso(now);
+    const cur = this.raw.prepare('SELECT feeds FROM discovery_keys WHERE subject = ? AND subfolder = ? AND purl = ?').get(subject, subfolder, purl);
+    if (cur) {
+      const feeds = [...new Set([...String(cur.feeds).split(','), feed])].filter(Boolean).sort().join(',');
+      this.raw.prepare('UPDATE discovery_keys SET feeds = ?, last_seen = ? WHERE subject = ? AND subfolder = ? AND purl = ?').run(feeds, t, subject, subfolder, purl);
+      return false;
+    }
+    const rid = repoId ?? this.getSubject(subject)?.repo_id ?? null;
+    this.raw.prepare('INSERT INTO discovery_keys (subject, repo_id, subfolder, purl, feeds, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)').run(subject, rid, subfolder, purl, String(feed), t, t);
+    return true;
+  }
+
+  listDiscoveryKeys(subject) {
+    return (subject === undefined
+      ? this.raw.prepare('SELECT * FROM discovery_keys ORDER BY subject, subfolder, purl').all()
+      : this.raw.prepare('SELECT * FROM discovery_keys WHERE subject = ? ORDER BY subfolder, purl').all(subject)).map(plain);
   }
 
   listSubjects() {

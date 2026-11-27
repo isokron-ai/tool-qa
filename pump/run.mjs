@@ -71,6 +71,8 @@
 //   LANE_STATE_PRUNE_ENABLED   anything but unset, empty or "true" stops pruning
 //   LANE_SUBJECT_IDS_ENABLED   anything but unset, empty or "true" stops the
 //                      subject id lookups (pump/identity.mjs)
+//   LANE_DISCOVER_ENABLED   only the exact value "true" turns discover.yml
+//                      candidates into subjects (pump/discover.mjs)
 //   LANE_LIVE_SNAPSHOT_ENABLED   only the exact value "true" publishes the live
 //                      loop snapshot to R2 (live/publish.mjs); with
 //                      LIVE_R2_ACCESS_KEY_ID, LIVE_R2_SECRET_ACCESS_KEY,
@@ -102,6 +104,7 @@ import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.
 import { computeBudget, reapExpired } from './slots.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
+import { applyDiscovery, DISCOVER_KV_KEY, discoverEnabled, fetchCandidates } from './discover.mjs';
 import { planShards, runTick } from './tick.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
@@ -119,6 +122,8 @@ export const FINAL_REQUEST_TIMEOUT_MS = 30_000;
 export const REGISTRY_DELTA_CHECK_MS = 5 * 60_000;
 export const REGISTRY_DELTA_WINDOW_MS = 60_000;
 export const REGISTRY_DELTA_KEY = 'pump.registry_delta';
+// The discover pass (pump/discover.mjs) gets this long at the start of a run.
+export const DISCOVER_WINDOW_MS = 90_000;
 export const BUDGET_KEY = 'pump.api_budget';
 export const BREAKER_KEY = 'pump.breaker';
 export const CONFORMANCE_KEY = 'pump.conformance';
@@ -145,6 +150,9 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
  * for the defaults, null for none, or options for refreshIdentities()
  * (batch, maxQueries, retryMs). They use GITHUB_TOKEN through the run's API
  * budget and never hold the run.
+ * discover: the discover pass (pump/discover.mjs): undefined for the real
+ * one, null for none, or {getCandidates, config} for tests. Only with
+ * LANE_DISCOVER_ENABLED exactly "true".
  * ingest: undefined for the pump's own collector (ingest/collect.mjs, built
  * with `ingestOptions`), null for none, a function (called as collect()), or an
  * object with collect() and optionally check().
@@ -165,6 +173,7 @@ export async function runPump({
   stateFile = DEFAULT_STATE,
   seedFile = SEED_FILE,
   identity,
+  discover,
   config,
   pull = pullState,
   push = pushState,
@@ -519,6 +528,26 @@ export async function runPump({
       say('pump: subject ids: lookups are off (LANE_SUBJECT_IDS_ENABLED); ids already found are still used');
       // The watchdog shows the item off, not the last pass's colour (R-SUBJ-18).
       db.setKv(IDENTITY_KV_KEY, { ...(db.getKv(IDENTITY_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
+    }
+    // The discover lane (pump/discover.mjs, A2): candidates from discover.yml
+    // become subjects, deduped by repository id, forks left out, at most
+    // discover.json daily_cap a day. Its own short window; never holds the run.
+    if (discover !== null && discoverEnabled(env) && repo) {
+      try {
+        const until = Math.min(deadline, now() + DISCOVER_WINDOW_MS);
+        const gql = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => until, onRetry: retryHook('github_api') }) : null;
+        const getCandidates = discover?.getCandidates ?? (async () => {
+          const { token } = await lazyMint({ repositories: [repo.split('/')[1]], permissions: { actions: 'read' } });
+          const client = createClient({ token, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => until, requestTimeoutMs: 20_000, onRetry: retryHook('github_api') });
+          return fetchCandidates({ client, fetch, repo });
+        });
+        const d = await applyDiscovery(db, { client: gql, getCandidates, now, log: say, ...(discover?.config ? { config: discover.config } : {}) });
+        say(`pump: discover: ${d.summary}`);
+      } catch (err) {
+        say(`pump: discover failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
+      }
+    } else if (discover !== null) {
+      db.setKv(DISCOVER_KV_KEY, { ...(db.getKv(DISCOVER_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
     }
     // Registry delta capture (pump/registry-delta.mjs): GitHub's */15 cron for it
     // fires hours late, so the pump dispatches it when the newest capture is

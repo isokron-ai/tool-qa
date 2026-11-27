@@ -187,7 +187,7 @@ test('R-ORD-08: the v9 migration of a v8 state keeps every row and changes no pr
   assert.equal(v8.schemaVersion(), 8);
   assert.deepEqual(dueFromState(v8, { tiers, workflows: wf, now: T0 + 40 * DAY }).map((d) => [d.subject, d.reasons, d.priority]), dueBefore, 'a v8 state is read as before');
   assert.equal(v8.migrate(), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 10);
+  assert.equal(SCHEMA_VERSION, 11);
   assert.equal(v8.raw.prepare('SELECT COUNT(*) AS n FROM results').get().n, before);
   assert.deepEqual(dueFromState(v8, { tiers, workflows: wf, now: T0 + 40 * DAY }).map((d) => [d.subject, d.reasons, d.priority]), dueBefore, 'nothing became due or moved');
   assert.deepEqual(v8.listOracleDisagreements(), []);

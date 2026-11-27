@@ -394,6 +394,7 @@ after 8 days and always keeps the newest.
 | `registry_delta` | `noteRegistryDelta`, only when `action` is `dispatched` or `failed` | | `{ action }` |
 | `breaker_changed` | `noteBreaker` | | `{ tripped, reason, held }` |
 | `workflow_paused` | `noteShaMismatch` when it pauses (now one transaction) | workflow, 1 | `{ until }` |
+| `frame_grew` | `pump/discover.mjs` `noteFrame`, when a discover pass added subjects | , subjects added | `{ version }`: the new frame version (kv `frame`) |
 
 State calls:
 

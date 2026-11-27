@@ -826,6 +826,71 @@ but no tool for it is shipped, so if v8 has run for long, prefer fixing
 forward (or switching the lookups off with `LANE_SUBJECT_IDS_ENABLED=false`)
 to a restore.
 
+## Discover: the frame grows from the feeds (design audit A2)
+
+Until this, every subject came from the hand-drawn seed (997 repositories,
+`source = seed-v1`, about 1.4% of the registry). History already captured the
+registry (H1) and the npm, PyPI, crates.io and Go feeds (H2), but nothing
+turned those rows into subjects. Two steps do now:
+
+1. **`discover.yml`** (daily 05:41 UTC, and by hand). `discover/run.mjs` reads
+   the newest full registry capture and the newest package capture and maps
+   their rows to GitHub repositories:
+   - registry rows: the latest active version, `repository.url` plus
+     `subfolder`, and a purl per package;
+   - crates rows: `repository`;
+   - Go module paths: `github.com/<owner>/<name>[/<folder>]`;
+   - npm and PyPI names the registry does not already list: one GET each to
+     `registry.npmjs.org/<name>/latest` or `pypi.org/pypi/<name>/json`, at
+     most 400 a run, 150 ms apart, with an identifying User-Agent.
+
+   It writes one candidate per repository, with every (subfolder, purl, feed)
+   key, to the artifact `discover-<run id>` (`candidates.json.gz`,
+   `manifest.json` with input sha256s and counts; kept 7 days). Candidates
+   are ordered by class, then by the sha256 of the name: 0 registry-listed
+   with a package, 1 package feeds only, 2 registry-listed without a package.
+   Class 2 servers are only ever read from source, never contacted
+   (decision 7). On 27 Nov this was 37,990 candidates (21,078 / 3,150 /
+   13,762).
+2. **The pump** (`pump/discover.mjs`, at the start of a run after the id
+   pass). It reads the newest successful `discover.yml` run on main and walks
+   its candidates from a cursor (kv `pump.discover`). A name a subject
+   already has is known: its keys go to that subject. Unknown names are
+   looked up by GraphQL (100 a query, `discover.json` `max_queries`, the
+   pump's `graphql` budget):
+   - not found: skipped, nothing recorded against anyone;
+   - a fork: left out;
+   - a repository id a subject already holds: no new subject, the keys go to
+     the holder (dedupe by repository id);
+   - otherwise: a new subject with key and name as GitHub spells it,
+     `source = discover-v1`, tier `discover.json` `tier` (T3), bound to its id
+     at once.
+
+**Controlled steps.** At most `discover.json` `daily_cap` (100) new subjects in
+any rolling 24 hours. With no room, the artifact is not even read. Each new
+subject is due once as `first_sight` on every enabled lane.
+
+**Keys and frame version.** State schema v11 adds `discovery_keys` (subject,
+repo_id, subfolder, purl, feeds, first and last seen). A monorepo stays one
+subject, and its servers' folders and packages are kept beside it. kv
+`frame` holds the frame version (bumped whenever subjects are added), the
+active subjects per source, and the artifact they came from. Event
+`frame_grew`.
+
+**Switch.** `LANE_DISCOVER_ENABLED`, for both the workflow and the pump step:
+only the exact value `true`. Off, the workflow ends green with a notice and
+the pump writes `off` to kv `pump.discover`.
+
+**Dry run.** `discover/run.mjs --no-network` on downloaded captures, then
+`node scripts/discover-dry-run.mjs --state <decrypted copy> --candidates <file>`
+runs one pass on a copy of the state with the real GraphQL API and pushes
+nothing.
+
+**The v11 migration** adds one table and changes no row. It runs in the first
+pump run with this code. Code from before v11 refuses a v11 state, so going
+back means restoring the snapshot taken before the merge (see "State
+snapshots").
+
 ## The pump
 
 `.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
