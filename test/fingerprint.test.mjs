@@ -90,9 +90,22 @@ test('R-LEAD-07: a lead holds the bug shape only: no subject name reaches any pa
   assert.ok(leads.every((l) => /^[0-9a-f]{12}$/.test(l.fingerprint)));
 });
 
-test('leadFailures never throws: a broken item makes no lead', () => {
-  assert.deepEqual(leadFailures({ subject: 'a/b', results: null, skips: null, tools: [] }), []);
-  assert.deepEqual(bundleLeads(Buffer.from('{not json'), new Map(), { subject: 'a/b' }, 'scan-static', { names: new Set() }), []);
+test('R-LEAD-14: an item that cannot be read gives null (not folded), never [] (which would count as a clean re-check of every lead)', () => {
+  assert.equal(leadFailures({ subject: 'a/b', results: null, skips: null, tools: [] }), null);
+  assert.equal(bundleLeads(Buffer.from('{not json'), new Map(), { subject: 'a/b' }, 'scan-static', { names: new Set() }), null);
+  assert.deepEqual(leadFailures(itemFromBundle(bundle())), [], 'a readable item with no failure is []');
+});
+
+test('R-LEAD-15: a lead names only our own tools: a third-party tool a worker runs (gvisor, an SDK) is in neither its id nor its versions', () => {
+  const skips = [{ stage: 'install', reason: 'no_runnable_artifact', fault: 'tool' }];
+  const tools = [{ name: 'mcp-writecheck', version: '3af41c6' }, { name: 'mcp-writecheck-action', version: 'db0d614' }, { name: 'gvisor', version: '20261116.0' }, { name: 'sdk-python', version: '2.3.0' }];
+  const [l] = leadFailures(itemFromBundle(bundle({ lane: 'corpus', repo: 'isokron-ai/mcp-writecheck-action', skips, tools })));
+  assert.equal(l.tool, 'mcp-writecheck');
+  assert.deepEqual(l.versions, ['mcp-writecheck@3af41c6', 'mcp-writecheck-action@db0d614']);
+  const [m] = leadFailures(itemFromBundle(bundle({ lane: 'corpus', repo: 'isokron-ai/mcp-writecheck-action', skips, tools: [...tools, { name: 'gvisor', version: '20270101.0' }] })));
+  assert.equal(m.fingerprint, l.fingerprint, 'a third-party upgrade does not split the lead');
+  const [n] = leadFailures(itemFromBundle(bundle({ skips, tools: [{ name: 'gvisor', version: '1' }] })));
+  assert.equal(n.tool, '<other>');
 });
 
 test('R-CHECKIN-17: a worker that reports one reason again at every later stage (install, init, plan, catalog) has one failure, at its first stage', () => {

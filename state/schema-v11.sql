@@ -4,7 +4,8 @@
 -- leadKeyOf: tool, component, oracle, class, SDK idiom, layout, normalised
 -- signature, without the tool versions), kept while LANE_LEADS_ENABLED is on.
 -- Ingest folds every accepted result into it (StateDb.noteLeads, in the same
--- transaction as the result). The rules are in state/leads.mjs.
+-- transaction as the result). The rules are in state/leads.mjs; the re-check
+-- dispatch, filing and closing come with the pump's lead step (later parts).
 --
 -- leads: one row per fingerprint.
 --   repo        our repository an issue for it goes to (leads/routing.json)
@@ -35,6 +36,8 @@
 --   log         JSON [[iso, 1|0], ...]: the pair's results in the last 14 days
 --               (1 carried it), at most 32, for the flake rate
 --   last_run_id the worker run of the newest result folded in
+--   last_hit_run_id  the worker run of the newest result that carried it: a re-run
+--               reproduces the lead only from another run than this one
 CREATE TABLE leads (
   fingerprint          TEXT PRIMARY KEY,
   repo                 TEXT NOT NULL,
@@ -86,6 +89,7 @@ CREATE TABLE lead_subjects (
   last_seen    TEXT NOT NULL,
   last_checked TEXT NOT NULL,
   last_run_id  INTEGER,
+  last_hit_run_id INTEGER,
   log          TEXT NOT NULL DEFAULT '[]',
   PRIMARY KEY (fingerprint, subject, lane)
 ) STRICT;

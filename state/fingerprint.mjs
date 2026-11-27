@@ -55,6 +55,9 @@ export const CLASSES = Object.freeze([...SKIP_REASONS]);
  * subject data). A manifest name is folded first: `@isokron/` and
  * `isokron-ai/` are taken off. Anything else is <other>.
  */
+/** The tools in OUR_TOOLS that are our own code (the rest are third-party tools our workers run). */
+export const OWN_TOOLS = Object.freeze(['mcp-check', 'mcp-surface-corpus', 'mcp-surface-corpus-sandbox', 'mcp-writecheck', 'mcp-writecheck-action', 'mcp-catalog-snap',
+  'tool-qa', 'tool-qa-meta-github', 'tool-qa-meta-registry', 'tool-qa-release-diff', 'fuzz']);
 export const OUR_TOOLS = Object.freeze([
   'mcp-check', 'mcp-surface-corpus', 'mcp-surface-corpus-sandbox', 'mcp-writecheck', 'mcp-writecheck-action', 'mcp-catalog-snap',
   'tool-qa', 'tool-qa-meta-github', 'tool-qa-meta-registry', 'tool-qa-release-diff', 'fuzz', 'gvisor',
@@ -211,8 +214,11 @@ export const toolNames = (tool) => String(tool).split(',').map((t) => t.replace(
  */
 export function leadKeyOf(f) {
   const { parts } = fingerprintOf(f);
-  const lead = { ...parts, tool: toolNames(parts.tool).split(',')[0] };
-  return { id: idOf(lead), parts: lead, versions: String(parts.tool).split(',').filter((t) => t && t !== 'unknown') };
+  const tags = String(parts.tool).split(',').filter((t) => t && t !== 'unknown');
+  // Only our own tools go into a lead (and so into an issue): a third-party tool a worker runs (gvisor, an SDK) is left out.
+  const own = tags.filter((t) => OWN_TOOLS.includes(t.replace(/@[^@]*$/, '')));
+  const lead = { ...parts, tool: own.length ? own[0].replace(/@[^@]*$/, '') : '<other>' };
+  return { id: idOf(lead), parts: lead, versions: own };
 }
 
 // ---------------------------------------------------------------- items
@@ -291,8 +297,9 @@ export const LEAD_FAULTS = Object.freeze(['tool', 'unknown', 'infra']);
 
 /**
  * The leads of one accepted item: one entry per distinct lead id, with its
- * parts, fault side, tool versions and partial flag. Never throws (a bundle
- * that cannot be read makes no lead).
+ * parts, fault side, tool versions and partial flag. Never throws: an item
+ * that cannot be read gives null, which is not "no leads" (an empty list would
+ * count as a clean re-check of every lead its subject and lane carried).
  */
 export function leadFailures(item, { names, langOf } = {}) {
   try {
@@ -303,6 +310,6 @@ export function leadFailures(item, { names, langOf } = {}) {
     }
     return [...out.values()];
   } catch {
-    return [];
+    return null;
   }
 }

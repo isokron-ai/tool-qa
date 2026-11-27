@@ -1,8 +1,8 @@
 // Leads (DESIGN-v3 section 7, "Leads -> issues on our repos"): the rules, as
 // pure functions. The state store (state/db.mjs noteLeads) keeps the leads and
-// where they were seen; the pump's lead step (leads/step.mjs) re-checks, files
-// and closes them; the dry run (leads/dry-run.mjs) replays the archive through
-// the same code.
+// where they were seen; the pump's lead step (later parts of this work)
+// re-checks, files and closes them; the dry run (leads/dry-run.mjs) replays the
+// archive through the same code.
 //
 //   - a lead is filed only after a re-run on another runner (another worker run
 //     of the same subject and lane) showed it again;
@@ -121,7 +121,7 @@ export function flakeStats(pairs, now) {
 }
 
 /**
- * Whether a lead may be filed now, before the caps (leads/plan.mjs applies
+ * Whether a lead may be filed now, before the caps (the filing step applies
  * those). null for a lead that is not open or has an issue.
  * @returns {{file: boolean, reason: string}|null}
  */

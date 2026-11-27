@@ -187,3 +187,31 @@ test('R-LEAD-10: a lead goes to one of our repositories: by lane and component, 
   assert.equal(repoFor({ lane: 'scan-static', component: 'static' }, { ...r, lanes: { 'scan-static': 'someone/else' } }), r.default, 'a route outside repos is refused');
   for (const repo of r.repos) assert.match(repo, /^isokron-ai\/[a-z0-9-]+$/);
 });
+
+test('R-LEAD-13: reproduced means a re-run after a run that carried it; a flap after clean runs is not, and a reopened lead with no issue is re-checked again', () => {
+  const db = openState(':memory:');
+  const L = lead(6);
+  let t = T0;
+  accept(db, { failures: [L], runId: 1, now: t });
+  for (let r = 2; r < 2 + CLEAN_RECHECKS_TO_CLOSE; r++) accept(db, { failures: [], runId: r, now: (t += HOUR) });
+  let row = one(db, L.fingerprint);
+  assert.equal(row.status, 'closed');
+  // It comes back once: reopened, not reproduced (nothing carried it since run 1 but this run), and re-checked from this pair.
+  accept(db, { failures: [L], runId: 10, now: (t += HOUR) });
+  row = one(db, L.fingerprint);
+  assert.deepEqual([row.status, row.reproduced_at, row.recheck_attempts, row.recheck_subject], ['open', null, 0, 'acme/a']);
+  // The re-check shows it again from another run: now reproduced.
+  accept(db, { failures: [L], runId: 11, now: (t += HOUR) });
+  assert.equal(one(db, L.fingerprint).reproduced_run_id, 11);
+
+  // A lead reproduced before it closed loses that on reopen when it has no issue.
+  const M = lead(7);
+  accept(db, { subject: 'acme/m', failures: [M], runId: 20, now: (t += HOUR) });
+  accept(db, { subject: 'acme/m', failures: [M], runId: 21, now: (t += HOUR) });
+  assert.ok(one(db, M.fingerprint).reproduced_at);
+  for (let r = 22; r < 22 + CLEAN_RECHECKS_TO_CLOSE; r++) accept(db, { subject: 'acme/m', failures: [], runId: r, now: (t += HOUR) });
+  accept(db, { subject: 'acme/m', failures: [M], runId: 30, now: (t += HOUR) });
+  row = one(db, M.fingerprint);
+  assert.deepEqual([row.status, row.reproduced_at], ['open', null]);
+  assert.equal(filingDecision(row, { pairs: [], now: new Date(t).toISOString() }).file, false);
+});

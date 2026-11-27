@@ -1272,31 +1272,37 @@ export class StateDb {
           f.idiom, f.layout, f.signature, f.partial ? 1 : 0, f.fault, JSON.stringify(mergeVersions([], versions)), at, at, run, run, subject, lane, t, t);
         out.opened += 1;
       } else {
-        const reproduced = !lead.reproduced_at && pair && pair.last_run_id != null && run != null && pair.last_run_id !== run;
         const reopen = lead.status === 'closed';
+        // A reopened lead with no issue must be re-checked again before it is filed (and gets its re-checks back).
+        const fresh = reopen && lead.issue_number == null;
+        // The pair's previous result carried it too (current), from another worker run: a clean run in between makes
+        // this a flap, not a reproduction (R-LEAD-13); flaps are counted by the flake rate instead.
+        const reproduced = (fresh || !lead.reproduced_at) && pair && pair.current === 1 && pair.last_hit_run_id != null && run != null && pair.last_hit_run_id !== run;
         const status = reopen ? (lead.issue_number != null ? 'filed' : 'open') : lead.status;
         const cols = {
           status, sightings: lead.sightings + 1, last_seen: at > lead.last_seen ? at : lead.last_seen, last_run_id: run ?? lead.last_run_id,
           versions: JSON.stringify(mergeVersions(JSON.parse(lead.versions), versions)), clean_rechecks: 0,
         };
+        if (fresh) Object.assign(cols, { reproduced_at: null, reproduced_run_id: null, recheck_attempts: 0, recheck_subject: subject, recheck_lane: lane, recheck_after: t });
         if (reproduced) { cols.reproduced_at = at; cols.reproduced_run_id = run; out.reproduced += 1; }
         if (reopen) {
           Object.assign(cols, { reopened: lead.reopened + 1, closed_at: null, close_reason: null, needs_sync: needsSync({ status, issue_number: lead.issue_number, issue_state: lead.issue_state }) ? 1 : 0 });
           out.reopened += 1;
         }
         // A lead with no pair to re-check (every earlier one came back clean) re-checks this one.
-        if (!lead.reproduced_at && !reproduced && lead.recheck_subject == null && lead.recheck_attempts < RECHECK_MAX_ATTEMPTS) {
+        if (!fresh && !lead.reproduced_at && !reproduced && lead.recheck_subject == null && lead.recheck_attempts < RECHECK_MAX_ATTEMPTS) {
           Object.assign(cols, { recheck_subject: subject, recheck_lane: lane, recheck_after: t });
         }
         setLead(fp, cols);
         out.seen += 1;
       }
       this.raw.prepare(`
-        INSERT INTO lead_subjects (fingerprint, subject, lane, run_key, current, seen, clean, first_seen, last_seen, last_checked, last_run_id, log)
-        VALUES (?, ?, ?, ?, 1, 1, 0, ?, ?, ?, ?, ?)
+        INSERT INTO lead_subjects (fingerprint, subject, lane, run_key, current, seen, clean, first_seen, last_seen, last_checked, last_run_id, last_hit_run_id, log)
+        VALUES (?, ?, ?, ?, 1, 1, 0, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (fingerprint, subject, lane) DO UPDATE SET run_key = excluded.run_key, current = 1, seen = lead_subjects.seen + 1,
-          last_seen = excluded.last_seen, last_checked = excluded.last_checked, last_run_id = COALESCE(excluded.last_run_id, lead_subjects.last_run_id), log = excluded.log
-      `).run(fp, subject, lane, runKey, at, at, at, run, JSON.stringify(pushLog(pair ? JSON.parse(pair.log) : [], at, true, { now: at })));
+          last_seen = excluded.last_seen, last_checked = excluded.last_checked, last_run_id = COALESCE(excluded.last_run_id, lead_subjects.last_run_id),
+          last_hit_run_id = COALESCE(excluded.last_hit_run_id, lead_subjects.last_hit_run_id), log = excluded.log
+      `).run(fp, subject, lane, runKey, at, at, at, run, run, JSON.stringify(pushLog(pair ? JSON.parse(pair.log) : [], at, true, { now: at })));
     }
 
     // Clean re-checks: only an assessed result says a stage ran and did not show the lead.

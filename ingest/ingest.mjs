@@ -314,7 +314,8 @@ export async function openAttempt(input, deps) {
         // (loop upgrade #7); it never changes the fault side or coverage.
         ...(outcome === 'accepted' && files ? (() => { const oracle = oracleFactsFromFiles(row.workflow_name, files); return oracle ? { oracle } : {}; })() : {}),
         // The bundle's leads (state/fingerprint.mjs), only while the lead pipeline is on (LANE_LEADS_ENABLED).
-        ...(outcome === 'accepted' && files && leads ? { failures: bundleLeads(manifestBytes, files, item, row.workflow_name, leads) } : {}),
+        // null (unreadable) passes nothing: the result is then not folded into any lead, never counted as clean.
+        ...(outcome === 'accepted' && files && leads ? (() => { const failures = bundleLeads(manifestBytes, files, item, row.workflow_name, leads); return failures ? { failures } : {}; })() : {}),
       };
       const answer = (await ledger.recordResult(wantedRecord)) ?? { accepted: wantedRecord.accepted, reason };
       const recorded = { accepted: answer.accepted === true, reason: typeof answer.reason === 'string' ? answer.reason : null };
@@ -496,7 +497,8 @@ export async function openAttempt(input, deps) {
 
 /**
  * The leads of an accepted bundle (state/fingerprint.mjs leadFailures), never
- * throwing: a manifest that cannot be read here makes none.
+ * throwing: null when the manifest or the bundle cannot be read here (not
+ * folded at all), [] when it carries none.
  * leads: {names: Set|() => Set} the subject-name tokens no signature word may share.
  */
 export function bundleLeads(manifestBytes, files, item, lane, leads) {
@@ -505,7 +507,7 @@ export function bundleLeads(manifestBytes, files, item, lane, leads) {
     const names = typeof leads.names === 'function' ? leads.names() : leads.names;
     return leadFailures(itemFromBundle({ manifest, files, subject: item.subject, lane }), { names, ...(leads.langOf ? { langOf: leads.langOf } : {}) });
   } catch {
-    return [];
+    return null;
   }
 }
 

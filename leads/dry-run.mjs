@@ -49,7 +49,10 @@ export function replay(items, { langOf = seedLanguageOf() } = {}) {
   for (const it of sorted) {
     if (!Number.isFinite(Date.parse(it.observed_at))) continue;
     const failures = leadFailures(it, { names, langOf });
-    const { coverage } = resultFault(it.skips);
+    if (failures === null) continue; // unreadable: not folded, as in ingest
+    // As ingest: a result whose every skip is retryable (skips_only) is no clean re-check.
+    const skipsOnly = it.skips.length > 0 && it.skips.every((s) => s?.retryable === true);
+    const coverage = skipsOnly ? null : resultFault(it.skips).coverage;
     const r = db.noteLeads(it.subject, it.lane, it.key ?? `${it.attempt_id}/${it.item_index}`, failures, { now: it.observed_at, observedAt: it.observed_at, runId: it.run_id, coverage });
     if (r.refused) refused += 1;
     else folded += 1;
