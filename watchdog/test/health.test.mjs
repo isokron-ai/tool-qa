@@ -132,3 +132,25 @@ test('replace keeps an item raised by another job until a newer reading of the s
   assert.equal(merged.find((c) => c.id === 'pump-successor').status, 'green');
   assert.equal(merged.find((c) => c.id === 'pump'), undefined, 'replace drops plain items not reported again');
 });
+
+test('R-WD-29: a red item that was already red does not hide a new one: the comment fires for each red id that was not red on the previous run, and names it', async () => {
+  const h = issuesApi();
+  const cov = { id: 'coverage:writecheck', status: 'red', summary: '1 of 20 assessed' };
+  let out = await applyHealth({ client: h.client, repo: REPO, checks: [cov, { id: 'pump', status: 'green', summary: 'ok' }], now: NOW });
+  assert.equal(out.commented, true, 'first red');
+  assert.match(h.comments[0].body, /turned \*\*red\*\*/);
+  out = await applyHealth({ client: h.client, repo: REPO, checks: [cov, { id: 'pump', status: 'green', summary: 'ok' }], now: NOW });
+  assert.equal(out.commented, false, 'nothing new');
+  // the pump dies while coverage is still red
+  out = await applyHealth({ client: h.client, repo: REPO, checks: [cov, { id: 'pump', status: 'red', summary: 'no pump run started for 50 minutes' }], now: NOW });
+  assert.equal(out.commented, true);
+  assert.match(h.comments[1].body, /new red item: pump/);
+  assert.match(h.comments[1].body, /no pump run started/);
+  assert.doesNotMatch(h.comments[1].body, /coverage:writecheck/);
+  // both red the next run: no repeat
+  out = await applyHealth({ client: h.client, repo: REPO, checks: [cov, { id: 'pump', status: 'red', summary: 'still' }], now: NOW });
+  assert.equal(out.commented, false);
+  // recovered only when nothing is red
+  out = await applyHealth({ client: h.client, repo: REPO, checks: [{ ...cov, status: 'amber' }, { id: 'pump', status: 'green' }], now: NOW });
+  assert.match(h.comments[2].body, /recovered/i);
+});

@@ -19,6 +19,7 @@ import { parseBody } from '../health.mjs';
 import { openState } from '../../state/db.mjs';
 import { API, fakeApi, fakeClock } from '../../test/lib/fake-api.mjs';
 import { backed, greenStatus } from '../../test/lib/conformance.mjs';
+import { seedLaneState, tick } from '../../test/lib/lane-state.mjs';
 
 const REPO = 'isokron-ai/tool-qa';
 const MIN = 60_000;
@@ -35,6 +36,8 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
       }
       return { body: { workflow_runs: [] } };
     }],
+    // the state of a workflow file (the external-workflows item)
+    ['GET', /\/repos\/[^/]+\/[^/]+\/actions\/workflows\/[^/]+\.ya?ml$/, () => ({ body: { state: 'active' } })],
     ['GET', `/repos/${REPO}/actions/artifacts`, () => ({
       body: {
         artifacts: [
@@ -94,6 +97,8 @@ function world({ pumpAgeMin = 5, workflows = [], seed } = {}) {
       if (!seed) return { status: 'absent' };
       const db = openState(file);
       seed(db, c);
+      // a healthy lane picture under every seed (watchdog/lanes.mjs); a test about the lanes sets opts.noLanes
+      if (!opts.noLanes) seedLaneState(db, { now: c.t });
       db.close();
       return { status: 'pulled' };
     },
@@ -552,7 +557,7 @@ test('R-WD-17: no self test failure in the last 6 hours is green, and costs one 
   const w = selftestWorld([]);
   const c = await selftestOf(w);
   assert.equal(c.status, 'green', c.summary);
-  const reads = w.api.calls.filter((r) => /isokron-ai\/(mcp-check|mcp-writecheck-action)\//.test(r.path));
+  const reads = w.api.calls.filter((r) => /isokron-ai\/(mcp-check|mcp-writecheck-action)\/actions\/(workflows\/[^/]+\/runs|runs\/|jobs\/)/.test(r.path));
   assert.deepEqual(reads.map((r) => r.path).sort(), ['/repos/isokron-ai/mcp-check/actions/workflows/live-probe.yml/runs', '/repos/isokron-ai/mcp-writecheck-action/actions/workflows/corpus.yml/runs']);
   // the minted actions: read token (not the tool-qa App token, not the job token) reads the other repositories
   assert.equal(reads[0].headers.get('authorization'), 'Bearer ghs_synthetic_log_token');
@@ -603,7 +608,7 @@ test('R-WD-17: with no lane that runs third-party code enabled the item is off a
   w.opts.workerWorkflows = Object.fromEntries(Object.entries(SHIPPED).map(([k, v]) => [k, { ...v, enabled: v.runs_untrusted === false }]));
   const c = await selftestOf(w);
   assert.equal(c.status, 'off');
-  assert.equal(w.api.calls.some((r) => /mcp-check|mcp-writecheck-action/.test(r.path)), false);
+  assert.equal(w.api.calls.some((r) => /(mcp-check|mcp-writecheck-action)\/actions\/(workflows\/[^/]+\/runs|runs\/|jobs\/)/.test(r.path)), false);
   w.cleanup();
 });
 
@@ -635,7 +640,7 @@ test('R-WD-17: when the log token cannot be minted the reads fall back to the jo
   const c = await selftestOf(w);
   assert.equal(c.status, 'amber', c.summary);
   assert.match(c.summary, /installation does not cover mcp-check/);
-  assert.equal(w.api.calls.find((r) => r.path.includes('/mcp-check/')).headers.get('authorization'), 'Bearer ghs_synthetic_job_token');
+  assert.equal(w.api.calls.find((r) => r.path.includes('/mcp-check/') && r.path.endsWith('/runs')).headers.get('authorization'), 'Bearer ghs_synthetic_job_token');
   w.cleanup();
 });
 
@@ -647,7 +652,7 @@ test('R-WD-17: with no lane enabled no log token is minted', async () => {
   w.cleanup();
 });
 
-const readsOf = (w) => w.api.calls.filter((r) => /isokron-ai\/(mcp-check|mcp-writecheck-action)\//.test(r.path));
+const readsOf = (w) => w.api.calls.filter((r) => /isokron-ai\/(mcp-check|mcp-writecheck-action)\/actions\/(workflows\/[^/]+\/runs|runs\/|jobs\/)/.test(r.path));
 
 test('R-WD-18: no failure found in a truncated run list is amber (list truncated), not green; a complete list stays green', async () => {
   const w = selftestWorld([]);
@@ -787,4 +792,61 @@ test('R-WD-22: a log redirect that is relative, http or missing leaves the image
     assert.equal(w.blobCalls.length, 0, String(location));
     w.cleanup();
   }
+});
+
+test('R-WD-23: the health issue is not green in the 27 Nov state (due 0, nothing dispatched for 7.5 hours, null shas), and shows the lane items', async () => {
+  const w = world({ seed: (db, c) => {
+    seedLaneState(db, { now: c.t, subjects: 60, versioned: false, dispatchAgeMin: 450, lanes: { 'live-probe': { ageMin: 443, n: 50, assessed: 20, tool: 30 }, 'scan-static': { ageMin: 925, n: 55, assessed: 50 } } });
+    tick(db, c.t, { due: 0, dispatched: 0 });
+  } });
+  w.opts.noLanes = true;
+  const out = await runWatchdog(w.opts);
+  const checks = parseBody(w.issues[0].body).checks;
+  const st = (id) => checks.find((x) => x.id === id)?.status;
+  assert.notEqual(out.overall, 'green');
+  for (const id of ['lane-fresh:live-probe', 'lane-fresh:scan-static', 'pump-idle', 'coverage:live-probe']) assert.ok(['amber', 'red'].includes(st(id)), `${id}: ${st(id)}`);
+  assert.equal(st('external-workflows'), 'green');
+  assert.equal(st('ingest-rejects'), 'green');
+  assert.equal(st('oracle-disagreements'), 'green');
+  w.cleanup();
+});
+
+test('R-WD-28: a disabled external workflow, and a failing read of one, show on the health issue (amber) without failing the run', async () => {
+  const w = world({ seed: () => {} });
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-surface-corpus\/actions\/workflows\/conformance-nightly\.yml$/, () => ({ body: { state: 'disabled_inactivity' } })]);
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/workflows\/live-probe\.yml$/, () => ({ status: 500, body: {} })]);
+  const out = await runWatchdog(w.opts);
+  const c = parseBody(w.issues[0].body).checks.find((x) => x.id === 'external-workflows');
+  assert.equal(c.status, 'amber');
+  assert.match(c.summary, /conformance-nightly\.yml .*disabled by GitHub for inactivity/);
+  assert.match(c.summary, /live-probe\.yml .*unreadable/);
+  assert.notEqual(out.overall, 'red');
+  w.cleanup();
+});
+
+test('R-WD-32: a red lane item never acts: the pump is not dispatched, no workflow is enabled or touched, no POST but the health issue', async () => {
+  const w = world({ seed: (db, c) => {
+    seedLaneState(db, { now: c.t, subjects: 20, versioned: false, dispatchAgeMin: 24 * 60, lanes: { 'scan-static': { ageMin: 30 * 60, n: 20, assessed: 2 } } });
+    tick(db, c.t, { due: 3, dispatched: 0 });
+  } });
+  w.opts.noLanes = true;
+  const out = await runWatchdog(w.opts);
+  const checks = parseBody(w.issues[0].body).checks;
+  assert.ok(checks.some((x) => x.id.startsWith('lane-fresh:') && x.status === 'red'), 'a lane item is red');
+  assert.equal(out.actions.dispatchPump, false);
+  assert.deepEqual(out.actions.enableWorkflows, []);
+  const writes = w.api.calls.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path}`);
+  assert.deepEqual(writes.filter((x) => !/\/issues(\/\d+)?(\/comments)?$/.test(x.split(' ')[1]) && !x.endsWith('/graphql')), []);
+  w.cleanup();
+});
+
+test('R-WD-33: without GITHUB_TOKEN the external workflows are not read with the tool-qa App token: amber with the reason', async () => {
+  const w = world({ seed: () => {} });
+  delete w.opts.env.GITHUB_TOKEN;
+  await runWatchdog(w.opts);
+  const c = parseBody(w.issues[0].body).checks.find((x) => x.id === 'external-workflows');
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /GITHUB_TOKEN is unset/);
+  assert.equal(w.api.calls.some((r) => /\/(mcp-check|mcp-writecheck-action|mcp-surface-corpus)\/actions\/workflows\/[^/]+\.ya?ml$/.test(r.path)), false);
+  w.cleanup();
 });

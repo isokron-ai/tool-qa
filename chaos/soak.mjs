@@ -56,6 +56,8 @@ export async function soakOne(seed, { faults = 14, hours = 5, recoverHours = 4, 
       // A run past its lease keeps its runner while its slot is free again.
       extraRuns: dup + slow + (sim.restoresApplied ?? 0) * 3,
       allowParked: true,
+      // The simulated subjects never age during the quiet spell, so a lane's newest result is old by design (R-WD-23).
+      ignoreChecks: ['lane-fresh:'],
     });
     return { seed, ok: problems.length === 0, problems, schedule: lines, tail: problems.length ? sim.tail(150) : '' };
   } finally {
