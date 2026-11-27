@@ -101,10 +101,11 @@ test('R-SAMP-06: T2 writecheck (mode sample) is due only when the sampler picks 
   assert.deepEqual(due.filter((d) => d.tier === 1).map((d) => d.reasons.join()), ['first_sight'], 'T1 is due as before, not as a sample');
 });
 
-test('R-SAMP-07: unreadable rates are 0 (a rate over 1 is 1); unreadable caps are the default', () => {
+test('R-SAMP-07: unreadable rates are 0 (a rate over 1, hex or exponent forms too); unreadable caps are the default', () => {
   for (const bad of [undefined, null, '', ' ', 'abc', '-1', '0', 'NaN', 'Infinity-', '0,5']) assert.equal(parseRate(bad), 0, String(bad));
   assert.equal(parseRate('0.25'), 0.25);
-  assert.equal(parseRate('7'), 1);
+  for (const bad of ['7', '10', '1.5', '1.0001', '0x10', '1e0', '5e-1', '+0.5', '0.5.1', '1/2', '50%']) assert.equal(parseRate(bad), 0, `${bad} must not open a tier`);
+  for (const [good, v] of [['1', 1], ['1.0', 1], ['0', 0], ['.5', 0.5], ['0.05', 0.05], [' 0.25 ', 0.25]]) assert.equal(parseRate(good), v, good);
   for (const bad of [undefined, '', 'x', '-3', '2.5', '1e3']) assert.equal(parseCap(bad), DEFAULT_CAP, String(bad));
   assert.equal(parseCap('0'), 0);
   assert.equal(parseCap('12'), 12);
@@ -143,4 +144,25 @@ test('R-SAMP-10: pump.yml passes every tier variable and sets no default, so the
   }
   assert.doesNotMatch(yml, /SAMPLE_RATE_T\d: '?[0-9.]/);
   assert.ok(tiers.priority.cell_sample > 0);
+});
+
+test('R-SAMP-11: the sampling hook is never consulted for a pair that is mode never, on a disabled workflow, or parked', () => {
+  const subjects = ids(3).map((id) => ({ id, tier: 2, sha: 'a'.repeat(40) }));
+  const asked = [];
+  const hooks = { ...NO_HOOKS, cellSample: (s, name) => { asked.push(`${s.id}:${name}`); return true; } };
+  const never = structuredClone(tiers);
+  never.tiers.T2.writecheck.mode = 'never';
+  computeDue({ ...dueInput(hooks, subjects), tiers: never });
+  assert.deepEqual(asked, [], 'mode never');
+  computeDue({ ...dueInput(hooks, subjects), workflows: { writecheck: { ...wf, enabled: false } } });
+  assert.deepEqual(asked, [], 'disabled workflow');
+  const parked = new Set(subjects.map((s) => runKey(runKeyFields(s, 'writecheck', wf))));
+  computeDue({ ...dueInput(hooks, subjects), parked });
+  assert.deepEqual(asked, [], 'parked run keys');
+  const due = computeDue(dueInput(hooks, subjects));
+  assert.equal(asked.length, 3, 'consulted when the pair is eligible');
+  assert.equal(due.length, 3);
+  const withInFlight = computeDue({ ...dueInput(hooks, subjects), inFlight: new Set(subjects.map((s) => `${s.id}\u0000writecheck`)) });
+  assert.equal(withInFlight.length, 0);
+  assert.equal(asked.length, 3, 'not consulted for in-flight pairs either');
 });

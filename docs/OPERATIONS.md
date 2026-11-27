@@ -1085,7 +1085,7 @@ Repository variables, one pair per tier (T1 to T4), passed to the Pump step:
 
 | Variable | Meaning | Unset means |
 |---|---|---|
-| `SAMPLE_RATE_T<n>` | Share of the tier's subjects sampled per workflow, 0 to 1 | 0: nothing is sampled |
+| `SAMPLE_RATE_T<n>` | Share of the tier's subjects sampled per workflow, 0 to 1, a plain decimal (a value above 1 reads as 0) | 0: nothing is sampled |
 | `SAMPLE_CAP_T<n>` | Most pairs per workflow per week in that tier (the lowest scores are kept) | 25 |
 
 The shipped state is no variable set, so rate 0 and the due list is unchanged. Opening a tier is a repository variable change by the owner: set `SAMPLE_RATE_T2` (for example `0.1`) and, if wanted, `SAMPLE_CAP_T2`. A lane that is not enabled in `pump/workflows.json` still dispatches nothing. To stop sampling again, unset the variable or set it to 0.

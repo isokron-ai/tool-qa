@@ -49,12 +49,16 @@ export function sampleScore(subject, workflow, week) {
   return h.readUIntBE(0, 6) / 2 ** 48;
 }
 
-/** A rate from a variable: a number in [0, 1], else 0. */
+/**
+ * A rate from a variable: a plain decimal from 0 to 1 (`0`, `.25`, `0.25`, `1`,
+ * `1.0`), else 0. Anything else, a value above 1 (someone meaning a percent),
+ * hex, exponent forms, signs and spaces inside, is 0: it never opens a tier.
+ */
 export function parseRate(raw) {
-  if (raw === undefined || raw === null || String(raw).trim() === '') return 0;
-  const n = Number(String(raw).trim());
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(1, n);
+  if (raw === undefined || raw === null) return 0;
+  const s = String(raw).trim();
+  if (!/^(0|0?\.\d+|1(\.0+)?)$/.test(s)) return 0;
+  return Number(s);
 }
 
 /** A cap from a variable: a whole number >= 0, else DEFAULT_CAP. */
