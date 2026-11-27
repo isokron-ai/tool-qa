@@ -1122,6 +1122,12 @@ person. off: switched off on purpose.
 | `retention-seal` | The last seal of the pump's outputs could not compress, or could not write the keep-forever file (amber); three seals in a row failed (red). The full bundle was still sealed, as a plain tar if need be, so nothing is lost, but each such seal leaves a hole in the keep-forever set. | Read the item's summary for the error (kv `retention.seal` in the state); fix the cause, then the next clean seal turns it green. "Data retention". |
 | `keep-markers` | A seal whose keep-forever file failed has no `ingest-keepgap-<run>-<attempt>` artifact an hour later (red: the marker was lost), or cannot be matched to a run or is older than the artifact list reaches (amber). Green when every failed one has its marker, or none failed in the last 2 days. | Open the named pump run's "Upload the keep-forever gap markers" step. The prune checks every item's keep file itself ("Data retention"), so nothing expires unprotected; the marker is the second line. |
 
+The watchdog comments on the issue when a red item appears that was not red on its previous
+run (naming it), and when overall health recovers from red. An item that stays red for days
+(a coverage number, say) does not hide the next real one: each new red id is announced. A red
+item changes nothing else: the watchdog dispatches the pump only when no pump run started for
+20 minutes, and re-enables only workflows GitHub disabled for inactivity; nothing reads this issue to pause a lane.
+
 If the issue is missing, the next watchdog run creates it. If pinning fails
 (the App may not be allowed to pin), pin it once by hand.
 

@@ -467,3 +467,25 @@ test('R-LIVE-60: a check the watchdog reports as off stays off (switched off on 
   assert.equal(h.checks.find((c) => c.id === 'pump').status, 'off');
   assert.equal(h.checks.find((c) => c.id === 'slots').status, 'green');
 });
+
+test('R-WD-30: with more checks than fit, red and amber then the core liveness and backup items are kept, and the rest is counted in a "more-checks" entry', () => {
+  const mk = (id, status = 'green') => ({ id, status, summary: 'x' });
+  const lanes = Array.from({ length: 50 }, (_, i) => mk(`lane-fresh:l${i}`));
+  const core = ['pump', 'slots', 'dispatches', 'state-snapshot', 'archive', 'offsite-backup', 'keep-forever'].map((id) => mk(id));
+  const junk = Array.from({ length: 40 }, (_, i) => mk(`zz-extra-${i}`));
+  // 98 checks in all: the red item comes last in the issue
+  const checks = [...lanes, ...junk, ...core, mk('pump-dispatch', 'red')];
+  const body = `<!-- loop-health:v1 ${JSON.stringify({ overall: 'red', updated: '2026-11-27T00:00:00.000Z', checks })} -->`;
+  const h = allowlistHealth(body);
+  const ids = h.checks.map((c) => c.id);
+  assert.equal(h.checks.length, 81, '80 kept plus the count');
+  assert.equal(ids[0], 'pump-dispatch', 'red first');
+  for (const id of ['state-snapshot', 'archive', 'offsite-backup', 'keep-forever']) assert.ok(ids.includes(id), id);
+  const more = h.checks.at(-1);
+  assert.equal(more.id, 'more-checks');
+  assert.match(more.summary, /^18 more checks not shown$/);
+  // nothing is dropped, and no entry is added, when everything fits
+  const small = allowlistHealth(`<!-- loop-health:v1 ${JSON.stringify({ overall: 'green', checks: [...core, ...lanes.slice(0, 20)] })} -->`);
+  assert.equal(small.checks.length, 27);
+  assert.ok(!small.checks.some((c) => c.id === 'more-checks'));
+});

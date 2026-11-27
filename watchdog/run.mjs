@@ -325,7 +325,10 @@ export async function runWatchdog({
   let external = null;
   try {
     const listed = externalWorkflows(wfs, loadExpectedExternal());
-    external = listed.length ? await readExternalWorkflows(env.GITHUB_TOKEN ? createClient({ token: env.GITHUB_TOKEN, fetch, apiUrl, budget, sleep, now }) : client, listed) : null;
+    // Without the job token these are not read with the tool-qa App token (narrowed to this repository): amber, with the reason.
+    external = !listed.length ? null
+      : env.GITHUB_TOKEN ? await readExternalWorkflows(createClient({ token: env.GITHUB_TOKEN, fetch, apiUrl, budget, sleep, now }), listed)
+        : listed.map((w) => ({ ...w, state: 'error', error: 'GITHUB_TOKEN is unset' }));
   } catch {
     external = null;
   }

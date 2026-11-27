@@ -106,7 +106,8 @@ export function readLaneData(db, now, { cfg = {}, tiers = null } = {}) {
       window: Object.fromEntries(all("SELECT workflow, COUNT(*) AS total, COALESCE(SUM(fault = 'tool'), 0) AS tool FROM results WHERE accepted_at >= ? GROUP BY workflow", since).map((r) => [r.workflow, { total: Number(r.total), tool: Number(r.tool) }])),
       disagreements: all("SELECT COUNT(*) AS n, MIN(opened_at) AS oldest FROM oracle_disagreements WHERE status = 'open'").map((r) => ({ n: Number(r.n), oldest: r.oldest }))[0] ?? { n: 0, oldest: null },
       inFlight: Number(all("SELECT COUNT(*) AS n FROM dispatches WHERE status IN ('pending', 'dispatched')")[0]?.n ?? 0),
-      newestDispatch: all('SELECT MAX(created) AS at FROM dispatches')[0]?.at ?? null,
+      // only dispatches that started a run: a failed or expired one is not work going out
+      newestDispatch: all("SELECT MAX(created) AS at FROM dispatches WHERE status IN ('dispatched', 'done')")[0]?.at ?? null,
       rejects: { by_reason: rejects.filter((r) => watched.includes(r.reason)), newest_runs: runsNewest.map((r) => ({ run_id: r.run_id, bad: Number(r.bad) })) },
     };
   } catch {

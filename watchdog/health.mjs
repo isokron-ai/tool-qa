@@ -104,10 +104,18 @@ async function pin(client, nodeId) {
   }
 }
 
-function comment(prevOverall, overall, checks) {
-  if (overall === 'red' && prevOverall !== 'red') {
-    const reds = checks.filter((c) => c.status === 'red').map((c) => `- **${c.id}**: ${c.summary}`);
-    return ['Loop health turned **red**.', '', ...reds, '', 'See the table in the issue body; what to do is in docs/OPERATIONS.md.'].join('\n');
+/**
+ * The comment for this run, or null. A red item that was not red on the previous run
+ * is announced, named, whatever the overall status was: an item that stays red for days
+ * (a coverage number) must not hide the next real one (R-WD-29).
+ */
+function comment(prevOverall, overall, checks, prevChecks = []) {
+  const wasRed = new Set((prevChecks ?? []).filter((c) => c.status === 'red').map((c) => c.id));
+  const fresh = checks.filter((c) => c.status === 'red' && !wasRed.has(c.id));
+  if (fresh.length) {
+    const lines = fresh.map((c) => `- **${c.id}**: ${c.summary}`);
+    const head = prevOverall !== 'red' ? 'Loop health turned **red**.' : `Loop health is red and has ${fresh.length === 1 ? 'a new red item' : 'new red items'}: ${fresh.map((c) => c.id).join(', ')}.`;
+    return [head, '', ...lines, '', 'See the table in the issue body; what to do is in docs/OPERATIONS.md.'].join('\n');
   }
   if (prevOverall === 'red' && overall !== 'red') return `Loop health recovered: overall is now **${overall}**.`;
   return null;
@@ -135,7 +143,7 @@ export async function applyHealth({ client, repo, checks, mode = 'replace', now 
     await client.request('PATCH', `/repos/${repo}/issues/${issue.number}`, { essential: true, body: { body } });
     out.updated = true;
   }
-  const text = comment(previous, overall, merged);
+  const text = comment(previous, overall, merged, prevState?.checks);
   if (text && (out.created ? overall === 'red' : true)) {
     await client.request('POST', `/repos/${repo}/issues/${out.number}/comments`, { essential: true, body: { body: text } });
     out.commented = true;

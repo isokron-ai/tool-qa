@@ -205,3 +205,15 @@ test('R-WD-23: a state that cannot be read for the lanes is one amber item, neve
   assert.deepEqual(items.map((i) => [i.id, i.status]), [['lane-health', 'amber']]);
   assert.ok(LANE_THRESHOLDS.freshAmberMs < LANE_THRESHOLDS.freshRedMs);
 });
+
+test('R-WD-31: the last dispatch is the newest one that started a run: a failed or expired dispatch is not work going out', () => withDb((db) => {
+  seedLaneState(db, { now: NOW, subjects: 3, dispatchAgeMin: 5 * 60 });
+  const at = new Date(NOW - 10 * MIN).toISOString();
+  for (const [i, status] of ['failed', 'expired', 'pending'].entries()) {
+    db.raw.prepare("INSERT INTO dispatches (attempt_id, shard_id, workflow, repo, workflow_file, ref, created, expires, status) VALUES (?, ?, 'live-probe', 'o/r', 'f.yml', 'main', ?, ?, ?)").run(`x${i}`, `sx${i}`, at, at, status);
+  }
+  db.raw.exec("UPDATE subjects SET sha = NULL");
+  const p = by(run(db), 'pump-idle');
+  assert.equal(p.status, 'amber', p.summary);
+  assert.match(p.summary, /nothing dispatched for 5\.0 hours/);
+}));

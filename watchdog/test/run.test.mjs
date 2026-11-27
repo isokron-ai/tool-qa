@@ -823,3 +823,30 @@ test('R-WD-28: a disabled external workflow, and a failing read of one, show on 
   assert.notEqual(out.overall, 'red');
   w.cleanup();
 });
+
+test('R-WD-32: a red lane item never acts: the pump is not dispatched, no workflow is enabled or touched, no POST but the health issue', async () => {
+  const w = world({ seed: (db, c) => {
+    seedLaneState(db, { now: c.t, subjects: 20, versioned: false, dispatchAgeMin: 24 * 60, lanes: { 'scan-static': { ageMin: 30 * 60, n: 20, assessed: 2 } } });
+    tick(db, c.t, { due: 3, dispatched: 0 });
+  } });
+  w.opts.noLanes = true;
+  const out = await runWatchdog(w.opts);
+  const checks = parseBody(w.issues[0].body).checks;
+  assert.ok(checks.some((x) => x.id.startsWith('lane-fresh:') && x.status === 'red'), 'a lane item is red');
+  assert.equal(out.actions.dispatchPump, false);
+  assert.deepEqual(out.actions.enableWorkflows, []);
+  const writes = w.api.calls.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path}`);
+  assert.deepEqual(writes.filter((x) => !/\/issues(\/\d+)?(\/comments)?$/.test(x.split(' ')[1]) && !x.endsWith('/graphql')), []);
+  w.cleanup();
+});
+
+test('R-WD-33: without GITHUB_TOKEN the external workflows are not read with the tool-qa App token: amber with the reason', async () => {
+  const w = world({ seed: () => {} });
+  delete w.opts.env.GITHUB_TOKEN;
+  await runWatchdog(w.opts);
+  const c = parseBody(w.issues[0].body).checks.find((x) => x.id === 'external-workflows');
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /GITHUB_TOKEN is unset/);
+  assert.equal(w.api.calls.some((r) => /\/(mcp-check|mcp-writecheck-action|mcp-surface-corpus)\/actions\/workflows\/[^/]+\.ya?ml$/.test(r.path)), false);
+  w.cleanup();
+});
