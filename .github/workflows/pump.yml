@@ -81,10 +81,21 @@ jobs:
           AGE_BIN: ${{ runner.temp }}/age/age
           AGE_KEYGEN_BIN: ${{ runner.temp }}/age/age-keygen
           LANE_STATE_PRUNE_ENABLED: ${{ vars.LANE_STATE_PRUNE_ENABLED }}
+          # Sampling of `mode: sample` tier cells (pump/sampling.mjs). Unset means rate 0: nothing is sampled.
+          SAMPLE_RATE_T1: ${{ vars.SAMPLE_RATE_T1 }}
+          SAMPLE_RATE_T2: ${{ vars.SAMPLE_RATE_T2 }}
+          SAMPLE_RATE_T3: ${{ vars.SAMPLE_RATE_T3 }}
+          SAMPLE_RATE_T4: ${{ vars.SAMPLE_RATE_T4 }}
+          SAMPLE_CAP_T1: ${{ vars.SAMPLE_CAP_T1 }}
+          SAMPLE_CAP_T2: ${{ vars.SAMPLE_CAP_T2 }}
+          SAMPLE_CAP_T3: ${{ vars.SAMPLE_CAP_T3 }}
+          SAMPLE_CAP_T4: ${{ vars.SAMPLE_CAP_T4 }}
           LANE_HISTORY_REGISTRY_ENABLED: ${{ vars.LANE_HISTORY_REGISTRY_ENABLED }}
           LANE_SUBJECT_IDS_ENABLED: ${{ vars.LANE_SUBJECT_IDS_ENABLED }}
           # The backfill filler (pump/backfill.mjs): off unless the variable is exactly "true".
           LANE_BACKFILL_ENABLED: ${{ vars.LANE_BACKFILL_ENABLED }}
+          # The head poll (pump/heads.mjs): off unless the variable is exactly "true".
+          LANE_HEADS_ENABLED: ${{ vars.LANE_HEADS_ENABLED }}
           # The live loop view snapshot (live/publish.mjs): off unless the variable is exactly "true".
           LANE_LIVE_SNAPSHOT_ENABLED: ${{ vars.LANE_LIVE_SNAPSHOT_ENABLED }}
           # Shown by the live view's publish gate node (config.switches).

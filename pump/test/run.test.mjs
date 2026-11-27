@@ -902,3 +902,21 @@ test('live: lane notes come from the committed file; a missing or invalid file g
   assert.equal(r.logged, true);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('R-COV-47: each pump run records one coverage entry per UTC day, with the frame it was measured on, and a failure to do so never stops the run', async () => {
+  const h = harness({ slots: '0' });
+  await runPump(h.opts);
+  await runPump({ ...h.opts, pull: async () => ({ status: 'pulled' }) });
+  const db = openState(h.stateFile);
+  const days = db.getKv('coverage.history').days;
+  assert.equal(days.length, 1, 'two runs on one day: one entry');
+  assert.equal(days[0].frame.size, 4);
+  assert.match(days[0].frame.version, /^derived-[0-9a-f]{8}$/);
+  db.close();
+  const bad = harness({ slots: '0' });
+  const out = await runPump({ ...bad.opts, config: { tiers: { get tiers() { throw new Error('unreadable'); } }, workflows: { 'live-probe': wf } } });
+  assert.equal(out.ticks, 1, 'the run goes on');
+  assert.ok(bad.lines.some((l) => /coverage history not recorded/.test(l)));
+  h.cleanup();
+  bad.cleanup();
+});
