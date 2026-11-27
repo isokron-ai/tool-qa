@@ -1336,6 +1336,13 @@ export class StateDb {
         if (!fresh && !lead.reproduced_at && !reproduced && lead.recheck_subject == null && lead.recheck_attempts < RECHECK_MAX_ATTEMPTS) {
           Object.assign(cols, { recheck_subject: subject, recheck_lane: lane, recheck_after: t });
         }
+        // The re-check pair carried it again, but this result cannot count as a re-run on another runner (no worker
+        // run id, or the same run): it is one attempt, and the re-check is due again rather than waiting for ever (R-LEAD-39).
+        if (!fresh && !reproduced && !lead.reproduced_at && lead.recheck_subject === subject && lead.recheck_lane === lane && pair) {
+          const attempts = lead.recheck_attempts + 1;
+          Object.assign(cols, attempts < RECHECK_MAX_ATTEMPTS ? { recheck_attempts: attempts, recheck_after: t }
+            : { recheck_attempts: attempts, recheck_subject: null, recheck_lane: null, recheck_after: null });
+        }
         setLead(fp, cols);
         out.seen += 1;
       }
