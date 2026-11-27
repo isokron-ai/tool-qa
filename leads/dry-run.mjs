@@ -31,6 +31,7 @@ import { openState } from '../state/db.mjs';
 import { leadFailures, nameTokens, seedLanguageOf } from '../state/fingerprint.mjs';
 import { filingDecision, flakeStats, shapeOf } from '../state/leads.mjs';
 import { resultFault } from '../worker-kit/contract.mjs';
+import { recheckPairs, RECHECK_MAX_DUE } from './recheck.mjs';
 
 export const SOURCE = 'tool-qa leads/dry-run.mjs';
 
@@ -132,6 +133,9 @@ export async function main(argv = process.argv.slice(2), { write = (s) => proces
   try {
     const rows = report(db, { now: at });
     write(renderText(rows, { read: { items: folded, refused }, now: at }));
+    // What the pump would re-dispatch now with LANE_LEADS_ENABLED=recheck (leads/recheck.mjs); counts only, the pairs name subjects.
+    const rc = recheckPairs(db);
+    write(`\nre-checks the pump would send now: ${rc.pairs.size} (at most ${RECHECK_MAX_DUE} at once), leads waiting for one: ${rc.waiting}\n`);
     if (o['out-json']) {
       try {
         writeOut(o['out-json'], `${JSON.stringify({ source: SOURCE, generated_at: at, read: read.stats, folded, refused, leads: rows }, null, 2)}\n`);
