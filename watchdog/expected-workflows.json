@@ -1,5 +1,5 @@
 {
-  "about": "Loop workflows the watchdog expects to be enabled. If GitHub disables one for inactivity, the watchdog re-enables it. One disabled by hand is reported as off and left alone.",
+  "about": "Loop workflows the watchdog expects to be enabled. If GitHub disables one for inactivity, the watchdog re-enables it. One disabled by hand is reported as off and left alone. ledger, perf-baselines, chaos-soak and publish-results are the capture workflows (design audit H8). `external` lists workflows of other repositories (repo, path, why) the watchdog reports on; the nightly conformance and every enabled lane's workflow file are always included (watchdog/lanes.mjs).",
   "workflows": [
     ".github/workflows/pump.yml",
     ".github/workflows/watchdog.yml",
@@ -8,6 +8,11 @@
     ".github/workflows/history-popularity.yml",
     ".github/workflows/state-snapshot.yml",
     ".github/workflows/offsite-backup.yml",
-    ".github/workflows/keep-forever.yml"
-  ]
+    ".github/workflows/keep-forever.yml",
+    ".github/workflows/ledger.yml",
+    ".github/workflows/perf-baselines.yml",
+    ".github/workflows/chaos-soak.yml",
+    ".github/workflows/publish-results.yml"
+  ],
+  "external": []
 }

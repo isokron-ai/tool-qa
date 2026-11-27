@@ -43,6 +43,8 @@ import { fileURLToPath } from 'node:url';
 import { laneVariable, parseSlots } from '../scripts/guard.mjs';
 import { pullState } from '../scripts/state-asset.mjs';
 import { openState } from '../state/db.mjs';
+import { computeCoverage } from '../state/coverage.mjs';
+import { NOT_BUILT_LANES } from '../live/build.mjs';
 import { appTokenMinter } from '../pump/app-token.mjs';
 import { ApiBudget } from '../pump/budgets.mjs';
 import { createClient, scrub } from '../pump/github.mjs';
@@ -52,6 +54,8 @@ import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
 import { archiveCheck } from './archive.mjs';
 import { offsiteCheck } from './offsite.mjs';
+import { nightlyImage, readSelftestFailures, selftestLanes } from './selftest.mjs';
+import { externalWorkflows, readExternalWorkflows, readLaneData } from './lanes.mjs';
 import { keepCheck, readKeepStatus } from '../keep/health.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
@@ -119,6 +123,11 @@ export function loadExpected(file = EXPECTED_FILE) {
   return JSON.parse(readFileSync(file, 'utf8')).workflows;
 }
 
+/** Workflows of other repositories the lanes need, beside the nightly and the lanes' own files (H8). */
+export function loadExpectedExternal(file = EXPECTED_FILE) {
+  return JSON.parse(readFileSync(file, 'utf8')).external ?? [];
+}
+
 /** Lane switches as the guard reads them: unset, empty or "true" is on. */
 export function readLanes(env) {
   const lanes = {};
@@ -129,8 +138,18 @@ export function readLanes(env) {
   return lanes;
 }
 
+/** Coverage from an open state database against the pump's tiers and workflows; null on any failure, so the health issue is never held back by it. */
+export function readCoverage(db, config) {
+  try {
+    const cfg = config ?? loadConfig();
+    return computeCoverage(db, { tiers: cfg.tiers, workflows: cfg.workflows, skipLanes: [...NOT_BUILT_LANES] });
+  } catch {
+    return null;
+  }
+}
+
 /** Read what the checks need from a pulled copy of the state database. */
-export function readState(file) {
+export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {}) {
   const db = openState(file);
   try {
     return {
@@ -143,6 +162,7 @@ export function readState(file) {
         'pump.conformance': db.getKv('pump.conformance') ?? null,
         'pump.subjects': db.getKv('pump.subjects') ?? null,
         'pump.identity': db.getKv('pump.identity') ?? null,
+        'pump.heads': db.getKv('pump.heads') ?? null,
         'pump.last_tick': db.getKv('pump.last_tick') ?? null,
         'pump.api_budget': db.getKv('pump.api_budget') ?? null,
         'pump.last_run': db.getKv('pump.last_run') ?? null,
@@ -150,6 +170,10 @@ export function readState(file) {
         'live.last_upload': db.getKv('live.last_upload') ?? null,
         'retention.seal': db.getKv('retention.seal') ?? null,
       },
+      lanes: readLaneData(db, now, { cfg, tiers }),
+      // The four coverage numbers per lane (state/coverage.mjs); null when the config or state cannot answer.
+      // the same config the lane checks read (R-WD-36); the pump's own when none was given
+      coverage: readCoverage(db, tiers && Object.keys(cfg).length ? { tiers, workflows: cfg } : undefined),
     };
   } finally {
     db.close();
@@ -174,6 +198,7 @@ export async function runWatchdog({
   verifyConformanceRun,
   workerWorkflows,
   loadWorkerConfig = () => loadConfig().workflows,
+  loadTiers = () => loadConfig().tiers,
   readSnapshot,
   readKeep,
 } = {}) {
@@ -211,6 +236,23 @@ export async function runWatchdog({
   // the list is looked up through its own workflow's latest successful runs.
   const artifacts = [...listed, ...(await historyArtifacts(client, repo, listed))];
 
+  // The lane config, read first: the lane checks and the breaker both need it.
+  // A pump/workflows.json the pump cannot load is a red `config` check, not a
+  // silent watchdog (R-WD-13).
+  let wfs = {};
+  let configError = null;
+  try {
+    wfs = workerWorkflows ?? loadWorkerConfig();
+  } catch (err) {
+    configError = scrub(String(err?.message ?? err), secrets).slice(0, 300);
+  }
+  let tiers = null;
+  try {
+    tiers = loadTiers();
+  } catch {
+    // the lane checks then count no frame; the config check above says why
+  }
+
   const dir = stateDir ?? mkdtempSync(join(env.RUNNER_TEMP || tmpdir(), 'watchdog-'));
   let state = null;
   let stateError = null;
@@ -219,7 +261,7 @@ export async function runWatchdog({
     const file = join(dir, 'state.sqlite');
     const pulled = await pull({ repo, token: env.GITHUB_TOKEN || undefined, file, fetch, apiUrl, log: say, sleep, ...stateKeys });
     if (pulled?.status !== 'absent') {
-      state = readState(file);
+      state = readState(file, now(), { cfg: wfs, tiers });
       state.asset = { bytes: Number.isSafeInteger(pulled?.bytes) ? pulled.bytes : null, compressed: pulled?.compressed ?? null };
     }
   } catch (err) {
@@ -230,16 +272,6 @@ export async function runWatchdog({
     if (!stateDir) rmSync(dir, { recursive: true, force: true });
   }
 
-  // The sandbox breaker, as the pump sees it.
-  // A pump/workflows.json the pump cannot load is a red `config` check, not a
-  // silent watchdog (R-WD-13).
-  let wfs = {};
-  let configError = null;
-  try {
-    wfs = workerWorkflows ?? loadWorkerConfig();
-  } catch (err) {
-    configError = scrub(String(err?.message ?? err), secrets).slice(0, 300);
-  }
   let conformance;
   try {
     conformance = await (readConformance ?? (() => readConformanceStatus({ fetch, sleep })))();
@@ -272,8 +304,53 @@ export async function runWatchdog({
   }
   if (snapshot?.error) snapshot = { ...snapshot, error: scrub(String(snapshot.error), secrets).slice(0, 200) };
 
+  // The lanes' own sandbox self tests (R-WD-17). The job's GITHUB_TOKEN is scoped to this
+  // repository: for the lanes' repositories it is a public caller, which can list runs and jobs
+  // but gets 403 on job logs (where the runner image is). So a second App installation token,
+  // for those repositories and actions: read only, reads them; if it cannot be minted the
+  // reads fall back to the job token and the item says so (amber). Same API budget throughout.
+  let selftest;
+  try {
+    const owner = repo.split('/')[0];
+    const laneRepos = [...new Set(selftestLanes(wfs).map((l) => l.repo).filter((r) => r.split('/')[0] === owner).map((r) => r.split('/')[1]))];
+    let logToken = null;
+    let tokenError = null;
+    if (laneRepos.length) {
+      try {
+        ({ token: logToken } = await minter({ repositories: laneRepos, permissions: { actions: 'read' } }));
+        secrets.push(logToken);
+        if (env.GITHUB_ACTIONS === 'true') process.stdout.write(`::add-mask::${logToken}\n`);
+      } catch (err) {
+        tokenError = scrub(String(err?.message ?? err), secrets).slice(0, 160);
+      }
+    }
+    const readToken = logToken ?? env.GITHUB_TOKEN;
+    if (laneRepos.length && !readToken) {
+      // The tool-qa App token is narrowed to this repository: not a fallback for the lanes' repositories (R-WD-21).
+      selftest = { read: { error: `no token to read the lanes' runs (${tokenError ?? 'no log token'}; GITHUB_TOKEN is unset)` }, passedImage: null };
+    } else {
+      const reader = readToken ? createClient({ token: readToken, fetch, apiUrl, budget, sleep, now }) : client;
+      selftest = { read: { ...(await readSelftestFailures({ client: reader, workflows: wfs, now, fetch })), tokenError }, passedImage: verdict.tripped ? null : nightlyImage(conformance?.status) };
+    }
+  } catch (err) {
+    selftest = { read: { error: scrub(String(err?.message ?? err), secrets).slice(0, 200) }, passedImage: null };
+  }
+
+  // The workflows the lanes depend on outside the loop's own list (watchdog/lanes.mjs, H8): public
+  // repositories, their state read with the job token; a failed read is that workflow's own amber.
+  let external = null;
+  try {
+    const listed = externalWorkflows(wfs, loadExpectedExternal());
+    // Without the job token these are not read with the tool-qa App token (narrowed to this repository): amber, with the reason.
+    external = !listed.length ? null
+      : env.GITHUB_TOKEN ? await readExternalWorkflows(createClient({ token: env.GITHUB_TOKEN, fetch, apiUrl, budget, sleep, now }), listed)
+        : listed.map((w) => ({ ...w, state: 'error', error: 'GITHUB_TOKEN is unset' }));
+  } catch {
+    external = null;
+  }
+
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot, selftest, laneHealth: { cfg: wfs, data: state?.lanes ?? null, coverage: state?.coverage ?? null, external } });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');
@@ -320,7 +397,7 @@ export async function runWatchdog({
   }
 
   for (const c of checks) say(`watchdog: ${c.status.padEnd(5)} ${c.id}: ${c.summary}`);
-  const health = await applyHealth({ client, repo, checks, mode: 'replace', now: now() });
+  const health = await applyHealth({ client, repo, checks, mode: 'replace', now: now(), coverage: state?.coverage ?? null });
   say(`watchdog: overall ${health.overall} (issue #${health.number}${health.created ? ', created' : health.updated ? ', updated' : ', unchanged'})`);
   return { overall: health.overall, checks, actions, health };
 }

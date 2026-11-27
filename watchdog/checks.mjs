@@ -28,6 +28,8 @@
 //   subject-ids          the pump's subject id lookups (watchdog/identity.mjs):
 //                        red on a mass of NOT_FOUND or of gone subjects,
 //                        amber on any id conflict.
+//   subject-heads        the pump's head poll (watchdog/heads.mjs): amber when
+//                        nothing was written for 6 hours, red after 24.
 //   workflow:<file>      an expected workflow GitHub disabled for inactivity
 //                        (amber; the watchdog re-enables it) or one disabled by
 //                        hand (off).
@@ -38,6 +40,14 @@
 //                        it would hold lanes but none is enabled, or when it is
 //                        closed but an enabled lane pins another sandbox commit
 //                        than the one the nightly tested.
+//   sandbox-selftest     per-lane sandbox self tests (watchdog/selftest.mjs): amber when
+//                        2 or more `sandbox-selftest` jobs of the enabled third-party-code
+//                        lanes failed in 6 hours, or one failed on a runner image the
+//                        nightly has not passed on, or the lookup failed; never red.
+//   lane-fresh:<lane>, pump-idle, coverage:<lane>, tool-failures:<lane>, oracle-disagreements,
+//   ingest-rejects, external-workflows
+//                        whether the lanes produce, not only whether the machinery runs
+//                        (watchdog/lanes.mjs, the design audit's H7 and H8).
 //   state-snapshot       the hourly state snapshots (snapshot/health.mjs): amber
 //                        when no snapshot run has confirmed the live state is
 //                        captured for 3 hours (or there is no snapshot yet, the
@@ -59,6 +69,9 @@ import { snapshotCheck } from '../snapshot/health.mjs';
 import { sizeCheck } from './size.mjs';
 import { markerCheck, sealCheck } from '../keep/health.mjs';
 import { identityCheck } from './identity.mjs';
+import { headsCheck } from './heads.mjs';
+import { selftestCheck } from './selftest.mjs';
+import { externalCheck, laneChecks } from './lanes.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -152,7 +165,7 @@ const baseName = (path) => String(path).split('/').pop();
  * @returns {{ checks: {id: string, status: string, summary: string, link?: string, at?: string}[],
  *   actions: { dispatchPump: boolean, enableWorkflows: {id: number, path: string}[] } }}
  */
-export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot }) {
+export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifacts = [], state, workflows = [], expected = [], breaker, snapshot, selftest, laneHealth }) {
   const checks = [];
   const actions = { dispatchPump: false, enableWorkflows: [] };
 
@@ -251,6 +264,7 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
     }
     checks.push(liveSnapshotCheck({ now, on: liveSwitch === 'true', last: state.kv?.['live.last_upload'] ?? null }));
     const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
+    const hd = headsCheck({ now, heads: state.kv?.['pump.heads'] }); if (hd) checks.push(hd); // head poll (watchdog/heads.mjs)
   }
 
   // latest loop run per workflow
@@ -283,6 +297,28 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
 
   // the sandbox breaker
   if (breaker) checks.push(breakerCheck(breaker));
+
+  // the lanes' own sandbox self tests (watchdog/selftest.mjs, R-WD-17); fenced like the snapshot item
+  if (selftest) {
+    let item;
+    try {
+      item = selftestCheck(selftest);
+    } catch (err) {
+      item = { id: 'sandbox-selftest', status: 'amber', summary: `could not judge the lanes' sandbox self tests: ${String(err?.message ?? err).slice(0, 200)}` };
+    }
+    checks.push(item);
+  }
+
+  // do the lanes produce: freshness, idle pump, coverage, our tool's failures, disagreements, rejects,
+  // and the workflows they depend on (watchdog/lanes.mjs, R-WD-23..28); fenced like the snapshot item
+  if (laneHealth) {
+    try {
+      checks.push(...laneChecks({ now, slots, pumpOn: laneOn(lanes, 'pump'), cfg: laneHealth.cfg, data: laneHealth.data ?? null, tick: state?.kv?.['pump.last_tick'] ?? null, breakerTripped: breaker?.tripped === true, coverage: laneHealth.coverage ?? null }));
+      if (laneHealth.external) checks.push(externalCheck(laneHealth.external));
+    } catch (err) {
+      checks.push({ id: 'lane-health', status: 'amber', summary: `could not judge the lanes: ${String(err?.message ?? err).slice(0, 200)}` });
+    }
+  }
 
   // the hourly state snapshots
   // snapshotCheck does not throw, but a bad manifest must never take the

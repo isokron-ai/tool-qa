@@ -1,5 +1,19 @@
 {
   "commits": {
+    "isokron-ai/mcp-check@023d637": {
+      "sha": "023d637",
+      "pr": 35,
+      "merged_at": "2026-11-24T14:59:48Z",
+      "merge_commit_sha": "6f4a35c7032dda925983bbba141aa22ee5910fbc",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@049b075": {
+      "sha": "049b075",
+      "pr": 49,
+      "merged_at": "2026-11-26T04:21:09Z",
+      "merge_commit_sha": "8a6d1fa65586459a99d0c2fe6219760d5b5816bb",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@0866426": {
       "sha": "0866426",
       "pr": 16,
@@ -7,11 +21,116 @@
       "merge_commit_sha": "ec3c8015f6f97675fcb1d63a559e226108281a9d",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@0c1b85e": {
+      "sha": "0c1b85e",
+      "pr": 48,
+      "merged_at": "2026-11-26T02:35:51Z",
+      "merge_commit_sha": "b4638046c2a91e15d64395822c1cfb26970cabae",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@117e6c3": {
+      "sha": "117e6c3",
+      "pr": 45,
+      "merged_at": "2026-11-26T01:55:02Z",
+      "merge_commit_sha": "81a9ea5489aaff1235f2ceb56994618c98400305",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@137127d": {
+      "sha": "137127d",
+      "pr": 48,
+      "merged_at": "2026-11-26T02:35:51Z",
+      "merge_commit_sha": "b4638046c2a91e15d64395822c1cfb26970cabae",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@23bfe6a": {
+      "sha": "23bfe6a",
+      "pr": 43,
+      "merged_at": "2026-11-25T22:20:48Z",
+      "merge_commit_sha": "d4a373a5f785db4631c18aad97df658836bbc2d1",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@24867ec": {
+      "sha": "24867ec",
+      "pr": 46,
+      "merged_at": "2026-11-26T02:09:36Z",
+      "merge_commit_sha": "2392ed66e855731a304acb540fa05747873cff1d",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@29b5d11": {
+      "sha": "29b5d11",
+      "pr": 46,
+      "merged_at": "2026-11-26T02:09:36Z",
+      "merge_commit_sha": "2392ed66e855731a304acb540fa05747873cff1d",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@2c90acb": {
+      "sha": "2c90acb",
+      "pr": 44,
+      "merged_at": "2026-11-26T00:51:32Z",
+      "merge_commit_sha": "2743210f765f428f28a2c64bf32e0be661ffd881",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@2cd0cf2": {
+      "sha": "2cd0cf2",
+      "pr": 46,
+      "merged_at": "2026-11-26T02:09:36Z",
+      "merge_commit_sha": "2392ed66e855731a304acb540fa05747873cff1d",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@2d3515a": {
+      "sha": "2d3515a",
+      "pr": 37,
+      "merged_at": "2026-11-24T07:36:09Z",
+      "merge_commit_sha": "08bd53acd7b53663b89266684adfd7f30f6f0551",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@358d734": {
       "sha": "358d734",
       "pr": 32,
       "merged_at": "2026-11-24T03:59:11Z",
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@35ef4fc": {
+      "sha": "35ef4fc",
+      "pr": 48,
+      "merged_at": "2026-11-26T02:35:51Z",
+      "merge_commit_sha": "b4638046c2a91e15d64395822c1cfb26970cabae",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@3fabdd1": {
+      "sha": "3fabdd1",
+      "pr": 49,
+      "merged_at": "2026-11-26T04:21:09Z",
+      "merge_commit_sha": "8a6d1fa65586459a99d0c2fe6219760d5b5816bb",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@401fb4b": {
+      "sha": "401fb4b",
+      "pr": 49,
+      "merged_at": "2026-11-26T04:21:09Z",
+      "merge_commit_sha": "8a6d1fa65586459a99d0c2fe6219760d5b5816bb",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@41f071b": {
+      "sha": "41f071b",
+      "pr": 40,
+      "merged_at": "2026-11-25T05:00:07Z",
+      "merge_commit_sha": "4aa4830764961c41aeea9bf448d3f2d4c5cfd144",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@432ecb7": {
+      "sha": "432ecb7",
+      "pr": 48,
+      "merged_at": "2026-11-26T02:35:51Z",
+      "merge_commit_sha": "b4638046c2a91e15d64395822c1cfb26970cabae",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@45bafa6": {
+      "sha": "45bafa6",
+      "pr": 49,
+      "merged_at": "2026-11-26T04:21:09Z",
+      "merge_commit_sha": "8a6d1fa65586459a99d0c2fe6219760d5b5816bb",
       "state": "merged"
     },
     "isokron-ai/mcp-check@48194d3": {
@@ -28,6 +147,20 @@
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@5209e9b": {
+      "sha": "5209e9b",
+      "pr": 45,
+      "merged_at": "2026-11-26T01:55:02Z",
+      "merge_commit_sha": "81a9ea5489aaff1235f2ceb56994618c98400305",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@527dbcc": {
+      "sha": "527dbcc",
+      "pr": 35,
+      "merged_at": "2026-11-24T14:59:48Z",
+      "merge_commit_sha": "6f4a35c7032dda925983bbba141aa22ee5910fbc",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@5a8402e": {
       "sha": "5a8402e",
       "pr": 32,
@@ -35,11 +168,53 @@
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@5aee4e4": {
+      "sha": "5aee4e4",
+      "pr": 43,
+      "merged_at": "2026-11-25T22:20:48Z",
+      "merge_commit_sha": "d4a373a5f785db4631c18aad97df658836bbc2d1",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@5d723b3": {
       "sha": "5d723b3",
       "pr": 17,
       "merged_at": "2026-11-24T01:50:13Z",
       "merge_commit_sha": "4b9809d91086b648f450447ba22fbfb5fb23deea",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@5e7c18d": {
+      "sha": "5e7c18d",
+      "pr": 37,
+      "merged_at": "2026-11-24T07:36:09Z",
+      "merge_commit_sha": "08bd53acd7b53663b89266684adfd7f30f6f0551",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@600fe43": {
+      "sha": "600fe43",
+      "pr": 48,
+      "merged_at": "2026-11-26T02:35:51Z",
+      "merge_commit_sha": "b4638046c2a91e15d64395822c1cfb26970cabae",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@6da6bde": {
+      "sha": "6da6bde",
+      "pr": 52,
+      "merged_at": "2026-11-26T04:22:16Z",
+      "merge_commit_sha": "486ca811b9c526e537959c279578072048f580f1",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@6ebda70": {
+      "sha": "6ebda70",
+      "pr": 40,
+      "merged_at": "2026-11-25T05:00:07Z",
+      "merge_commit_sha": "4aa4830764961c41aeea9bf448d3f2d4c5cfd144",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@6f0ca20": {
+      "sha": "6f0ca20",
+      "pr": 39,
+      "merged_at": "2026-11-25T02:30:47Z",
+      "merge_commit_sha": "f4d67f4dd27e3a811250b895057aee2325539e31",
       "state": "merged"
     },
     "isokron-ai/mcp-check@70941a7": {
@@ -56,6 +231,13 @@
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@731c7f3": {
+      "sha": "731c7f3",
+      "pr": 39,
+      "merged_at": "2026-11-25T02:30:47Z",
+      "merge_commit_sha": "f4d67f4dd27e3a811250b895057aee2325539e31",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@73bbe55": {
       "sha": "73bbe55",
       "pr": 31,
@@ -68,6 +250,20 @@
       "pr": 29,
       "merged_at": "2026-11-24T03:32:29Z",
       "merge_commit_sha": "e3bd0894ad567d1e2e1a4a719975a5d1a9b6a582",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@7a9118a": {
+      "sha": "7a9118a",
+      "pr": 38,
+      "merged_at": "2026-11-24T07:49:25Z",
+      "merge_commit_sha": "820547f9337a00b22e54cedde0bdeb5717cafbeb",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@815eabf": {
+      "sha": "815eabf",
+      "pr": 48,
+      "merged_at": "2026-11-26T02:35:51Z",
+      "merge_commit_sha": "b4638046c2a91e15d64395822c1cfb26970cabae",
       "state": "merged"
     },
     "isokron-ai/mcp-check@83b0613": {
@@ -84,11 +280,60 @@
       "merge_commit_sha": "e7a42b4d4f5c28ad02848ed0975082958f5d1cb0",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@857fedf": {
+      "sha": "857fedf",
+      "pr": 45,
+      "merged_at": "2026-11-26T01:55:02Z",
+      "merge_commit_sha": "81a9ea5489aaff1235f2ceb56994618c98400305",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@8902753": {
+      "sha": "8902753",
+      "pr": 46,
+      "merged_at": "2026-11-26T02:09:36Z",
+      "merge_commit_sha": "2392ed66e855731a304acb540fa05747873cff1d",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@895750c": {
+      "sha": "895750c",
+      "pr": 47,
+      "merged_at": "2026-11-26T02:22:30Z",
+      "merge_commit_sha": "bc39bcdbf489b0d579dbe885944a23fa6f7aec9c",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@8b84878": {
+      "sha": "8b84878",
+      "pr": 52,
+      "merged_at": "2026-11-26T04:22:16Z",
+      "merge_commit_sha": "486ca811b9c526e537959c279578072048f580f1",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@8bca1a5": {
       "sha": "8bca1a5",
       "pr": 32,
       "merged_at": "2026-11-24T03:59:11Z",
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@8d95c71": {
+      "sha": "8d95c71",
+      "pr": 39,
+      "merged_at": "2026-11-25T02:30:47Z",
+      "merge_commit_sha": "f4d67f4dd27e3a811250b895057aee2325539e31",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@8f749a7": {
+      "sha": "8f749a7",
+      "pr": 46,
+      "merged_at": "2026-11-26T02:09:36Z",
+      "merge_commit_sha": "2392ed66e855731a304acb540fa05747873cff1d",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@91a4cd8": {
+      "sha": "91a4cd8",
+      "pr": 45,
+      "merged_at": "2026-11-26T01:55:02Z",
+      "merge_commit_sha": "81a9ea5489aaff1235f2ceb56994618c98400305",
       "state": "merged"
     },
     "isokron-ai/mcp-check@9559b9c": {
@@ -105,6 +350,27 @@
       "merge_commit_sha": "0e39a566e05acafd21aaebb4926676ca3aeb79c8",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@9685b77": {
+      "sha": "9685b77",
+      "pr": 45,
+      "merged_at": "2026-11-26T01:55:02Z",
+      "merge_commit_sha": "81a9ea5489aaff1235f2ceb56994618c98400305",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@97a8c95": {
+      "sha": "97a8c95",
+      "pr": 42,
+      "merged_at": "2026-11-25T19:34:48Z",
+      "merge_commit_sha": "0b0d25623d69211b313c8ed0b5be70b6f5a074d4",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@a13742f": {
+      "sha": "a13742f",
+      "pr": 48,
+      "merged_at": "2026-11-26T02:35:51Z",
+      "merge_commit_sha": "b4638046c2a91e15d64395822c1cfb26970cabae",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@a3dce7c": {
       "sha": "a3dce7c",
       "pr": 17,
@@ -119,11 +385,25 @@
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@acf05dd": {
+      "sha": "acf05dd",
+      "pr": 41,
+      "merged_at": "2026-11-25T17:30:30Z",
+      "merge_commit_sha": "116b0ca841dec25116b3b3b7d6f3ce7286fd198f",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@adacdae": {
       "sha": "adacdae",
       "pr": 32,
       "merged_at": "2026-11-24T03:59:11Z",
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@b4ed72a": {
+      "sha": "b4ed72a",
+      "pr": 42,
+      "merged_at": "2026-11-25T19:34:48Z",
+      "merge_commit_sha": "0b0d25623d69211b313c8ed0b5be70b6f5a074d4",
       "state": "merged"
     },
     "isokron-ai/mcp-check@c05d85a": {
@@ -138,6 +418,13 @@
       "pr": 21,
       "merged_at": "2026-11-24T02:14:50Z",
       "merge_commit_sha": "e7a42b4d4f5c28ad02848ed0975082958f5d1cb0",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@c231524": {
+      "sha": "c231524",
+      "pr": 35,
+      "merged_at": "2026-11-24T14:59:48Z",
+      "merge_commit_sha": "6f4a35c7032dda925983bbba141aa22ee5910fbc",
       "state": "merged"
     },
     "isokron-ai/mcp-check@c75e033": {
@@ -189,6 +476,13 @@
       "merge_commit_sha": "7de78569c65fc86ccb84a6f109bca65be2d0419c",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@d52c81e": {
+      "sha": "d52c81e",
+      "pr": 39,
+      "merged_at": "2026-11-25T02:30:47Z",
+      "merge_commit_sha": "f4d67f4dd27e3a811250b895057aee2325539e31",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@d547972": {
       "sha": "d547972",
       "pr": 32,
@@ -210,11 +504,39 @@
       "merge_commit_sha": "75503c1df757e5c7f7d11bd5df02e63b1c7e1539",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@ddc8259": {
+      "sha": "ddc8259",
+      "pr": 47,
+      "merged_at": "2026-11-26T02:22:30Z",
+      "merge_commit_sha": "bc39bcdbf489b0d579dbe885944a23fa6f7aec9c",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@ddea697": {
       "sha": "ddea697",
       "pr": 32,
       "merged_at": "2026-11-24T03:59:11Z",
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@e011a4b": {
+      "sha": "e011a4b",
+      "pr": 43,
+      "merged_at": "2026-11-25T22:20:48Z",
+      "merge_commit_sha": "d4a373a5f785db4631c18aad97df658836bbc2d1",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@e2e3dfb": {
+      "sha": "e2e3dfb",
+      "pr": 41,
+      "merged_at": "2026-11-25T17:30:30Z",
+      "merge_commit_sha": "116b0ca841dec25116b3b3b7d6f3ce7286fd198f",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@ed595cb": {
+      "sha": "ed595cb",
+      "pr": 39,
+      "merged_at": "2026-11-25T02:30:47Z",
+      "merge_commit_sha": "f4d67f4dd27e3a811250b895057aee2325539e31",
       "state": "merged"
     },
     "isokron-ai/mcp-check@ee163ea": {
@@ -224,6 +546,20 @@
       "merge_commit_sha": "bf748b9e51c4b5b1fcc446719af9da128c528da7",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@eebfbd1": {
+      "sha": "eebfbd1",
+      "pr": 45,
+      "merged_at": "2026-11-26T01:55:02Z",
+      "merge_commit_sha": "81a9ea5489aaff1235f2ceb56994618c98400305",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@ef8a6c7": {
+      "sha": "ef8a6c7",
+      "pr": 45,
+      "merged_at": "2026-11-26T01:55:02Z",
+      "merge_commit_sha": "81a9ea5489aaff1235f2ceb56994618c98400305",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@f458b88": {
       "sha": "f458b88",
       "pr": 36,
@@ -231,11 +567,39 @@
       "merge_commit_sha": "75503c1df757e5c7f7d11bd5df02e63b1c7e1539",
       "state": "merged"
     },
+    "isokron-ai/mcp-check@f51d245": {
+      "sha": "f51d245",
+      "pr": 45,
+      "merged_at": "2026-11-26T01:55:02Z",
+      "merge_commit_sha": "81a9ea5489aaff1235f2ceb56994618c98400305",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@f755456": {
+      "sha": "f755456",
+      "pr": 47,
+      "merged_at": "2026-11-26T02:22:30Z",
+      "merge_commit_sha": "bc39bcdbf489b0d579dbe885944a23fa6f7aec9c",
+      "state": "merged"
+    },
     "isokron-ai/mcp-check@f7b80f8": {
       "sha": "f7b80f8",
       "pr": 17,
       "merged_at": "2026-11-24T01:50:13Z",
       "merge_commit_sha": "4b9809d91086b648f450447ba22fbfb5fb23deea",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@f7da46f": {
+      "sha": "f7da46f",
+      "pr": 40,
+      "merged_at": "2026-11-25T05:00:07Z",
+      "merge_commit_sha": "4aa4830764961c41aeea9bf448d3f2d4c5cfd144",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-check@fad5613": {
+      "sha": "fad5613",
+      "pr": 49,
+      "merged_at": "2026-11-26T04:21:09Z",
+      "merge_commit_sha": "8a6d1fa65586459a99d0c2fe6219760d5b5816bb",
       "state": "merged"
     },
     "isokron-ai/mcp-check@fc172b5": {
@@ -315,6 +679,13 @@
       "merge_commit_sha": "44143660600a15a18c2f8964941de9584bcc5242",
       "state": "merged"
     },
+    "isokron-ai/mcp-surface-corpus@2f5b286": {
+      "sha": "2f5b286",
+      "pr": 12,
+      "merged_at": "2026-11-24T07:57:49Z",
+      "merge_commit_sha": "4c16b586e8e5886acb098285b6ec405fd4db4ac7",
+      "state": "merged"
+    },
     "isokron-ai/mcp-surface-corpus@30d8c31": {
       "sha": "30d8c31",
       "pr": 6,
@@ -357,6 +728,20 @@
       "merge_commit_sha": "94b0a4a1e5c0d273d412a2962754ba7044b37923",
       "state": "merged"
     },
+    "isokron-ai/mcp-surface-corpus@49c897c": {
+      "sha": "49c897c",
+      "pr": 14,
+      "merged_at": "2026-11-26T04:22:24Z",
+      "merge_commit_sha": "11974fbb75a8c276214c887a079d6ad6df374124",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-surface-corpus@4c4d39b": {
+      "sha": "4c4d39b",
+      "pr": 12,
+      "merged_at": "2026-11-24T07:57:49Z",
+      "merge_commit_sha": "4c16b586e8e5886acb098285b6ec405fd4db4ac7",
+      "state": "merged"
+    },
     "isokron-ai/mcp-surface-corpus@531f46b": {
       "sha": "531f46b",
       "pr": 5,
@@ -364,11 +749,25 @@
       "merge_commit_sha": "ed60d062beda539cbf6ce3e71e8a8218d22d1869",
       "state": "merged"
     },
+    "isokron-ai/mcp-surface-corpus@58ae456": {
+      "sha": "58ae456",
+      "pr": 12,
+      "merged_at": "2026-11-24T07:57:49Z",
+      "merge_commit_sha": "4c16b586e8e5886acb098285b6ec405fd4db4ac7",
+      "state": "merged"
+    },
     "isokron-ai/mcp-surface-corpus@5d1f859": {
       "sha": "5d1f859",
       "pr": 6,
       "merged_at": "2026-11-23T23:45:04Z",
       "merge_commit_sha": "3b43c19a3b84950732379ea5beee06a8f73512a6",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-surface-corpus@6277f0f": {
+      "sha": "6277f0f",
+      "pr": 14,
+      "merged_at": "2026-11-26T04:22:24Z",
+      "merge_commit_sha": "11974fbb75a8c276214c887a079d6ad6df374124",
       "state": "merged"
     },
     "isokron-ai/mcp-surface-corpus@6d10237": {
@@ -392,6 +791,13 @@
       "merge_commit_sha": "94b0a4a1e5c0d273d412a2962754ba7044b37923",
       "state": "merged"
     },
+    "isokron-ai/mcp-surface-corpus@802675c": {
+      "sha": "802675c",
+      "pr": 14,
+      "merged_at": "2026-11-26T04:22:24Z",
+      "merge_commit_sha": "11974fbb75a8c276214c887a079d6ad6df374124",
+      "state": "merged"
+    },
     "isokron-ai/mcp-surface-corpus@8cea11f": {
       "sha": "8cea11f",
       "pr": 7,
@@ -411,6 +817,13 @@
       "pr": 6,
       "merged_at": "2026-11-23T23:45:04Z",
       "merge_commit_sha": "3b43c19a3b84950732379ea5beee06a8f73512a6",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-surface-corpus@93fba2e": {
+      "sha": "93fba2e",
+      "pr": 14,
+      "merged_at": "2026-11-26T04:22:24Z",
+      "merge_commit_sha": "11974fbb75a8c276214c887a079d6ad6df374124",
       "state": "merged"
     },
     "isokron-ai/mcp-surface-corpus@9656ca1": {
@@ -448,11 +861,25 @@
       "merge_commit_sha": "97bd96cae93b894fa3f891e3c05514a7c4bc0432",
       "state": "merged"
     },
+    "isokron-ai/mcp-surface-corpus@c7b1159": {
+      "sha": "c7b1159",
+      "pr": 12,
+      "merged_at": "2026-11-24T07:57:49Z",
+      "merge_commit_sha": "4c16b586e8e5886acb098285b6ec405fd4db4ac7",
+      "state": "merged"
+    },
     "isokron-ai/mcp-surface-corpus@cea7f1c": {
       "sha": "cea7f1c",
       "pr": 8,
       "merged_at": "2026-11-24T01:48:58Z",
       "merge_commit_sha": "73a2669ca3d571bc50c5deab1cd171bc4a70ddda",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-surface-corpus@d2189fb": {
+      "sha": "d2189fb",
+      "pr": 15,
+      "merged_at": "2026-11-26T04:17:11Z",
+      "merge_commit_sha": "b074bddbe8999e18151e1e7981a2e89c94028f44",
       "state": "merged"
     },
     "isokron-ai/mcp-surface-corpus@ecd2147": {
@@ -490,11 +917,60 @@
       "merge_commit_sha": "21b09c94eee86e732851061e56e6b76ea5541fc5",
       "state": "merged"
     },
+    "isokron-ai/mcp-write-safety@55b9970": {
+      "sha": "55b9970",
+      "pr": 37,
+      "merged_at": "2026-11-24T19:20:06Z",
+      "merge_commit_sha": "f22e1d14b3168194506ee44e4da9dd8b1a957efb",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-write-safety@6a0b16e": {
+      "sha": "6a0b16e",
+      "pr": 40,
+      "merged_at": "2026-11-24T23:14:40Z",
+      "merge_commit_sha": "58eea7ebfa543d5a5875a6f61d40f1b1b76a54ca",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-write-safety@8174fa7": {
+      "sha": "8174fa7",
+      "pr": 37,
+      "merged_at": "2026-11-24T19:20:06Z",
+      "merge_commit_sha": "f22e1d14b3168194506ee44e4da9dd8b1a957efb",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-write-safety@87e0041": {
+      "sha": "87e0041",
+      "pr": 36,
+      "merged_at": "2026-11-24T10:07:40Z",
+      "merge_commit_sha": "c9e24f2f82fb270ecf656d83f44eb1174e68db2b",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-writecheck-action@11f20f8": {
+      "sha": "11f20f8",
+      "pr": 70,
+      "merged_at": "2026-11-26T01:38:27Z",
+      "merge_commit_sha": "953726b88cc0c42215a9ad6051e81cd19e260e3f",
+      "state": "merged"
+    },
     "isokron-ai/mcp-writecheck-action@1584bb7": {
       "sha": "1584bb7",
       "pr": 61,
       "merged_at": "2026-11-24T01:48:45Z",
       "merge_commit_sha": "de359d26f8c15bc77606e214131303cd50e68d79",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-writecheck-action@202a4d1": {
+      "sha": "202a4d1",
+      "pr": 70,
+      "merged_at": "2026-11-26T01:38:27Z",
+      "merge_commit_sha": "953726b88cc0c42215a9ad6051e81cd19e260e3f",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-writecheck-action@2e61a7f": {
+      "sha": "2e61a7f",
+      "pr": 68,
+      "merged_at": "2026-11-25T21:19:15Z",
+      "merge_commit_sha": "54d454127ed18c1a0d85719da14de075226033a0",
       "state": "merged"
     },
     "isokron-ai/mcp-writecheck-action@39ac554": {
@@ -511,11 +987,46 @@
       "merge_commit_sha": "3a7042cda5e7d3941a60c2951bb92dae1025b264",
       "state": "merged"
     },
+    "isokron-ai/mcp-writecheck-action@3bef45e": {
+      "sha": "3bef45e",
+      "pr": 67,
+      "merged_at": "2026-11-25T19:06:32Z",
+      "merge_commit_sha": "db0d614e44042cf2d9eb7bd3d9745973c6fc5656",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-writecheck-action@4857595fa092": {
+      "sha": "4857595fa092",
+      "pr": 68,
+      "merged_at": "2026-11-25T21:19:15Z",
+      "merge_commit_sha": "54d454127ed18c1a0d85719da14de075226033a0",
+      "state": "merged"
+    },
     "isokron-ai/mcp-writecheck-action@5010b05": {
       "sha": "5010b05",
       "pr": 61,
       "merged_at": "2026-11-24T01:48:45Z",
       "merge_commit_sha": "de359d26f8c15bc77606e214131303cd50e68d79",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-writecheck-action@5067d26": {
+      "sha": "5067d26",
+      "pr": 72,
+      "merged_at": "2026-11-26T01:53:03Z",
+      "merge_commit_sha": "c825098fdc771dad82866798e06fc0045f4e4057",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-writecheck-action@7155f64": {
+      "sha": "7155f64",
+      "pr": 66,
+      "merged_at": "2026-11-25T01:34:28Z",
+      "merge_commit_sha": "0a64199592554f5d06fb0671a98b8ea2d05b8d6a",
+      "state": "merged"
+    },
+    "isokron-ai/mcp-writecheck-action@80a3a5b": {
+      "sha": "80a3a5b",
+      "pr": 70,
+      "merged_at": "2026-11-26T01:38:27Z",
+      "merge_commit_sha": "953726b88cc0c42215a9ad6051e81cd19e260e3f",
       "state": "merged"
     },
     "isokron-ai/mcp-writecheck-action@99085e0": {
@@ -539,11 +1050,39 @@
       "merge_commit_sha": "6515986fc191b311e3f289df4641d65f7dea25f7",
       "state": "merged"
     },
+    "isokron-ai/mcp-writecheck-action@c0d74f2": {
+      "sha": "c0d74f2",
+      "pr": 69,
+      "merged_at": "2026-11-25T22:37:44Z",
+      "merge_commit_sha": "cb78eab252be368e81db0f27b78d01a844a81bde",
+      "state": "merged"
+    },
     "isokron-ai/mcp-writecheck-action@cc252b6": {
       "sha": "cc252b6",
       "pr": 61,
       "merged_at": "2026-11-24T01:48:45Z",
       "merge_commit_sha": "de359d26f8c15bc77606e214131303cd50e68d79",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@04ac341": {
+      "sha": "04ac341",
+      "pr": 68,
+      "merged_at": "2026-11-25T19:30:53Z",
+      "merge_commit_sha": "60a37f9a6f6b7f28393e75f9ca69900ae9a6bb73",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@060403a": {
+      "sha": "060403a",
+      "pr": 51,
+      "merged_at": "2026-11-24T16:45:20Z",
+      "merge_commit_sha": "86e2a6d86b2fe213818f6f32b5e1a1f2d7ba879f",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@07e4e40": {
+      "sha": "07e4e40",
+      "pr": 78,
+      "merged_at": "2026-11-26T00:10:18Z",
+      "merge_commit_sha": "f7cbc41725b5f507d5c15ab7a10b53861ab91535",
       "state": "merged"
     },
     "isokron-ai/tool-qa@0f5b765": {
@@ -560,11 +1099,39 @@
       "merge_commit_sha": "270ad571b712e38d64a7579bbca6fd32b43b026e",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@129f48b": {
+      "sha": "129f48b",
+      "pr": 85,
+      "merged_at": "2026-11-26T02:07:11Z",
+      "merge_commit_sha": "d17f00e58c8db4fec32c1996275a0822fc6f040d",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@18453da": {
+      "sha": "18453da",
+      "pr": 49,
+      "merged_at": "2026-11-24T14:39:05Z",
+      "merge_commit_sha": "c84f8339e2475c4f04c95b1361a3de7d33e83492",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@1a4c274": {
       "sha": "1a4c274",
       "pr": 7,
       "merged_at": "2026-11-24T01:26:27Z",
       "merge_commit_sha": "20a7a3f1be2d7b85f0f1442686334f1d54c53990",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@1b9b6a5": {
+      "sha": "1b9b6a5",
+      "pr": 63,
+      "merged_at": "2026-11-25T17:32:23Z",
+      "merge_commit_sha": "de0e91a3602f6865d9f2b63e6f8065368d31bc34",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@1c3ac8c": {
+      "sha": "1c3ac8c",
+      "pr": 48,
+      "merged_at": "2026-11-24T09:53:38Z",
+      "merge_commit_sha": "29e6412e00da40e96c74d805918a6647c102cef3",
       "state": "merged"
     },
     "isokron-ai/tool-qa@1d718bb": {
@@ -588,11 +1155,25 @@
       "merge_commit_sha": "b1f25a9b0b7655f45eb353f31562a93d9319d5a4",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@2a1c8d2": {
+      "sha": "2a1c8d2",
+      "pr": 46,
+      "merged_at": "2026-11-24T08:06:26Z",
+      "merge_commit_sha": "713ea3aa6963ce545b480939d1d893da03060ebb",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@2a3cb57": {
       "sha": "2a3cb57",
       "pr": 28,
       "merged_at": "2026-11-24T03:47:59Z",
       "merge_commit_sha": "2a0abbe99e99273f02e92848e975ef0d41012901",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@2dbfb51": {
+      "sha": "2dbfb51",
+      "pr": 68,
+      "merged_at": "2026-11-25T19:30:53Z",
+      "merge_commit_sha": "60a37f9a6f6b7f28393e75f9ca69900ae9a6bb73",
       "state": "merged"
     },
     "isokron-ai/tool-qa@3137349": {
@@ -623,6 +1204,20 @@
       "merge_commit_sha": "e2590c789c3336fd48b388b49c98ba11937600f8",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@4417765": {
+      "sha": "4417765",
+      "pr": 37,
+      "merged_at": "2026-11-24T15:28:35Z",
+      "merge_commit_sha": "3c643e77f301f862b02c4e88434f0de9f021382f",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@45c1294": {
+      "sha": "45c1294",
+      "pr": 43,
+      "merged_at": "2026-11-24T07:37:28Z",
+      "merge_commit_sha": "28ffd763cd035cf14d932c4cd0726807d05bf384",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@46cb5a8": {
       "sha": "46cb5a8",
       "pr": 1,
@@ -642,6 +1237,13 @@
       "pr": 10,
       "merged_at": "2026-11-24T01:46:21Z",
       "merge_commit_sha": "8c3f7aefd38d35a9d53f49b503829b7c40ec3650",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@4beb933": {
+      "sha": "4beb933",
+      "pr": 64,
+      "merged_at": "2026-11-25T17:38:45Z",
+      "merge_commit_sha": "94c5bbf58e03eae98d4ff3e51bc19383193af1a9",
       "state": "merged"
     },
     "isokron-ai/tool-qa@4cb8db2": {
@@ -672,6 +1274,27 @@
       "merge_commit_sha": "8b5fd30678bcd7b92d035ed8be26c06b8e78647f",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@56eed2c": {
+      "sha": "56eed2c",
+      "pr": 85,
+      "merged_at": "2026-11-26T02:07:11Z",
+      "merge_commit_sha": "d17f00e58c8db4fec32c1996275a0822fc6f040d",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@58e5104": {
+      "sha": "58e5104",
+      "pr": 70,
+      "merged_at": "2026-11-25T22:39:41Z",
+      "merge_commit_sha": "f56acc66fc727151e6163d7a23101616c69c3b9a",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@5a60ac8": {
+      "sha": "5a60ac8",
+      "pr": 57,
+      "merged_at": "2026-11-25T01:13:20Z",
+      "merge_commit_sha": "2d99cd98720f413ad5fc4da7339cbebb187cc3d8",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@5ca0640": {
       "sha": "5ca0640",
       "pr": 28,
@@ -691,6 +1314,13 @@
       "pr": 11,
       "merged_at": "2026-11-24T02:23:40Z",
       "merge_commit_sha": "eeac4d8c7f15704c4c0a4c063a9e1ca63183a4b6",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@69227fb": {
+      "sha": "69227fb",
+      "pr": 64,
+      "merged_at": "2026-11-25T17:38:45Z",
+      "merge_commit_sha": "94c5bbf58e03eae98d4ff3e51bc19383193af1a9",
       "state": "merged"
     },
     "isokron-ai/tool-qa@6a6a29a": {
@@ -714,6 +1344,27 @@
       "merge_commit_sha": "b1f25a9b0b7655f45eb353f31562a93d9319d5a4",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@7295b79": {
+      "sha": "7295b79",
+      "pr": 74,
+      "merged_at": "2026-11-25T23:20:19Z",
+      "merge_commit_sha": "79435c350d6484b7f2fc87c72f3924037eb74b25",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@7325a9a": {
+      "sha": "7325a9a",
+      "pr": 49,
+      "merged_at": "2026-11-24T14:39:05Z",
+      "merge_commit_sha": "c84f8339e2475c4f04c95b1361a3de7d33e83492",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@7566371": {
+      "sha": "7566371",
+      "pr": 48,
+      "merged_at": "2026-11-24T09:53:38Z",
+      "merge_commit_sha": "29e6412e00da40e96c74d805918a6647c102cef3",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@76681ae": {
       "sha": "76681ae",
       "pr": 23,
@@ -733,6 +1384,20 @@
       "pr": 27,
       "merged_at": "2026-11-24T03:24:02Z",
       "merge_commit_sha": "82266d09d00519f3c7c2cf8d6f45b8f83097d29a",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@7d97eab": {
+      "sha": "7d97eab",
+      "pr": 75,
+      "merged_at": "2026-11-26T00:00:01Z",
+      "merge_commit_sha": "134536208124fe58f60fa38a6d8821c92c84207c",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@7e9a5c8": {
+      "sha": "7e9a5c8",
+      "pr": 51,
+      "merged_at": "2026-11-24T16:45:20Z",
+      "merge_commit_sha": "86e2a6d86b2fe213818f6f32b5e1a1f2d7ba879f",
       "state": "merged"
     },
     "isokron-ai/tool-qa@7ef2543": {
@@ -770,6 +1435,27 @@
       "merge_commit_sha": "72e240546683acd6d2be603036b19e264a9177d6",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@84e7a3f": {
+      "sha": "84e7a3f",
+      "pr": 76,
+      "merged_at": "2026-11-25T23:34:49Z",
+      "merge_commit_sha": "7567d2c83cc090d8c9a0ab8a5e752a53b87a6fc2",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@8503bfe": {
+      "sha": "8503bfe",
+      "pr": 50,
+      "merged_at": "2026-11-24T16:10:43Z",
+      "merge_commit_sha": "f8e6fd993adb495475f31263a3982cfe19bb9c64",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@88353bd": {
+      "sha": "88353bd",
+      "pr": 47,
+      "merged_at": "2026-11-24T09:09:20Z",
+      "merge_commit_sha": "28ef14ab6ab70640adcb9a778770f8bca36aecc0",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@89da1f5": {
       "sha": "89da1f5",
       "pr": 35,
@@ -777,11 +1463,39 @@
       "merge_commit_sha": "bf5415030edc257bb55d94a6c7a9d3a1b1400e2c",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@8c7266c": {
+      "sha": "8c7266c",
+      "pr": 63,
+      "merged_at": "2026-11-25T17:32:23Z",
+      "merge_commit_sha": "de0e91a3602f6865d9f2b63e6f8065368d31bc34",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@8cd2bef": {
+      "sha": "8cd2bef",
+      "pr": 58,
+      "merged_at": "2026-11-25T01:10:58Z",
+      "merge_commit_sha": "3d53827994ec5e22ebdc747fa24a9d7c33ed7aad",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@8dda8c8": {
       "sha": "8dda8c8",
       "pr": 6,
       "merged_at": "2026-11-24T01:27:09Z",
       "merge_commit_sha": "72e240546683acd6d2be603036b19e264a9177d6",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@9019a65": {
+      "sha": "9019a65",
+      "pr": 47,
+      "merged_at": "2026-11-24T09:09:20Z",
+      "merge_commit_sha": "28ef14ab6ab70640adcb9a778770f8bca36aecc0",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@917196b": {
+      "sha": "917196b",
+      "pr": 75,
+      "merged_at": "2026-11-26T00:00:01Z",
+      "merge_commit_sha": "134536208124fe58f60fa38a6d8821c92c84207c",
       "state": "merged"
     },
     "isokron-ai/tool-qa@99f6817": {
@@ -798,11 +1512,25 @@
       "merge_commit_sha": "38bfa178f4e14ec7847e270d7435183e674b14f0",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@9bea976": {
+      "sha": "9bea976",
+      "pr": 70,
+      "merged_at": "2026-11-25T22:39:41Z",
+      "merge_commit_sha": "f56acc66fc727151e6163d7a23101616c69c3b9a",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@9ca820c": {
       "sha": "9ca820c",
       "pr": 9,
       "merged_at": "2026-11-24T01:08:45Z",
       "merge_commit_sha": "d880a4af953c42256536f5d26c976fea551e67fd",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@9d95cd1": {
+      "sha": "9d95cd1",
+      "pr": 86,
+      "merged_at": "2026-11-26T02:28:44Z",
+      "merge_commit_sha": "c01d0c477b765077380b7f536cecc2eafb3f252b",
       "state": "merged"
     },
     "isokron-ai/tool-qa@a1b1424": {
@@ -819,6 +1547,13 @@
       "merge_commit_sha": "8b5fd30678bcd7b92d035ed8be26c06b8e78647f",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@a2a7a73": {
+      "sha": "a2a7a73",
+      "pr": 88,
+      "merged_at": "2026-11-26T03:42:55Z",
+      "merge_commit_sha": "d086e56567e63f5435e0514fccd4bf55aca13378",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@a2d1ffb": {
       "sha": "a2d1ffb",
       "pr": 2,
@@ -831,6 +1566,27 @@
       "pr": 33,
       "merged_at": "2026-11-24T05:08:58Z",
       "merge_commit_sha": "e2590c789c3336fd48b388b49c98ba11937600f8",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@a38a955": {
+      "sha": "a38a955",
+      "pr": 67,
+      "merged_at": "2026-11-25T18:37:17Z",
+      "merge_commit_sha": "fccaea6b1dad2588b206dc2ddd40fc0a4c35ad75",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@a613f06": {
+      "sha": "a613f06",
+      "pr": 49,
+      "merged_at": "2026-11-24T14:39:05Z",
+      "merge_commit_sha": "c84f8339e2475c4f04c95b1361a3de7d33e83492",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@a78ec10": {
+      "sha": "a78ec10",
+      "pr": 46,
+      "merged_at": "2026-11-24T08:06:26Z",
+      "merge_commit_sha": "713ea3aa6963ce545b480939d1d893da03060ebb",
       "state": "merged"
     },
     "isokron-ai/tool-qa@ae50a93": {
@@ -847,6 +1603,13 @@
       "merge_commit_sha": "d747d66ca574100576475e1ed7ff8c3f8564f68a",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@af14bbe": {
+      "sha": "af14bbe",
+      "pr": 68,
+      "merged_at": "2026-11-25T19:30:53Z",
+      "merge_commit_sha": "60a37f9a6f6b7f28393e75f9ca69900ae9a6bb73",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@afbb628": {
       "sha": "afbb628",
       "pr": 10,
@@ -859,6 +1622,20 @@
       "pr": 41,
       "merged_at": "2026-11-24T06:58:31Z",
       "merge_commit_sha": "d4cab3d353a6768d15e897d294d5fc566dcfb38f",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@b5f0a77": {
+      "sha": "b5f0a77",
+      "pr": 37,
+      "merged_at": "2026-11-24T15:28:35Z",
+      "merge_commit_sha": "3c643e77f301f862b02c4e88434f0de9f021382f",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@b763bb4": {
+      "sha": "b763bb4",
+      "pr": 81,
+      "merged_at": "2026-11-26T01:03:31Z",
+      "merge_commit_sha": "b9d34f4b9fbcd489509b2b386b53c70cfa4f04c5",
       "state": "merged"
     },
     "isokron-ai/tool-qa@bdfa903": {
@@ -875,11 +1652,39 @@
       "merge_commit_sha": "fb2ff1d4144c4d018073491a5bc29c3223fbc56e",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@c4ab8ef": {
+      "sha": "c4ab8ef",
+      "pr": 47,
+      "merged_at": "2026-11-24T09:09:20Z",
+      "merge_commit_sha": "28ef14ab6ab70640adcb9a778770f8bca36aecc0",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@c6aae65": {
+      "sha": "c6aae65",
+      "pr": 59,
+      "merged_at": "2026-11-25T01:20:39Z",
+      "merge_commit_sha": "5e586747ac3e480b794a14494a22b3e7b61ce021",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@c89fbb3": {
+      "sha": "c89fbb3",
+      "pr": 68,
+      "merged_at": "2026-11-25T19:30:53Z",
+      "merge_commit_sha": "60a37f9a6f6b7f28393e75f9ca69900ae9a6bb73",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@c8bb49c": {
       "sha": "c8bb49c",
       "pr": 3,
       "merged_at": "2026-11-24T00:16:57Z",
       "merge_commit_sha": "b1f25a9b0b7655f45eb353f31562a93d9319d5a4",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@cb773b2": {
+      "sha": "cb773b2",
+      "pr": 80,
+      "merged_at": "2026-11-26T01:08:40Z",
+      "merge_commit_sha": "14c0eb2f017b7fa5c004635471077842247f17c8",
       "state": "merged"
     },
     "isokron-ai/tool-qa@d3e101f": {
@@ -924,6 +1729,13 @@
       "merge_commit_sha": "72e240546683acd6d2be603036b19e264a9177d6",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@de807c3": {
+      "sha": "de807c3",
+      "pr": 46,
+      "merged_at": "2026-11-24T08:06:26Z",
+      "merge_commit_sha": "713ea3aa6963ce545b480939d1d893da03060ebb",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@e027a30": {
       "sha": "e027a30",
       "pr": 3,
@@ -938,11 +1750,32 @@
       "merge_commit_sha": "38bfa178f4e14ec7847e270d7435183e674b14f0",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@e2a71d4": {
+      "sha": "e2a71d4",
+      "pr": 89,
+      "merged_at": "2026-11-26T03:51:42Z",
+      "merge_commit_sha": "4432b15fd40e1d44f6be3e85d446859c30aa238e",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@e2f32c5": {
+      "sha": "e2f32c5",
+      "pr": 83,
+      "merged_at": "2026-11-26T01:59:08Z",
+      "merge_commit_sha": "590c6861aa9b5365b93c7c6a03d75bedfddafd47",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@e4ccaf9": {
       "sha": "e4ccaf9",
       "pr": 10,
       "merged_at": "2026-11-24T01:46:21Z",
       "merge_commit_sha": "8c3f7aefd38d35a9d53f49b503829b7c40ec3650",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@e57a22b": {
+      "sha": "e57a22b",
+      "pr": 45,
+      "merged_at": "2026-11-24T07:41:04Z",
+      "merge_commit_sha": "0fd5312bd45249251fb2e93da232a975f656c535",
       "state": "merged"
     },
     "isokron-ai/tool-qa@e5bb984": {
@@ -952,11 +1785,46 @@
       "merge_commit_sha": "b1f25a9b0b7655f45eb353f31562a93d9319d5a4",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@e8ff104": {
+      "sha": "e8ff104",
+      "pr": 56,
+      "merged_at": "2026-11-25T01:17:58Z",
+      "merge_commit_sha": "b3470351119de4e9b1c578b005d36c621e87bf00",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@eb13d3d": {
+      "sha": "eb13d3d",
+      "pr": 50,
+      "merged_at": "2026-11-24T16:10:43Z",
+      "merge_commit_sha": "f8e6fd993adb495475f31263a3982cfe19bb9c64",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@ef72bbc": {
       "sha": "ef72bbc",
       "pr": 6,
       "merged_at": "2026-11-24T01:27:09Z",
       "merge_commit_sha": "72e240546683acd6d2be603036b19e264a9177d6",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@f3d8305": {
+      "sha": "f3d8305",
+      "pr": 86,
+      "merged_at": "2026-11-26T02:28:44Z",
+      "merge_commit_sha": "c01d0c477b765077380b7f536cecc2eafb3f252b",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@f3eedaa": {
+      "sha": "f3eedaa",
+      "pr": 68,
+      "merged_at": "2026-11-25T19:30:53Z",
+      "merge_commit_sha": "60a37f9a6f6b7f28393e75f9ca69900ae9a6bb73",
+      "state": "merged"
+    },
+    "isokron-ai/tool-qa@f48a9a8": {
+      "sha": "f48a9a8",
+      "pr": 78,
+      "merged_at": "2026-11-26T00:10:18Z",
+      "merge_commit_sha": "f7cbc41725b5f507d5c15ab7a10b53861ab91535",
       "state": "merged"
     },
     "isokron-ai/tool-qa@f4ea50f": {
@@ -980,6 +1848,13 @@
       "merge_commit_sha": "de4bef77ed0d19757c5d9599127df95a1a56fd9a",
       "state": "merged"
     },
+    "isokron-ai/tool-qa@f7974f3": {
+      "sha": "f7974f3",
+      "pr": 75,
+      "merged_at": "2026-11-26T00:00:01Z",
+      "merge_commit_sha": "134536208124fe58f60fa38a6d8821c92c84207c",
+      "state": "merged"
+    },
     "isokron-ai/tool-qa@fcd43aa": {
       "sha": "fcd43aa",
       "pr": 26,
@@ -993,7 +1868,1194 @@
       "merged_at": "2026-11-24T01:27:09Z",
       "merge_commit_sha": "72e240546683acd6d2be603036b19e264a9177d6",
       "state": "merged"
+    },
+    "isokron-ai/tool-qa@fedad92": {
+      "sha": "fedad92",
+      "pr": 75,
+      "merged_at": "2026-11-26T00:00:01Z",
+      "merge_commit_sha": "134536208124fe58f60fa38a6d8821c92c84207c",
+      "state": "merged"
     }
   },
-  "contains": {}
+  "contains": {},
+  "prs": {
+    "isokron-ai/tool-qa#1": {
+      "created_at": "2026-11-23T19:14:37Z"
+    },
+    "isokron-ai/tool-qa#10": {
+      "created_at": "2026-11-24T01:14:54Z"
+    },
+    "isokron-ai/tool-qa#11": {
+      "created_at": "2026-11-24T01:17:33Z"
+    },
+    "isokron-ai/tool-qa#13": {
+      "created_at": "2026-11-24T01:27:43Z"
+    },
+    "isokron-ai/tool-qa#15": {
+      "created_at": "2026-11-24T02:07:45Z"
+    },
+    "isokron-ai/tool-qa#17": {
+      "created_at": "2026-11-24T02:21:19Z"
+    },
+    "isokron-ai/tool-qa#2": {
+      "created_at": "2026-11-23T20:22:57Z"
+    },
+    "isokron-ai/tool-qa#20": {
+      "created_at": "2026-11-24T02:36:42Z"
+    },
+    "isokron-ai/tool-qa#21": {
+      "created_at": "2026-11-24T02:40:01Z"
+    },
+    "isokron-ai/tool-qa#23": {
+      "created_at": "2026-11-24T02:43:35Z"
+    },
+    "isokron-ai/tool-qa#24": {
+      "created_at": "2026-11-24T02:44:31Z"
+    },
+    "isokron-ai/tool-qa#26": {
+      "created_at": "2026-11-24T02:52:04Z"
+    },
+    "isokron-ai/tool-qa#27": {
+      "created_at": "2026-11-24T03:01:53Z"
+    },
+    "isokron-ai/tool-qa#28": {
+      "created_at": "2026-11-24T03:20:39Z"
+    },
+    "isokron-ai/tool-qa#29": {
+      "created_at": "2026-11-24T03:28:34Z"
+    },
+    "isokron-ai/tool-qa#3": {
+      "created_at": "2026-11-23T23:31:41Z"
+    },
+    "isokron-ai/tool-qa#33": {
+      "created_at": "2026-11-24T04:44:42Z"
+    },
+    "isokron-ai/tool-qa#34": {
+      "created_at": "2026-11-24T04:57:49Z"
+    },
+    "isokron-ai/tool-qa#35": {
+      "created_at": "2026-11-24T04:59:49Z"
+    },
+    "isokron-ai/tool-qa#37": {
+      "created_at": "2026-11-24T05:15:35Z"
+    },
+    "isokron-ai/tool-qa#39": {
+      "created_at": "2026-11-24T05:21:20Z"
+    },
+    "isokron-ai/tool-qa#4": {
+      "created_at": "2026-11-24T00:22:45Z"
+    },
+    "isokron-ai/tool-qa#41": {
+      "created_at": "2026-11-24T06:01:59Z"
+    },
+    "isokron-ai/tool-qa#42": {
+      "created_at": "2026-11-24T07:02:58Z"
+    },
+    "isokron-ai/tool-qa#43": {
+      "created_at": "2026-11-24T07:22:02Z"
+    },
+    "isokron-ai/tool-qa#45": {
+      "created_at": "2026-11-24T07:36:13Z"
+    },
+    "isokron-ai/tool-qa#46": {
+      "created_at": "2026-11-24T07:55:43Z"
+    },
+    "isokron-ai/tool-qa#47": {
+      "created_at": "2026-11-24T08:32:20Z"
+    },
+    "isokron-ai/tool-qa#48": {
+      "created_at": "2026-11-24T09:13:07Z"
+    },
+    "isokron-ai/tool-qa#49": {
+      "created_at": "2026-11-24T09:37:07Z"
+    },
+    "isokron-ai/tool-qa#5": {
+      "created_at": "2026-11-24T00:42:35Z"
+    },
+    "isokron-ai/tool-qa#50": {
+      "created_at": "2026-11-24T15:42:06Z"
+    },
+    "isokron-ai/tool-qa#51": {
+      "created_at": "2026-11-24T15:57:52Z"
+    },
+    "isokron-ai/tool-qa#56": {
+      "created_at": "2026-11-25T00:59:40Z"
+    },
+    "isokron-ai/tool-qa#57": {
+      "created_at": "2026-11-25T01:03:17Z"
+    },
+    "isokron-ai/tool-qa#58": {
+      "created_at": "2026-11-25T01:07:26Z"
+    },
+    "isokron-ai/tool-qa#59": {
+      "created_at": "2026-11-25T01:11:08Z"
+    },
+    "isokron-ai/tool-qa#6": {
+      "created_at": "2026-11-24T00:47:50Z"
+    },
+    "isokron-ai/tool-qa#63": {
+      "created_at": "2026-11-25T17:18:02Z"
+    },
+    "isokron-ai/tool-qa#64": {
+      "created_at": "2026-11-25T17:22:27Z"
+    },
+    "isokron-ai/tool-qa#67": {
+      "created_at": "2026-11-25T18:31:11Z"
+    },
+    "isokron-ai/tool-qa#68": {
+      "created_at": "2026-11-25T18:42:13Z"
+    },
+    "isokron-ai/tool-qa#7": {
+      "created_at": "2026-11-24T00:48:02Z"
+    },
+    "isokron-ai/tool-qa#70": {
+      "created_at": "2026-11-25T22:28:25Z"
+    },
+    "isokron-ai/tool-qa#74": {
+      "created_at": "2026-11-25T22:58:08Z"
+    },
+    "isokron-ai/tool-qa#75": {
+      "created_at": "2026-11-25T23:03:13Z"
+    },
+    "isokron-ai/tool-qa#76": {
+      "created_at": "2026-11-25T23:19:14Z"
+    },
+    "isokron-ai/tool-qa#78": {
+      "created_at": "2026-11-25T23:46:15Z"
+    },
+    "isokron-ai/tool-qa#80": {
+      "created_at": "2026-11-26T00:47:14Z"
+    },
+    "isokron-ai/tool-qa#81": {
+      "created_at": "2026-11-26T01:00:20Z"
+    },
+    "isokron-ai/tool-qa#83": {
+      "created_at": "2026-11-26T01:54:24Z"
+    },
+    "isokron-ai/tool-qa#85": {
+      "created_at": "2026-11-26T01:58:02Z"
+    },
+    "isokron-ai/tool-qa#86": {
+      "created_at": "2026-11-26T02:09:17Z"
+    },
+    "isokron-ai/tool-qa#88": {
+      "created_at": "2026-11-26T03:34:29Z"
+    },
+    "isokron-ai/tool-qa#89": {
+      "created_at": "2026-11-26T03:45:37Z"
+    },
+    "isokron-ai/tool-qa#9": {
+      "created_at": "2026-11-24T01:03:41Z"
+    }
+  },
+  "times": {
+    "isokron-ai/tool-qa:row:R-ARC-01": "2026-11-24T02:52:42Z",
+    "isokron-ai/tool-qa:row:R-ARC-02": "2026-11-24T02:52:42Z",
+    "isokron-ai/tool-qa:row:R-ARC-03": "2026-11-24T02:52:42Z",
+    "isokron-ai/tool-qa:row:R-ARC-04": "2026-11-24T03:01:36Z",
+    "isokron-ai/tool-qa:row:R-ARC-05": "2026-11-24T03:01:36Z",
+    "isokron-ai/tool-qa:row:R-ARC-06": "2026-11-24T03:01:36Z",
+    "isokron-ai/tool-qa:row:R-ARC-07": "2026-11-24T03:01:36Z",
+    "isokron-ai/tool-qa:row:R-ARC-08": "2026-11-24T03:01:36Z",
+    "isokron-ai/tool-qa:row:R-ARC-09": "2026-11-24T03:01:36Z",
+    "isokron-ai/tool-qa:row:R-ARC-10": "2026-11-24T03:01:36Z",
+    "isokron-ai/tool-qa:row:R-ARC-11": "2026-11-24T03:17:03Z",
+    "isokron-ai/tool-qa:row:R-ARC-12": "2026-11-24T03:17:03Z",
+    "isokron-ai/tool-qa:row:R-ARC-13": "2026-11-24T03:17:03Z",
+    "isokron-ai/tool-qa:row:R-ARC-14": "2026-11-24T03:17:03Z",
+    "isokron-ai/tool-qa:row:R-ARC-15": "2026-11-24T03:17:03Z",
+    "isokron-ai/tool-qa:row:R-ARC-16": "2026-11-24T03:17:03Z",
+    "isokron-ai/tool-qa:row:R-ARC-17": "2026-11-24T03:17:03Z",
+    "isokron-ai/tool-qa:row:R-ARC-18": "2026-11-24T03:17:03Z",
+    "isokron-ai/tool-qa:row:R-ARC-19": "2026-11-24T03:28:16Z",
+    "isokron-ai/tool-qa:row:R-ARC-20": "2026-11-24T03:28:16Z",
+    "isokron-ai/tool-qa:row:R-ARC-21": "2026-11-24T03:28:16Z",
+    "isokron-ai/tool-qa:row:R-ARC-22": "2026-11-24T03:28:16Z",
+    "isokron-ai/tool-qa:row:R-ARC-23": "2026-11-24T03:58:29Z",
+    "isokron-ai/tool-qa:row:R-ARC-24": "2026-11-24T03:58:29Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-01": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-02": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-03": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-04": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-05": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-06": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-07": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-08": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-09": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-10": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-11": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-12": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-13": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-14": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-15": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-16": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-17": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-CHAOS-18": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-01": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-02": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-03": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-04": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-05": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-06": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-07": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-08": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-09": "2026-11-24T07:55:38Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-10": "2026-11-24T08:03:44Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-11": "2026-11-24T08:03:44Z",
+    "isokron-ai/tool-qa:row:R-CHECKIN-12": "2026-11-24T08:03:44Z",
+    "isokron-ai/tool-qa:row:R-COV-01": "2026-11-24T03:32:59Z",
+    "isokron-ai/tool-qa:row:R-COV-02": "2026-11-24T03:32:59Z",
+    "isokron-ai/tool-qa:row:R-COV-03": "2026-11-24T03:32:59Z",
+    "isokron-ai/tool-qa:row:R-COV-04": "2026-11-24T03:34:55Z",
+    "isokron-ai/tool-qa:row:R-COV-05": "2026-11-24T03:32:59Z",
+    "isokron-ai/tool-qa:row:R-COV-06": "2026-11-24T03:32:59Z",
+    "isokron-ai/tool-qa:row:R-COV-07": "2026-11-24T03:32:59Z",
+    "isokron-ai/tool-qa:row:R-COV-08": "2026-11-24T03:34:55Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-01": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-02": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-03": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-04": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-05": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-06": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-07": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-08": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-09": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-10": "2026-11-24T05:10:31Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-11": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-12": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-13": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-14": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-15": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-16": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-17": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-18": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-19": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-20": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-21": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-22": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-23": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-24": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-25": "2026-11-24T05:20:56Z",
+    "isokron-ai/tool-qa:row:R-DRIFT-26": "2026-11-24T08:03:44Z",
+    "isokron-ai/tool-qa:row:R-HB-01": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:row:R-HB-02": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:row:R-HB-03": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:row:R-HB-04": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:row:R-HB-05": "2026-11-25T17:35:05Z",
+    "isokron-ai/tool-qa:row:R-HB-06": "2026-11-25T17:35:05Z",
+    "isokron-ai/tool-qa:row:R-HB-07": "2026-11-25T17:35:05Z",
+    "isokron-ai/tool-qa:row:R-HB-08": "2026-11-25T17:35:05Z",
+    "isokron-ai/tool-qa:row:R-HB-09": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:row:R-HB-10": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:row:R-HB-11": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:row:R-HB-12": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:row:R-HB-13": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:row:R-HB-14": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:row:R-HB-15": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:row:R-HB-16": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:row:R-HB-17": "2026-11-25T22:34:44Z",
+    "isokron-ai/tool-qa:row:R-HB-18": "2026-11-25T22:34:44Z",
+    "isokron-ai/tool-qa:row:R-HB-19": "2026-11-25T22:34:44Z",
+    "isokron-ai/tool-qa:row:R-HB-20": "2026-11-25T22:34:44Z",
+    "isokron-ai/tool-qa:row:R-HIST-01": "2026-11-24T01:51:32Z",
+    "isokron-ai/tool-qa:row:R-HIST-02": "2026-11-24T01:51:32Z",
+    "isokron-ai/tool-qa:row:R-HIST-03": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-HIST-04": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-HIST-05": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:row:R-HIST-06": "2026-11-25T17:26:47Z",
+    "isokron-ai/tool-qa:row:R-HIST-07": "2026-11-25T17:26:47Z",
+    "isokron-ai/tool-qa:row:R-ING-01": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-02": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-03": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-04": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-05": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-06": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-07": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-08": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-09": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-10": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-11": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-12": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-13": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-14": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-15": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-16": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:row:R-ING-17": "2026-11-24T00:22:33Z",
+    "isokron-ai/tool-qa:row:R-ING-18": "2026-11-24T00:22:33Z",
+    "isokron-ai/tool-qa:row:R-ING-19": "2026-11-24T00:22:33Z",
+    "isokron-ai/tool-qa:row:R-ING-20": "2026-11-24T01:09:19Z",
+    "isokron-ai/tool-qa:row:R-ING-21": "2026-11-24T01:09:19Z",
+    "isokron-ai/tool-qa:row:R-ING-22": "2026-11-24T01:09:19Z",
+    "isokron-ai/tool-qa:row:R-ING-23": "2026-11-24T01:09:19Z",
+    "isokron-ai/tool-qa:row:R-ING-24": "2026-11-24T01:09:19Z",
+    "isokron-ai/tool-qa:row:R-ING-25": "2026-11-24T01:09:19Z",
+    "isokron-ai/tool-qa:row:R-ING-26": "2026-11-24T01:13:04Z",
+    "isokron-ai/tool-qa:row:R-ING-27": "2026-11-24T02:07:38Z",
+    "isokron-ai/tool-qa:row:R-LED-01": "2026-11-24T02:18:35Z",
+    "isokron-ai/tool-qa:row:R-LED-02": "2026-11-24T02:18:35Z",
+    "isokron-ai/tool-qa:row:R-LED-03": "2026-11-24T02:18:35Z",
+    "isokron-ai/tool-qa:row:R-LED-04": "2026-11-24T02:18:35Z",
+    "isokron-ai/tool-qa:row:R-LED-05": "2026-11-24T02:18:35Z",
+    "isokron-ai/tool-qa:row:R-LED-06": "2026-11-24T02:18:35Z",
+    "isokron-ai/tool-qa:row:R-LED-07": "2026-11-24T02:19:18Z",
+    "isokron-ai/tool-qa:row:R-LED-09": "2026-11-24T07:36:00Z",
+    "isokron-ai/tool-qa:row:R-LED-10": "2026-11-24T07:27:52Z",
+    "isokron-ai/tool-qa:row:R-LED-11": "2026-11-24T07:37:27Z",
+    "isokron-ai/tool-qa:row:R-LIVE-01": "2026-11-25T23:14:52Z",
+    "isokron-ai/tool-qa:row:R-LIVE-20": "2026-11-25T23:41:44Z",
+    "isokron-ai/tool-qa:row:R-LIVE-21": "2026-11-25T23:41:44Z",
+    "isokron-ai/tool-qa:row:R-LIVE-22": "2026-11-25T23:41:44Z",
+    "isokron-ai/tool-qa:row:R-LIVE-23": "2026-11-25T23:41:44Z",
+    "isokron-ai/tool-qa:row:R-LIVE-24": "2026-11-25T23:41:44Z",
+    "isokron-ai/tool-qa:row:R-LIVE-25": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:row:R-LIVE-26": "2026-11-25T23:41:50Z",
+    "isokron-ai/tool-qa:row:R-LIVE-27": "2026-11-25T23:41:50Z",
+    "isokron-ai/tool-qa:row:R-LIVE-28": "2026-11-25T23:50:48Z",
+    "isokron-ai/tool-qa:row:R-LIVE-29": "2026-11-26T01:00:16Z",
+    "isokron-ai/tool-qa:row:R-LIVE-30": "2026-11-26T02:10:59Z",
+    "isokron-ai/tool-qa:row:R-LIVE-31": "2026-11-26T02:23:40Z",
+    "isokron-ai/tool-qa:row:R-LIVE-32": "2026-11-26T02:23:40Z",
+    "isokron-ai/tool-qa:row:R-LIVE-33": "2026-11-26T02:23:40Z",
+    "isokron-ai/tool-qa:row:R-LIVE-34": "2026-11-26T02:23:40Z",
+    "isokron-ai/tool-qa:row:R-LIVE-40": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:row:R-LIVE-41": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:row:R-LIVE-42": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:row:R-LIVE-43": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:row:R-LIVE-44": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:row:R-LIVE-45": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:row:R-LIVE-46": "2026-11-26T01:51:21Z",
+    "isokron-ai/tool-qa:row:R-LIVE-47": "2026-11-26T02:01:02Z",
+    "isokron-ai/tool-qa:row:R-LIVE-48": "2026-11-26T02:01:02Z",
+    "isokron-ai/tool-qa:row:R-LIVE-60": "2026-11-26T01:04:00Z",
+    "isokron-ai/tool-qa:row:R-META-01": "2026-11-24T01:27:09Z",
+    "isokron-ai/tool-qa:row:R-META-02": "2026-11-24T01:27:09Z",
+    "isokron-ai/tool-qa:row:R-META-03": "2026-11-24T01:27:09Z",
+    "isokron-ai/tool-qa:row:R-META-04": "2026-11-24T01:27:09Z",
+    "isokron-ai/tool-qa:row:R-META-05": "2026-11-24T01:27:09Z",
+    "isokron-ai/tool-qa:row:R-META-06": "2026-11-24T01:27:09Z",
+    "isokron-ai/tool-qa:row:R-META-07": "2026-11-24T01:27:09Z",
+    "isokron-ai/tool-qa:row:R-META-08": "2026-11-24T01:27:09Z",
+    "isokron-ai/tool-qa:row:R-META-09": "2026-11-24T01:31:57Z",
+    "isokron-ai/tool-qa:row:R-META-10": "2026-11-25T01:13:20Z",
+    "isokron-ai/tool-qa:row:R-META-11": "2026-11-25T01:13:20Z",
+    "isokron-ai/tool-qa:row:R-META-12": "2026-11-25T23:18:59Z",
+    "isokron-ai/tool-qa:row:R-OFF-01": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-02": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-03": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-04": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-05": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-06": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-07": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-08": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-09": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-10": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-11": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-12": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-OFF-13": "2026-11-24T05:22:24Z",
+    "isokron-ai/tool-qa:row:R-ORD-01": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-02": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-03": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-04": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-05": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-06": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-07": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-08": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-09": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-10": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-11": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-12": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-13": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-14": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-15": "2026-11-24T16:37:35Z",
+    "isokron-ai/tool-qa:row:R-ORD-16": "2026-11-25T01:17:57Z",
+    "isokron-ai/tool-qa:row:R-ORD-17": "2026-11-25T01:17:57Z",
+    "isokron-ai/tool-qa:row:R-ORD-18": "2026-11-25T01:17:57Z",
+    "isokron-ai/tool-qa:row:R-PERF-01": "2026-11-24T09:37:03Z",
+    "isokron-ai/tool-qa:row:R-PERF-02": "2026-11-24T09:37:03Z",
+    "isokron-ai/tool-qa:row:R-PERF-03": "2026-11-24T09:37:03Z",
+    "isokron-ai/tool-qa:row:R-PERF-04": "2026-11-24T09:42:30Z",
+    "isokron-ai/tool-qa:row:R-PERF-05": "2026-11-24T10:08:33Z",
+    "isokron-ai/tool-qa:row:R-PERF-06": "2026-11-24T10:08:33Z",
+    "isokron-ai/tool-qa:row:R-PERF-07": "2026-11-24T10:08:33Z",
+    "isokron-ai/tool-qa:row:R-PIN-01": "2026-11-26T00:00:57Z",
+    "isokron-ai/tool-qa:row:R-PIN-02": "2026-11-26T00:00:57Z",
+    "isokron-ai/tool-qa:row:R-PRUNE-01": "2026-11-24T06:14:52Z",
+    "isokron-ai/tool-qa:row:R-PRUNE-02": "2026-11-24T06:14:52Z",
+    "isokron-ai/tool-qa:row:R-PRUNE-03": "2026-11-24T06:14:52Z",
+    "isokron-ai/tool-qa:row:R-PRUNE-04": "2026-11-24T07:02:48Z",
+    "isokron-ai/tool-qa:row:R-PRUNE-05": "2026-11-24T07:02:48Z",
+    "isokron-ai/tool-qa:row:R-PUB-01": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-02": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-03": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-04": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-05": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-06": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-07": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-08": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-09": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-10": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-11": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-12": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-13": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-14": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-15": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-16": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-17": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-18": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:row:R-PUB-19": "2026-11-25T19:12:41Z",
+    "isokron-ai/tool-qa:row:R-PUB-20": "2026-11-25T19:12:41Z",
+    "isokron-ai/tool-qa:row:R-PUB-21": "2026-11-25T19:12:41Z",
+    "isokron-ai/tool-qa:row:R-PUB-22": "2026-11-25T19:12:41Z",
+    "isokron-ai/tool-qa:row:R-RD-01": "2026-11-24T15:02:23Z",
+    "isokron-ai/tool-qa:row:R-RD-02": "2026-11-24T15:02:23Z",
+    "isokron-ai/tool-qa:row:R-RD-03": "2026-11-24T15:02:23Z",
+    "isokron-ai/tool-qa:row:R-RD-04": "2026-11-24T15:02:23Z",
+    "isokron-ai/tool-qa:row:R-RD-05": "2026-11-24T15:02:23Z",
+    "isokron-ai/tool-qa:row:R-RD-06": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-07": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-08": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-09": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-10": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-11": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-12": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-13": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-14": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-15": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-16": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:row:R-RD-17": "2026-11-25T01:11:08Z",
+    "isokron-ai/tool-qa:row:R-RD-18": "2026-11-25T01:11:08Z",
+    "isokron-ai/tool-qa:row:R-RD-19": "2026-11-25T01:11:08Z",
+    "isokron-ai/tool-qa:row:R-RD-20": "2026-11-25T23:18:59Z",
+    "isokron-ai/tool-qa:row:R-RET-01": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-02": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-03": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-04": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-05": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-06": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-07": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-08": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-09": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-10": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-11": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-12": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-13": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-14": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-15": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-16": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-17": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-18": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-19": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-20": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-21": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-22": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:row:R-RET-23": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:row:R-RET-24": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:row:R-RET-25": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:row:R-RET-26": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:row:R-RET-27": "2026-11-25T01:04:58Z",
+    "isokron-ai/tool-qa:row:R-SNAP-01": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-02": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-03": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-04": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-05": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-06": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-07": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-08": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-09": "2026-11-24T03:47:59Z",
+    "isokron-ai/tool-qa:row:R-SNAP-10": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-11": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-12": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-13": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-14": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-15": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-16": "2026-11-24T03:13:07Z",
+    "isokron-ai/tool-qa:row:R-SNAP-17": "2026-11-24T03:47:59Z",
+    "isokron-ai/tool-qa:row:R-STATE-01": "2026-11-24T01:51:32Z",
+    "isokron-ai/tool-qa:row:R-SUB-01": "2026-11-24T01:03:26Z",
+    "isokron-ai/tool-qa:row:R-SUB-02": "2026-11-24T01:03:26Z",
+    "isokron-ai/tool-qa:row:R-SUB-03": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-04": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-05": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-06": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-07": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-08": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-09": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-10": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-11": "2026-11-24T01:34:43Z",
+    "isokron-ai/tool-qa:row:R-SUB-12": "2026-11-25T18:28:02Z",
+    "isokron-ai/tool-qa:row:R-SUB-13": "2026-11-25T18:28:02Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-01": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-02": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-03": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-04": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-05": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-06": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-07": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-08": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-09": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-10": "2026-11-24T08:30:30Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-11": "2026-11-24T08:46:59Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-12": "2026-11-24T08:46:59Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-13": "2026-11-24T08:46:59Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-14": "2026-11-24T09:13:03Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-15": "2026-11-24T09:13:03Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-16": "2026-11-24T09:13:03Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-17": "2026-11-24T09:49:52Z",
+    "isokron-ai/tool-qa:row:R-SUBJ-18": "2026-11-24T09:49:52Z",
+    "isokron-ai/tool-qa:row:R-WD-01": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-02": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-03": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-04": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-05": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-06": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-07": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-08": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-09": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-10": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-11": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-12": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-13": "2026-11-24T01:24:29Z",
+    "isokron-ai/tool-qa:row:R-WD-14": "2026-11-25T01:04:58Z",
+    "isokron-ai/tool-qa:row:R-WD-15": "2026-11-26T03:33:00Z",
+    "isokron-ai/tool-qa:row:R-WD-16": "2026-11-26T03:44:20Z",
+    "isokron-ai/tool-qa:test:chaos/identity.test.mjs:R-SUBJ-04: a rename and a transfer between ticks, one with a result in flight under the old name: one subject each, no run_key moves, the result lands, later work goes out under the new name": "2026-11-24T08:22:06Z",
+    "isokron-ai/tool-qa:test:chaos/identity.test.mjs:R-SUBJ-05: a deleted repository and one turned private are subject-fault skips: not dispatched while gone; the private one is back once public": "2026-11-24T08:22:06Z",
+    "isokron-ai/tool-qa:test:chaos/identity.test.mjs:R-SUBJ-06: an old name taken by a new repository, and an id that comes back naming another repository: nothing is rebound, renamed or split": "2026-11-24T08:22:06Z",
+    "isokron-ai/tool-qa:test:chaos/identity.test.mjs:R-SUBJ-12: before the first lookup, a subject's repository moved and a newcomer took its old name: the newcomer is refused (id_conflict, amber), the others bind": "2026-11-24T08:46:41Z",
+    "isokron-ai/tool-qa:test:chaos/identity.test.mjs:R-SUBJ-13: the pump's token stops seeing every repository: nothing is marked gone, dispatching goes on, and the health issue is red until it sees them again": "2026-11-24T08:46:41Z",
+    "isokron-ai/tool-qa:test:chaos/limits.test.mjs:R-CHAOS-04: a primary rate limit (403, reset in 40 minutes) hit by ingest mid-tick: health turns amber while it holds; the results that came in meanwhile still count": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/limits.test.mjs:R-CHAOS-07: a rate limit that ends mid-run: the late dispatches ingest could not look at are judged first, not throttled while their work goes out again": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/limits.test.mjs:R-CHAOS-14: a short GitHub outage on the state push (500s on the upload, then a 502) is ridden out by the retries: the run does not fail and nothing is saved twice": "2026-11-25T17:17:45Z",
+    "isokron-ai/tool-qa:test:chaos/pins.test.mjs:R-PIN-01: a label lane whose worker runs another version of a pin that is not its own: refused (pin_mismatch), the lane pauses, nothing is parked, and a pin bump brings it back": "2026-11-26T00:00:57Z",
+    "isokron-ai/tool-qa:test:chaos/pins.test.mjs:R-PIN-01: an enforce lane runs its pinned commit, not the branch head: every result proves the pin": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:chaos/pins.test.mjs:R-PIN-01: an enforce lane whose worker does not take tool_sha yet is refused by GitHub, records nothing, and goes on once the worker takes it": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:chaos/pins.test.mjs:R-PIN-01: ingest holds a lane to the pin_check of the config the pump dispatched with: an enforce lane whose worker does not prove its commit is refused (pin_unverified)": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:chaos/pins.test.mjs:R-PIN-02: a label lane whose branch moved past its own pin: accepted with the pin listed unverified (self_pin_moved), no pause": "2026-11-26T00:00:57Z",
+    "isokron-ai/tool-qa:test:chaos/pump-crash.test.mjs:R-CHAOS-05: a dispatch answered 502 after GitHub started the run stays pending: the run is judged, the slot stays counted": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/pump-crash.test.mjs:R-CHAOS-08: a server error on the branch re-read right before sending: nothing was sent, so the dispatch is freed at once and the work goes out on the next tick": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:test:chaos/results.test.mjs:R-CHAOS-02: a dispatch reaped in a run's last minutes, when ingest does not run: its work is held, and the on-time result counts on the next tick": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/results.test.mjs:R-CHAOS-02: a run that finished before its lease ran out, judged only after: accepted, not rejected as lease_expired": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/results.test.mjs:R-RET-26: one item's keep-forever file fails to write while the others succeed: every result is still judged and recorded, and a gap marker is sealed so the prune keeps that run's full bundles": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:test:chaos/results.test.mjs:R-WD-14: a keep-forever file that fails with its gap marker artifact lost turns keep-markers red in the health issue; with the marker uploaded it stays green": "2026-11-25T01:09:43Z",
+    "isokron-ai/tool-qa:test:chaos/state.test.mjs:R-CHAOS-01: a state asset that vanished while snapshots exist: the pump refuses to start from empty and fails loudly; a restore brings it back": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/state.test.mjs:R-CHAOS-03: a passing GitHub error while pulling the state does not cancel the successor: the chain goes on": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/state.test.mjs:R-CHAOS-03: a pump that cannot read its state cancels the successor it dispatched: a few failing runs an hour, not one a minute": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/state.test.mjs:R-CHAOS-06: a damaged live asset that kept its label: the restore drill checks the bytes, not the label, and puts the snapshot back": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:chaos/state.test.mjs:R-CHAOS-09: a passing GitHub error while counting snapshots (state asset missing) does not cancel the successor": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:test:chaos/state.test.mjs:R-CHAOS-11: a deliberate fresh start keeps the snapshots: a fresh state pushed by hand with --force, then the pump carries on from it": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat-report.test.mjs:R-LIVE-60: a check the watchdog reports as off stays off (switched off on purpose is never turned into unknown)": "2026-11-26T01:04:00Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-01: a broken pump chain is restarted: nothing queued or running and the newest run is past its limit": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-02: a healthy chain is left alone: a run queued or running, or a recent one": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-03: the kill switches hold: LOOP_ENABLED off, HEARTBEAT_ENABLED off, or no token means no dispatch": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-04: during a GitHub outage nothing throws and nothing is dispatched blind; the next tick retries": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-05: the other pause switches hold: LOOP_PAUSE_UNTIL, LANE_PUMP_ENABLED, LOOP_SLOTS=0; an unset variable is the default": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-06: the switches are read as scripts/guard.mjs reads them": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-07: a run stuck waiting is not healthy forever; action_required is not running": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-08: age comes from when the run started or last finished, not when it was created": "2026-11-25T17:33:49Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-09: every scheduled workflow that should keep running is watched, with thresholds from its schedule and timeout": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-10: each workflow maps to the lane variable its own guard step reads": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-11: per-entry decisions: a healthy loop dispatches nothing; each stale workflow is dispatched on its own limit": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-12: history-registry is watched for its full capture only: the 15-minute deltas do not hide a missing full run": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-13: inputs sent with a dispatch: mode full for the registry, stars (all on Monday UTC) for popularity, none elsewhere": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-14: at most MAX_DISPATCHES dispatches per tick; the rest wait for the next tick, in WATCH order": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-15: the variables are read in one call, and a tick stays far under the 50-subrequest limit even in the worst case": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-16: a failing daily or weekly run is not re-dispatched in a loop; state-snapshot retries a failed run after 30 minutes": "2026-11-25T22:27:06Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-17: variables are listed 30 per page: a switch on page 2 still stops every dispatch": "2026-11-25T22:34:44Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-18: only runs on main count: a pull request run cannot hide a missed scheduled run": "2026-11-25T22:34:44Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-19: the registry full run is found behind a day of deltas, and a window without one dispatches": "2026-11-25T22:34:44Z",
+    "isokron-ai/tool-qa:test:heartbeat/test/heartbeat.test.mjs:R-HB-20: a state snapshot that keeps failing is retried fast only 3 times, then every staleMin, with a loud alert": "2026-11-25T22:34:44Z",
+    "isokron-ai/tool-qa:test:history/packages/test/crates.test.mjs:R-HIST-01: processDump keeps seeded crates the matcher misses, with reason seed": "2026-11-24T01:18:52Z",
+    "isokron-ai/tool-qa:test:history/packages/test/crates.test.mjs:R-HIST-01: runCrates re-reads an unchanged dump when the seeded crates change": "2026-11-24T01:18:52Z",
+    "isokron-ai/tool-qa:test:history/popularity/test/popularity.test.mjs:github: 404 release is null, rate limit stops the loop": "2026-11-23T19:14:31Z",
+    "isokron-ai/tool-qa:test:history/popularity/test/popularity.test.mjs:pypistats and per-item errors": "2026-11-23T19:14:31Z",
+    "isokron-ai/tool-qa:test:history/popularity/test/popularity.test.mjs:R-HIST-02: github: a stop after some rows is a warning, a gone repo is missing": "2026-11-24T01:18:52Z",
+    "isokron-ai/tool-qa:test:history/popularity/test/popularity.test.mjs:R-HIST-02: npm: a gone package is missing, not an error": "2026-11-24T01:18:52Z",
+    "isokron-ai/tool-qa:test:ingest/test/age.test.mjs:R-ING-04: age is killed at its time limit and fails as timeout": "2026-11-23T23:52:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-CHAOS-07: a late dispatch whose look the API budget stopped is looked at on the next tick, not ten minutes later; an earlier look keeps counting": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-CHAOS-10: ingest passes the artifact upload time: a run that completed inside its lease but whose bundle was uploaded after it is lease_expired": "2026-11-24T05:10:03Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-05: a count left by an earlier run is honoured: the item is recorded as ingest_error without a download": "2026-11-23T23:56:56Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-05: an item that keeps failing is counted in the state and recorded as ingest_error on the third failure": "2026-11-23T23:56:56Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-06: a poison item is decided in its own tick and the items after it are still judged": "2026-11-23T23:56:56Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-08: a bundle that makes the judge throw is a recorded rejection, never downloaded again": "2026-11-24T00:11:07Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-08: transient download errors are retried and never counted": "2026-11-23T23:56:56Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-12: a run found by its name is checked against the commit recorded at dispatch, not its own": "2026-11-24T00:06:30Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-12: setDispatchRun never sets the expected commit, and markDispatched never replaces it": "2026-11-24T00:06:30Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-17: a GitHub call that hangs is cut off at collect()'s deadline plus its grace": "2026-11-24T00:22:20Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-21: a deadline further off than a timer can wait is no deadline, not one that fires at once": "2026-11-24T00:47:12Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-22: three dispatches in a row at the wrong commit pause the workflow; a run that passes resets the count": "2026-11-24T00:47:25Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-24: the shards a merge overtook (all recorded at the old commit) count once and do not pause the workflow": "2026-11-24T00:56:15Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-25: the same recorded commit in separate ticks keeps counting, and pauses at three": "2026-11-24T01:04:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-ING-26: same-commit mismatches from separate ticks only ~130 s apart still count, and pause at three": "2026-11-24T01:13:01Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-PIN-01: in the pump, a result refused for its version pins pauses its lane and parks nothing; a proven one is recorded as usual": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-RET-03: each full bundle is sealed as zstd, and its keep-forever file and its catalog next to it, each readable by magic bytes": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-RET-04: a tool list shared by two items is sealed once as a catalog; a different one is sealed again": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-RET-05: a compression that fails never stops the seal: the bundle is sealed as a plain tar, the decision is recorded, and the failure is counted for the watchdog": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-RET-05: a keep-forever file that cannot be written is counted and the full bundle is still sealed and recorded": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-RET-06: the note of a seal is written with the time of the tick (the seal once read a clock that was not in its scope, and no item could be sealed)": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-RET-23: when one item's keep-forever file cannot be written, a gap marker is sealed for the run; if the marker cannot be written either, the item is not recorded": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:test:ingest/test/collect.test.mjs:R-WD-14: the seal record notes each keep-forever file that failed with the pump run whose gap marker artifact must carry it": "2026-11-25T01:04:58Z",
+    "isokron-ai/tool-qa:test:ingest/test/forgery.test.mjs:R-ING-02: identity claims in a 1 MiB text file are found in linear time": "2026-11-23T23:46:23Z",
+    "isokron-ai/tool-qa:test:ingest/test/forgery.test.mjs:R-ING-07: identity claims inside JSON nested 200,000 deep are still found, from the text": "2026-11-23T23:49:05Z",
+    "isokron-ai/tool-qa:test:ingest/test/github.test.mjs:R-ING-17: no request is sent once the caller's deadline has passed, and a hanging one is cut off by it": "2026-11-24T00:22:20Z",
+    "isokron-ai/tool-qa:test:ingest/test/github.test.mjs:R-ING-20: the wait before a retry ends at the deadline, even a retry-after of 60 s": "2026-11-24T00:47:12Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-COV-02: a rejected item carries no fault or coverage to the ledger (only accepted results are stored)": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-COV-02: a skip that puts our own limit down to the subject is rejected as manifest_invalid": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-COV-02: a tool-fault skip is accepted and recorded as unassessed_tool, never as the subject's or excluded": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-COV-02: an older worker kit's bundle (no fault) is accepted; an ambiguous reason is recorded as unknown, a clear one by the fixed map": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ING-03: a file over the per-file cap is rejected as file_too_large; the caps are the contract's": "2026-11-23T23:54:36Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ING-03: a full-size bundle of crafted text is judged well inside the time limit": "2026-11-23T23:54:36Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ING-03: an artifact over 65 MiB is rejected without a download": "2026-11-23T23:54:36Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ING-04: a judge that hangs is stopped at its time limit and the item is recorded as ingest_timeout": "2026-11-23T23:52:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ING-04: a judge that throws, or dies, records ingest_error instead of failing the tick": "2026-11-23T23:52:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ING-04: the judge thread gets no environment": "2026-11-23T23:52:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ING-16: a bundle whose every skip is retryable is sent back as retry_later; the retries are bounded": "2026-11-24T00:09:48Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ING-16: one skip that is not retryable, or no skips at all, is accepted as before": "2026-11-24T00:09:48Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-ORD-07: an accepted live-probe bundle hands its oracle facts to the ledger; another lane, or a rejected item, hands none; the fault side is untouched": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-SUB-04: a throttled bundle is sent back as retry_throttled, not counted towards MAX_RETRIES, for up to the retry window": "2026-11-24T01:14:04Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-SUB-06: an accepted bundle whose every skip is retryable and no records is recorded as skips_only; any permanent skip is not": "2026-11-24T01:24:06Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-SUB-09: only declared third-party stages are throttling; a subject's own fetch or probe failure is a counted retry": "2026-11-24T01:34:33Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-SUB-10: skips_only needs nothing measured: null observations and a skip's own evidence file do not count; other results/ data or a value does": "2026-11-24T01:34:33Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-SUB-12: a meta lane's rate_limited, outage and shard-deadline skips are throttling: retried after the backoff, not counted towards the 3 retries": "2026-11-25T18:28:02Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-SUB-13: the lane versions in pump/workflows.json are the versions the meta lanes report, so a change of skip semantics moves the run keys": "2026-11-25T18:28:02Z",
+    "isokron-ai/tool-qa:test:ingest/test/ingest.test.mjs:R-SUBJ-02: the report names the subject by its key and repository id, with the name the worker was sent and the name it has now": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/ledger.test.mjs:R-COV-02: the JSON ledger keeps an accepted result's fault side and coverage, and drops them from a refused one": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:ingest/test/ledger.test.mjs:R-ORD-10: the lane name survives normalising a row twice, as the state ledger and ingest both do": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: a lane the config does not name is held to enforce; a run_key with no recorded label is not checked": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: getAttempt carries each item's pins from the fields its run_key was computed from": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: mismatch refused with a reason and the tool fault side, on every lane: the worker ran another commit than the run_key is filed under": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: missing SHA during rollout handled per the switch: a label lane accepts it with the pin listed unverified, an enforce lane refuses it (tool side)": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: pausePinRefused pauses the lane for an hour, says why, records the event, and never shortens a longer pause": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: pin match accepted: a bundle that reports the full pinned commit, and each other pin, is accepted": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: pin refusals are not counted towards parking a run_key: the subject did nothing wrong": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: the ledger hands ingest the run_key's pins; a hand-made ledger without them is not checked": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-01: the pin check never overrides ingest's other judgments: a forgery, a quarantine and a retry still decide first": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-02: enforce lane, its own worker-repository pin moved: still refused as pin_mismatch": "2026-11-26T00:00:57Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-02: label lane, a pin that is not its own moved: still refused as pin_mismatch": "2026-11-26T00:00:57Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-02: label lane, its own worker-repository pin moved: accepted, listed unverified with a self_pin_moved note, no refusal": "2026-11-26T00:00:57Z",
+    "isokron-ai/tool-qa:test:ingest/test/pins.test.mjs:R-PIN-02: pins recorded but unreadable are refused (pin_unverified) on an enforce lane, never taken as no label": "2026-11-26T00:00:57Z",
+    "isokron-ai/tool-qa:test:ingest/test/redact.test.mjs:R-ING-01: every redaction rule scans 1 MiB of crafted text in linear time": "2026-11-23T23:46:23Z",
+    "isokron-ai/tool-qa:test:ingest/test/redact.test.mjs:R-ING-01: the bounded patterns still find what they found before": "2026-11-23T23:46:23Z",
+    "isokron-ai/tool-qa:test:ingest/test/redact.test.mjs:R-ING-07: a JSON document nested 200,000 deep is scanned as text, not walked into a stack overflow": "2026-11-23T23:49:05Z",
+    "isokron-ai/tool-qa:test:ingest/test/registry.test.mjs:R-COV-04: the pinned registry declares fault_side and coverage_state, and active fields are accepted like planned ones": "2026-11-24T02:51:32Z",
+    "isokron-ai/tool-qa:test:ingest/test/registry.test.mjs:R-COV-08: the pin and its test copy agree: commit, path and sha256 move together": "2026-11-24T03:12:46Z",
+    "isokron-ai/tool-qa:test:ingest/test/retention.test.mjs:R-RET-02: one catalog per distinct tool list, whatever the number of items; a rejected item keeps only its report; an attempt-level report is kept": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/retention.test.mjs:R-RET-02: the control files of an item whose control failed are kept; so are those of a manifest that cannot be read": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:ingest/test/retention.test.mjs:R-RET-02: the keep-forever set is results, manifest, ingest.json, observations and repo.json; controls, report, scan and logs stay in the full bundle only": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-10: a second run copies nothing, uploads nothing and downloads nothing; a new artifact makes a second part, and the old part is not rewritten": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-10: the keep-forever files and the history zips are copied into a part per month, with a manifest per month, a catalog index and a status": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-11: a tool list already copied is not copied again, in the same run or a later one": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-12: artifacts roll by the month they were made; each month has its own manifest": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-13: a part uploaded by a run that died before its manifest is found again by name and not uploaded twice": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-14: an artifact from a fork or another branch is left alone; one of ours from a workflow SOURCES does not list is held and fails the run": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-15: a file that is not a sealed keep or catalog file is refused and listed, the rest are copied, and the artifact is not retried forever": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-16: a run stops taking artifacts at its byte limit, says what is waiting and since when, and the next run carries on": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:keep/test/copy.test.mjs:R-RET-24: a tool list also staged for an earlier month whose write fails is still copied with the later month": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:test:keep/test/health.test.mjs:R-RET-17: a run that failed shows amber even when the last good run is recent": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:keep/test/health.test.mjs:R-RET-17: a stalled copy shows: an artifact waiting over 30 days is amber, over 60 days red (GitHub deletes at 90), even with fresh good runs": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:keep/test/health.test.mjs:R-RET-17: not run yet, unreadable, switched off, or a status from the future is not green; nothing here throws": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:keep/test/health.test.mjs:R-RET-17: readKeepStatus reads the newest status revision from the release, and says what is missing": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:keep/test/health.test.mjs:R-RET-17: the keep-forever copy is green while a good run is under 12 hours old, amber to 24, red after": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:keep/test/health.test.mjs:R-RET-18: the seal item is amber after one failed compression or keep-forever file, red after three in a row, green again once a seal is clean": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:keep/test/health.test.mjs:R-WD-14: every failed keep-forever file has its gap marker artifact: a lost marker is red, one that cannot be matched amber, a matched or recent one green": "2026-11-25T01:04:58Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:quarantine rule: a quarantined result emits nothing and counts only in the next day's ring_daily, every class null unless all are 5 or more": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-20: ring_daily is the previous complete UTC day, and never moves while a day runs": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-21: public seq numbers leave no gap where a result was not published; the snapshot seq is not an event id": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-22: now_checking is counts per lane: batches out and the oldest start; no server is named": "2026-11-25T23:49:12Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-23: a server name that names a vendor, holds a secret, is over 60 characters or not a plain owner/name is left out": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-24: a retry call label comes from the fixed list; raw \"METHOD /path\" labels are mapped, never copied; the mode says which call": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-25: an observer of every snapshot and hour file cannot tell a quarantined item from one rejected for its lease, except in the next day's ring_daily at 5 or more": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-26: a named result is published only in the next hour's file, sorted by name, its times cut to the hour; the previous hour file is rebuilt for 300 s": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-27: only assessed and subject-side results carry a server name, anywhere": "2026-11-25T23:41:45Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-28: dispatched work is public only as batch counts, so items minus accepted results never reproduces a suppressed not_used": "2026-11-25T23:49:12Z",
+    "isokron-ai/tool-qa:test:live/test/build.test.mjs:R-LIVE-29: the pump step is not given LOOP_ENABLED, so its absence reads as on: LOOP_SLOTS=0 is idle \"scanning paused by us\", never \"loop switched off by us\"": "2026-11-26T01:00:02Z",
+    "isokron-ai/tool-qa:test:live/test/history.test.mjs:R-LIVE-30: a day file cannot tell one quarantined item from one rejected for its lease (and one more unused item) below the threshold: the files are byte-identical": "2026-11-26T02:10:59Z",
+    "isokron-ai/tool-qa:test:live/test/history.test.mjs:R-LIVE-31: a day file whose PUT landed but answered an error (or whose kv record failed after it) is sent again byte-identical, never rebuilt": "2026-11-26T02:23:40Z",
+    "isokron-ai/tool-qa:test:live/test/history.test.mjs:R-LIVE-32: a day is built only when the events table holds all of it; the loop's first day is built once, marked partial": "2026-11-26T02:23:40Z",
+    "isokron-ai/tool-qa:test:live/test/history.test.mjs:R-LIVE-33: a day built more than a day after it ended has lane state and pins null; the first build in its window uses the config": "2026-11-26T02:23:40Z",
+    "isokron-ai/tool-qa:test:live/test/history.test.mjs:R-LIVE-34: a blocked day is kept once in live.history.blocked and not built again; backfill builds at most two days per publish": "2026-11-26T02:23:40Z",
+    "isokron-ai/tool-qa:test:live/test/history.test.mjs:suppression: not_used is null below 5; classes are null unless every class is 5 or more": "2026-11-26T02:10:59Z",
+    "isokron-ai/tool-qa:test:live/test/publish.test.mjs:R-LIVE-40: a builder module that cannot be imported is recorded as error build (the real dynamic import path)": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:test:live/test/publish.test.mjs:R-LIVE-41: a run that straddles the hour names its files and caches them by the time it started": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:test:live/test/publish.test.mjs:R-LIVE-43: never alongside a transaction: inside one, publishLive neither builds nor uploads; a zero budget skips too": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:test:live/test/publish.test.mjs:R-LIVE-44: a scan block stays on record (blocked_at) through later failed attempts until a good upload": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:test:live/test/publish.test.mjs:R-LIVE-45: a snapshot last sent over 24 hours ago is sent again, even when its body is unchanged": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-01: a language with a symbol in its name (C#) is kept in the idiom, not collapsed to <other>": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-02: no-tools skips are split by the repository language from the seed, and a partial reader limit says which limit": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-03: only the latest result of a subject and lane is affected; one fixed by a later run drops out and counts as healed": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-04: impact is severity x the sum of tier weights boosted by popularity, and the formula is configurable": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-05: skips that are the subject's, a passing condition or our policy are not tool-side; an ambiguous reason is read from the result detail": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-06: a signature holds only our own codes: a repository name in an error or detail never reaches it": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-06: probes: reasons, stages and languages outside the known lists, name fragments, short names, non-ASCII names and other items' names": "2026-11-24T08:02:12Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-07: every claim carries run id, attempt id and item index; the same bundle twice counts once": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-08: the reports are written 0600 outside the input, an output inside it is refused, and the reader writes nothing": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-09: the archive is read sealed, in memory, and nothing decrypted is left on disk": "2026-11-24T07:54:19Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-10: every result in a bundle is read, not only the first one with a status": "2026-11-24T08:02:12Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-11: a finished_at that does not parse sorts last, never NaN": "2026-11-24T08:02:12Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-CHECKIN-12: the Markdown says how many evidence refs are left to the JSON, and shows all when asked": "2026-11-24T08:02:12Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-ORD-04: the check-in makes no fingerprint out of a disagreement, and a subject-side skip stays out": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-ORD-05: a subject whose oracles disagree weighs 1.5 times in every fingerprint it is affected by, and the weight is the config value": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-ORD-12: the check-in compares the lanes only on one subject version": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-ORD-16: the check-in compares unversioned lanes only when observed within the window: an old scan against a fresh live list is no disagreement": "2026-11-25T00:59:27Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/checkin.test.mjs:R-RET-20: the archive reads sealed files made before and after zstd, and an item that is in a full bundle and in its keep-forever file counts once": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-01: a version-like release tag force-pushed to another commit is a git_tag_moves event, ranked high": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-02: a version-like image tag that resolves to a new digest is an oci_tag_moves event, ranked medium; latest moving is not": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-03: a tool list that changes behind an unchanged image digest is a catalog_drift_same_version event; a new digest behind the same tag ranks high": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-04: floating tags (latest, v1, v1.4, nightly, main) moving are counted, never events; a re-annotated version tag on the same commit is not a move": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-05: a tag moved within an hour of its release is kept but ranked low (a fix-up re-tag), for git and for images": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-06: an npm or PyPI package at the same version is never a drift event, whatever its tool list does": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-07: a tool list change explained by our own tools (new version, new run_key) is excluded; same commit, tools and run_key is our reader, reported tool-side": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-11: a failed read in between (ok, rate_limited, ok with a new digest) or a git tag that leaves the window and comes back moved does not hide the move": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-12: a tool list change behind a floating image tag is not an event: the probed tag counts, not the registry version": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-22: --since reports only events seen at or after it, with everything before it as the baseline; times are compared as times": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-24: --out is written 0600, and never inside the folder being read": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-DRIFT-26: an --out that is a link, or a second name, for a file in the folder being read is refused and the file is untouched": "2026-11-24T08:02:12Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/derive.test.mjs:R-SUBJ-10: a repository renamed between two results stays one subject: items are grouped by the subject key ingest recorded, not the name sent": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-04: version-like means a full MAJOR.MINOR.PATCH, optionally v- or package-prefixed; floating tags are not": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-05: dates within the window rank low only when our own last sight of the old target was within the window of when it was made": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-05: the fix-up window is an hour either way between the two targets; unknown times rank high": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-06: a NuGet package at the same version is treated like npm and PyPI: never an event": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-18: a version with a floating word in its prefix or pre-release (snapshot, dev, nightly, edge, latest, main, master, canary) is not version-like": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-19: a moved version image tag ranks medium (base images are rebuilt routinely), a moved git tag high": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-20: only scan-static reports a same-commit list change tool-side; another lane with only a commit has no anchor": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-23: bidirectional control characters in a tag name never reach an event": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:longitudinal/test/drift.test.mjs:R-DRIFT-25: a floating word inside a package prefix does not make a tag floating; a bare one-word prefix or the pre-release still does": "2026-11-24T05:20:56Z",
+    "isokron-ai/tool-qa:test:meta/test/github.test.mjs:R-DRIFT-01: meta-github records each tag's target (an annotated tag peeled once) and a hash of the tag map, in the same GraphQL batch": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:meta/test/github.test.mjs:R-DRIFT-09: tag names and image answers are upstream text: the forgery controls plant identity text in them and stay contained": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:meta/test/github.test.mjs:R-DRIFT-21: a GraphQL error on the tag refs is a failed read (null with why, retryable skip), not \"no tag refs\"": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:meta/test/github.test.mjs:R-DRIFT-23: meta-github replaces bidirectional control characters in tag names before keeping or hashing them": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:meta/test/github.test.mjs:R-META-12: a GitHub 403 on a REST read is classified: secondary throttling (no rate-limit header) is a retryable infra rate_limited skip, a DMCA or disabled repository is the subject's settled skip, and a size refusal stays a note": "2026-11-25T23:18:53Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-02: an image tag resolves to its digest with a manifest HEAD, one anonymous token per image, never a GET on docker.io": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-08: OCI reads stay on the allowlist: other hosts get no request, an off-list token realm is refused, redirects are not followed": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-08: without a digest header, a non-Docker-Hub registry gets one capped manifest GET, hashed as sent": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-10: an OCI rate limit or outage is a retryable skip of the oci stage and stops further reads of that host only": "2026-11-24T04:59:07Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-13: a manifest GET over the 4 MiB cap is too_large, by Content-Length before reading and by counting a chunked body": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-14: a token realm over plain http is refused, and never asked": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-15: a token realm with a user or password in it is refused, and a refused realm stops the host for the run": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-16: a token answer over the cap, not JSON or without a token is token_unreadable: no retry, the host stops for the run, a tool-side skip": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:meta/test/oci.test.mjs:R-DRIFT-17: an empty manifest body is no_digest, never the digest of empty input": "2026-11-24T05:16:30Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-06: a republished file that the source tracks and that differs is content_differs, even under lib/ or dist/": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-06: a version stamp is a line whose only difference is the version, not any line that says \"version\" or holds a number": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-07: a renamed repository is read at its new github.com name; one that moved elsewhere, a 403 and a 429 are skips with a fault side": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-08: native, source and doc lookups are indexed (a large tree with many absent .so files compares in well under a second)": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-08: the compute deadline ends the comparison (ComputeBudget) and the subject with a tool-fault skip, not a job timeout": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-09: registry JSON reads do not follow redirects: one off the allowed hosts is refused, one to an allowed host is followed once checked": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-10: a download is tried once (no retries on a 120 s read), and the subject budget applies before every network call": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-11: an archive our readers cannot read (unsupported zip method, zip64, a huge tar number) is a tool-fault skip, not a finding; real damage still is": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-12: the held list is capped like the findings, with a last entry that counts what it left out, and held files stay out of public counts": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-13: tag_commit_differs_from_git_head is low (an attention item), not medium": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-14: findings of a package linked only by its own repository field or project URLs are capped at low; provenance and attested deps.dev links keep their level": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-15: a PyPI version matches its tag by PEP 440 normalisation (1.0 and v1.0.0, 1.0.0rc1 and v1.0.0-rc.1); npm versions are not normalised": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-16: release_artifacts holds upstream text (tag names, provenance refs, file names) and is redacted R1 like the other author-text fields in the pinned registry": "2026-11-24T15:22:27Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-17: a changed executable file keeps medium when the only link is the package's own repository field; other findings still drop to low": "2026-11-25T01:03:06Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-18: a 403 for a DMCA-blocked or disabled repository is a settled skip (upstream_unavailable, fault subject, not retryable); throttling stays a retryable infra skip": "2026-11-25T01:03:06Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-19: an artifact whose bytes do not match the registry's digest is a held finding (not a retryable infra skip), and the public record does not say so": "2026-11-25T01:03:06Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff-review.test.mjs:R-RD-20: forbiddenKind reads only GitHub's own repository-level messages (start of a line or of the JSON message) as a repository taken down; the same words inside other text are not": "2026-11-25T23:18:53Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff.test.mjs:R-RD-01: a body that stops mid-read is a passing problem (upstream_unavailable), not a lane failure": "2026-11-24T05:13:32Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff.test.mjs:R-RD-02: setuptools' generated setup.cfg in an sdist (only [egg_info] tags) is generated metadata, not an unexpected file": "2026-11-24T05:13:32Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff.test.mjs:R-RD-03: a file copied into the package from elsewhere in the repository (same bytes, another path) is explained": "2026-11-24T05:13:32Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff.test.mjs:R-RD-04: a source archive that outlasts our time limit is our limit (reader_limit, fault tool, not retried), and a subject stops starting downloads after its budget": "2026-11-24T05:13:32Z",
+    "isokron-ai/tool-qa:test:meta/test/release-diff.test.mjs:R-RD-05: a per-language release tag (py-v0.1.0, js-v1.0.0) is the version's tag, not a missing one": "2026-11-24T05:13:32Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-01: a body over the cap is not read past it and is a too_large problem": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-01: an error thrown while reading one subject is recorded as its non-retryable skip": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-01: an npm package over the cap is a skip that is not retried; the subject's other stages still run": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-01: npm is read through the abbreviated document and the latest version, never the full document": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-01: one subject whose data makes the lane throw is that subject's own skip, never a failed shard (meta-github)": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-01: one subject whose data makes the lane throw is that subject's own skip, never a failed shard (meta-registry)": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-02: a GitHub rate limit on the known-answer read makes the control unavailable, not failed": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-02: a known-answer read stopped by an outage reads no subject; every item is a retryable skip with the forgery control": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-02: a real known-answer mismatch is still a hard failure": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-03: the reserve is a quarter of the reported limit, at least 300, and requests in flight count against it": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-04: a full shard of 100 items is read and written well inside the job time (mocked APIs)": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-04: the deadline is checked per subject: a batch that starts in time does not run past it": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-05: a registry entry in someone else's io.github namespace is flagged": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-06: the request cache holds no upstream free text (licence texts, summaries, crate descriptions)": "2026-11-24T01:04:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-07: a search crowded past three pages, or failing, still finds the subject's own entry by its exact name": "2026-11-24T01:13:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-07: a spoofed package that npm answers with an outage does not make the control unavailable": "2026-11-24T01:13:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-07: entries others publish for our repository cannot break the meta-registry known-answer control": "2026-11-24T01:13:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-08: five spoofed entries cannot push a subject's own package out of the ones read": "2026-11-24T01:13:14Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-09: only a 404 on the exact-name read means no own entry; any other 4xx is a retryable problem, not a fallback to search": "2026-11-24T01:27:23Z",
+    "isokron-ai/tool-qa:test:meta/test/review.test.mjs:R-META-10: our own limits are recorded with their honest reason and fault tool (too_large, tool_error, unsupported_layout, reader_limit), never as excluded or infra; passing problems say infra": "2026-11-25T01:07:22Z",
+    "isokron-ai/tool-qa:test:meta/test/workflows.test.mjs:R-META-11: every meta lane's workflow, and the fixture, pins a worker kit that knows skip fault sides (2ffcea1 or later)": "2026-11-25T01:07:22Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-01: copies snapshots, the snapshot manifest, ingest and history artifacts byte for byte under kind/day keys, with a manifest part and a cursor": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-01: snapshot keys and artifact keys are by kind and UTC day": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-02: dedupe: a second run copies nothing new; a key with the same sha256 is skipped by HEAD without a download; other bytes under a key are never overwritten": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-03: a HEAD after the PUT that does not show the bytes sent is a verification failure: red status, exit code 1, and the cursor holds": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-04: the cost cap: nothing is uploaded past OFFSITE_MAX_BYTES (status over_cap); per-run byte and operation caps defer to the next run": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-05: the origin filter: artifacts from a fork, another branch or another workflow are never copied; ours from an unlisted workflow are held": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-06: the cursor: the next run lists artifacts only back to an hour before it, and downloads only what is new": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-07: missing R2 settings: exit 0, an unconfigured heartbeat, no store and no GitHub call; the workflow keeps the secrets in the backup step": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-08: a failed bucket read is an error heartbeat, not a crash, and the credentials never reach the heartbeat": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-12: a PUT stored but answered \"exists\" on retry counts as copied with its manifest line; a run that died before its manifest part is recovered next run; one kind past its run bytes does not stop the others; the time limit defers": "2026-11-24T05:09:15Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-OFF-13: the account ID only from a secret, both jobs only on main; retries count against the operation caps; a PUT that failed every attempt counts as possibly stored; a truncated listing is an error": "2026-11-24T05:19:47Z",
+    "isokron-ai/tool-qa:test:offsite/test/backup.test.mjs:R-RET-22: the keep-forever part of the pump outputs gets its own key prefix, so the prune can never mistake it for full data; the Mac archive names its kind": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-OFF-10: a dry run deletes nothing; apply deletes the plan; the workflow keeps prune off unless OFFSITE_PRUNE_ENABLED is true": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-OFF-10: the prune plan deletes only past the 30-day lock, oldest first, never the keep-forever set, the newest snapshots or the run manifests": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-OFF-13: apply refuses a listing that looks cut short, and the step summary never shows the credentials": "2026-11-24T05:19:47Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-07: full bundles expire after 30 days whatever the bucket size, and only when their keep-forever copy is in the bucket": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-07: the cap pass takes the oldest full data first and never the keep-forever set, even when that leaves the bucket over its target": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-08: a hold list that is not valid is refused, never read as \"nothing held\"; an unreadable file stops the prune": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-08: the hold list keeps an artifact past 30 days for 90 days (dispute, disclosure) or 548 (raw), and not a day longer": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-09: the checked-in hold list is valid, and the backup does not send x-amz-checksum-sha256 unless asked (R2 refuses it with Content-MD5)": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-23: a run with a keep-forever gap marker keeps all its full bundles, even past 30 days, under the cap, and with OFFSITE_PRUNE_LEGACY_INGEST": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-27: a keep artifact must hold a keep file for every item of the full bundle; any gap, an unlisted zip or a bundle with no item keeps the bundle": "2026-11-25T01:04:58Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-27: the prune reads the zips of the bucket and deletes only a bundle whose keep artifact covers every item, with no marker anywhere": "2026-11-25T01:04:58Z",
+    "isokron-ai/tool-qa:test:offsite/test/prune.test.mjs:R-RET-27: zipMembers lists a zip from its directory with ranged reads, never the whole object, and refuses anything that does not read cleanly": "2026-11-25T01:04:58Z",
+    "isokron-ai/tool-qa:test:offsite/test/store-r2.test.mjs:R-OFF-11: the endpoint is the account's R2 S3 endpoint": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:offsite/test/store-r2.test.mjs:R-OFF-11: the R2 store sends If-None-Match, Content-MD5, x-amz-checksum-sha256 (when asked) and sha256 metadata; reads them back; an existing key is \"exists\"": "2026-11-24T16:02:47Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-09: publishing is off unless RESULTS_PUBLISH_ENABLED is exactly \"true\", and the loop is on": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-09: the key, the checker and the App never share a step; only ciphertext is uploaded; every later step waits for the gate": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-10: a dry run builds the call plan and makes none; a path outside the layout, or files that differ from the report, are refused": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-10: an open pull request is updated, an existing branch is moved by force, an unchanged run opens nothing": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-10: delivery opens a pull request from its own branch and never touches main": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-10: delivery stops, creating nothing, when main moved, the commit is not verified, or the App lacks the permissions": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-10: the command line refuses to run without the switch inputs it needs": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-17: the checker from mcp-results runs only if its files are the reviewed ones": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-18: delivery leaves a branch alone that holds a commit this publisher did not make": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-22: a missing, unprotected, reviewer-less or any-branch publish environment fails closed": "2026-11-25T19:23:52Z",
+    "isokron-ai/tool-qa:test:publish/test/deliver.test.mjs:R-PUB-22: nothing is delivered unreviewed: the schedule only builds; delivery needs a dispatch with the reviewed digest and the approve job, which holds no secret, so no approval means the open step never runs": "2026-11-25T19:17:43Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-01: a result that carries a security-class field is held whole; nothing says it existed": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-01: every S and M field of the pinned field registry holds a result, planned or not": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-02: a canary-looking value, an oversize value and a value nested too deep hold the result, they are not cut or passed": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-02: fields that are not public are left out, and only observations are read from a result": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-02: in text the server author wrote (R1) only the secret span is masked; anywhere else a secret holds the result": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-03: a skip that is our limit is published as our limit, never as a failed server; a skipped server is not a failed one": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-04: running again on the same input adds nothing and changes no file": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-04: the order of the inputs, and the same result sealed twice, change nothing": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-05: every record carries what traces it to a run key and an attempt, and its own digests recompute": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-05: only results ingest accepted are read, and every one must agree with ingest and with its own manifest": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-06: a published record is never changed; a changed one stops the run, a retracted one is not brought back": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-06: what is already published must still be publishable under the registry as it is now": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-07: end to end with real age: sealed results are read with the key, the output is plain, and nothing decrypted is left behind": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-08: nothing in the publisher, its documents or its output names an AI model or vendor": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-11: no position in the attempt is published, so a held result leaves no gap; the id does not depend on it": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-12: nothing about what was held or left out is public: not in the report, the log, the step summary; the private report is sealed": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-13: one bad item is held, it does not stop the run: the whole record is scanned, not only the observations": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-14: a result whose every field was left out is not published as a clean assessment; one with a skip of ours still is": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-15: a re-read record that differs from its published one is skipped inside the re-read window and stops the run outside it": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-16: our own failures end the run not clean (exit 4) after the output is written: an unreadable sealed file, a coverage mismatch, a skipped conflict": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-19: the output leaves the build job sealed, and opens only with the reviewed digest, the loop key and untampered files": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-20: the private report is padded to a fixed size, so its length shows nothing about its keys": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:publish/test/publish.test.mjs:R-PUB-21: the fence is not published: a global counter whose gaps could show where a result was held": "2026-11-25T19:12:31Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-01: the breaker is closed only on a well-formed, passing status checked within 36 hours": "2026-11-24T00:43:15Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-01: the status is fetched without a token, followed through redirects, capped in size, retried once": "2026-11-24T00:43:15Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-01: workflows.json marks every lane: live-probe, writecheck, build-probe and scan-deep run third-party code; scan-static, meta-* and release-diff do not": "2026-11-24T05:13:32Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-02: one isEnabled everywhere: only enabled === true dispatches; loadConfig refuses anything but real booleans": "2026-11-24T00:59:58Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-03: lanes pinned at another sandbox commit than the one the nightly tested are named (amber), not held": "2026-11-24T00:59:58Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-04: the trusted set is pinned: exactly scan-static, meta-github, meta-registry and release-diff say runs_untrusted false": "2026-11-24T05:13:32Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-06: the status body is read with a cap: reading stops at 16 KiB, it is never read whole first": "2026-11-24T00:59:58Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-07: a status older than one already seen is a rollback: unreadable, whatever it says": "2026-11-24T00:59:58Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-08: a green status counts only when the Actions API shows its run as a successful nightly on main of that commit; looked up once": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-09: a forged red status cannot poison the rollback memory: nothing is remembered before its run's identity is verified": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-10: a green status is aged by its verified run, not its own checked_at: a replay with a fresh date is stale, and a date outside the run is refused": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-11: the run lookup sends the job token to api.github.com only; the status file is fetched with none": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-12: a commit that is not on main (a tag named main, a branch) does not back a status": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/breaker.test.mjs:R-WD-13: the committed workflows.json loads under the validation": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/budgets.test.mjs:R-ING-11: a restored snapshot carries the hourly caps into a new budget": "2026-11-24T00:03:59Z",
+    "isokron-ai/tool-qa:test:pump/test/budgets.test.mjs:R-ING-27: default families cover dispatch, artifacts, contents, issues, graphql and search within 2,500/h, with 1,200 artifact calls an hour": "2026-11-24T02:09:58Z",
+    "isokron-ai/tool-qa:test:pump/test/dispatch.test.mjs:R-ING-19: the branch is read with the actions-only dispatch token; a private worker repo fails closed with what to do": "2026-11-24T00:22:20Z",
+    "isokron-ai/tool-qa:test:pump/test/dispatch.test.mjs:R-ING-23: a branch that cannot be read names both causes: a missing branch, or a private repository": "2026-11-24T00:47:25Z",
+    "isokron-ai/tool-qa:test:pump/test/due.test.mjs:R-COV-03: a new tool version makes every tool-fault skip due again (tool_version), boosted ahead of the rest of its tier": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:pump/test/due.test.mjs:R-COV-03: dueFromState reads fault and coverage from the store; an assessed result under an older run_key counts as assessed": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:pump/test/due.test.mjs:R-COV-03: gapKind: never assessed, or last unassessed by our own limit once something moved; not the subject's side, policy or a result from before coverage": "2026-11-24T03:11:06Z",
+    "isokron-ai/tool-qa:test:pump/test/due.test.mjs:R-COV-03: the boost is coverage_gap_share x the tier weight (capped below the tier above), so it follows tier (popularity)": "2026-11-24T03:11:06Z",
+    "isokron-ai/tool-qa:test:pump/test/due.test.mjs:R-COV-03: within a tier, a never-assessed pair is boosted and a stale assessed one is not; the boost never makes a pair due": "2026-11-24T03:11:06Z",
+    "isokron-ai/tool-qa:test:pump/test/due.test.mjs:R-COV-05: with equal reasons and age, a boosted pair stays strictly below a bare pair of the tier above, for every adjacent tier and any share": "2026-11-24T03:11:06Z",
+    "isokron-ai/tool-qa:test:pump/test/due.test.mjs:R-COV-06: a tool-limit skip is boosted only when something moved (tool_version, new_version, change_event), never when merely stale": "2026-11-24T03:11:06Z",
+    "isokron-ai/tool-qa:test:pump/test/due.test.mjs:R-COV-07: a result from before state schema 7 that was not skips_only counts as assessed; a skips_only one does not": "2026-11-24T03:11:06Z",
+    "isokron-ai/tool-qa:test:pump/test/history-times.test.mjs:R-LIVE-46: a failing read keeps the cached value, the other kinds still update, and the pump goes on": "2026-11-26T01:51:21Z",
+    "isokron-ai/tool-qa:test:pump/test/history-times.test.mjs:R-LIVE-46: a lookup cut by the tick deadline keeps what it has and tries again next run; the refresh helper never throws": "2026-11-26T01:51:21Z",
+    "isokron-ai/tool-qa:test:pump/test/history-times.test.mjs:R-LIVE-46: registry-full picks a \"full\" titled run and a scheduled 03:xx run, never a delta": "2026-11-26T01:51:21Z",
+    "isokron-ai/tool-qa:test:pump/test/history-times.test.mjs:R-LIVE-46: the answer is reused for 30 minutes and read again after, on the same state": "2026-11-26T01:51:21Z",
+    "isokron-ai/tool-qa:test:pump/test/history-times.test.mjs:R-LIVE-46: the newest successful capture of registry-full, packages and popularity flows into config.history, three small reads once": "2026-11-26T01:51:21Z",
+    "isokron-ai/tool-qa:test:pump/test/history-times.test.mjs:R-LIVE-46: with the switch off the pump makes no call, mints nothing and passes no history": "2026-11-26T01:51:21Z",
+    "isokron-ai/tool-qa:test:pump/test/history-times.test.mjs:R-LIVE-48: the daily full-capture cron of history-registry.yml is exactly \"17 3 * * *\", the hour pickFullRun relies on": "2026-11-26T02:01:02Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-02: the due list names the subject by its key and carries the current name; workers are sent the name": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-08: a failed lookup never throws or holds the pump: budget, outage, a rate-limited answer and no token are each a stop, and kv says why": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-08: in a pump run the lookups run after the seed load and before the first tick; a GraphQL outage holds nothing": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-08: the backfill binds 250 subjects in 3 queries of up to 100 within the per-run cap, then waits a day before looking again by id": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-09: a rebuilt seed that spells a renamed repository by its new name keeps its subject, history and run_keys: nothing retired, nothing new": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-09: the seed finds a renamed subject by its current name, its key or an old name, case aside; a reused old name becomes a new key": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-11: old and new name in the same batch, the newcomer applied first: the subject with the history ends up bound, the newcomer merged into it": "2026-11-24T08:46:41Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-13: a batch mostly NOT_FOUND (a token or permission change) marks nothing gone: errors, retried in an hour, the pass stops, and the watchdog shows it red": "2026-11-24T08:46:41Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-13: the watchdog item: red on a mass NOT_FOUND pass or many gone, amber on any conflict, green with the counts, absent before any pass": "2026-11-24T08:46:41Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-14: the mass NOT_FOUND red survives a run with nothing to look up, and clears only when a batch is believed again": "2026-11-24T09:12:47Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-16: scripts/subject-accept.mjs accepts a conflict: the next pass binds the answer, the amber clears; an id another subject holds is still refused": "2026-11-24T09:12:47Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-17: an acceptance binds only the repository accepted, is used up by the next lookup whatever it answers, and lapses after 48 hours": "2026-11-24T09:49:41Z",
+    "isokron-ai/tool-qa:test:pump/test/identity.test.mjs:R-SUBJ-18: with the lookups switched off the subject-ids item is off, not the last pass's colour; switched on again, it follows the next pass": "2026-11-24T09:49:41Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: a commit pin is proven only by the full commit it starts; a package version says nothing about it": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: a label lane sends no tool_sha, and says when its branch head is not the pin": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: an enforce lane is dispatched with its pinned commit, resolved in full, as tool_sha": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: an enforce lane whose pinned commit cannot be resolved is not dispatched (fails closed)": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: an enforce lane with no commit pin of its own sends no tool_sha": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: an enforce lane's own commit pin is the versions.tool entry named after its worker repository": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: checkPins finds each pinned component by name, under a scope or owner, or as tool-qa-<lane>": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: every lane in pump/workflows.json says its pin_check; a lane that does not is held to enforce": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: expectedPins reads a run_key's fields or getAttempt's pins; anything else is no label": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: pinDecision: a match is accepted; a contradiction is refused on every lane, tool side; an unproven pin only on an enforce lane": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: the dispatcher resolves an abbreviated pin once with the dispatch token; one GitHub cannot find fails with what to do": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: tool-qa's own lanes are enforced, and what their bundles report proves their pins": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/pins.test.mjs:R-PIN-01: workerInputs sends tool_sha only when given, and only a full commit": "2026-11-26T00:00:49Z",
+    "isokron-ai/tool-qa:test:pump/test/prune.test.mjs:R-PRUNE-01: an archive given up and staged again in the same run keeps the state-size item amber until a pass deletes again": "2026-11-24T06:14:43Z",
+    "isokron-ai/tool-qa:test:pump/test/prune.test.mjs:R-PRUNE-03: an archive too big to read is given up at once, and one whose fetch keeps failing is given up after a few runs": "2026-11-24T06:14:43Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-03: a delta capture older than 15 minutes with none queued or running is dispatched in delta mode": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-03: a delta run that is queued or running holds the dispatch off; a full run does not; a stuck old one does not": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-03: a failed dispatch or read is reported, never thrown; a server error on the dispatch is retried": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-03: after a long stall the dispatch names the start of the gap, so no hole is left; a short stall uses the default window": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-03: nothing is dispatched while the newest capture is under 15 minutes old": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-03: our own dispatches are at least 10 minutes apart even when the run list lags": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-03: the lane switch LANE_HISTORY_REGISTRY_ENABLED turns the pump dispatch off, like the workflow itself": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-04: a failing or throwing registry check never stops the pump, and a switched-off lane is not checked": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-04: each pump run checks the registry delta capture, records the answer, and passes the time of its last dispatch to the next run": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-04: the real check mints an actions-only token, dispatches the stale capture, and survives a dispatch that fails": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-05: history-registry.yml keeps its */15 cron as a fallback, takes mode and since as dispatch inputs, and names its runs with the mode": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-06: past the pages read, the capture time kept from earlier runs still sets since; with nothing known there is none": "2026-11-25T17:29:08Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-06: with more than 100 newer artifacts of other kinds the stall is still found by paging, and the gap is named in since": "2026-11-25T17:29:08Z",
+    "isokron-ai/tool-qa:test:pump/test/registry-delta.test.mjs:R-HIST-07: a registry outage cannot hold the tick past its 60 second window, and the rest of the run goes on": "2026-11-25T17:26:47Z",
+    "isokron-ai/tool-qa:test:pump/test/retry.test.mjs:R-CHAOS-13: only 500, 502, 503, 504, 429, network errors and rate-limited 403s are transient; other 4xx are final": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/retry.test.mjs:R-CHAOS-13: Retry-After is honoured and capped at 60 s; a longer one ends the retries": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/retry.test.mjs:R-CHAOS-13: the delay is exponential with full jitter: base 2 s, doubling, cap 120 s": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/retry.test.mjs:R-CHAOS-13: the retrier stops at the attempt limit, the total-sleep limit and the deadline, and logs each retry": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/retry.test.mjs:R-CHAOS-16: the REST client retries a 500 on a repeatable call, never a 4xx, and never repeats an unsafe POST": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:live: the snapshot is read and uploaded only at the tick boundary, never inside a state transaction": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-CHAOS-12: cancelling the successor says so only when GitHub cancelled it; a 409 is reported as not cancelled": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-ING-06: expired dispatches are reaped before ingest looks at them": "2026-11-23T23:57:25Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-ING-09: a failed push makes the run fail; nothing is sent and the run ends after one housekeeping tick": "2026-11-23T23:59:19Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-ING-09: a push that fails after dispatching stops dispatching for the rest of the run": "2026-11-23T23:59:19Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-ING-10: dispatches are in the saved state before they are sent": "2026-11-23T23:59:19Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-ING-11: the API budget is saved with the state and seeds the next run": "2026-11-24T00:03:59Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-ING-22: while a workflow is paused the pump run fails, once said why": "2026-11-24T00:47:25Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-LIVE-42: the final state push keeps its full grace after a slow end-of-run upload": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-LIVE-47: an 11 minute run publishes about every 60 s between its 150 s ticks, and once more at the end": "2026-11-26T02:01:02Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-LIVE-47: no publish between ticks while the state is inside a transaction": "2026-11-26T02:01:02Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-LIVE-47: no publish starts when the next tick is due before its cap (20 s) would end, or past the run deadline": "2026-11-26T02:01:02Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-LIVE-47: with the switch off nothing is published between ticks": "2026-11-26T02:01:02Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-WD-01: a red, stale or unreadable conformance status holds every untrusted workflow; source-only ones still run": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-WD-01: a status that ages past 36 hours during a run trips the breaker on the next tick": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-WD-03: a lane pinned at another sandbox commit is logged and recorded, and still dispatched": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-WD-05: a fresh green status lets untrusted workflows run; the status is read on every tick that may dispatch, and only when one is enabled": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-WD-07: the newest status seen and the verified run are kept in the state; a later run that reads an older status holds the lanes": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/run.test.mjs:R-WD-08: a green status whose run the Actions API does not back holds the lanes": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-01: the pump loads the seed at start-up, before the first tick, and only once per seed file": "2026-11-24T01:03:04Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-01: the real seed loads into an empty state: 997 github subjects, sha left null, all due for scan-static": "2026-11-24T01:03:04Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-01: with scan-static on and LOOP_SLOTS=3 the first tick sends three full 25-item shards, T0 and T1 first": "2026-11-24T01:03:04Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-02: a subject with no sha is refreshed on its tier cadence, even where the cell has no age limit": "2026-11-24T01:03:04Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-03: a seed with no size, or one that would retire over 10% of the active seed subjects, is refused": "2026-11-24T01:14:04Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-04: retry_throttled is not counted towards parking or MAX_RETRIES, and its backoff is capped": "2026-11-24T01:14:04Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-05: a state error inside the load is returned as error, not thrown, and nothing is written": "2026-11-24T01:14:04Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-06: a skips_only result (retries ran out) is due again after a day; a permanent skip keeps the tier max age": "2026-11-24T01:16:23Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-07: kv subjects.seed records the path actually loaded": "2026-11-24T01:14:04Z",
+    "isokron-ai/tool-qa:test:pump/test/subjects.test.mjs:R-SUB-08: a subject that is throttled for ever gets one 7-day window, then skips_only re-dues back off: dispatches stay bounded": "2026-11-24T01:34:33Z",
+    "isokron-ai/tool-qa:test:pump/test/successor.test.mjs:R-CHAOS-15: the successor dispatch survives five server errors in a row, within 90 seconds of waiting": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/successor.test.mjs:R-CHAOS-15: when GitHub stays down the successor fails closed after six tries inside its window, reports it, and does not throw": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:pump/test/tick.test.mjs:R-CHAOS-02: run_keys the pump holds are not dispatched this tick": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:pump/test/tick.test.mjs:R-CHAOS-05: a dispatch that fails with a server or network error stays pending with its slot and leases; a refusal is closed at once": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:pump/test/tick.test.mjs:R-CHAOS-08: a server or network error before the dispatch POST (the ref re-read, the token mint) sent nothing: the dispatch is closed at once": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:test:pump/test/tick.test.mjs:R-CHAOS-08: only the dispatch POST and the poll for its run count as maybe sent": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:test:pump/test/tick.test.mjs:R-ING-12: a ref that cannot be resolved is not dispatched this tick": "2026-11-24T00:06:30Z",
+    "isokron-ai/tool-qa:test:pump/test/tick.test.mjs:R-ING-12: the dispatch records the commit its ref points to before sending, not what the run reports": "2026-11-24T00:06:30Z",
+    "isokron-ai/tool-qa:test:pump/test/tick.test.mjs:R-ING-22: a paused workflow gets no dispatch, and the tick says it is paused": "2026-11-24T00:47:25Z",
+    "isokron-ai/tool-qa:test:pump/test/tick.test.mjs:R-ING-24: the ref is read again just before each send; a merge since the tick began moves the expected commit": "2026-11-24T00:56:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/health.test.mjs:R-SNAP-08: age is measured from current_at, so an idle loop with running snapshots stays green": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/health.test.mjs:R-SNAP-08: no snapshot yet or an unreadable manifest is amber; a lane switched off is off": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/health.test.mjs:R-SNAP-08: the snapshot health item is green to 3 hours, amber to 6, red after": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/health.test.mjs:R-SNAP-16: a current_at more than 5 minutes in the future is amber, not green": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/health.test.mjs:R-SNAP-16: no release, no manifest and an empty manifest are told apart": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/health.test.mjs:R-SNAP-16: snapshotCheck never throws: null entries or a broken manifest object are amber": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: --apply keeps the live state as a snapshot first, then puts the chosen snapshot back byte for byte": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: --apply leaves the live state alone if it changes during the restore": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: --apply needs the loop stopped: switched off, pump lane off, or paused for at least 10 more minutes": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: --apply refuses while the loop runs or a pump run is active, and changes nothing": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: --apply replaces a live asset that cannot be copied, and keeps it renamed": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: a snapshot that decrypts to a damaged database fails the drill": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: a snapshot that opens but fails PRAGMA integrity_check fails the drill with report.ok false": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: a snapshot whose bytes differ from the manifest is refused before it is decrypted": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: inspectDatabase reports integrity, schema version, the fence and row counts, subjects and results first": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-07: the drill verifies, decrypts and checks a snapshot with the age identity, and leaves no plaintext behind": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-10: the drill can use a snapshot the manifest does not list, checked against its own label": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-11: --apply over an interrupted pump push keeps that upload (renamed), deletes only other stale uploads": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-13: --apply refuses when the loop switches cannot be read": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-13: the loop switches are read as the pump job sees them: environment, then repository, then every organization page": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/restore.test.mjs:R-SNAP-14: a run that has not finished in any state blocks --apply, a snapshot run in CI included": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/retry.test.mjs:R-CHAOS-17: a release create that failed with a server error is looked up before it is repeated": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:snapshot/test/retry.test.mjs:R-CHAOS-17: a server error on a read is retried with backoff and logged; a 404 is not retried; the log has no token": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:snapshot/test/retry.test.mjs:R-CHAOS-17: an upload that was stored but answered 500 is found and used, not uploaded twice; a half-stored one is deleted first": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-CHAOS-09: the release client marks errors that may pass as transient, a network failure after the last try included; a refusal is not": "2026-11-24T05:10:03Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-01: an idle loop prunes nothing: retention counts snapshots, not hours": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-01: retention keeps the 24 newest, the newest of each UTC day for 14 days and of each UTC week for 8 weeks, and prunes the rest": "2026-11-24T06:01:25Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-02: a changed state is a new snapshot, and so is a return to an older state": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-02: an unchanged state uploads nothing but refreshes current_at": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-02: dedupe compares against the newest snapshot only": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-03: an upload that does not read back intact is deleted and the run fails": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-03: verifySnapshot accepts the bytes the manifest describes and refuses a changed byte, a wrong size, a wrong name or plaintext": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-04: a plaintext or unlabelled state asset is never copied": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-04: an interrupted pump push (temporary name only) is copied like the pump would read it": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-04: bytes that do not match the label, twice, fail the run and upload nothing": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-04: the pump pushing during the copy is detected and the copy is retried once": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-05: a lost manifest is rebuilt from the snapshot assets, and a stale entry is dropped": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-05: pruned snapshots are deleted only after the manifest that drops them is written": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-10: a read-back that throws deletes the upload and fails the run": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-10: an asset the manifest does not list is verified before it is adopted; one that fails is deleted and never used for dedupe": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-10: an unlisted asset that cannot be downloaded is left alone and not trusted": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-12: a snapshot asset named in the future is left out of dedupe and retention": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-12: malformed manifest entries are left out, created always comes from the name, and a run does not crash on them": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/snapshot.test.mjs:R-SNAP-15: losing the race with the pump on both tries is a notice and exit 0, not a failed run": "2026-11-24T03:12:15Z",
+    "isokron-ai/tool-qa:test:snapshot/test/workflow.test.mjs:R-SNAP-06: the snapshot workflow holds only contents: write, no secrets or key, and checks the kill switch first": "2026-11-24T02:43:33Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-01: an archive whose cursor predates ingest still pulls every older ingest artifact": "2026-11-24T02:36:12Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-02: a listing cut off by the page cap keeps the cursor and exits 1": "2026-11-24T02:36:12Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-03: a line appended after a torn last line stays whole, in the index and the manifest": "2026-11-24T02:36:12Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-04: a download in doubt (digest or size mismatch) is retried, not quarantined": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-04: a partial artifact left in its folder by a run that died is recovered without a second quarantine copy": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-04: an ingest artifact with files that will never pass is quarantined as downloaded, its sealed files kept, marked partial, and not retried": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-04: an ingest zip past the inflated-size cap keeps the entries within it and quarantines the download": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-04: an unreadable ingest zip is quarantined whole, with no folder, and indexed as partial": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-04: readZipLenient refuses bad entries one by one and keeps the rest": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-05: a failed run shows a notification, and says when the last good run was once that is over a day old": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-05: a heartbeat that cannot be set is logged and notified, and the run still exits 0": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-05: a run that quarantines an artifact exits 0, sets the heartbeat and shows a notification": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-05: a successful run records .last-ok.json and sets ARCHIVE_LAST_OK to the time and the counts": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-05: no notification and no heartbeat in CI, on a dry run, or when turned off": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-06: an artifact listed twice is downloaded once and indexed once": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-07: a folder from an earlier run is trusted only if every file still has its sha256": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-07: every file and folder is synced to disk before the folder is renamed into place": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-08: a lock from a dead run on this host, or from another host untouched for 12 hours, is taken over; a recent one from another host is not": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-08: a second run while a live one holds the lock does nothing and exits 0": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-08: the lock is released when a run fails part way": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-09: temporary folders left by a dead run are removed at start; a live run's are kept": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-10: an ingest artifact whose created_at is not a date fails with that message": "2026-11-24T03:00:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-11: entries that fail after inflating still count toward the cap, and entries sharing local data are refused": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-12: a live run on this host keeps its lock however long it runs; one on another host keeps it while it touches it": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-13: two runs cannot both take over one stale lock, nor take one another run has just taken": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-14: names that one disk folds together, and empty or \".\" parts, are refused; a name the disk cannot write sends the whole download to quarantine": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-15: index and manifest lines are synced to disk, and the cursor is replaced whole only after them": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-16: an artifact not made by our own workflow on main is refused unread, not quarantined, and not a failure": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-17: a quarantine recovered after a run died before indexing it is still reported and notified": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-18: an artifact whose created_at is not a date keeps failing visibly on later runs": "2026-11-24T03:16:29Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-19: a lock on this host from an earlier boot, or whose pid now runs another program, is taken over": "2026-11-24T03:27:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-20: every artifact a workflow here uploads under an archived prefix is mapped in SOURCES to that workflow": "2026-11-24T03:27:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-20: our own artifact from a workflow SOURCES does not list is held, retried and notified, not passed over": "2026-11-24T03:27:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-21: many runs are looked up from the run list a page at a time, with one GET for each run it does not find": "2026-11-24T03:27:58Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-23: a live archive pull keeps its lock across a clock jump; the boot time is used only when ps cannot tell": "2026-11-24T03:58:12Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-ARC-24: a run started through a wrapper or link records its own command line, and keeps its lock by it": "2026-11-24T03:58:12Z",
+    "isokron-ai/tool-qa:test:test/archive-pull.test.mjs:R-PRUNE-05: a state archive is marked kind state-archive in the ingest manifest, not taken for a manual re-ingest": "2026-11-24T07:02:48Z",
+    "isokron-ai/tool-qa:test:test/history-workflows.test.mjs:R-HIST-01: history-popularity fetches the newest crates subset and hands it to the capture step": "2026-11-24T01:18:52Z",
+    "isokron-ai/tool-qa:test:test/history-workflows.test.mjs:R-HIST-01: with no crates subset in the last runs, the fetch step warns and passes nothing": "2026-11-24T01:18:52Z",
+    "isokron-ai/tool-qa:test:test/ingest-workflow.test.mjs:R-ING-13: the ingest job checks the kill switch and the pump lane again before anything else": "2026-11-24T00:07:20Z",
+    "isokron-ai/tool-qa:test:test/ledger-times.test.mjs:R-LED-11: a corrupt cache entry is dropped, not trusted, and a history cut at the page cap gives no date": "2026-11-24T07:33:24Z",
+    "isokron-ai/tool-qa:test:test/ledger-times.test.mjs:R-LED-11: an empty API budget leaves the times for the next run, and the rest of the ledger is still written": "2026-11-24T07:33:24Z",
+    "isokron-ai/tool-qa:test:test/ledger-times.test.mjs:R-LED-11: answers are cached for good, so a rerun makes no history, pull request or file calls": "2026-11-24T07:33:24Z",
+    "isokron-ai/tool-qa:test:test/ledger-times.test.mjs:R-LED-11: each row gets found, pinned, merged and released dates, and the stats follow": "2026-11-24T07:33:24Z",
+    "isokron-ai/tool-qa:test:test/ledger-times.test.mjs:R-LED-11: the time lookups need only read access and add no code to the publish job": "2026-11-24T07:33:24Z",
+    "isokron-ai/tool-qa:test:test/ledger-times.test.mjs:R-LED-11: without a pull request, the row's first commit in REGRESSIONS.md is the found date": "2026-11-24T07:33:24Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-01: one unreadable ledger is recorded as such; the others are built and written, and the run fails": "2026-11-24T02:00:44Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-01: the ledger table is the one whose header has an ID column, not the first table on the page": "2026-11-24T02:00:44Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-02: only an open pull request from this repository counts as the workflow's own, never a fork's": "2026-11-24T02:00:44Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-02: with only a fork's pull request on ledger/refresh, the workflow neither closes it nor counts it as its own": "2026-11-24T02:00:44Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-03: a Fix cell yields commit SHAs only, not dates, pull request numbers or hex-looking words": "2026-11-24T02:00:44Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-04: a test path with .., a leading /, ? or # is rejected and never fetched": "2026-11-24T02:00:44Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-05: generate holds a read-only token; only publish can write, and it runs no ledger code": "2026-11-24T02:00:44Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-06: a test is found only under exactly its name, not as part of a longer one": "2026-11-24T02:00:44Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-07: a SHA in backticks or in a commit link counts even when it is all digits": "2026-11-24T02:19:18Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-09: the refresh commit is made through the API so GitHub signs it, never with git commit and a push": "2026-11-24T07:27:52Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-10: after a new refresh commit the workflow dispatches test.yml and lint.yml on ledger/refresh, and their results show on the pull request as commit statuses": "2026-11-24T07:27:52Z",
+    "isokron-ai/tool-qa:test:test/ledger.test.mjs:R-LED-10: when the branch already holds the ledger, a dispatch an earlier run left undone is made again, unless its run is in flight": "2026-11-24T07:36:00Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-01: oracleFacts reads the two lanes, bounds what it keeps and returns null for a lane or result without facts": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-01: the kinds: a different count is tool_count, an SDK client with other definitions schema, a failed client protocol, a worker class its kind": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-02: the oracle boost is its share of the tier weight, taken after the coverage-gap boost from the same cap, so both together stay under the next tier up": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-03: foldDisagreement: open, unchanged re-checks settle it, a change starts over, agreement clears it, a new one reopens": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-03: the store derives one record per subject from the latest facts of both lanes; settles after the same disagreement survives the re-checks; clears on agreement": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-04: a disagreement is about our tool: it never writes the result fault or coverage, and server-side evidence opens nothing": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-06: an open disagreement makes its oracle-lane pairs due again sooner than the tier max age, and not when settled, cleared or on another lane": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-07: ingest reads the facts out of the bundle files, never throws on bad input, and a rejected or fact-less result notes nothing": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-08: the v9 migration of a v8 state keeps every row and changes no priority; the due list reads a state from before v9": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-09: a cleared record keeps its cleared_at and kinds while results go on agreeing": "2026-11-24T15:42:02Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-11: hashes are not compared across lanes: the reader derives its list from source, so a different hash alone says nothing; across lanes only a complete reader count is compared": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-12: lanes are compared only on one subject version; a lane of an older version is stale, and dropped when a newer result of it has no facts": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-13: a re-check is a check cycle (every lane reported), not a lane result; a rolling budget settles a server that keeps flapping": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-14: the oracle_recheck reason is charged to the same cap as the boosts, so a boosted pair never reaches a bare pair of the tier above": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-16: facts of a subject with no sha and no digest are compared across lanes only when observed within the window; a months-old scan against a fresh live list is no disagreement": "2026-11-25T00:59:27Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-17: a late result of an older version does not overwrite or drop the lane's newer facts": "2026-11-25T00:59:27Z",
+    "isokron-ai/tool-qa:test:test/oracle.test.mjs:R-ORD-18: a settled record keeps the reason it settled for; recheck_budget is not rewritten to unchanged_rechecks": "2026-11-25T00:59:27Z",
+    "isokron-ai/tool-qa:test:test/perf-lib.test.mjs:R-PERF-01: a first baseline with failed calls, or a profile that failed, is red, not accepted": "2026-11-24T09:36:47Z",
+    "isokron-ai/tool-qa:test:test/perf-lib.test.mjs:R-PERF-02: a baseline whose profile did not complete is skipped, not a crash": "2026-11-24T09:36:47Z",
+    "isokron-ai/tool-qa:test:test/perf-lib.test.mjs:R-PERF-03: session churn is read from the churn object the Inspector prints, not from connections": "2026-11-24T09:37:03Z",
+    "isokron-ai/tool-qa:test:test/perf-lib.test.mjs:R-PERF-04: a version with a trailing newline is not a version; install-server refuses it and any loose name or version": "2026-11-24T09:46:28Z",
+    "isokron-ai/tool-qa:test:test/perf-lib.test.mjs:R-PERF-05: only our own packages, and only better-sqlite3 as a rebuild, can be installed; plan and install-server both refuse the rest": "2026-11-24T10:08:33Z",
+    "isokron-ai/tool-qa:test:test/perf-lib.test.mjs:R-PERF-06: the resolved dependency tree of the measured release is recorded in the result": "2026-11-24T10:08:33Z",
+    "isokron-ai/tool-qa:test:test/perf-lib.test.mjs:R-PERF-07: a profile that is in the baseline but missing from the result is amber, not silently skipped": "2026-11-24T10:08:33Z",
+    "isokron-ai/tool-qa:test:test/retention-workflow.test.mjs:R-RET-21: keep-forever.yml has the guard first, a lane switch, least-privilege permissions, pinned actions and a schedule that dispatches serialised": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:test/retention-workflow.test.mjs:R-RET-21: the lane switch really stops it, and the watchdog expects the workflow and reads the lane": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:test/retention-workflow.test.mjs:R-RET-21: the pump uploads the keep-forever outputs as ingest-keep-<run>-<attempt> from the directory it writes them to": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-CHAOS-14: a half-stored upload under the same name is deleted before the repeat, and a rival asset that appeared still refuses the push": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-CHAOS-14: a push whose upload gets HTTP 500 and 502 is repeated until it lands, with backoff, and logs the retries": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-CHAOS-14: an upload that was stored but answered 500 is not uploaded twice: the stored copy is used, and the push still checks the remote is unchanged": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-CHAOS-14: pull retries a server error on the release read and on the asset download": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-CHAOS-16: a 4xx is never retried by the state client": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-CHAOS-18: retries stop at the deadline the caller gives, so a push cannot outlast the run; the error is marked transient": "2026-11-25T17:10:25Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-ING-15: migrate replaces a plaintext asset with an encrypted one, once": "2026-11-24T00:02:56Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-ING-15: pull refuses an asset that is not age ciphertext and writes nothing": "2026-11-24T00:02:56Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-ING-15: push never uploads plaintext, whatever the encrypter returns": "2026-11-24T00:02:56Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-ING-15: the committed state.pub lists the ingest key, so the pump can read what it pushes": "2026-11-24T00:02:56Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-ING-15: with the real age binary: round trip, no identity no read, and no push a writer could not read back": "2026-11-24T00:02:56Z",
+    "isokron-ai/tool-qa:test:test/state-asset.test.mjs:R-STATE-01: pull from an empty release then push succeeds (first-ever push)": "2026-11-24T01:18:52Z",
+    "isokron-ai/tool-qa:test:test/state-dispatch.test.mjs:R-COV-02: migration from version 6 keeps results and adds fault, coverage and assessed_at as NULL": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:test/state-events.test.mjs:R-LIVE-01: noteShaMismatch sets the pause and removes the count in one transaction: neither write happens without the other": "2026-11-25T23:14:52Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-CHAOS-02: a result whose run completed before the lease ran out is on time, even recorded after it; a later one is not; a newer lease always wins": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-CHAOS-10: a result counts as in when both its run completed and its artifact was uploaded; an artifact dated after the lease makes it late": "2026-11-24T05:02:54Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-COV-02: ingest over the real store records a tool-fault skip as unassessed_tool": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-COV-02: recordResult stores the fault side and coverage of an accepted result; a later skip keeps assessed_at": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-ING-16: retry_later frees the lease and slot, is not counted towards parking, and backs off before the work is due again": "2026-11-24T00:09:48Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-ING-16: the due list skips a run_key sent back as retry_later until its backoff ends": "2026-11-24T00:09:48Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-ING-18: run_sha_mismatch does not count towards parking the run_key": "2026-11-24T00:22:20Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-ORD-07: ingest over the real store keeps the oracle facts of a live-probe bundle and opens a disagreement with the reader's facts": "2026-11-24T15:40:14Z",
+    "isokron-ai/tool-qa:test:test/state-ingest.test.mjs:R-ORD-15: with the real store the lane is known to ingest, so a scan-static rate limit is throttled (retry_throttled), not one of the three retries; another lane is not": "2026-11-24T16:01:11Z",
+    "isokron-ai/tool-qa:test:test/state-prune.test.mjs:R-PRUNE-02: the newest attempt and slot row always stay, so their ids are never handed out again": "2026-11-24T06:14:43Z",
+    "isokron-ai/tool-qa:test:test/state-prune.test.mjs:R-PRUNE-04: an attempt received before the cutoff stays while its dispatch closed after it, even when it is not the highest id": "2026-11-24T07:02:48Z",
+    "isokron-ai/tool-qa:test:test/state-prune.test.mjs:R-PRUNE-04: ingest failure counters stay with a dispatch that straddles the cutoff and go with one that does not": "2026-11-24T07:02:48Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-01: the v8 CHECKs pass on migrated rows and refuse bad ids and statuses; one subject per repository id": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-01: the v8 migration of a live-shaped v7 state keeps every row, names every subject by its key, and makes nothing due that was not": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-02: a lookup binds the id; a later rename or transfer moves only the name, never the key, and is recorded": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-02: getAttempt and the dispatch keep the name the worker was sent; the result is recorded under the key after a rename": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-03: not found is a subject-fault skip, recorded once, kept with its id, and undone when the repository is back": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-06: an id already bound with another creation time, or a bound id answering another one, is refused: nothing bound, renamed or merged": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-07: two subjects that turn out to be one repository are merged into the one with the history; it is active if either was": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-08: identityCandidates waits by the last outcome and skips retired, merged and non-GitHub subjects": "2026-11-24T08:27:49Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-11: the newcomer bound first: the binding moves to the subject with the history, which stays due on its own run_keys; the newcomer becomes its alias": "2026-11-24T08:46:41Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-12: a first binding to a repository created after the subject was first seen (a newcomer squatting on its old name) is refused as id_conflict": "2026-11-24T08:46:41Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-15: the merge refuses to move a binding to a survivor first seen before the repository was created (squatter on the move branch)": "2026-11-24T09:12:47Z",
+    "isokron-ai/tool-qa:test:test/state-subjects.test.mjs:R-SUBJ-15: with no history on either side the subject first seen earlier survives, even when the other was bound first": "2026-11-24T09:12:47Z",
+    "isokron-ai/tool-qa:test:test/unzip.test.mjs:R-ING-14: the default caps are in place": "2026-11-23T23:44:54Z",
+    "isokron-ai/tool-qa:test:test/unzip.test.mjs:R-ING-14: too many entries, or too many bytes once inflated, are refused before inflating": "2026-11-23T23:44:54Z",
+    "isokron-ai/tool-qa:test:watchdog/test/checks.test.mjs:live-snapshot: no builder is red; a scan block stays red through later failures; never uploaded is red 40 minutes after the first attempt": "2026-11-26T00:28:46Z",
+    "isokron-ai/tool-qa:test:watchdog/test/checks.test.mjs:R-CHAOS-04: api-budget is amber while a saved rate-limit block holds or the latest tick stopped on the budget, and absent otherwise": "2026-11-24T04:44:17Z",
+    "isokron-ai/tool-qa:test:watchdog/test/checks.test.mjs:R-SNAP-09: state-snapshot.yml is a loop workflow: its failed run is red and its lane switch is read": "2026-11-24T02:50:04Z",
+    "isokron-ai/tool-qa:test:watchdog/test/checks.test.mjs:R-SUB-11: a seed the pump could not load is red on the health issue, with why; a loaded seed is green": "2026-11-24T01:34:33Z",
+    "isokron-ai/tool-qa:test:watchdog/test/checks.test.mjs:R-WD-14: the health issue shows a failed keep-forever file whose gap marker artifact is missing as red, and the marker present as green": "2026-11-25T01:04:58Z",
+    "isokron-ai/tool-qa:test:watchdog/test/offsite.test.mjs:R-OFF-09: the watchdog item: green under 12 hours, amber to 24 or when not configured, red after 24, over the cap or on a verification failure, off with the lane off": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:watchdog/test/offsite.test.mjs:R-OFF-09: the watchdog run pushes the offsite item and watchdog.yml passes the lane switch": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:watchdog/test/offsite.test.mjs:R-OFF-09: the watchdog trusts only heartbeats from offsite-backup.yml runs on main in this repository, scheduled or dispatched": "2026-11-24T04:57:00Z",
+    "isokron-ai/tool-qa:test:watchdog/test/offsite.test.mjs:R-OFF-12: a run that failed before reading the bucket takes its last good time from an older heartbeat: amber, not red": "2026-11-24T05:09:15Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-ARC-22: the watchdog shows the archive heartbeat from vars.ARCHIVE_LAST_OK: amber after 12 hours, red after 24 or when it is empty or unreadable": "2026-11-24T03:27:58Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-ARC-22: watchdog.yml passes vars.ARCHIVE_LAST_OK to the watchdog step through env": "2026-11-24T03:27:58Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-RET-19: the health issue carries the keep-forever copy and the seal record: a stalled copy and a failed compression are amber and red": "2026-11-24T15:57:40Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-SNAP-09: the watchdog reads the snapshot manifest from the release with the job token; an unreadable one is amber, not a failed run": "2026-11-24T02:50:04Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-SNAP-09: the watchdog shows the state snapshots on the health issue: amber after 3 hours, red after 6, off with the lane off": "2026-11-24T02:50:04Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-SNAP-17: a snapshot manifest with null entries, one that throws, or a time in the future is amber; the watchdog run still writes the issue": "2026-11-24T03:56:07Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-01: the sandbox breaker is on the health issue: red while it holds an enabled lane, amber with none enabled, green when it passed": "2026-11-24T00:43:15Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-01: the watchdog fetches the conformance status itself, with no token": "2026-11-24T00:43:15Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-03: the health issue shows amber while an enabled lane pins another sandbox commit than the nightly tested": "2026-11-24T00:59:58Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-07: the watchdog judges with what the pump remembered: a rollback is unreadable, and a run already verified is not looked up again": "2026-11-24T00:59:58Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-13: a workflows.json the pump cannot load is a red config check; the watchdog still writes the issue": "2026-11-24T01:07:16Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-15: a history capture that fell off the newest-300 artifact list is found through its workflow runs, not reported red": "2026-11-26T03:33:00Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-15: the daily registry-full run is found under many pages of delta runs": "2026-11-26T03:38:21Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-15: when the history lookups fail, the check reads as before (red, no artifact found) and the watchdog still runs": "2026-11-26T03:33:00Z",
+    "isokron-ai/tool-qa:test:watchdog/test/run.test.mjs:R-WD-16: run.mjs declares every module-level const before its script entry, so running it as a script cannot hit a temporal dead zone": "2026-11-26T03:47:02Z",
+    "isokron-ai/tool-qa:test:worker-kit/test/bundle.test.mjs:R-RET-01: a bundle is read the same whether it was sealed as a plain tar (before loop upgrade 20) or as zstd": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:worker-kit/test/bundle.test.mjs:R-RET-01: a zstd bundle that inflates past the cap, or is damaged, is refused with a codec error": "2026-11-24T15:54:43Z",
+    "isokron-ai/tool-qa:test:worker-kit/test/bundle.test.mjs:R-RET-25: the default cap on an inflated bundle is 256 MiB: that many bytes open, one more is refused": "2026-11-24T16:13:31Z",
+    "isokron-ai/tool-qa:test:worker-kit/test/contract.test.mjs:R-COV-01: a manifest without fault (an older worker kit) is valid; a declared fault must be one its reason allows": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:worker-kit/test/contract.test.mjs:R-COV-01: every skip reason has a fixed fault map; our own limits are reasons of their own and always the tool's": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:worker-kit/test/contract.test.mjs:R-COV-01: skipFault and resultFault: declared first, then the fixed map; our limits win over every other side": "2026-11-24T02:41:20Z",
+    "isokron-ai/tool-qa:test:worker-kit/test/contract.test.mjs:R-ING-03: collectFiles refuses a file over 8 MiB and a bundle over 64 MiB; the schema caps listed sizes": "2026-11-23T23:54:36Z",
+    "isokron-ai/tool-qa:test:worker-kit/test/contract.test.mjs:R-ING-16: rate_limited and upstream_unavailable are skip reasons, and a skip may be marked retryable": "2026-11-24T00:09:48Z"
+  }
 }

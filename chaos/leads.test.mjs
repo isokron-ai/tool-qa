@@ -13,6 +13,8 @@ const call = (name) => (c) => CALLS[name]({ method: c.method, path: c.path, host
 const SKIPS = [{ stage: 'static', reason: 'no_tools_found', fault: 'tool' }];
 const version = (run) => run.ran?.find((t) => t.name === 'mcp-check')?.version ?? null;
 /** server-0 always carries the failure; server-1 only until the tool's second version (a fix). */
+/** These scenarios inject tool-side failures on purpose: the health checks that report them (tool-failures, coverage) are meant to fire. */
+const INJECTED = { ignoreChecks: ['tool-failures:', 'coverage:'] };
 const carries = (subject, v) => subject.endsWith('-0') || (subject.endsWith('-1') && v === 'chaos01');
 
 test('R-LEAD-12: chaos: with leads on, a pump killed mid-ingest and after a push neither loses nor double-counts a lead; a re-run reproduces it and a fix re-checks clean', CHAOS, async () => {
@@ -48,7 +50,7 @@ test('R-LEAD-12: chaos: with leads on, a pump killed mid-ingest and after a push
     assert.equal(pair('chaos-org/server-0').seen, want.filter((x) => x.subject.endsWith('-0')).length);
     assert.equal(pair('chaos-org/server-1').current, 0, 'the fixed subject re-checked clean');
     assert.ok(pair('chaos-org/server-1').clean >= 1);
-    assertRecovered(sim);
+    assertRecovered(sim, INJECTED);
   });
 });
 
@@ -60,7 +62,7 @@ test('R-LEAD-12: chaos: with the switch unset the same run keeps no lead at all'
     const s = sim.readLive();
     assert.ok(s.attempts.some((a) => a.accepted === 1));
     assert.deepEqual([s.leads.length, s.lead_subjects.length], [0, 0]);
-    assertRecovered(sim);
+    assertRecovered(sim, INJECTED);
   });
 });
 
