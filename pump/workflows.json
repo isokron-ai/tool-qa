@@ -70,7 +70,7 @@
       "enabled": true,
       "runs_untrusted": true,
       "pin_check": "enforce",
-      "sandbox_sha": "11974fbb75a8c276214c887a079d6ad6df374124",
+      "sandbox_sha": "4504c0bba95c73ae22236e71f1ff6ca08432bff0",
       "repo": "isokron-ai/mcp-writecheck-action",
       "file": "corpus.yml",
       "ref": "main",
@@ -78,7 +78,7 @@
       "setup_minutes": 12,
       "minutes_per_subject": 2,
       "slots_max": 2,
-      "versions": { "tool": { "mcp-writecheck-action": "7c5d497", "mcp-writecheck": "3af41c6" }, "oracle": {}, "probe": { "mcp-surface-corpus": "11974fb" } },
+      "versions": { "tool": { "mcp-writecheck-action": "1cc22ec", "mcp-writecheck": "3af41c6" }, "oracle": {}, "probe": { "mcp-surface-corpus": "4504c0b" } },
       "image_digest": null,
       "settings_state": "default"
     },
