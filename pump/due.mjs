@@ -435,6 +435,7 @@ export function workflowProblems(workflows) {
     if (!wf || typeof wf !== 'object') { p.push(`${name}: not an object`); continue; }
     if (typeof wf.enabled !== 'boolean') p.push(`${name}: enabled must be true or false`);
     if (typeof wf.runs_untrusted !== 'boolean') p.push(`${name}: runs_untrusted must be true or false`);
+    if (wf.sha_check !== undefined && wf.sha_check !== 'label' && wf.sha_check !== 'enforce') p.push(`${name}: sha_check must be "label" or "enforce"`);
     if (wf.runs_untrusted !== false && !(wf.sandbox_sha === null || /^[0-9a-f]{40}$/.test(String(wf.sandbox_sha)))) p.push(`${name}: sandbox_sha must be a full commit SHA or null`);
   }
   return p;

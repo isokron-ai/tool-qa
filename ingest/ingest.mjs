@@ -85,7 +85,7 @@ import { normalizeAttempt, openLedger } from './ledger.mjs';
 import { maskText, scanText } from './redact.mjs';
 import { loadRegistry } from './registry.mjs';
 import { oracleFactsFromFiles } from '../state/oracle.mjs';
-import { lanePinModes } from '../pump/pins.mjs';
+import { lanePinModes, laneShaModes } from '../pump/pins.mjs';
 
 export const REPORT_SCHEMA_VERSION = 1;
 /**
@@ -120,6 +120,13 @@ export function laneThrottleStages(file = new URL('../pump/workflows.json', impo
     laneStages.set(key, out);
   }
   return laneStages.get(key);
+}
+const laneShas = new Map();
+/** Each lane's sha_check mode from pump/workflows.json (R-SHA-01); the pump passes its own config's. */
+export function laneShaModesFile(file = new URL('../pump/workflows.json', import.meta.url)) {
+  const key = String(file);
+  if (!laneShas.has(key)) laneShas.set(key, laneShaModes(JSON.parse(readFileSync(file, 'utf8')).workflows));
+  return laneShas.get(key);
 }
 const laneModes = new Map();
 /**
@@ -194,6 +201,7 @@ export async function openAttempt(input, deps) {
     analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS, maxRetries = MAX_RETRIES, retryWindowMs = RETRY_WINDOW_MS,
     throttleStages = laneThrottleStages(),
     pinModes = lanePinModesFile(),
+    shaModes = laneShaModesFile(),
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
 
@@ -476,6 +484,27 @@ export async function openAttempt(input, deps) {
     } catch (err) {
       return reject('ingest_error', [{ reason: 'ingest_error', detail: `reading the accepted bundle failed: ${errorText(err)}` }]);
     }
+    // R-SHA-01: the commit the worker read against the commit the run_key
+    // names. A run_key with no sha is not checked. On an enforce lane a
+    // mismatch is refused: the result would be filed under a commit nobody
+    // read. Not the subject's fault: its head moved, or the worker read
+    // another commit (fault is never set by this).
+    const want = typeof item.sha === 'string' ? item.sha : null;
+    if (want !== null) {
+      let got = null;
+      try {
+        const m = JSON.parse(Buffer.from(manifestBytes).toString('utf8'));
+        got = typeof m?.subject?.sha === 'string' ? m.subject.sha : null;
+      } catch { /* got stays null */ }
+      const shaMode = row.workflow_name && shaModes?.[row.workflow_name] === 'enforce' ? 'enforce' : 'label';
+      report.subject_sha = { expected: want, got, match: got === want, mode: shaMode };
+      // Nothing measured (every skip retryable, R-SUB-10): nothing is filed under the commit, so nothing to refuse.
+      const measuredNothing = Number(report.bundle?.skips) > 0 && Number(report.bundle?.retryable_skips) === Number(report.bundle?.skips)
+        && Number(report.observations?.measured) === 0 && Number(report.bundle?.result_files) === 0;
+      if (got !== want && shaMode === 'enforce' && !measuredNothing) {
+        return reject('subject_sha_mismatch', [{ reason: 'subject_sha_mismatch', detail: `the worker read ${got ?? 'no commit'}, the run_key names ${want}`, expected: want, got: got ?? 'none' }]);
+      }
+    }
     // Every skip retryable (its retries ran out) and nothing measured: no
     // observation with a value and no results/ file beyond a skip's evidence
     // (R-SUB-10). The due list looks again after skips_only_max_age_days
@@ -526,6 +555,7 @@ function checkRun(run, row, seen) {
  * @param {number} [deps.retryWindowMs]  how long a throttled bundle keeps being sent back (retry_throttled)
  * @param {Record<string, string[]>} [deps.throttleStages]  lane -> throttle_stages (default: pump/workflows.json)
  * @param {Record<string, string>} [deps.pinModes]  lane -> pin_check mode, label or enforce (default: pump/workflows.json)
+ * @param {Record<string, string>} [deps.shaModes]  lane -> sha_check mode, label or enforce (default: pump/workflows.json; R-SHA-01)
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
  *   outcome and reason are the items' own when they all agree; otherwise outcome

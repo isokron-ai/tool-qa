@@ -728,6 +728,17 @@ export class StateDb {
    * 'malformed' when they are recorded but cannot be read (R-PIN-02: refused
    * on an enforce lane, never taken as no label).
    */
+  /** The commit SHA a run_key was computed with (its subject's sha at dispatch), or null. */
+  runKeySha(runKey) {
+    const row = this.raw.prepare('SELECT fields FROM run_keys WHERE run_key = ?').get(runKey);
+    try {
+      const sha = JSON.parse(row?.fields ?? 'null')?.sha;
+      return typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+    } catch {
+      return null;
+    }
+  }
+
   runKeyPins(runKey) {
     const row = this.raw.prepare('SELECT fields FROM run_keys WHERE run_key = ?').get(runKey);
     if (!row || row.fields === null || row.fields === undefined) return null;
@@ -965,6 +976,7 @@ export class StateDb {
         retries: this.retryLaterCount(it.run_key),
         ...this.retryThrottled(it.run_key),
         pins: this.runKeyPins(it.run_key),
+        sha: this.runKeySha(it.run_key),
       };
     });
     const file = String(d.workflow_file);

@@ -832,6 +832,33 @@ but no tool for it is shipped, so if v8 has run for long, prefer fixing
 forward (or switching the lookups off with `LANE_SUBJECT_IDS_ENABLED=false`)
 to a restore.
 
+## The commit read against the commit filed (R-SHA-01)
+
+A run_key names the subject's commit (its `sha`, written by the head poll,
+`pump/heads.mjs`). Workers are not sent that commit yet: they read the
+default branch's head when they run, and say which commit they read in each
+bundle's manifest (`subject.sha`). If the branch moved in between, a result
+would be filed under a commit nobody read.
+
+Ingest compares the two for every item whose run_key has a sha, and writes
+`subject_sha: {expected, got, match, mode}` into the ingest report. What it
+does about a mismatch is the lane's `sha_check` in `pump/workflows.json`:
+
+- `label` (the default): accept, recorded in the report;
+- `enforce`: refuse as `subject_sha_mismatch`. It is never the subject's fault.
+  The next head poll moves the sha, the run_key moves with it, and the pair
+  is due again.
+
+A result that measured nothing (every skip retryable, retries used up,
+`skips_only`) is not refused, because nothing is filed under the commit. A
+run_key with no sha is not checked.
+
+**Before the shas feed the published dataset:** set `sha_check: "enforce"`
+on every lane that publishes. The worker side then sends the run_key's
+commit as an item field and reads exactly that commit (mcp-check
+scan-static and live-probe accept only `subject`, `run_key` and `fence`
+today, so the pump does not send it yet).
+
 ## The pump
 
 `.github/workflows/pump.yml` runs every 30 minutes and can be started by hand
