@@ -43,7 +43,7 @@ export const SELFTEST = Object.freeze({
   maxPages: 3,
   maxLogs: 3,
   logBytes: 12_288,
-  job: /sandbox-selftest/i,
+  job: /^(sandbox|conformance) \/ sandbox-selftest$/,
   failed: Object.freeze(['failure', 'timed_out', 'startup_failure']),
 });
 
@@ -136,7 +136,8 @@ export async function readSelftestFailures({ client, workflows, now, fetch = glo
       for (const run of bad.slice(0, SELFTEST.maxRunsPerLane)) {
         const jobs = await client.request('GET', `/repos/${lane.repo}/actions/runs/${run.id}/jobs`, { allow: [404], query: { per_page: 100 } });
         if (jobs.status === 404) throw new Error(`the jobs of run ${run.id} answered 404`);
-        seen += 1;
+        // a pending run replaced in its concurrency group shows as cancelled with no jobs: not evidence of a renamed job
+        if (run.conclusion !== 'cancelled') seen += 1;
         for (const job of jobs.data?.jobs ?? []) {
           if (!SELFTEST.job.test(String(job.name))) continue;
           named += 1;
@@ -191,7 +192,7 @@ export function selftestCheck({ read, passedImage = null }) {
   const lanes = [...new Set(f.map((x) => x.lane))].join(', ');
   const link = safeUrl(f[0].url) ?? safeUrl(f[0].run_url);
   const head = `${read.more ? 'at least ' : ''}${f.length} sandbox self test failure${f.length === 1 ? '' : 's'} in the last 6 hours (${lanes}) on runner image ${images.join(', ')}; the nightly last passed on ${passedImage ?? 'no image (it is not green)'}; the lane failed closed, nothing ran`;
-  const item = { id, status: many || off.length || read.tokenError ? 'amber' : 'green', summary: `${head}${gaps}`, at: f[0].at };
+  const item = { id, status: many || off.length || read.tokenError || errs.length || read.more ? 'amber' : 'green', summary: `${head}${gaps}`, at: f[0].at };
   if (link) item.link = link;
   return item;
 }

@@ -707,7 +707,9 @@ test('R-WD-20: the self-test job name pattern matches the real reusable-workflow
   const { SELFTEST } = await import('../selftest.mjs');
   // names from mcp-check run 45745127857
   assert.equal(SELFTEST.job.test('sandbox / sandbox-selftest'), true);
-  for (const other of ['live-probe-guard', 'sandbox / selftest-mutation (${{ matrix.disable }})', 'sandbox / verdict', 'live-probe']) assert.equal(SELFTEST.job.test(other), false, other);
+  // names from mcp-writecheck-action corpus.yml (the reusable workflow is called as `conformance`)
+  assert.equal(SELFTEST.job.test('conformance / sandbox-selftest'), true);
+  for (const other of ['x sandbox / sandbox-selftest', 'sandbox / sandbox-selftest-2', 'conformance / verdict', 'writecheck-guard', 'writecheck', 'live-probe-guard', 'sandbox / selftest-mutation (${{ matrix.disable }})', 'sandbox / verdict', 'live-probe']) assert.equal(SELFTEST.job.test(other), false, other);
 });
 
 test('R-WD-20: failed runs on a lane with no self-test job among their jobs read amber (self-test job not found), never green', async () => {
@@ -737,4 +739,52 @@ test('R-WD-21: a 404 on a lane\'s runs list is amber (could not read), not an em
   assert.equal(c.status, 'amber', c.summary);
   assert.match(c.summary, /404/);
   w.cleanup();
+});
+
+test('R-WD-22: a failure found on one lane does not hide that another lane could not be read or was truncated: the item is amber', async () => {
+  const flake = [{ min: 30, image: '20261117.1' }];
+  // lane B (writecheck) 404s
+  const a = selftestWorld(flake);
+  a.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-writecheck-action\/actions\/workflows\/corpus\.yml\/runs$/, () => ({ status: 404, body: { message: 'Not Found' } })]);
+  const ca = await selftestOf(a);
+  assert.equal(ca.status, 'amber', ca.summary);
+  assert.match(ca.summary, /could not read/);
+  // lane B truncated: three full pages of passing runs
+  const b = selftestWorld(flake);
+  b.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-writecheck-action\/actions\/workflows\/corpus\.yml\/runs$/, () => ({ body: { workflow_runs: Array.from({ length: 100 }, (_, i) => ({ id: 6000 + i, status: 'completed', conclusion: 'success' })) } })]);
+  const cb = await selftestOf(b);
+  assert.equal(cb.status, 'amber', cb.summary);
+  assert.match(cb.summary, /at least/);
+  // and with neither, the single flake on the nightly's image stays green
+  const ok = await selftestOf(selftestWorld(flake));
+  assert.equal(ok.status, 'green', ok.summary);
+  a.cleanup(); b.cleanup();
+});
+
+test('R-WD-22: cancelled runs with no jobs are not evidence of a renamed self-test job', async () => {
+  const w = selftestWorld([{ min: 30, image: '20261117.1', conclusion: 'cancelled' }]);
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/runs\/(\d+)\/jobs$/, () => ({ body: { jobs: [] } })]);
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'green', c.summary);
+  w.cleanup();
+});
+
+test('R-WD-22: a 404 on a run\'s jobs call is amber (could not read)', async () => {
+  const w = selftestWorld([{ min: 30, image: '20261117.1' }]);
+  w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/runs\/(\d+)\/jobs$/, () => ({ status: 404, body: { message: 'Not Found' } })]);
+  const c = await selftestOf(w);
+  assert.equal(c.status, 'amber', c.summary);
+  assert.match(c.summary, /jobs of run \d+ answered 404/);
+  w.cleanup();
+});
+
+test('R-WD-22: a log redirect that is relative, http or missing leaves the image unknown and the blob store is not called', async () => {
+  for (const location of ['/actions-results/0', 'http://blob.test/actions-results/0', null]) {
+    const w = selftestWorld([{ min: 30, image: '20261122.23.1' }]);
+    w.api.routes.unshift(['GET', /\/repos\/isokron-ai\/mcp-check\/actions\/jobs\/(\d+)\/logs$/, () => ({ status: 302, headers: location ? { location } : {} })]);
+    const c = await selftestOf(w);
+    assert.match(c.summary, /runner image unknown/, String(location));
+    assert.equal(w.blobCalls.length, 0, String(location));
+    w.cleanup();
+  }
 });
