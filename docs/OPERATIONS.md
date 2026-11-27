@@ -1094,6 +1094,19 @@ deployment branches to `main`, so no other branch can use the key, and add no
 required reviewers (scheduled runs would wait for approval). Each pump and
 watchdog run shows up as a deployment to `loop`; that is expected.
 
+## Sampling `mode: sample` tier cells (E12)
+
+A tier cell in `mode: sample` in `pump/tiers.json` (T2 `writecheck`, T3 `scan-deep`, `build-probe` and `writecheck`) is due only when the sampling hook (`pump/sampling.mjs`) picks the pair. The pick is a stable hash of subject id, workflow and ISO week (UTC) under a rate, so every pump run in a week agrees and the sample moves when the week turns. A picked pair runs once a week: a result accepted this week is that week's sample. The due reason is `cell_sample`.
+
+Repository variables, one pair per tier (T1 to T4), passed to the Pump step:
+
+| Variable | Meaning | Unset means |
+|---|---|---|
+| `SAMPLE_RATE_T<n>` | Share of the tier's subjects sampled per workflow, 0 to 1, a plain decimal (a value above 1 reads as 0) | 0: nothing is sampled |
+| `SAMPLE_CAP_T<n>` | Most pairs per workflow per week in that tier (the lowest scores are kept) | 25 |
+
+The shipped state is no variable set, so rate 0 and the due list is unchanged. Opening a tier is a repository variable change by the owner: set `SAMPLE_RATE_T2` (for example `0.1`) and, if wanted, `SAMPLE_CAP_T2`. A lane that is not enabled in `pump/workflows.json` still dispatches nothing. To stop sampling again, unset the variable or set it to 0.
+
 ## The loop health issue
 
 The watchdog runs at minutes 7, 22, 37 and 52 of every hour and keeps one
