@@ -16,7 +16,7 @@
 // before anything is sent.
 
 import { DEFAULT_CONFIG } from '../longitudinal/checkin.mjs';
-import { DETAIL_CLASS, hitsName, word } from '../state/fingerprint.mjs';
+import { DETAIL_CLASS, word } from '../state/fingerprint.mjs';
 import { CAP_NEW_PER_REPO_PER_DAY, CAP_OPEN_PER_REPO, CLEAN_RECHECKS_TO_CLOSE, filingDecision, flakeStats, INFRA_MIN_DAYS, shapeOf } from '../state/leads.mjs';
 import { syntheticRepro } from './repro.mjs';
 
@@ -157,7 +157,8 @@ export function assertShapeOnly(lead, text, { names, subjects = [] }) {
     const id = String(s).toLowerCase();
     if (id.includes('/') && !id.startsWith('isokron-ai/') && low.includes(id)) throw new Error(`lead ${lead.fingerprint}: the issue holds a subject name`);
   }
-  if (hitsName(lead.idiom, new Set()) || /[^a-z0-9/:#+._<>-]/i.test(lead.idiom) || /[^a-z0-9:;._<>-]/i.test(lead.layout)) throw new Error(`lead ${lead.fingerprint}: idiom or layout is not shape-only`);
+  // idiom and layout are built from closed lists (state/fingerprint.mjs): their alphabet is all that can be checked.
+  if (/[^a-z0-9/:#+._<>-]/i.test(lead.idiom) || /[^a-z0-9:;._<>-]/i.test(lead.layout)) throw new Error(`lead ${lead.fingerprint}: idiom or layout is not shape-only`);
 }
 
 /** The plan as Markdown for a job summary (shapes only). */

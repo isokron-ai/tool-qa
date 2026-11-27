@@ -24,11 +24,13 @@ import { appendFileSync } from 'node:fs';
 import { createClient } from '../pump/github.mjs';
 import { nameTokens } from '../state/fingerprint.mjs';
 import { filesLeads } from '../state/leads.mjs';
-import { assertShapeOnly, issueFor, LABEL, planFilings, renderPlan, titleTag } from './plan.mjs';
+import { assertShapeOnly, issueFor, planFilings, renderPlan, titleTag } from './plan.mjs';
 
 export const LEADS_LAST_KEY = 'leads.last';
 /** Issue writes (create, close, reopen, comment) per pump run at most. */
 export const MAX_WRITES = 20;
+/** Pages of 100 issues looked through to adopt a filing that was not confirmed. */
+export const ADOPT_PAGES = 3;
 
 const repoName = (repo) => String(repo).split('/')[1];
 
@@ -77,8 +79,14 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
       for (const e of plan.indoubt) {
         try {
           const gh = await clientFor(e.lead.repo);
-          const res = await gh.request('GET', `/repos/${e.lead.repo}/issues`, { query: { state: 'all', labels: LABEL, per_page: 100, sort: 'created', direction: 'desc' } });
-          const hit = (Array.isArray(res.data) ? res.data : []).find((i) => typeof i?.title === 'string' && i.title.startsWith(titleTag(e.lead.fingerprint)));
+          // By the title tag alone, newest first, a few pages: an issue filed without the label (R-LEAD-30) is found too.
+          let hit = null;
+          for (let page = 1; page <= ADOPT_PAGES && !hit; page++) {
+            const res = await gh.request('GET', `/repos/${e.lead.repo}/issues`, { query: { state: 'all', per_page: 100, page, sort: 'created', direction: 'desc' } });
+            const list = Array.isArray(res.data) ? res.data : [];
+            hit = list.find((i) => !i?.pull_request && typeof i?.title === 'string' && i.title.startsWith(titleTag(e.lead.fingerprint))) ?? null;
+            if (list.length < 100) break;
+          }
           if (hit) {
             db.tx(() => db.raw.prepare("UPDATE leads SET status = 'filed', issue_number = ?, issue_state = ?, filed_at = COALESCE(filed_at, ?), filing_started_at = NULL, updated_at = ? WHERE fingerprint = ?")
               .run(hit.number, hit.state === 'closed' ? 'closed' : 'open', at(), at(), e.lead.fingerprint));
@@ -103,14 +111,19 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
             const text = state === 'closed'
               ? `The loop re-checked this ${e.lead.clean_rechecks} times without seeing it, and no server carries it now: closing. It reopens if it comes back.`
               : `It came back (${e.lead.sightings} sightings in all, last ${e.lead.last_seen.slice(0, 10)}): reopening.`;
+            // The state first: a failed comment never makes the next run comment again.
             const ok = await write(async () => {
-              await gh.request('POST', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}/comments`, { body: { body: text } });
               await gh.request('PATCH', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}`, { body: { state, ...(state === 'closed' ? { state_reason: 'completed' } : {}) } });
               return true;
             });
             if (!ok) break;
-            note.writes += 1; // two calls
             db.tx(() => db.raw.prepare('UPDATE leads SET issue_state = ?, needs_sync = 0, updated_at = ? WHERE fingerprint = ?').run(state, at(), e.lead.fingerprint));
+            note.writes += 1; // the comment
+            try {
+              await gh.request('POST', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}/comments`, { body: { body: text } });
+            } catch (err) {
+              log(`leads: issue #${e.lead.issue_number} on ${e.lead.repo} is ${state}, but its comment failed: ${err?.message ?? err}`);
+            }
             note[verb] += 1;
             done.set(e.lead.fingerprint, `${verb} #${e.lead.issue_number}`);
           } catch (err) {
@@ -150,8 +163,10 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
                 try {
                   return await gh.request('POST', `/repos/${e.lead.repo}/issues`, { body: issue });
                 } catch (err) {
-                  // A repository that refuses the label (no permission to create it): file without it.
+                  // A repository that refuses the label (no permission to create it): file without it. Adoption finds
+                  // such an issue by its title tag, so it is never filed twice either.
                   if (Number(err?.status) !== 422) throw err;
+                  note.writes += 1;
                   return gh.request('POST', `/repos/${e.lead.repo}/issues`, { body: { title: issue.title, body: issue.body } });
                 }
               });

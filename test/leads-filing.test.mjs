@@ -113,7 +113,10 @@ function issuesApi({ refuseLabel = false, existing = [] } = {}) {
   const issues = [...existing];
   const comments = [];
   const api = fakeApi([
-    ['GET', /^\/repos\/isokron-ai\/[a-z-]+\/issues$/, () => ({ body: issues.map((i) => ({ ...i })) })],
+    ['GET', /^\/repos\/isokron-ai\/[a-z-]+\/issues$/, (req) => {
+      const label = req.query.get('labels');
+      return { body: issues.filter((i) => !label || (i.labels ?? []).some((x) => (x.name ?? x) === label)).map((i) => ({ ...i })) };
+    }],
     ['POST', /^\/repos\/isokron-ai\/[a-z-]+\/issues$/, (req) => {
       if (refuseLabel && req.json.labels) return { status: 422, body: { message: 'Validation Failed' } };
       const i = { number: issues.length + 1, title: req.json.title, body: req.json.body, state: 'open', labels: req.json.labels ?? [] };
@@ -258,4 +261,36 @@ test('R-LEAD-25: the step re-checks every issue before sending: a lead whose sig
   const note = await step(db, { mintToken: m.mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} } });
   assert.deepEqual([note.filed, issues.length], [0, 0]);
   assert.ok(note.errors >= 1);
+});
+
+test('R-LEAD-30: an issue filed without its label (the repository refused it) is still adopted by its title tag, never filed twice; a pull request with the tag is not an issue; a failed comment does not repeat the close', async () => {
+  const db = reproduced(1);
+  const [l] = db.listLeads();
+  const { api, issues, comments } = issuesApi({
+    existing: [
+      { number: 1, title: `${titleTag(l.fingerprint)} a pull request`, body: '', state: 'open', labels: [], pull_request: { url: 'x' } },
+      { number: 2, title: `${titleTag(l.fingerprint)} no_tools_found in scan-static static`, body: '', state: 'open', labels: [] },
+    ],
+  });
+  db.raw.prepare('UPDATE leads SET filing_started_at = ? WHERE fingerprint = ?').run(NOW, l.fingerprint);
+  const m = minter();
+  const client = { fetch: api.fetch, apiUrl: API, sleep: async () => {} };
+  const note = await step(db, { mintToken: m.mint, save: async () => true, client });
+  assert.deepEqual([note.adopted, note.filed, issues.length], [1, 0, 2]);
+  assert.equal(db.listLeads()[0].issue_number, 2);
+
+  // Close: the state is set first; a comment that fails is logged and not tried again.
+  db.raw.prepare("UPDATE leads SET status = 'closed', needs_sync = 1, clean_rechecks = 3 WHERE fingerprint = ?").run(l.fingerprint);
+  const failingComments = fakeApi([
+    ['POST', /\/comments$/, () => ({ status: 500, body: { message: 'boom' } })],
+    ...api.routes,
+  ]);
+  const lines = [];
+  const c1 = await step(db, { mintToken: m.mint, save: async () => true, client: { ...client, fetch: failingComments.fetch, maxAttempts: 1 }, log: (x) => lines.push(x) });
+  assert.equal(c1.closed, 1);
+  assert.equal(issues[1].state, 'closed');
+  assert.ok(lines.some((x) => /its comment failed/.test(x)));
+  const c2 = await step(db, { mintToken: m.mint, save: async () => true, client });
+  assert.equal(c2.closed, 0, 'not closed (or commented) again');
+  assert.equal(comments.length, 0);
 });
