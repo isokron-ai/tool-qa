@@ -309,7 +309,7 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
   // and the workflows they depend on (watchdog/lanes.mjs, R-WD-23..28); fenced like the snapshot item
   if (laneHealth) {
     try {
-      checks.push(...laneChecks({ now, slots, pumpOn: laneOn(lanes, 'pump'), cfg: laneHealth.cfg, data: laneHealth.data ?? null, tick: state?.kv?.['pump.last_tick'] ?? null, breakerTripped: breaker?.tripped === true }));
+      checks.push(...laneChecks({ now, slots, pumpOn: laneOn(lanes, 'pump'), cfg: laneHealth.cfg, data: laneHealth.data ?? null, tick: state?.kv?.['pump.last_tick'] ?? null, breakerTripped: breaker?.tripped === true, coverage: laneHealth.coverage ?? null }));
       if (laneHealth.external) checks.push(externalCheck(laneHealth.external));
     } catch (err) {
       checks.push({ id: 'lane-health', status: 'amber', summary: `could not judge the lanes: ${String(err?.message ?? err).slice(0, 200)}` });

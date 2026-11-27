@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 import { LANE_THRESHOLDS, externalCheck, externalWorkflows, laneChecks, readLaneData, readExternalWorkflows } from '../lanes.mjs';
 import { openState } from '../../state/db.mjs';
+import { computeCoverage } from '../../state/coverage.mjs';
 import { seedLaneState, tick } from '../../test/lib/lane-state.mjs';
 
 const CFG = JSON.parse(readFileSync(new URL('../../pump/workflows.json', import.meta.url), 'utf8')).workflows;
@@ -40,7 +41,7 @@ function idle27Nov(db, o = {}) {
   });
   tick(db, NOW, { due: 0, dispatched: 0 });
 }
-const run = (db, extra = {}) => laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: db.getKv('pump.last_tick'), ...extra });
+const run = (db, extra = {}) => laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: db.getKv('pump.last_tick'), coverage: computeCoverage(db, { tiers: TIERS, workflows: CFG, skipLanes: ['scan-deep', 'build-probe'] }), ...extra });
 const by = (items, id) => items.find((i) => i.id === id);
 
 test('R-WD-23: in the 27 Nov state (due 0, nothing dispatched for 7.5 hours, 997 null shas) the lane items are amber or red, not green', () => withDb((db) => {
@@ -115,8 +116,7 @@ test('R-WD-25: coverage is the assessed share of the whole frame, not of the las
   assert.equal(by(items, 'coverage:scan-static').status, 'red');
   assert.equal(by(items, 'coverage:live-probe').status, 'amber');
   assert.equal(by(items, 'coverage:meta-github').status, 'green');
-  assert.match(by(items, 'coverage:scan-static').summary, /40 of 100 subjects \(40%\)/);
-  assert.equal(by(items, 'coverage:writecheck'), undefined, 'a sampling lane has no frame');
+  assert.match(by(items, 'coverage:scan-static').summary, /40 of 100 eligible subjects \(40%\)/);
 }));
 
 test('R-WD-26: our tool\'s failures show as absolute counts: 370 results now is amber even when the 24 hour share is low, red at half of the last 24 hours', () => withDb((db) => {
@@ -216,4 +216,24 @@ test('R-WD-31: the last dispatch is the newest one that started a run: a failed 
   const p = by(run(db), 'pump-idle');
   assert.equal(p.status, 'amber', p.summary);
   assert.match(p.summary, /nothing dispatched for 5\.0 hours/);
+}));
+
+test('R-WD-34: coverage:<lane> is the assessment number of state/coverage.mjs: the same value, with policy-excluded results out of the denominator; without it the item says so', () => withDb((db) => {
+  seedLaneState(db, { now: NOW, subjects: 10, dispatchAgeMin: 5, lanes: { 'scan-static': { ageMin: 5, n: 10, assessed: 6 } } });
+  // 2 of the 4 unassessed results are policy-excluded: they leave the denominator, as in computeCoverage
+  db.raw.exec("UPDATE results SET coverage = 'excluded' WHERE workflow = 'scan-static' AND rowid IN (SELECT rowid FROM results WHERE workflow = 'scan-static' AND coverage <> 'assessed' LIMIT 2)");
+  const cov = computeCoverage(db, { tiers: TIERS, workflows: CFG, skipLanes: ['scan-deep', 'build-probe'] });
+  const L = cov.lanes.find((x) => x.id === 'scan-static');
+  assert.equal(L.assessment, 0.75, '6 of 8 eligible');
+  const item = by(laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: null, coverage: cov }), 'coverage:scan-static');
+  assert.equal(item.status, 'amber', item.summary);
+  assert.match(item.summary, /6 of 8 eligible subjects \(75%\).*2 excluded/);
+  // thresholds on the assessment number: under 80% amber, under 50% red, otherwise green
+  for (const [a, status] of [[0.9, 'green'], [0.79, 'amber'], [0.49, 'red']]) {
+    const c = { ...cov, lanes: cov.lanes.map((x) => (x.id === 'scan-static' ? { ...x, assessment: a } : x)) };
+    assert.equal(by(laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: null, coverage: c }), 'coverage:scan-static').status, status);
+  }
+  const none = laneChecks({ now: NOW, slots: 4, pumpOn: true, cfg: CFG, data: readLaneData(db, NOW, { cfg: CFG, tiers: TIERS }), tick: null, coverage: null });
+  assert.equal(by(none, 'coverage').status, 'amber');
+  assert.equal(by(none, 'coverage:scan-static'), undefined);
 }));
