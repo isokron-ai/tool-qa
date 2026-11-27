@@ -79,6 +79,12 @@ read variables there, not here: `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` and the lane 
 all is `enabled` in `pump/workflows.json`. A lane switched off in its repository fails nothing: its
 runs end as a notice.
 
+One more variable of `mcp-check` is not a lane switch but an add-on of scan-static: `LANE_SCAN_STATIC_AST_GREP`, exactly
+`true` turns on the ast-grep oracle (O3). It is off by default. On, each scan-static bundle also carries `oracle_ast_grep`
+in its result and, where the reader and ast-grep differ, an `oracle_disagreements` field record; this repository's
+ingest (`state/oracle.mjs`) turns those into D1/D2 disagreements and applies the three-way rule. Turn it on only after
+the ingest that understands it is merged (it is inert without the variable, and without the facts).
+
 `chaos-soak.yml`, `test.yml`, `lint.yml`, `lint-workflows.yml` and `meta-fixture.yml` are CI: they read no switch and never touch the live loop (the soak plays schedules against a simulated GitHub; the fixture run reads public data and uploads a 3-day artifact the pump never ingests).
 
 The three history workflows capture public data and don't work in slots, so
