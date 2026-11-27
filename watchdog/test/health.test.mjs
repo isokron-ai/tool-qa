@@ -153,6 +153,7 @@ test('R-WD-29: a red item that was already red does not hide a new one: the comm
   // recovered only when nothing is red
   out = await applyHealth({ client: h.client, repo: REPO, checks: [{ ...cov, status: 'amber' }, { id: 'pump', status: 'green' }], now: NOW });
   assert.match(h.comments[2].body, /recovered/i);
+});
 
 const COVERAGE = {
   schema: 'isokron-loop-coverage/1',

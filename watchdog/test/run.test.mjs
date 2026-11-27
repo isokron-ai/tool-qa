@@ -849,6 +849,7 @@ test('R-WD-33: without GITHUB_TOKEN the external workflows are not read with the
   assert.match(c.summary, /GITHUB_TOKEN is unset/);
   assert.equal(w.api.calls.some((r) => /\/(mcp-check|mcp-writecheck-action|mcp-surface-corpus)\/actions\/workflows\/[^/]+\.ya?ml$/.test(r.path)), false);
   w.cleanup();
+});
 
 test('R-COV-46: the watchdog reads coverage from the state copy, and a config it cannot read gives null instead of stopping the run', async () => {
   const { readCoverage } = await import('../run.mjs');
