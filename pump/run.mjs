@@ -71,6 +71,9 @@
 //   LANE_STATE_PRUNE_ENABLED   anything but unset, empty or "true" stops pruning
 //   LANE_SUBJECT_IDS_ENABLED   anything but unset, empty or "true" stops the
 //                      subject id lookups (pump/identity.mjs)
+//   LANE_LEADS_ENABLED   the lead pipeline (state/leads.mjs): off unless "dry-run",
+//                      "recheck" or "true"; ingest keeps each accepted result's
+//                      leads in the state (StateDb.noteLeads)
 //   LANE_LIVE_SNAPSHOT_ENABLED   only the exact value "true" publishes the live
 //                      loop snapshot to R2 (live/publish.mjs); with
 //                      LIVE_R2_ACCESS_KEY_ID, LIVE_R2_SECRET_ACCESS_KEY,

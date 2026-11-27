@@ -531,6 +531,7 @@ export class Sim {
         env: {
           GITHUB_REPOSITORY: TOOLQA, GITHUB_TOKEN: `ghs_jobtoken${run.id}`, LOOP_SLOTS: String(g.slots), AGE_IDENTITY: this.identity, GITHUB_API_URL: API_HOST,
           GITHUB_RUN_ID: String(run.id), GITHUB_RUN_ATTEMPT: '1', ...(this.vars().LANE_STATE_PRUNE_ENABLED !== undefined ? { LANE_STATE_PRUNE_ENABLED: this.vars().LANE_STATE_PRUNE_ENABLED } : {}),
+          ...(this.vars().LANE_LEADS_ENABLED !== undefined ? { LANE_LEADS_ENABLED: this.vars().LANE_LEADS_ENABLED } : {}),
         },
         now: clock,
         sleep: task.sleep,
@@ -888,6 +889,8 @@ export class Sim {
           dispatches: has('dispatches') ? all('SELECT attempt_id, shard_id, status, created, expires, closed, close_reason, run_id FROM dispatches') : [],
           items: has('dispatch_items') ? all('SELECT * FROM dispatch_items') : [],
           subjects: has('subjects') ? all('SELECT * FROM subjects ORDER BY id') : [],
+          leads: has('leads') ? all('SELECT * FROM leads ORDER BY fingerprint') : [],
+          lead_subjects: has('lead_subjects') ? all('SELECT * FROM lead_subjects ORDER BY fingerprint, subject, lane') : [],
           subjectEvents: has('subject_events') ? all('SELECT * FROM subject_events ORDER BY id') : [],
           slots: has('slot_ledger') ? all('SELECT * FROM slot_ledger WHERE released IS NULL') : [],
           kv: has('kv') ? Object.fromEntries(all('SELECT key, value FROM kv').map((r) => [r.key, safeJson(r.value)])) : {},

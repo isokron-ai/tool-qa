@@ -85,6 +85,7 @@ import { normalizeAttempt, openLedger } from './ledger.mjs';
 import { maskText, scanText } from './redact.mjs';
 import { loadRegistry } from './registry.mjs';
 import { oracleFactsFromFiles } from '../state/oracle.mjs';
+import { itemFromBundle, leadFailures } from '../state/fingerprint.mjs';
 import { lanePinModes } from '../pump/pins.mjs';
 
 export const REPORT_SCHEMA_VERSION = 1;
@@ -194,6 +195,7 @@ export async function openAttempt(input, deps) {
     analyze = runAnalysis, judgeTimeoutMs = JUDGE_TIMEOUT_MS, maxRetries = MAX_RETRIES, retryWindowMs = RETRY_WINDOW_MS,
     throttleStages = laneThrottleStages(),
     pinModes = lanePinModesFile(),
+    leads = null,
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
 
@@ -311,6 +313,8 @@ export async function openAttempt(input, deps) {
         // What the oracle lanes said, for the subject's disagreement record
         // (loop upgrade #7); it never changes the fault side or coverage.
         ...(outcome === 'accepted' && files ? (() => { const oracle = oracleFactsFromFiles(row.workflow_name, files); return oracle ? { oracle } : {}; })() : {}),
+        // The bundle's leads (state/fingerprint.mjs), only while the lead pipeline is on (LANE_LEADS_ENABLED).
+        ...(outcome === 'accepted' && files && leads ? { failures: bundleLeads(manifestBytes, files, item, row.workflow_name, leads) } : {}),
       };
       const answer = (await ledger.recordResult(wantedRecord)) ?? { accepted: wantedRecord.accepted, reason };
       const recorded = { accepted: answer.accepted === true, reason: typeof answer.reason === 'string' ? answer.reason : null };
@@ -490,6 +494,21 @@ export async function openAttempt(input, deps) {
   return { done: null, attempt: row, items: pending.slice(), judge };
 }
 
+/**
+ * The leads of an accepted bundle (state/fingerprint.mjs leadFailures), never
+ * throwing: a manifest that cannot be read here makes none.
+ * leads: {names: Set|() => Set} the subject-name tokens no signature word may share.
+ */
+export function bundleLeads(manifestBytes, files, item, lane, leads) {
+  try {
+    const manifest = JSON.parse(Buffer.from(manifestBytes).toString('utf8'));
+    const names = typeof leads.names === 'function' ? leads.names() : leads.names;
+    return leadFailures(itemFromBundle({ manifest, files, subject: item.subject, lane }), { names, ...(leads.langOf ? { langOf: leads.langOf } : {}) });
+  } catch {
+    return [];
+  }
+}
+
 function errorText(err) {
   return `${err?.name ?? 'Error'}: ${err?.message ?? err}`;
 }
@@ -526,6 +545,8 @@ function checkRun(run, row, seen) {
  * @param {number} [deps.retryWindowMs]  how long a throttled bundle keeps being sent back (retry_throttled)
  * @param {Record<string, string[]>} [deps.throttleStages]  lane -> throttle_stages (default: pump/workflows.json)
  * @param {Record<string, string>} [deps.pinModes]  lane -> pin_check mode, label or enforce (default: pump/workflows.json)
+ * @param {{names: Set<string>|(() => Set<string>), langOf?: Function}|null} [deps.leads]  set while the lead pipeline is on: each accepted
+ *   result's leads go to recordResult as `failures` (bundleLeads)
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
  *   outcome and reason are the items' own when they all agree; otherwise outcome

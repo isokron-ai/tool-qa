@@ -26,13 +26,18 @@
 //
 // Schema v10 adds the append-only events table (state/schema-v10.sql): each
 // event is written in the same transaction as the fact it describes.
+//
+// Schema v11 adds the leads tables (state/schema-v11.sql): bug fingerprints in
+// our own tools and where they were seen, folded from accepted results by
+// noteLeads() while LANE_LEADS_ENABLED is on (state/leads.mjs).
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { deriveDisagreements, foldDisagreement, ORACLE_BUDGET_DAYS, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_LANES } from './oracle.mjs';
+import { CLEAN_RECHECKS_TO_CLOSE, mergeVersions, needsSync, pushLog, RECHECK_MAX_ATTEMPTS, repoFor, STALE_PAIR_DAYS } from './leads.mjs';
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -52,6 +57,7 @@ const MIGRATIONS = [
   { version: 8, sql: () => readFileSync(new URL('./schema-v8.sql', import.meta.url), 'utf8') },
   { version: 9, sql: () => readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8') },
   { version: 10, sql: () => readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8') },
+  { version: 11, sql: () => readFileSync(new URL('./schema-v11.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -1043,9 +1049,12 @@ export class StateDb {
    *   oracle: the accepted bundle's oracle facts (state/oracle.mjs
    *   oracleFacts), folded into the subject's disagreement by noteOracle().
    *   It never changes fault or coverage.
+   *   failures: the accepted bundle's leads (state/fingerprint.mjs leadFailures),
+   *   folded into the leads tables by noteLeads(); absent (null) while the lead
+   *   pipeline is off, so nothing is kept. An empty list is a result with none.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, completedAt = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, failures = null, completedAt = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -1116,6 +1125,11 @@ export class StateDb {
           `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0,
             fault, coverage, assessed);
           if (oracle || ORACLE_LANES.includes(item.workflow)) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now });
+          if (Array.isArray(failures)) {
+            this.noteLeads(item.subject, item.workflow, runKey, failures, {
+              now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now, runId: d.run_id ?? null, coverage: skipsOnly ? null : coverage,
+            });
+          }
         }
         const open = this.raw.prepare('SELECT COUNT(*) AS n FROM dispatch_items WHERE attempt_id = ? AND resolved IS NULL').get(attemptId).n;
         if (open === 0) {
@@ -1207,6 +1221,127 @@ export class StateDb {
     `).run(subject, status, kinds, status === 'cleared' ? prior.signature : derived.signature, JSON.stringify(derived.server_side),
       next.unchanged_rechecks, JSON.stringify(lanesSeen), JSON.stringify(log), t, t, status === 'cleared' ? t : null, reason, reopened ? 1 : 0);
     return { status, kinds: derived.kinds };
+  }
+
+  /**
+   * Fold one accepted result into the leads (state/leads.mjs, schema v11).
+   * Called inside recordResult()'s transaction while the lead pipeline is on.
+   *
+   * Each lead the result carries is counted on its (subject, lane): a new lead
+   * opens; a lead seen again on that pair in another worker run than the pair's
+   * last is reproduced (the re-run on another runner the design asks for); a
+   * closed lead is reopened (to filed when it has an issue). Every lead the pair
+   * carried that this result does not is one clean re-check, but only when the
+   * result was assessed (no skip): CLEAN_RECHECKS_TO_CLOSE of them with no
+   * pair carrying it any more (checked in the last STALE_PAIR_DAYS) close it.
+   * A result observed before the pair's newest one is late and changes nothing.
+   *
+   * @param {string} subject  subjects.id
+   * @param {string} lane     the workflow name
+   * @param {object[]} failures  state/fingerprint.mjs leadFailures()
+   * @param {{now, observedAt?, runId?: number|null, coverage?: string|null, routing?: object}} o
+   * @returns {{refused?: 'older', opened: number, seen: number, reproduced: number, clean: number, closed: number, reopened: number}}
+   */
+  noteLeads(subject, lane, runKey, failures, { now, observedAt = now, runId = null, coverage = null, routing } = {}) {
+    const t = iso(now);
+    const at = iso(observedAt);
+    const out = { opened: 0, seen: 0, reproduced: 0, clean: 0, closed: 0, reopened: 0 };
+    const pairs = this.raw.prepare('SELECT * FROM lead_subjects WHERE subject = ? AND lane = ?').all(subject, lane).map(plain);
+    if (pairs.some((p) => p.last_checked > at)) return { ...out, refused: 'older' };
+    const byFp = new Map(pairs.map((p) => [p.fingerprint, p]));
+    const getLead = (fp) => plain(this.raw.prepare('SELECT * FROM leads WHERE fingerprint = ?').get(fp));
+    const setLead = (fp, cols) => {
+      const keys = Object.keys(cols);
+      this.raw.prepare(`UPDATE leads SET ${keys.map((k) => `${k} = ?`).join(', ')}, updated_at = ? WHERE fingerprint = ?`).run(...keys.map((k) => cols[k]), t, fp);
+    };
+    // dispatches.run_id is TEXT: the worker run's id as a number, or null when the run is not known.
+    const run = runId !== null && runId !== undefined && /^\d{1,16}$/.test(String(runId)) && Number.isSafeInteger(Number(runId)) ? Number(runId) : null;
+    const carried = new Map();
+    for (const f of failures) if (f && typeof f.fingerprint === 'string' && !carried.has(f.fingerprint)) carried.set(f.fingerprint, f);
+
+    for (const [fp, f] of carried) {
+      const lead = getLead(fp);
+      const pair = byFp.get(fp);
+      const versions = Array.isArray(f.versions) ? f.versions.map(String) : [];
+      if (!lead) {
+        this.raw.prepare(`
+          INSERT INTO leads (fingerprint, repo, tool, lane, component, oracle, class, idiom, layout, signature, partial, fault, versions, status,
+            sightings, first_seen, last_seen, first_run_id, last_run_id, recheck_subject, recheck_lane, recheck_after, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(fp, repoFor({ lane: f.lane, component: f.component }, ...(routing ? [routing] : [])), f.tool, f.lane, f.component, f.oracle, f.class,
+          f.idiom, f.layout, f.signature, f.partial ? 1 : 0, f.fault, JSON.stringify(mergeVersions([], versions)), at, at, run, run, subject, lane, t, t);
+        out.opened += 1;
+      } else {
+        const reproduced = !lead.reproduced_at && pair && pair.last_run_id != null && run != null && pair.last_run_id !== run;
+        const reopen = lead.status === 'closed';
+        const status = reopen ? (lead.issue_number != null ? 'filed' : 'open') : lead.status;
+        const cols = {
+          status, sightings: lead.sightings + 1, last_seen: at > lead.last_seen ? at : lead.last_seen, last_run_id: run ?? lead.last_run_id,
+          versions: JSON.stringify(mergeVersions(JSON.parse(lead.versions), versions)), clean_rechecks: 0,
+        };
+        if (reproduced) { cols.reproduced_at = at; cols.reproduced_run_id = run; out.reproduced += 1; }
+        if (reopen) {
+          Object.assign(cols, { reopened: lead.reopened + 1, closed_at: null, close_reason: null, needs_sync: needsSync({ status, issue_number: lead.issue_number, issue_state: lead.issue_state }) ? 1 : 0 });
+          out.reopened += 1;
+        }
+        // A lead with no pair to re-check (every earlier one came back clean) re-checks this one.
+        if (!lead.reproduced_at && !reproduced && lead.recheck_subject == null && lead.recheck_attempts < RECHECK_MAX_ATTEMPTS) {
+          Object.assign(cols, { recheck_subject: subject, recheck_lane: lane, recheck_after: t });
+        }
+        setLead(fp, cols);
+        out.seen += 1;
+      }
+      this.raw.prepare(`
+        INSERT INTO lead_subjects (fingerprint, subject, lane, run_key, current, seen, clean, first_seen, last_seen, last_checked, last_run_id, log)
+        VALUES (?, ?, ?, ?, 1, 1, 0, ?, ?, ?, ?, ?)
+        ON CONFLICT (fingerprint, subject, lane) DO UPDATE SET run_key = excluded.run_key, current = 1, seen = lead_subjects.seen + 1,
+          last_seen = excluded.last_seen, last_checked = excluded.last_checked, last_run_id = COALESCE(excluded.last_run_id, lead_subjects.last_run_id), log = excluded.log
+      `).run(fp, subject, lane, runKey, at, at, at, run, JSON.stringify(pushLog(pair ? JSON.parse(pair.log) : [], at, true, { now: at })));
+    }
+
+    // Clean re-checks: only an assessed result says a stage ran and did not show the lead.
+    if (coverage !== 'assessed') return out;
+    const fresh = iso(toMs(at) - STALE_PAIR_DAYS * 86_400_000);
+    for (const p of pairs) {
+      if (carried.has(p.fingerprint)) continue;
+      if (run != null && p.last_run_id === run) continue; // the same worker run is no re-check
+      const lead = getLead(p.fingerprint);
+      if (!lead || lead.status === 'closed') continue;
+      this.raw.prepare('UPDATE lead_subjects SET current = 0, clean = clean + 1, last_checked = ?, last_run_id = COALESCE(?, last_run_id), log = ? WHERE fingerprint = ? AND subject = ? AND lane = ?')
+        .run(at, run, JSON.stringify(pushLog(JSON.parse(p.log), at, false, { now: at })), p.fingerprint, subject, lane);
+      out.clean += 1;
+      const cols = { clean_rechecks: lead.clean_rechecks + 1 };
+      if (lead.recheck_subject === subject && lead.recheck_lane === lane && !lead.reproduced_at) {
+        // The re-check came back clean: re-check another pair that still carries it, if any.
+        // recheck_after is the store time of the pair's newest result (results.accepted_at), which the due list compares with.
+        const next = this.raw.prepare(`SELECT s.subject, s.lane, COALESCE((SELECT MAX(r.accepted_at) FROM results r WHERE r.subject = s.subject AND r.workflow = s.lane), s.last_seen) AS last_seen
+          FROM lead_subjects s WHERE s.fingerprint = ? AND s.current = 1 AND s.last_checked >= ? ORDER BY s.last_seen DESC, s.subject, s.lane LIMIT 1`).get(p.fingerprint, fresh);
+        const attempts = lead.recheck_attempts + 1;
+        Object.assign(cols, next && attempts < RECHECK_MAX_ATTEMPTS
+          ? { recheck_attempts: attempts, recheck_subject: next.subject, recheck_lane: next.lane, recheck_after: next.last_seen }
+          : { recheck_attempts: attempts, recheck_subject: null, recheck_lane: null, recheck_after: null });
+      }
+      const still = this.raw.prepare('SELECT COUNT(*) AS n FROM lead_subjects WHERE fingerprint = ? AND current = 1 AND last_checked >= ?').get(p.fingerprint, fresh).n;
+      if (cols.clean_rechecks >= CLEAN_RECHECKS_TO_CLOSE && still === 0) {
+        Object.assign(cols, { status: 'closed', closed_at: t, close_reason: 'clean_rechecks' });
+        cols.needs_sync = needsSync({ status: 'closed', issue_number: lead.issue_number, issue_state: lead.issue_state }) ? 1 : 0;
+        out.closed += 1;
+      }
+      setLead(p.fingerprint, cols);
+    }
+    return out;
+  }
+
+  /** The leads, parsed (versions as a list). `status` filters (default: all). */
+  listLeads({ status = null } = {}) {
+    const rows = status ? this.raw.prepare('SELECT * FROM leads WHERE status = ? ORDER BY fingerprint').all(status)
+      : this.raw.prepare('SELECT * FROM leads ORDER BY fingerprint').all();
+    return rows.map((r) => ({ ...plain(r), versions: JSON.parse(r.versions) }));
+  }
+
+  /** Where a lead was seen: its (subject, lane) rows, logs parsed. */
+  leadSubjects(fingerprint) {
+    return this.raw.prepare('SELECT * FROM lead_subjects WHERE fingerprint = ? ORDER BY subject, lane').all(fingerprint).map((r) => ({ ...plain(r), log: JSON.parse(r.log) }));
   }
 
   /** The stored disagreement rows, parsed. `status` filters (default: all). */

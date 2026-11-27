@@ -7,7 +7,9 @@
 // Groups every tool-side skip, error and reader limit in the loop's accepted
 // results into fingerprints (DESIGN-v3 section 7: tool, component, oracle,
 // class, SDK idiom, layout, normalised signature; the tool version is part of
-// the key too, so a fix shows as the old fingerprint emptying out) and ranks
+// the key too, so a fix shows as the old fingerprint emptying out; the
+// fingerprinting itself is state/fingerprint.mjs, shared with ingest's lead
+// pipeline, so both read a failure the same way) and ranks
 // them by what fixing each would unlock: the subjects whose latest result of
 // that lane still carries it, weighted by subject tier and popularity, times
 // the class's severity. Every number comes with evidence refs: run id,
@@ -42,18 +44,17 @@
 // Exit codes: 0 done; 2 usage (or an output inside the input); 3 the input
 // could not be read.
 
-import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ageDecrypt } from '../ingest/age.mjs';
-import { SKIP_REASONS, skipFault } from '../worker-kit/contract.mjs';
 import { unpackBundle } from '../worker-kit/bundle.mjs';
 import { readTar } from '../worker-kit/tar.mjs';
 import { tierFor } from '../pump/subjects.mjs';
-import { deriveDisagreements, oracleFacts, observedFields, ORACLE_LANES } from '../state/oracle.mjs';
+import { deriveDisagreements, oracleFacts, ORACLE_LANES } from '../state/oracle.mjs';
+import { failuresOf as sharedFailuresOf, fingerprintOf, itemFromBundle, nameTokens } from '../state/fingerprint.mjs';
 import { DEFAULT_IDENTITY, outUnsafe, sealedFiles, subjectKeyOf, writeOut } from './derive.mjs';
 
 const ROOT = new URL('../', import.meta.url);
@@ -79,14 +80,6 @@ export const DEFAULT_CONFIG = Object.freeze({
   md_evidence: 10,
 });
 
-/** result.detail words (scan-static) -> the contract skip reason they stand for, and the fault they have. */
-const DETAIL_CLASS = Object.freeze({
-  no_tools: 'no_tools_found', multiple_servers: 'unsupported_layout', unsupported_language: 'unsupported_language',
-  names_only: 'reader_limit', too_large: 'too_large', tool_error: 'tool_error',
-});
-/** Reasons the manifest may give for what the result detail says more exactly. */
-const AMBIGUOUS = new Set(['no_runnable_artifact', 'install_failed_registry', 'timeout_start']);
-
 const ITEM_RE = /^accepted\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/(\d{1,6})\/(.+)$/;
 const WANT_RE = /^(manifest\.json|ingest\.json|results\/[A-Za-z0-9._-]+\.json|raw\/subject\/scan\.json|observations\/[A-Za-z0-9._-]+\.ndjson)$/;
 
@@ -107,32 +100,17 @@ export function itemsFromEntries(entries, stats = { unreadable: 0 }) {
     const man = parseJson(g.files.get('manifest.json'));
     if (!man || typeof man.subject?.id !== 'string' || typeof man.finished_at !== 'string') { stats.unreadable++; continue; }
     const ing = parseJson(g.files.get('ingest.json'));
-    const results = new Map();
-    for (const [p, d] of g.files) {
-      const m = /^results\/([A-Za-z0-9._-]+)\.json$/.exec(p);
-      if (m) { const r = parseJson(d); if (r && typeof r === 'object') results.set(m[1], r); }
-    }
-    const lane = String(man.workflow?.file ?? '').split('/').pop().replace(/\.ya?ml$/, '') || 'unknown';
+    // The shared item shape (state/fingerprint.mjs), under the subject key ingest
+    // recorded it under, which a rename does not move (derive.mjs subjectKeyOf).
+    const item = itemFromBundle({ manifest: man, files: g.files, subject: subjectKeyOf(g.files.get('ingest.json'), man) });
     out.push({
-      // The subject key ingest recorded it under, which a rename does not
-      // move (derive.mjs subjectKeyOf); the name the worker was sent is kept.
-      subject: subjectKeyOf(g.files.get('ingest.json'), man),
-      // The subject version the lane read (state oracle facts are compared on one version only, R-ORD-12).
-      version: man.subject.sha ?? man.subject.artifact_digest ?? null,
-      sent_as: man.subject.id,
-      lane,
-      observed_at: man.finished_at,
+      ...item,
       attempt_id: String(man.attempt_id ?? g.attempt),
       item_index: g.index,
       // Dedupe key (R-CHECKIN-13): an item is in its full bundle and in its keep-forever
       // file; without a key every item after the first was dropped as already seen.
       key: `${man.attempt_id ?? g.attempt}/${g.index}/${man.run_key ?? ''}`,
       run_id: Number.isSafeInteger(ing?.run?.id) ? ing.run.id : Number.isSafeInteger(ing?.input?.run_id) ? ing.input.run_id : man.workflow?.run_id ?? null,
-      tools: Array.isArray(man.tools) ? man.tools.map((t) => `${t?.name ?? '?'}@${t?.version ?? '?'}`) : [],
-      skips: Array.isArray(man.skips) ? man.skips : [],
-      results,
-      scan: parseJson(g.files.get('raw/subject/scan.json')),
-      fields: observedFields(g.files),
     });
   }
   return out;
@@ -178,135 +156,17 @@ export function readPlain(dir) {
 
 // ---------------------------------------------------------------- fingerprints
 
-const fold = (v) => String(v).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
-const flatten = (v) => fold(v).replace(/[^a-z0-9]/g, '');
+// The fingerprinting itself is shared with ingest (state/fingerprint.mjs), so the
+// check-in and the leads table can never read a failure differently.
+export { nameTokens, fingerprintOf };
 
-/**
- * The name matcher for a set of subject ids: every case-folded NFKD token of at
- * least 3 characters of each owner and repo (acme-widget-mcp: acme, widget, mcp),
- * and each whole name with separators removed. Used on every free word.
- */
-export function nameTokens(subjects) {
-  const out = new Set();
-  for (const subject of subjects) {
-    for (const part of String(subject).split('/')) {
-      const f = fold(part);
-      for (const t of f.split(/[^a-z0-9]+/)) if (t.length >= 3) out.add(t);
-      const whole = f.replace(/[^a-z0-9]/g, '');
-      if (whole.length >= 3) out.add(whole);
-    }
-  }
-  return out;
-}
-const hitsName = (value, names) => { const flat = flatten(value); for (const n of names) if (flat.includes(n)) return true; return false; };
-
-/** A closed list: the value if it is on it, else <other> (null stays null). */
-const oneOf = (v, list) => (v === null || v === undefined ? null : list.includes(v) ? v : '<other>');
-
-const ENUMS = Object.freeze({
-  stage: ['static', 'live', 'scan', 'build', 'install', 'start', 'probe', 'meta', 'registry', 'differential', 'conformance', 'bridge', 'trace'],
-  from: ['catalog', 'source', 'committed', 'snapshots', 'live', 'registry'],
-  fidelity: ['exact', 'derived', 'literal', 'names'],
-  via: ['github', 'git', 'api', 'archive', 'tarball', 'zip', 'local'],
-  language: ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'c#', 'c++', 'c', 'swift', 'php', 'ruby', 'scala', 'dart', 'elixir', 'shell', 'ts/js', 'java/kotlin', 'other'],
-  detail: ['no_tools', 'multiple_servers', 'unsupported_language', 'names_only', 'too_large', 'tool_error', 'rate_limited', 'needs_credentials', 'quarantined'],
-});
-const CLASSES = [...SKIP_REASONS];
-
-/** A free word (error name, detail, list error): only our own short codes, never a name of anything in the run. */
-function word(v, names) {
-  if (v === null || v === undefined) return null;
-  const s = String(v);
-  if (!/^[A-Za-z][A-Za-z0-9_.-]{0,39}$/.test(s)) return '<other>';
-  return hitsName(s, names) ? '<other>' : s.toLowerCase();
-}
-/** A code from a closed list; anything else is <other>. */
-const code = (v, list) => (v === null || v === undefined ? null : list.includes(v) ? v : '<other>');
-
-const bucketHttp = (n) => (Number.isInteger(n) && n >= 100 && n < 600 ? `${Math.floor(n / 100)}xx` : null);
-
-function layoutOf(item, result) {
-  const sj = item.scan?.hints?.serverJson;
-  const n = Array.isArray(sj) ? sj.length : null;
-  const parts = [];
-  if (n !== null) parts.push(`server_json:${n === 0 ? '0' : n === 1 ? '1' : 'many'}`);
-  if (result?.detail === 'multiple_servers') parts.push('multi_server');
-  if (result?.listing?.via) parts.push(`via:${oneOf(result.listing.via, ENUMS.via) ?? 'none'}`);
-  return parts.join(';') || 'unknown';
-}
-
-/** A language name as the reader or the seed spells it (c#, c++, go): lower-case, a short fixed alphabet. */
-const langWord = (v) => (typeof v === 'string' ? (ENUMS.language.includes(v.toLowerCase()) ? v.toLowerCase() : '<other>') : null);
-
-function idiomOf(result, seedLanguage) {
-  const l = result?.list;
-  const lang = langWord(l?.language ?? result?.language_hint) ?? (langWord(seedLanguage) ? `repo:${langWord(seedLanguage)}` : 'unknown');
-  return `${l ? `${oneOf(l.from, ENUMS.from) ?? 'none'}/${oneOf(l.fidelity, ENUMS.fidelity) ?? 'none'}` : 'none'}/${lang}`;
-}
-
-/**
- * The tool-side failures of one item, each {cls, partial, stage, signature, ...}.
- * A skip with a declared (or defaulted) fault outside config.faults is not ours.
- * The result's own detail word says more than an ambiguous manifest reason.
- */
-export function failuresOf(item, config = DEFAULT_CONFIG, { langOf = () => null, names = nameTokens([item.subject]) } = {}) {
-  const want = new Set(config.faults);
-  // Every result in the bundle is read, not only the first.
-  const results = [...item.results.values()].filter((r) => r && typeof r.status === 'string');
-  const out = [];
-  const detailOf = (r) => (r.status === 'skipped' ? DETAIL_CLASS[r.detail] ?? null : null);
-  const primary = results.find((r) => detailOf(r)) ?? results.find((r) => r.status === 'error') ?? results[0] ?? null;
-  const baseFor = (r) => ({ idiom: idiomOf(r, langOf(item.subject)), layout: layoutOf(item, r) });
-  const common = (r, cls, stage, extra) => ({
-    ...baseFor(r), cls: code(cls, CLASSES), stage: code(stage, ENUMS.stage) ?? 'unknown',
-    signature: [
-      `class=${code(cls, CLASSES)}`, `detail=${code(r?.detail, ENUMS.detail) ?? '-'}`, `error=${word(r?.error_name, names) ?? '-'}`,
-      `list_error=${word(typeof r?.list_error === 'string' ? r.list_error : r?.list_error?.code, names) ?? '-'}`,
-      `http=${bucketHttp(r?.http_status) ?? '-'}`, ...extra,
-    ].join(';'),
-  });
-
-  const detailCls = primary ? detailOf(primary) : null;
-  let usedDetail = false;
-  for (const s of item.skips) {
-    let cls = s.reason;
-    let fault = skipFault(s);
-    if (detailCls && AMBIGUOUS.has(s.reason)) { cls = detailCls; if (!s.fault) fault = 'tool'; usedDetail = true; }
-    else if (detailCls === s.reason) usedDetail = true;
-    if (!want.has(fault)) continue;
-    out.push({ ...common(primary, cls, s.stage, [`fault=${fault}`, `retryable=${s.retryable === true}`]), partial: false });
-  }
-  if (detailCls && !usedDetail && want.has('tool')) out.push({ ...common(primary, detailCls, 'static', ['fault=tool', 'retryable=false']), partial: false });
-  for (const r of results) {
-    if (r.status === 'error' && want.has('tool') && !out.some((f) => f.cls === 'tool_error')) {
-      out.push({ ...common(r, 'tool_error', 'static', ['fault=tool', 'retryable=false']), partial: false });
-    }
-    // A graded result that is incomplete: the reader said what it could not read.
-    if (r.status === 'graded' && want.has('tool')) {
-      const partials = [];
-      const l = r.list ?? {};
-      if (l.unresolved_names > 0) partials.push('unresolved_names');
-      if (l.registration_not_seen > 0) partials.push('registration_not_seen');
-      if (l.tools_left_out > 0) partials.push('tools_left_out');
-      for (const k of ['input_schemas', 'descriptions', 'annotations']) if (l.unreadable?.[k] > 0) partials.push(`unreadable_${k}`);
-      if (l.listing_truncated === true || r.listing?.truncated === true) partials.push('listing_truncated');
-      if (r.listing?.budget_hit === true) partials.push('budget_hit');
-      for (const p of partials) out.push({ ...common(r, 'reader_limit', 'static', [`partial=${p}`]), partial: true });
-    }
-  }
-  const safe = (v) => (/^[A-Za-z0-9@._,-]{1,80}$/.test(v) && !hitsName(v, names) ? v : '<other>');
-  return out.map((f) => ({ ...f, tool: safe(item.tools.join(',') || 'unknown'), lane: /^[A-Za-z0-9._-]{1,80}$/.test(item.lane ?? '') ? item.lane : '<other>' /* our workflow name, not subject data: never name-redacted */ }));
+/** The tool-side failures of one item (state/fingerprint.mjs failuresOf) with the check-in's default faults. */
+export function failuresOf(item, config = DEFAULT_CONFIG, o = {}) {
+  return sharedFailuresOf(item, config, o);
 }
 
 /** Order by time; a time that does not parse sorts last (never NaN). */
 export const byTime = (a, b) => { const x = Date.parse(a); const y = Date.parse(b); const ax = Number.isFinite(x) ? x : Infinity; const ay = Number.isFinite(y) ? y : Infinity; return ax < ay ? -1 : ax > ay ? 1 : 0; };
-
-/** The fingerprint id and its parts. */
-export function fingerprintOf(f) {
-  const parts = { tool: f.tool, lane: f.lane, component: f.stage, oracle: f.lane, class: f.cls, idiom: f.idiom, layout: f.layout, signature: f.signature };
-  const id = createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 12);
-  return { id, parts };
-}
 
 // ---------------------------------------------------------------- scoring
 

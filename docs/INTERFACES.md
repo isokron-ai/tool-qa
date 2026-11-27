@@ -417,6 +417,27 @@ State calls:
 - `db.log`: where a failed event insert is reported (stderr by default; the
   pump sets its own log).
 
+## Leads (schema v11)
+
+While `LANE_LEADS_ENABLED` is on (`dry-run`, `recheck` or `true`; see
+docs/OPERATIONS.md, "Leads"), ingest turns every accepted result into its
+leads: bug fingerprints in our own tools (`state/fingerprint.mjs`, the same
+fingerprinting the check-in ranks by) and passes them to
+`recordResult({ ..., failures })`. `recordResult` folds them with
+`db.noteLeads(subject, lane, runKey, failures, { now, observedAt, runId, coverage })`
+in the same transaction as the result, so a sighting commits exactly when its
+result does (`state/schema-v11.sql`, rules in `state/leads.mjs`). With the
+switch off ingest passes no `failures` and nothing is kept.
+
+- `leads`: one row per fingerprint (the lead id is the fingerprint without tool
+  versions or probe tools). Its shape columns (`SHAPE_COLUMNS`) are the only
+  ones that may go into a public issue or job summary.
+- `lead_subjects`: where each lead was seen, per (subject, lane): whether that
+  pair's latest result carries it, counts, the 14-day log for the flake rate
+  and the worker run of the newest result. It names subjects and stays in the
+  state.
+- `db.listLeads({ status })` and `db.leadSubjects(fingerprint)` read them.
+
 ## Keys the pump keeps in `kv`
 
 | Key | Value |

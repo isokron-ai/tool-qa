@@ -53,6 +53,8 @@ import { MAX_BUNDLE_BYTES, openAttempt } from './ingest.mjs';
 import { dbLedger } from './ledger.mjs';
 import { loadRegistry as loadPinnedRegistry } from './registry.mjs';
 import { keepSet } from './retention.mjs';
+import { nameTokens, seedLanguageOf } from '../state/fingerprint.mjs';
+import { leadsMode, recordsLeads } from '../state/leads.mjs';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -146,6 +148,9 @@ function isoSeconds(ms) {
  *                                    recorded as rejected ingest_error
  * @param {{analyze?: Function, judgeTimeoutMs?: number}} [o.judge]  passed to openAttempt (tests)
  * @param {number} [o.callGraceMs]     how long after collect()'s deadline a GitHub call may still run
+ * @param {'off'|'dry-run'|'recheck'|'on'} [o.leads]  the lead pipeline (state/leads.mjs leadsMode, default from
+ *                                    env.LANE_LEADS_ENABLED): unless off, every accepted result's leads are kept
+ *                                    in the state (StateDb.noteLeads)
  */
 export function createCollector({
   env = process.env,
@@ -168,6 +173,7 @@ export function createCollector({
   maxItemFailures = MAX_ITEM_FAILURES,
   judge = {},
   callGraceMs = CALL_GRACE_MS,
+  leads = leadsMode(env),
 } = {}) {
   const ageBin = env.AGE_BIN || 'age';
   const keygenBin = env.AGE_KEYGEN_BIN || 'age-keygen';
@@ -313,6 +319,13 @@ export function createCollector({
     };
     const list = db.dispatchesAwaitingResults({ now: now(), lateMs });
     if (list.length === 0) return summary;
+    // The lead pipeline (LANE_LEADS_ENABLED): the subject-name tokens no signature word may share, from every
+    // subject the state knows (key and current name), built once per collect() and only if a result is accepted.
+    let names = null;
+    const leadOpts = recordsLeads(leads) ? {
+      names: () => (names ??= nameTokens(db.listSubjects().flatMap((s) => [s.id, s.name].filter(Boolean)))),
+      langOf: seedLanguageOf(),
+    } : null;
     const { recipients } = await check();
     if (typeof mintToken !== 'function') throw new TypeError('collect: mintToken is required');
 
@@ -393,6 +406,7 @@ export function createCollector({
           registry: reg,
           now: () => new Date(now()),
           allowNoControls,
+          leads: leadOpts,
           ...judge,
         });
         if (opened.done) {
