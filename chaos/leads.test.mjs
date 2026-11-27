@@ -87,7 +87,7 @@ test('R-LEAD-18: chaos: with LANE_LEADS_ENABLED=recheck the pump re-dispatches a
         assert.equal(runs.length, 1, `${mode}: no re-check is sent`);
         assert.equal(lead.reproduced_at, null);
       }
-      assertRecovered(sim);
+      assertRecovered(sim, INJECTED);
     });
   }
 });
