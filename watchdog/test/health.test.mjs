@@ -153,4 +153,38 @@ test('R-WD-29: a red item that was already red does not hide a new one: the comm
   // recovered only when nothing is red
   out = await applyHealth({ client: h.client, repo: REPO, checks: [{ ...cov, status: 'amber' }, { id: 'pump', status: 'green' }], now: NOW });
   assert.match(h.comments[2].body, /recovered/i);
+
+const COVERAGE = {
+  schema: 'isokron-loop-coverage/1',
+  frame: { version: 'frame-2026-11-27', dated: '2026-11-27', size: 100, source: 'state' },
+  lanes: [{ id: 'live-probe', on: true, frame: 100, excluded: 2, eligible: 98, reached: 90, assessed: 60, judged: 0, correct: 0, incorrect: 0, unassessed: {}, assessment: 0.6122, conditional: null, frame_coverage: null, gross: null, measurable: false, tiers: { T0: { frame: 5, excluded: 0, assessed: 3, judged: 0, correct: 0, incorrect: 0 } }, t012: {} }],
+  milestones: { m1: { reached: 90, total: 100 }, m2: { status: 'outside_state' }, m3: { target: 0.98, tiers: [0, 1, 2], met: null } },
+};
+
+test('R-COV-44: the health body shows the four numbers per lane against the frame, and says not yet measurable where there is no judgment', () => {
+  const body = renderBody({ checks: green, now: NOW, coverage: COVERAGE });
+  assert.match(body, /## Tool coverage/);
+  assert.match(body, /frame `frame-2026-11-27` \(dated 2026-11-27, 100 servers/);
+  assert.match(body, /\| live-probe \| 61\.2% \(60 of 98\) \| not yet measurable \| not yet measurable \| not yet measurable \|/);
+  assert.match(body, /\| live-probe \| T0 \| 5 \| 0 \| 3 \| 0 \| 0 \|/);
+  assert.equal(parseBody(body).coverage.frame.version, 'frame-2026-11-27');
+  assert.doesNotMatch(renderBody({ checks: green, now: NOW }), /Tool coverage/);
+});
+
+test('R-COV-45: the health issue is rewritten when only the coverage changed, and a job that passes none keeps the last coverage', async () => {
+  const { issues, client, api } = issuesApi();
+  await applyHealth({ client, repo: REPO, checks: green, now: NOW, coverage: COVERAGE });
+  const writes = () => api.calls.filter((c) => c.method === 'PATCH' || (c.method === 'POST' && /\/issues$/.test(c.path))).length;
+  const w0 = writes();
+  const same = await applyHealth({ client, repo: REPO, checks: green, now: NOW + 60_000, coverage: COVERAGE });
+  assert.equal(same.updated, false);
+  assert.equal(writes(), w0);
+  const next = structuredClone(COVERAGE);
+  next.lanes[0].assessed = 61;
+  const changed = await applyHealth({ client, repo: REPO, checks: green, now: NOW + 120_000, coverage: next });
+  assert.equal(changed.updated, true);
+  assert.equal(parseBody(issues[0].body).coverage.lanes[0].assessed, 61);
+  await applyHealth({ client, repo: REPO, checks: [{ id: 'other', status: 'green', summary: 'x' }], mode: 'merge', now: NOW + 180_000 });
+  assert.equal(parseBody(issues[0].body).coverage.lanes[0].assessed, 61, 'mode merge with no coverage keeps the last one');
+  assert.match(issues[0].body, /## Tool coverage/);
 });

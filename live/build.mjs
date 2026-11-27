@@ -40,6 +40,7 @@ import { CLASSES, dailyClassOf, isQuarantine, QUARANTINE_REASONS } from './class
 import { scanPublic } from './scan.mjs';
 import { hasVendorName } from './vendor-names.mjs';
 import { scanText } from '../ingest/redact.mjs';
+import { computeCoverage, compactCoverage } from '../state/coverage.mjs';
 
 export const SCHEMA = 'isokron-loop-live/1';
 export const TICK_S = 150;
@@ -614,6 +615,15 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
   let recent = events ? recentEvents(r, ctx, hourStartMs, nowMs) : [];
   let justChecked = current.named.slice(0, MAX_JUST_CHECKED).map((e) => ({ subject: e.subject ?? null, lane: e.lane, side: e.side }));
 
+  // Tool coverage (state/coverage.mjs, docs/METHODOLOGY.md): a new last key; every earlier key keeps its place.
+  // null when the config has no tiers or the state cannot answer: the snapshot is never held back by it.
+  let coverage = null;
+  try {
+    if (config?.tiers && typeof config.tiers === 'object') coverage = compactCoverage(computeCoverage(db, { tiers: config.tiers, workflows, skipLanes: [...notBuiltSet] }));
+  } catch {
+    coverage = null;
+  }
+
   const snapshotOf = () => ({
     schema: SCHEMA,
     seq: Math.floor(nowMs / 1000),
@@ -640,6 +650,7 @@ export function buildLiveSnapshot(db, { now, config, retry = null, version = nul
     now_checking: nowChecking,
     just_checked: { hour: isoMs(hourStartMs - HOUR), results: justChecked },
     recent,
+    coverage,
   });
   let snapshot = snapshotOf();
   const size = () => Buffer.byteLength(JSON.stringify(snapshot), 'utf8');

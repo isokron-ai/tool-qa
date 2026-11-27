@@ -1107,6 +1107,10 @@ Repository variables, one pair per tier (T1 to T4), passed to the Pump step:
 
 The shipped state is no variable set, so rate 0 and the due list is unchanged. Opening a tier is a repository variable change by the owner: set `SAMPLE_RATE_T2` (for example `0.1`) and, if wanted, `SAMPLE_CAP_T2`. A lane that is not enabled in `pump/workflows.json` still dispatches nothing. To stop sampling again, unset the variable or set it to 0.
 
+## Coverage judgments (G2)
+
+The four tool coverage numbers (docs/METHODOLOGY.md) need to know which assessed results were right. Until a judgment is recorded, conditional correctness, frame coverage and gross coverage read "not yet measurable". To record judgments: pull a copy of the state (`node scripts/state-asset.mjs pull`), run `node scripts/coverage-truth.mjs --state <copy> --judgments <file>` (or `--qa-csv <per-repo-results.csv>`) without `--apply` to see the counts, then with `--apply`, and push the copy back as for any operator write to the state (one writer at a time; see "State store: one writer at a time"). The script prints counts only.
+
 ## The loop health issue
 
 The watchdog runs at minutes 7, 22, 37 and 52 of every hour and keeps one
