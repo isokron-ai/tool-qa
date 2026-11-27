@@ -102,8 +102,21 @@ function checkTtl(ttlMs) {
 // pin_unverified (R-PIN-01): our worker ran, or did not prove it ran, other
 // code than the run_key is filed under; that is our side, and the lane is
 // paused instead (pausePinRefused), so a fixed worker never finds its work parked.
-export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch', 'pin_mismatch', 'pin_unverified']);
+// Nor does subject_sha_mismatch (R-SHA-01): the branch moved, or the worker read
+// another commit; it waits the retry backoff instead (retryLaterWaiting), and
+// the next head poll gives the subject a new run_key.
+export const NOT_COUNTED_REASONS = Object.freeze(['unknown_attempt', 'unknown_run_key', 'fence_mismatch', 'duplicate_result', 'stale_fence', 'retry_later', 'retry_throttled', 'run_sha_mismatch', 'pin_mismatch', 'pin_unverified', 'subject_sha_mismatch']);
 const NOT_COUNTED = NOT_COUNTED_REASONS.map((r) => `'${r}'`).join(', ');
+
+/** The commit-read fact kept with a result (R-SHA-06): {expected, got, match}, or null when it is malformed or absent. */
+export function subjectShaFact(v) {
+  if (!v || typeof v !== 'object') return null;
+  const sha = (x) => (typeof x === 'string' && /^[0-9a-f]{40}$/.test(x) ? x : null);
+  const expected = sha(v.expected);
+  if (expected === null) return null;
+  const got = sha(v.got);
+  return { expected, got, match: got === expected };
+}
 
 /** Event data strings are bounded (reasons, URLs, lane names). */
 function cap(v, max = 200) {
@@ -748,6 +761,17 @@ export class StateDb {
    * 'malformed' when they are recorded but cannot be read (R-PIN-02: refused
    * on an enforce lane, never taken as no label).
    */
+  /** The commit SHA a run_key was computed with (its subject's sha at dispatch), or null. */
+  runKeySha(runKey) {
+    const row = this.raw.prepare('SELECT fields FROM run_keys WHERE run_key = ?').get(runKey);
+    try {
+      const sha = JSON.parse(row?.fields ?? 'null')?.sha;
+      return typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+    } catch {
+      return null;
+    }
+  }
+
   runKeyPins(runKey) {
     const row = this.raw.prepare('SELECT fields FROM run_keys WHERE run_key = ?').get(runKey);
     if (!row || row.fields === null || row.fields === undefined) return null;
@@ -985,6 +1009,7 @@ export class StateDb {
         retries: this.retryLaterCount(it.run_key),
         ...this.retryThrottled(it.run_key),
         pins: this.runKeyPins(it.run_key),
+        sha: this.runKeySha(it.run_key),
       };
     });
     const file = String(d.workflow_file);
@@ -1068,7 +1093,7 @@ export class StateDb {
    *   pipeline is off, so nothing is kept. An empty list is a result with none.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, failures = null, completedAt = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, failures = null, subjectSha = null, completedAt = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -1114,7 +1139,11 @@ export class StateDb {
       `).run(subject, attemptId, Number.isSafeInteger(fence) ? fence : -1, d?.run_id ?? null, runKey, digest, t, ok ? 1 : 0, why, attemptId, stored);
       this.recordEvent({
         type: 'result_recorded', lane: item?.workflow ?? d?.workflow ?? this.getRunKey(runKey)?.workflow ?? null, subject: subject === 'unknown' ? null : subject,
-        data: { verdict: ok ? 'accepted' : 'rejected', reason: cap(why), outcome: ok ? resultOutcome ?? outcome : stored, fault: ok ? fault : null, coverage: ok ? coverage : null },
+        data: {
+          verdict: ok ? 'accepted' : 'rejected', reason: cap(why), outcome: ok ? resultOutcome ?? outcome : stored, fault: ok ? fault : null, coverage: ok ? coverage : null,
+          // R-SHA-06: the commit the worker read, against the one the run_key names (label lanes accept a mismatch).
+          ...(subjectShaFact(subjectSha) ? { subject_sha: subjectShaFact(subjectSha) } : {}),
+        },
       }, now);
       if (current) {
         this.raw.prepare('UPDATE dispatch_items SET resolved = ? WHERE attempt_id = ? AND run_key = ?').run(t, attemptId, runKey);
@@ -1140,7 +1169,7 @@ export class StateDb {
             fault, coverage, assessed);
           if (oracle || ORACLE_LANES.includes(item.workflow)) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now });
           if (Array.isArray(failures)) {
-            this.noteLeads(item.subject, item.workflow, runKey, failures, {
+            this.foldLeads(item.subject, item.workflow, runKey, failures, {
               now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now, runId: d.run_id ?? null, coverage: skipsOnly ? null : coverage,
             });
           }
@@ -1307,6 +1336,13 @@ export class StateDb {
         if (!fresh && !lead.reproduced_at && !reproduced && lead.recheck_subject == null && lead.recheck_attempts < RECHECK_MAX_ATTEMPTS) {
           Object.assign(cols, { recheck_subject: subject, recheck_lane: lane, recheck_after: t });
         }
+        // The re-check pair carried it again, but this result cannot count as a re-run on another runner (no worker
+        // run id, or the same run): it is one attempt, and the re-check is due again rather than waiting for ever (R-LEAD-39).
+        if (!fresh && !reproduced && !lead.reproduced_at && lead.recheck_subject === subject && lead.recheck_lane === lane && pair) {
+          const attempts = lead.recheck_attempts + 1;
+          Object.assign(cols, attempts < RECHECK_MAX_ATTEMPTS ? { recheck_attempts: attempts, recheck_after: t }
+            : { recheck_attempts: attempts, recheck_subject: null, recheck_lane: null, recheck_after: null });
+        }
         setLead(fp, cols);
         out.seen += 1;
       }
@@ -1373,6 +1409,38 @@ export class StateDb {
       setLead(p.fingerprint, cols);
     }
     return out;
+  }
+
+  /**
+   * noteLeads() in its own savepoint, for recordResult(): a lead that cannot be
+   * folded (a bad row, a constraint) rolls back only its own writes, is counted
+   * in kv `leads.fold_failures` ({count, last_at, last_error}) and logged as one
+   * line; the result is recorded all the same (R-LEAD-36). Only when SQLite gave
+   * up the whole transaction does the error go on, as it would for the result.
+   * @returns {object|null} noteLeads()'s answer, or null when it failed
+   */
+  foldLeads(subject, lane, runKey, failures, o = {}) {
+    this.raw.exec('SAVEPOINT lead_fold');
+    try {
+      const r = this.noteLeads(subject, lane, runKey, failures, o);
+      this.raw.exec('RELEASE lead_fold');
+      return r;
+    } catch (err) {
+      try {
+        this.raw.exec('ROLLBACK TO lead_fold');
+        this.raw.exec('RELEASE lead_fold');
+      } catch {
+        throw err;
+      }
+      const t = Number.isFinite(toMs(o.now)) ? iso(o.now) : new Date().toISOString();
+      const message = cap(String(err?.message ?? err));
+      try {
+        const prev = this.getKv('leads.fold_failures');
+        this.setKv('leads.fold_failures', { count: (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1, last_at: t, last_error: message }, { now: t });
+      } catch { /* counted where it can be */ }
+      try { this.log(`state: a lead of ${lane} could not be folded (the result is kept): ${message}`); } catch { /* the log is only a line */ }
+      return null;
+    }
   }
 
   /** The leads, parsed (versions as a list). `status` filters (default: all). */
@@ -1462,7 +1530,7 @@ export class StateDb {
     const t = toMs(now);
     const rows = this.raw.prepare(`
       SELECT a.run_key, COUNT(*) AS n, MAX(a.received) AS last FROM attempts a
-      WHERE a.reason IN ('retry_later', 'retry_throttled') AND a.run_key IS NOT NULL
+      WHERE a.reason IN ('retry_later', 'retry_throttled', 'subject_sha_mismatch') AND a.run_key IS NOT NULL
         AND a.received > COALESCE((SELECT accepted_at FROM results r WHERE r.run_key = a.run_key), '')
       GROUP BY a.run_key
     `).all();

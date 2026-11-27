@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { readArchive, readPlain, byTime } from '../longitudinal/checkin.mjs';
 import { DEFAULT_IDENTITY, outUnsafe, writeOut } from '../longitudinal/derive.mjs';
 import { openState } from '../state/db.mjs';
-import { leadFailures, nameTokens, seedLanguageOf } from '../state/fingerprint.mjs';
+import { leadFailures, seedLanguageOf } from '../state/fingerprint.mjs';
 import { filingDecision, flakeStats, shapeOf } from '../state/leads.mjs';
 import { resultFault } from '../worker-kit/contract.mjs';
 import { recheckPairs, RECHECK_MAX_DUE } from './recheck.mjs';
@@ -43,7 +43,6 @@ export const SOURCE = 'tool-qa leads/dry-run.mjs';
  */
 export function replay(items, { langOf = seedLanguageOf() } = {}) {
   const db = openState(':memory:');
-  const names = nameTokens(items.map((i) => i.subject));
   const seen = new Set();
   const sorted = items.filter((it) => { const k = `${it.attempt_id}/${it.item_index}`; if (seen.has(k)) return false; seen.add(k); return true; })
     .sort((a, b) => byTime(a.observed_at, b.observed_at) || `${a.attempt_id}/${a.item_index}`.localeCompare(`${b.attempt_id}/${b.item_index}`));
@@ -51,7 +50,7 @@ export function replay(items, { langOf = seedLanguageOf() } = {}) {
   let refused = 0;
   for (const it of sorted) {
     if (!Number.isFinite(Date.parse(it.observed_at))) continue;
-    const failures = leadFailures(it, { names, langOf });
+    const failures = leadFailures(it, { langOf });
     if (failures === null) continue; // unreadable: not folded, as in ingest
     // As ingest: a result whose every skip is retryable (skips_only) is no clean re-check.
     const skipsOnly = it.skips.length > 0 && it.skips.every((s) => s?.retryable === true);

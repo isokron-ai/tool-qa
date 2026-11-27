@@ -218,7 +218,7 @@ export async function runTick({
       const l = db.acquireLease(it.run_key, attemptId, { ttlMs, now: t });
       // subject: the key the result is recorded under; subject_name: the
       // current owner/name, what the worker clones or reads (schema v8).
-      if (l.acquired) leased.push({ run_key: it.run_key, subject: it.subject, subject_name: it.name ?? it.subject, fence: l.fence });
+      if (l.acquired) leased.push({ run_key: it.run_key, subject: it.subject, subject_name: it.name ?? it.subject, fence: l.fence, sha: it.fields?.sha ?? null });
     }
     if (leased.length === 0) {
       db.releaseSlotForAttempt(attemptId, 'nothing_leased', { now: t });
@@ -288,7 +288,7 @@ export async function runTick({
           log(`${wf.repo} ${wf.ref} moved to ${fresh} since this tick began; ${shardId} expects that commit`);
         }
       }
-      const inputs = workerInputs({ shardId, attemptId, items: leased, toolSha, runner });
+      const inputs = workerInputs({ shardId, attemptId, items: leased, toolSha, sendSha: wf.send_sha === true, runner });
       const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile: wf.file, ref: wf.ref, inputs, shardId });
       // The expected commit was recorded at creation; markDispatched keeps it.
       db.markDispatched(attemptId, { runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, correlatedBy: out?.correlatedBy ?? null, now: now() });

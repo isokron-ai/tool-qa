@@ -53,7 +53,7 @@ import { MAX_BUNDLE_BYTES, openAttempt } from './ingest.mjs';
 import { dbLedger } from './ledger.mjs';
 import { loadRegistry as loadPinnedRegistry } from './registry.mjs';
 import { keepSet } from './retention.mjs';
-import { nameTokens, seedLanguageOf } from '../state/fingerprint.mjs';
+import { seedLanguageOf } from '../state/fingerprint.mjs';
 import { leadsMode, recordsLeads } from '../state/leads.mjs';
 
 const MINUTE = 60_000;
@@ -319,13 +319,9 @@ export function createCollector({
     };
     const list = db.dispatchesAwaitingResults({ now: now(), lateMs });
     if (list.length === 0) return summary;
-    // The lead pipeline (LANE_LEADS_ENABLED): the subject-name tokens no signature word may share, from every
-    // subject the state knows (key and current name), built once per collect() and only if a result is accepted.
-    let names = null;
-    const leadOpts = recordsLeads(leads) ? {
-      names: () => (names ??= nameTokens(db.listSubjects().flatMap((s) => [s.id, s.name].filter(Boolean)))),
-      langOf: seedLanguageOf(),
-    } : null;
+    // The lead pipeline (LANE_LEADS_ENABLED): signatures are made from fixed code lists (R-LEAD-37), so only the
+    // seed's repository language is needed (the idiom of a result with no reader language).
+    const leadOpts = recordsLeads(leads) ? { langOf: seedLanguageOf() } : null;
     const { recipients } = await check();
     if (typeof mintToken !== 'function') throw new TypeError('collect: mintToken is required');
 

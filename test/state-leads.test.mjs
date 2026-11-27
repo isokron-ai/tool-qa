@@ -231,3 +231,20 @@ test('R-LEAD-21: a pair whose latest result fails at the same stage with another
   assert.equal(db.listLeads().find((l) => l.fingerprint === A.fingerprint).clean_rechecks, 0);
   assert.equal(db.leadSubjects(B.fingerprint)[0].current, 1);
 });
+
+test('R-LEAD-36: a lead that cannot be folded never costs its result: the fold rolls back alone, is counted in kv leads.fold_failures and logged', () => {
+  const db = openState(':memory:');
+  const lines = [];
+  db.log = (l) => lines.push(l);
+  const bad = lead(90, { class: null }); // NOT NULL on leads.class
+  const r = accept(db, { failures: [lead(91), bad], runId: 1, now: T0 });
+  assert.equal(r.accepted, true, 'the result is accepted');
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM results').get().n, 1, 'and recorded');
+  assert.deepEqual(db.listLeads(), [], 'the whole fold rolled back, the good lead with it (it is folded with the next result)');
+  assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM lead_subjects').get().n, 0);
+  assert.equal(db.getKv('leads.fold_failures').count, 1);
+  assert.ok(lines.some((l) => /could not be folded \(the result is kept\)/.test(l)));
+  // The next good result folds as usual.
+  accept(db, { failures: [lead(91)], runId: 2, now: T0 + HOUR });
+  assert.equal(db.listLeads().length, 1);
+});

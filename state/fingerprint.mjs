@@ -10,8 +10,9 @@
 // the disk except the lane table from pump/workflows.json, read once.
 //
 // The signature describes the shape of the bug, never the target: every part
-// is a code from a closed list, a bucket, a count, or one of our own short
-// words that shares no token with any subject name (`names`, nameTokens()).
+// is a code from a closed list (state/fingerprint-codes.json for the worker's
+// detail, list error and error name), a bucket or a count. No part depends on
+// which subjects the loop knows (R-LEAD-37).
 // Tool names are ours (a closed list, OUR_TOOLS) and lanes are our workflow
 // names, so neither goes through the subject-name filter (R-CHECKIN-14,
 // R-CHECKIN-15); anything else is <other>.
@@ -28,6 +29,14 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import { SKIP_REASONS, skipFault } from '../worker-kit/contract.mjs';
+
+/**
+ * The codes a signature may carry (state/fingerprint-codes.json): our workers'
+ * own detail codes, list errors and error names, refreshed from mcp-check by
+ * scripts/fingerprint-codes.mjs. Fixed lists, so a fingerprint never depends on
+ * which subjects the loop knows (R-LEAD-37).
+ */
+export const CODES = Object.freeze(JSON.parse(readFileSync(new URL('./fingerprint-codes.json', import.meta.url), 'utf8')));
 import { observedFields } from './oracle.mjs';
 
 /** result.detail words (scan-static) -> the contract skip reason they stand for. */
@@ -46,17 +55,9 @@ export const ENUMS = Object.freeze({
   fidelity: ['exact', 'derived', 'literal', 'names'],
   via: ['github', 'git', 'api', 'archive', 'tarball', 'zip', 'local'],
   language: ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'c#', 'c++', 'c', 'swift', 'php', 'ruby', 'scala', 'dart', 'elixir', 'shell', 'ts/js', 'java/kotlin', 'other'],
-  // result.detail: scan-static's words, and live-probe's fine causes (mcp-check corpus/live-probe.mjs DETAILS, the
-  // codes its items are skipped with). Our own codes only; anything else (a graded result's free text) is <other>.
-  detail: ['no_tools', 'multiple_servers', 'unsupported_language', 'names_only', 'too_large', 'tool_error', 'rate_limited', 'needs_credentials', 'quarantined',
-    'bad_subject', 'no_package', 'unsupported_package', 'private_registry', 'unverified_registry_entry', 'oci_host_not_allowed', 'image_too_large',
-    'launch_invalid', 'remote_only', 'unsupported_transport', 'registry_lookup_truncated', 'image_unavailable', 'image_registry_unreadable',
-    'image_pull_failed', 'install_failed', 'install_blocked', 'install_resource_limit', 'install_build_failed', 'install_timeout', 'package_not_runnable',
-    'package_error_unowned', 'entry_ambiguous', 'platform_unsupported', 'bundle_host_not_allowed', 'bundle_runtime_unsupported', 'bundle_unreadable',
-    'bundle_too_large', 'bundle_unavailable', 'bundle_hash_mismatch', 'bundle_invalid', 'bundle_unowned', 'entry_unresolved', 'start_needs_network',
-    'start_failed', 'start_needs_config', 'start_env_limited', 'start_needs_extra', 'start_dependency_drift', 'missing_own_module', 'undeclared_dependency',
-    'unsupported_platform', 'start_timeout', 'list_failed', 'list_probe_limited', 'list_rejected', 'upstream_error', 'harness_error', 'shard_deadline',
-    'sandbox_evidence_missing', 'disk_low'],
+  // result.detail: our workers' own codes (state/fingerprint-codes.json details: mcp-check live-probe DETAILS,
+  // scan-static SKIPS); anything else (a graded result's free text) is <other>.
+  detail: CODES.details,
 });
 export const CLASSES = Object.freeze([...SKIP_REASONS]);
 
@@ -99,12 +100,21 @@ export const hitsName = (value, names) => { const flat = flatten(value); for (co
 /** A closed list: the value if it is on it, else <other> (null stays null). */
 const oneOf = (v, list) => (v === null || v === undefined ? null : list.includes(v) ? v : '<other>');
 
-/** A free word (error name, detail, list error): only our own short codes, never a name of anything in the run. */
-export function word(v, names) {
+/**
+ * An error name (result.error_name): one of our error classes or a JavaScript
+ * built-in (CODES.error_names), lower-cased; anything else is <other>. A fixed
+ * list, never a filter against subject names: such a filter made one bug's
+ * fingerprint change as subjects were added (SyntaxError hit the token "axe"),
+ * which would have opened a second lead and a second public issue (R-LEAD-37).
+ */
+export function word(v) {
   if (v === null || v === undefined) return null;
-  const s = String(v);
-  if (!/^[A-Za-z][A-Za-z0-9_.-]{0,39}$/.test(s)) return '<other>';
-  return hitsName(s, names) ? '<other>' : s.toLowerCase();
+  return CODES.error_names.includes(String(v)) ? String(v).toLowerCase() : '<other>';
+}
+/** A list error code (result.list_error): one of our InputError codes (CODES.list_errors), else <other>. */
+export function listWord(v) {
+  if (v === null || v === undefined) return null;
+  return CODES.list_errors.includes(String(v)) ? String(v) : '<other>';
 }
 /** A code from a closed list; anything else is <other>. */
 const code = (v, list) => (v === null || v === undefined ? null : list.includes(v) ? v : '<other>');
@@ -146,9 +156,9 @@ export const toolTags = (tools) => (Array.isArray(tools) ? tools.map((t) => `${t
  * The result's own detail word says more than an ambiguous manifest reason.
  * @param {object} item  itemFromBundle()
  * @param {{faults: string[]}} config  the fault sides that count
- * @param {{langOf?: (subject: string) => string|null, names?: Set<string>}} [o]
+ * @param {{langOf?: (subject: string) => string|null}} [o]  (a `names` option is accepted and has no effect since R-LEAD-37)
  */
-export function failuresOf(item, config, { langOf = () => null, names = nameTokens([item.subject]) } = {}) {
+export function failuresOf(item, config, { langOf = () => null } = {}) {
   const want = new Set(config.faults);
   // Every result in the bundle is read, not only the first.
   const results = [...item.results.values()].filter((r) => r && typeof r.status === 'string');
@@ -159,8 +169,8 @@ export function failuresOf(item, config, { langOf = () => null, names = nameToke
   const common = (r, cls, stage, fault, extra) => ({
     ...baseFor(r), cls: code(cls, CLASSES), stage: code(stage, ENUMS.stage) ?? 'unknown', fault,
     signature: [
-      `class=${code(cls, CLASSES)}`, `detail=${code(r?.detail, ENUMS.detail) ?? '-'}`, `error=${word(r?.error_name, names) ?? '-'}`,
-      `list_error=${word(typeof r?.list_error === 'string' ? r.list_error : r?.list_error?.code, names) ?? '-'}`,
+      `class=${code(cls, CLASSES)}`, `detail=${code(r?.detail, ENUMS.detail) ?? '-'}`, `error=${word(r?.error_name) ?? '-'}`,
+      `list_error=${listWord(typeof r?.list_error === 'string' ? r.list_error : r?.list_error?.code) ?? '-'}`,
       `http=${bucketHttp(r?.http_status) ?? '-'}`, ...extra,
     ].join(';'),
   });
@@ -311,10 +321,10 @@ export const LEAD_FAULTS = Object.freeze(['tool', 'unknown', 'infra']);
  * that cannot be read gives null, which is not "no leads" (an empty list would
  * count as a clean re-check of every lead its subject and lane carried).
  */
-export function leadFailures(item, { names, langOf } = {}) {
+export function leadFailures(item, { langOf } = {}) {
   try {
     const out = new Map();
-    for (const f of failuresOf(item, { faults: LEAD_FAULTS }, { names: names ?? nameTokens([item.subject]), ...(langOf ? { langOf } : {}) })) {
+    for (const f of failuresOf(item, { faults: LEAD_FAULTS }, { ...(langOf ? { langOf } : {}) })) {
       const k = leadKeyOf(f);
       if (!out.has(k.id)) out.set(k.id, { fingerprint: k.id, ...k.parts, partial: f.partial, fault: f.fault, versions: k.versions });
     }

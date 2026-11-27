@@ -69,9 +69,15 @@ export function leadRecheckHook({ pairs }) {
     if (after === undefined || !ctx?.last) return false;
     const last = Date.parse(ctx.last.accepted_at);
     const want = Date.parse(after);
-    return Number.isFinite(last) && Number.isFinite(want) && last <= want;
+    if (!Number.isFinite(last) || !Number.isFinite(want)) return false;
+    // A newer result that moved nothing (it was never folded, say) leaves the lead waiting: after
+    // RECHECK_TIMEOUT_MS it is due again, still bounded by the attempts (recheckPairs counts every dispatch).
+    return last <= want || (Number.isFinite(ctx.now) && ctx.now - last > RECHECK_TIMEOUT_MS);
   };
 }
+
+/** How long a re-check pair waits after a result that moved its lead nowhere before it is sent again. */
+export const RECHECK_TIMEOUT_MS = 24 * 3_600_000;
 
 /** A runner label a worker workflow may be sent as `runner`: GitHub's label alphabet. */
 export const RUNNER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
