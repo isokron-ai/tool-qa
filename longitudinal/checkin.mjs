@@ -295,7 +295,7 @@ export function failuresOf(item, config = DEFAULT_CONFIG, { langOf = () => null,
     }
   }
   const safe = (v) => (/^[A-Za-z0-9@._,-]{1,80}$/.test(v) && !hitsName(v, names) ? v : '<other>');
-  return out.map((f) => ({ ...f, tool: safe(item.tools.join(',') || 'unknown'), lane: safe(item.lane) }));
+  return out.map((f) => ({ ...f, tool: safe(item.tools.join(',') || 'unknown'), lane: /^[A-Za-z0-9._-]{1,80}$/.test(item.lane ?? '') ? item.lane : '<other>' /* our workflow name, not subject data: never name-redacted */ }));
 }
 
 /** Order by time; a time that does not parse sorts last (never NaN). */

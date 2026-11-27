@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { analyse, byTime, failuresOf, itemsFromEntries, loadSeed, main, readArchive, renderMarkdown, subjectWeight, DEFAULT_CONFIG } from '../checkin.mjs';
+import { analyse, byTime, failuresOf, itemsFromEntries, loadSeed, main, nameTokens, readArchive, renderMarkdown, subjectWeight, DEFAULT_CONFIG } from '../checkin.mjs';
 import { ageEncrypt } from '../../ingest/age.mjs';
 import { packBundle } from '../../worker-kit/bundle.mjs';
 import { writeTar } from '../../worker-kit/tar.mjs';
@@ -392,4 +392,16 @@ test('R-CHECKIN-13: the archive keeps one sealed file per item; the items of eve
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('R-CHECKIN-14: the lane is our own workflow name and is shown even when a subject name shares a word with it', () => {
+  const item = itemsFromEntries(entriesOf()).find((it) => failuresOf(it).length > 0);
+  assert.ok(item, 'the fixture has an item with a tool-side failure');
+  const names = nameTokens(['acme/live-tools', 'x/probe-mcp', 'y/static-scan']);
+  for (const lane of ['live-probe', 'scan-static']) {
+    const fl = failuresOf({ ...item, lane }, DEFAULT_CONFIG, { names });
+    assert.ok(fl.length > 0);
+    assert.ok(fl.every((f) => f.lane === lane), `${lane} is not redacted`);
+  }
+  assert.ok(failuresOf({ ...item, lane: 'bad lane;' }, DEFAULT_CONFIG, { names }).every((f) => f.lane === '<other>'), 'a malformed lane is still refused');
 });
