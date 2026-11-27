@@ -11,6 +11,7 @@
     "lead_reverify": 25,
     "determinism_sample": 5,
     "raw_sample": 5,
+    "cell_sample": 5,
     "age_per_day": 1,
     "age_max": 30,
     "coverage_gap_share": 0.5,

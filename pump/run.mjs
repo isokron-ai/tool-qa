@@ -92,7 +92,8 @@ import { appTokenMinter } from './app-token.mjs';
 import { ApiBudget, budgetedFetch } from './budgets.mjs';
 import { allowedWorkflows, judgeConformance, pinMismatches, readConformance as readConformanceStatus, untrustedWorkflows, verifyRun } from './breaker.mjs';
 import { createDispatcher } from './dispatch.mjs';
-import { dueFromState, isEnabled, loadConfig } from './due.mjs';
+import { dueFromState, isEnabled, loadConfig, NO_HOOKS } from './due.mjs';
+import { samplingHooks, activeSubjects } from './sampling.mjs';
 import { lanePinModes } from './pins.mjs';
 import { createClient, scrub } from './github.mjs';
 import { POLICY } from './retry.mjs';
@@ -297,6 +298,8 @@ export async function runPump({
   // starts the next one at once, a failing run a minute until a person steps
   // in. The schedule and the watchdog still try every 30 minutes.
   let db;
+  // Sampling for `mode: sample` tier cells: SAMPLE_RATE_T<n> / SAMPLE_CAP_T<n>; unset is rate 0 (nothing picked).
+  const sampleHooks = samplingHooks({ env, population: () => activeSubjects(db) });
   let pulled;
   try {
     pulled = await pull({ repo, token: stateToken, file: stateFile, fetch, log: say, clock: now, retryUntil: start + PULL_RETRY_MS, onRetry: retryHook('state_asset'), ...stateKeys });
@@ -577,7 +580,7 @@ export async function runPump({
       // judges it first (R-CHAOS-02).
       const holdRunKeys = slots > 0 && collector && !(ingested && !ingested.stopped) ? unjudgedLateRunKeys(db, { now: now() }) : null;
       const summary = await runTick({
-        db, now, config: tickConfig, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
+        db, now, config: tickConfig, hooks: sampleHooks, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
         // The pending dispatches are saved before any is sent (R-ING-10).
         beforeSend: () => save(`tick ${ticks}, before dispatching`),
       });
@@ -698,7 +701,7 @@ export async function cancelSuccessor({ successorFile, repo, mint, fetch, apiUrl
 export function plan({ stateFile = DEFAULT_STATE, now = Date.now(), config = loadConfig(), out = (l) => process.stdout.write(`${l}\n`) } = {}) {
   const db = openState(stateFile);
   try {
-    const due = dueFromState(db, { now, tiers: config.tiers, workflows: config.workflows });
+    const due = dueFromState(db, { now, tiers: config.tiers, workflows: config.workflows, hooks: { ...NO_HOOKS, ...samplingHooks({ env: process.env, population: () => activeSubjects(db) }) } });
     out(`${due.length} due`);
     for (const d of due.slice(0, 50)) out(`  ${d.priority.toFixed(1).padStart(6)}  T${d.tier}  ${d.workflow.padEnd(14)} ${d.subject}${d.name && d.name !== d.subject ? ` (now ${d.name})` : ''}  (${d.reasons.join(', ')})`);
     const shards = planShards(due, config.workflows);
