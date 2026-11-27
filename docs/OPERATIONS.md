@@ -100,6 +100,9 @@ The publish workflow (`publish-results`, docs/PUBLISHING.md) is off unless
 `RESULTS_PUBLISH_ENABLED` is exactly `true`, and then also obeys `LOOP_ENABLED`,
 `LOOP_PAUSE_UNTIL` and `LANE_PUBLISH_RESULTS_ENABLED`; it does not use slots.
 
+The lead pipeline (`LANE_LEADS_ENABLED`, read by the pump step; "Leads") is
+off unless set to `dry-run`, `recheck` or `true`.
+
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a
 pump whose lane is off.
