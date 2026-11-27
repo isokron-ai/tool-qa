@@ -71,6 +71,9 @@
 //   LANE_STATE_PRUNE_ENABLED   anything but unset, empty or "true" stops pruning
 //   LANE_SUBJECT_IDS_ENABLED   anything but unset, empty or "true" stops the
 //                      subject id lookups (pump/identity.mjs)
+//   LANE_HEADS_ENABLED   only the exact value "true" runs the head poll
+//                      (pump/heads.mjs): new default-branch heads and releases
+//                      move subjects' sha and changed_at
 //   LANE_LIVE_SNAPSHOT_ENABLED   only the exact value "true" publishes the live
 //                      loop snapshot to R2 (live/publish.mjs); with
 //                      LIVE_R2_ACCESS_KEY_ID, LIVE_R2_SECRET_ACCESS_KEY,
@@ -102,6 +105,7 @@ import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.
 import { computeBudget, reapExpired } from './slots.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
+import { HEADS_KV_KEY, headsEnabled, refreshHeads } from './heads.mjs';
 import { planShards, runTick } from './tick.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
@@ -143,6 +147,10 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
  * for the defaults, null for none, or options for refreshIdentities()
  * (batch, maxQueries, retryMs). They use GITHUB_TOKEN through the run's API
  * budget and never hold the run.
+ * heads: the head poll at start-up (pump/heads.mjs): undefined for the
+ * defaults, null for none, or options for refreshHeads() (batch, maxQueries,
+ * reserve). Only with LANE_HEADS_ENABLED exactly "true"; GITHUB_TOKEN through
+ * the run's API budget; never holds the run.
  * ingest: undefined for the pump's own collector (ingest/collect.mjs, built
  * with `ingestOptions`), null for none, a function (called as collect()), or an
  * object with collect() and optionally check().
@@ -163,6 +171,7 @@ export async function runPump({
   stateFile = DEFAULT_STATE,
   seedFile = SEED_FILE,
   identity,
+  heads,
   config,
   pull = pullState,
   push = pushState,
@@ -511,6 +520,17 @@ export async function runPump({
       say('pump: subject ids: lookups are off (LANE_SUBJECT_IDS_ENABLED); ids already found are still used');
       // The watchdog shows the item off, not the last pass's colour (R-SUBJ-18).
       db.setKv(IDENTITY_KV_KEY, { ...(db.getKv(IDENTITY_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
+    }
+    // Change detection (pump/heads.mjs): default-branch heads and latest
+    // releases of bound subjects, so a change makes them due. A few GraphQL
+    // queries at most, after the id pass; never fails or holds the run (A3).
+    if (heads !== null && headsEnabled(env)) {
+      const client = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => deadline, onRetry: retryHook('github_api') }) : null;
+      const h = await refreshHeads(db, { client, tiers: cfg.tiers, now, log: say, ...(heads ?? {}) });
+      say(`pump: subject heads: ${h.summary}`);
+    } else if (heads !== null) {
+      // The watchdog shows the item off, not the last pass's colour.
+      db.setKv(HEADS_KV_KEY, { ...(db.getKv(HEADS_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
     }
     // Registry delta capture (pump/registry-delta.mjs): GitHub's */15 cron for it
     // fires hours late, so the pump dispatches it when the newest capture is
