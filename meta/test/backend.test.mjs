@@ -479,3 +479,12 @@ test('R-WB-18: a backend the repository declares outranks one it only mentions: 
   assert.deepEqual([v.class, v.backend.id, v.stand_in.id], ['local_full', 'sqlite', 'sqlite']);
   assert.ok(v.backends.some((b) => b.id === 'postgres' && b.score > v.backends.find((x) => x.id === 'sqlite').score), 'postgres scored higher, and still ranks below');
 });
+
+test('R-WB-19: tool names in FastMCP decorators whose arguments span lines and nest parentheses (mysql-mcp-server, dry run 28 Nov)', () => {
+  const v = classify({
+    'pyproject.toml': '[project]\ndependencies = ["mysql-connector-python"]\n',
+    'src/server.py': '@mcp.tool(\n    name="mysql_list_tables",\n    annotations=ToolAnnotations(title="List", readOnlyHint=True),\n)\ndef list_tables():\n    pass\n\n@mcp.tool(\n    name="mysql_insert_row",\n    annotations=ToolAnnotations(destructiveHint=False),\n)\nasync def insert_row():\n    pass\n',
+  });
+  assert.deepEqual(v.write_tools, { names_seen: 2, write_like: 1, sample: ['mysql_insert_row', 'mysql_list_tables'] });
+  assert.deepEqual([v.class, v.backend.id], ['local_full', 'mysql']);
+});
