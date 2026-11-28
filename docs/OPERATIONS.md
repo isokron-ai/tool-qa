@@ -2140,7 +2140,7 @@ repos"). It is off by default.
 | `dry-run` | Ingest keeps each accepted result's leads in the state; each pump run writes the filing plan to its **job summary** ("Leads"). No re-dispatch, no issue. |
 | `recheck` | `dry-run`, and the pump re-dispatches leads to re-check them. Still no issue. |
 | `true` | All of it: re-checks, and issues filed, closed and reopened on our repositories. |
-| Code | `state/fingerprint.mjs` (fingerprints, shared with the check-in), `state/leads.mjs` (rules), `StateDb.noteLeads` (state schema v11), `leads/recheck.mjs`, `leads/plan.mjs`, `leads/repro.mjs`, `leads/step.mjs`, `watchdog/leads.mjs`. |
+| Code | `state/fingerprint.mjs` (fingerprints, shared with the check-in), `state/leads.mjs` (rules), `StateDb.noteLeads` (state schema v12), `leads/recheck.mjs`, `leads/plan.mjs`, `leads/repro.mjs`, `leads/step.mjs`, `watchdog/leads.mjs`. |
 | Routing | `leads/routing.json`: by lane and component, else by lane, else `isokron-ai/tool-qa`; only the five listed repositories. |
 
 **What a lead is.** A fingerprint of a tool-side failure: our tool, component
