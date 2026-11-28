@@ -63,6 +63,15 @@ function numberEnv(env, key, dflt) {
   return Number(v);
 }
 
+/**
+ * Who read: the lane's version and the commit of this repository the job ran (GITHUB_SHA; the workers run ref main, so the
+ * version alone does not tell two builds apart, RD-11). null when the environment has no full sha.
+ */
+export function readerOf(lane, env) {
+  const sha = /^[0-9a-f]{40}$/.test(env.GITHUB_SHA ?? '') ? env.GITHUB_SHA : null;
+  return { name: `tool-qa-${lane.name}`, version: lane.version, build: sha };
+}
+
 const ndjson = (records) => records.map((r) => JSON.stringify(r)).join('\n') + (records.length ? '\n' : '');
 
 function writeFiles(dir, files) {
@@ -139,7 +148,7 @@ export async function runShard({
     }
     const records = sanitize(o.records);
     const report = sanitize({
-      format: RESULT_FORMAT, lane: lane.name, lane_version: lane.version, subject: item.subject,
+      format: RESULT_FORMAT, lane: lane.name, lane_version: lane.version, reader: readerOf(lane, env), subject: item.subject,
       observed_at: finishedAt, outcome, stages: o.stages, records: records.length,
       fields: [...new Set(records.map((r) => r.field))].sort(), shard_api: shardApi,
     });

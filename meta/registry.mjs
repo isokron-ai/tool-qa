@@ -30,7 +30,7 @@ import { OCI_HOSTS, ociTarget, resolveTags } from './lib/oci.mjs';
 import { bool, githubRepoOf, int, record, skipFor, str, textDigest, time, toolErrorSkip } from './lib/common.mjs';
 
 export const LANE = 'meta-registry';
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 export const MCP_REGISTRY = 'https://registry.modelcontextprotocol.io/v0.1/servers';
 const NPM = 'https://registry.npmjs.org';
 const PYPI = 'https://pypi.org';
@@ -660,7 +660,8 @@ export async function collectSubject(http, repo, { seed = new Map() } = {}) {
       ...out.npm.filter((x) => x.status === 'ok').map((x) => ['npm', x.name]),
       ...out.pypi.filter((x) => x.status === 'ok').map((x) => ['pypi', x.name]),
       ...out.crates.filter((x) => x.status === 'ok').map((x) => ['cargo', x.name]),
-      ...(out.go.status === 'ok' ? [['go', out.go.module]] : []),
+      // A module the proxy made up for a repository with no go.mod is not a Go package of the subject (RD-10).
+      ...(out.go.status === 'ok' && out.go.value?.go_mod_synthesized !== true ? [['go', out.go.module]] : []),
     ];
     const packages = [];
     for (const [sys, name] of found) packages.push(await depsdevPackage(http, sys, name));
@@ -671,7 +672,8 @@ export async function collectSubject(http, repo, { seed = new Map() } = {}) {
   for (const k of ['npm', 'pypi', 'crates']) stages[k] = out[k].length === 0 ? 'not_applicable' : out[k].map((x) => x.problem ?? x.status).join(',');
   // Per package, so a control can look at one package's outcome alone (R-META-07).
   stages.npm_packages = out.npm.map((x) => ({ package: x.name, status: x.problem ?? x.status }));
-  stages.go = out.go.problem ?? out.go.status;
+  // 'not_found' of a cached-only lookup means "the proxy has not cached it": unknown, not absent (RD-10).
+  stages.go = out.go.problem ?? (out.go.status === 'not_found' ? 'not_cached' : out.go.value?.go_mod_synthesized === true ? 'synthesized_go_mod' : out.go.status);
   stages.oci = out.oci.length === 0 ? 'not_applicable' : out.oci.map((x) => x.status).join(',');
   stages.depsdev = out.depsdev.problem ?? 'ok';
   return out;
@@ -745,7 +747,15 @@ export function subjectOutput(c, observedAt) {
     skip('go', c.go.problem);
     records.push(record('go_module_facts', null, `the Go module proxy was not read: ${c.go.problem}`));
   } else {
-    records.push(record('go_module_facts', { module: c.go.module, found: c.go.status === 'ok', basis: 'proxy.golang.org/cached-only', ...(c.go.status === 'ok' ? c.go.value : {}) }));
+    // found: true only when the proxy has the module; a 404 on the cached-only proxy is unknown (null), and a go.mod the
+    // proxy synthesized says the repository declares no Go module (RD-10). Other 4xx/5xx answers stay found: false.
+    const ok = c.go.status === 'ok';
+    const unknown = c.go.status === 'not_found';
+    records.push(record('go_module_facts', {
+      module: c.go.module, found: unknown ? null : ok, basis: 'proxy.golang.org/cached-only',
+      ...(unknown ? { note: 'the cached-only proxy did not answer 200: unknown, not proof that no Go module exists' } : {}),
+      ...(ok ? { ...c.go.value, declares_go_module: c.go.value.go_mod_synthesized !== true } : {}),
+    }));
   }
   // Image tags: one element per reference and tag; a rate limit or an outage is a retryable skip (R-DRIFT-10).
   const oci = c.oci ?? [];
