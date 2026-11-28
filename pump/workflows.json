@@ -78,7 +78,7 @@
       "setup_minutes": 12,
       "minutes_per_subject": 2,
       "slots_max": 2,
-      "versions": { "tool": { "mcp-writecheck-action": "67cd21b", "mcp-writecheck": "3af41c6" }, "oracle": {}, "probe": { "mcp-surface-corpus": "3738f2c" } },
+      "versions": { "tool": { "mcp-writecheck-action": "3c7da25", "mcp-writecheck": "3af41c6" }, "oracle": {}, "probe": { "mcp-surface-corpus": "3738f2c" } },
       "image_digest": null,
       "settings_state": "default"
     },
@@ -175,7 +175,7 @@
       "enabled": true,
       "switch": "LANE_T0_DOGFOOD_ENABLED",
       "runs_untrusted": true,
-      "sandbox_sha": "11974fbb75a8c276214c887a079d6ad6df374124",
+      "sandbox_sha": "3738f2c3dabe03e943a1e5ff0a2441aca831e910",
       "pin_check": "label",
       "repo": "isokron-ai/mcp-writecheck-action",
       "file": "dogfood-kronicle-lite.yml",
