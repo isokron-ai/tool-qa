@@ -92,6 +92,8 @@ jobs:
           SAMPLE_CAP_T4: ${{ vars.SAMPLE_CAP_T4 }}
           LANE_HISTORY_REGISTRY_ENABLED: ${{ vars.LANE_HISTORY_REGISTRY_ENABLED }}
           LANE_SUBJECT_IDS_ENABLED: ${{ vars.LANE_SUBJECT_IDS_ENABLED }}
+          # The discover lane (pump/discover.mjs): off unless the variable is exactly "true".
+          LANE_DISCOVER_ENABLED: ${{ vars.LANE_DISCOVER_ENABLED }}
           # The backfill filler (pump/backfill.mjs): off unless the variable is exactly "true".
           LANE_BACKFILL_ENABLED: ${{ vars.LANE_BACKFILL_ENABLED }}
           # The head poll (pump/heads.mjs): off unless the variable is exactly "true".
