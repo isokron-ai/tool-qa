@@ -530,9 +530,14 @@ export class FakeGitHub {
     }
     if (method === 'POST' && rest === '/issues') {
       const n = r.issues.length + 1;
-      const issue = { number: n, node_id: `I_${n}`, title: req.json.title, body: req.json.body, state: 'open', labels: (req.json.labels ?? []).map((name) => ({ name })) };
+      // Every token in the sim is the loop's App's (pump and watchdog), so its issues are the App bot's.
+      const issue = { number: n, node_id: `I_${n}`, title: req.json.title, body: req.json.body, state: 'open', labels: (req.json.labels ?? []).map((name) => ({ name })), user: { login: 'isokron-tool-qa[bot]', type: 'Bot' } };
       r.issues.push(issue);
       return { status: 201, body: { ...issue } };
+    }
+    if (method === 'GET' && (m = /^\/issues\/(\d+)$/.exec(rest))) {
+      const issue = r.issues.find((i) => i.number === Number(m[1]));
+      return issue ? { body: { ...issue } } : notFound();
     }
     if (method === 'PATCH' && (m = /^\/issues\/(\d+)$/.exec(rest))) {
       const issue = r.issues.find((i) => i.number === Number(m[1]));

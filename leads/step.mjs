@@ -22,9 +22,8 @@
 import { appendFileSync } from 'node:fs';
 
 import { createClient } from '../pump/github.mjs';
-import { nameTokens } from '../state/fingerprint.mjs';
 import { filesLeads } from '../state/leads.mjs';
-import { assertShapeOnly, issueFor, planFilings, renderPlan, titleTag } from './plan.mjs';
+import { issueFor, MARKER, planFilings, renderPlan, titleTag } from './plan.mjs';
 
 export const LEADS_LAST_KEY = 'leads.last';
 /** Issue writes (create, close, reopen, comment) per pump run at most. */
@@ -32,6 +31,8 @@ export const MAX_WRITES = 20;
 /** kv leads.last keeps a sample of the open queue at most this often, and this many. */
 export const HISTORY_EVERY_MS = 3_600_000;
 export const HISTORY_MAX = 30;
+/** The login GitHub shows for issues our App files (its slug plus [bot]); LEADS_BOT_LOGIN overrides it. */
+export const DEFAULT_BOT_LOGIN = 'isokron-tool-qa[bot]';
 /** Pages of 100 issues looked through to adopt a filing that was not confirmed. */
 export const ADOPT_PAGES = 3;
 
@@ -50,7 +51,7 @@ const repoName = (repo) => String(repo).split('/')[1];
  * @param {object} [o.client]  options for pump/github.mjs createClient (fetch, apiUrl, budget, sleep, retryUntil)
  * @returns {Promise<object>} what kv leads.last holds
  */
-export async function leadStep({ db, mode, tierWeights, now, log = () => {}, mintToken, save, summaryFile, client: clientOpts = {}, maxWrites = MAX_WRITES }) {
+export async function leadStep({ db, mode, tierWeights, now, log = () => {}, mintToken, save, summaryFile, client: clientOpts = {}, maxWrites = MAX_WRITES, botLogin = process.env.LEADS_BOT_LOGIN || DEFAULT_BOT_LOGIN }) {
   const at = () => new Date(now()).toISOString();
   const note = { at: at(), mode, filed: 0, closed: 0, reopened: 0, adopted: 0, refiled: 0, errors: 0, writes: 0 };
   const done = new Map();
@@ -63,8 +64,7 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
     Object.assign(note, counts(db), { planned: plan.file.length, capped: plan.capped.length, held: plan.held.length });
 
     if (filesLeads(mode) && typeof mintToken === 'function') {
-      const subjects = db.listSubjects().flatMap((s) => [s.id, s.name].filter(Boolean));
-      const names = nameTokens(subjects);
+      const ours = (i) => i?.user?.login === botLogin; // anyone may open an issue: only our App's count
       const clients = new Map();
       const clientFor = async (repo) => {
         if (!clients.has(repo)) {
@@ -82,12 +82,13 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
       for (const e of plan.indoubt) {
         try {
           const gh = await clientFor(e.lead.repo);
-          // By the title tag alone, newest first, a few pages: an issue filed without the label (R-LEAD-30) is found too.
+          // Newest first, a few pages, label or not (R-LEAD-30): our App's issue with this lead's title tag and marker (R-LEAD-41).
           let hit = null;
           for (let page = 1; page <= ADOPT_PAGES && !hit; page++) {
             const res = await gh.request('GET', `/repos/${e.lead.repo}/issues`, { query: { state: 'all', per_page: 100, page, sort: 'created', direction: 'desc' } });
             const list = Array.isArray(res.data) ? res.data : [];
-            hit = list.find((i) => !i?.pull_request && typeof i?.title === 'string' && i.title.startsWith(titleTag(e.lead.fingerprint))) ?? null;
+            hit = list.find((i) => !i?.pull_request && ours(i) && typeof i?.title === 'string' && i.title.startsWith(titleTag(e.lead.fingerprint))
+              && typeof i?.body === 'string' && i.body.includes(MARKER(e.lead.fingerprint))) ?? null;
             if (list.length < 100) break;
           }
           if (hit) {
@@ -114,14 +115,21 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
             const text = state === 'closed'
               ? `The loop re-checked this ${e.lead.clean_rechecks} times without seeing it, and no server carries it now: closing. It reopens if it comes back.`
               : `It came back (${e.lead.sightings} sightings in all, last ${e.lead.last_seen.slice(0, 10)}): reopening.`;
+            // Read it first (R-LEAD-43): an issue a person closed or reopened, or one our App did not open, is left alone.
+            const cur = (await gh.request('GET', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}`)).data ?? {};
+            const synced = (s2, why) => {
+              db.tx(() => db.raw.prepare('UPDATE leads SET issue_state = ?, needs_sync = 0, updated_at = ? WHERE fingerprint = ?').run(s2, at(), e.lead.fingerprint));
+              if (why) log(`leads: issue #${e.lead.issue_number} on ${e.lead.repo} left as it is: ${why}`);
+            };
+            if (!ours(cur)) { synced(e.lead.issue_state, 'not opened by our App'); continue; }
+            if (cur.state === state) { synced(state, null); continue; }
+            if (cur.state !== e.lead.issue_state) { synced(cur.state === 'closed' ? 'closed' : 'open', `its state was changed by hand (${cur.state})`); continue; }
+            // Both writes (state, then the comment) count against the cap, and go only together (R-LEAD-44).
+            if (note.writes + 2 > maxWrites) break;
+            note.writes += 2;
             // The state first: a failed comment never makes the next run comment again.
-            const ok = await write(async () => {
-              await gh.request('PATCH', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}`, { body: { state, ...(state === 'closed' ? { state_reason: 'completed' } : {}) } });
-              return true;
-            });
-            if (!ok) break;
-            db.tx(() => db.raw.prepare('UPDATE leads SET issue_state = ?, needs_sync = 0, updated_at = ? WHERE fingerprint = ?').run(state, at(), e.lead.fingerprint));
-            note.writes += 1; // the comment
+            await gh.request('PATCH', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}`, { body: { state, ...(state === 'closed' ? { state_reason: 'completed' } : {}) } });
+            synced(state, null);
             try {
               await gh.request('POST', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}/comments`, { body: { body: text } });
             } catch (err) {
@@ -140,15 +148,8 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
       const issues = [];
       for (const e of plan.file) {
         if (issues.length + note.writes >= maxWrites) break;
+        // Held leads never get here: planFilings runs the shape guard before handing out room (R-LEAD-42).
         const issue = issueFor(e, { now: at() });
-        try {
-          assertShapeOnly(e.lead, `${issue.title}\n${issue.body}`, { names, subjects });
-        } catch (err) {
-          note.errors += 1;
-          done.set(e.lead.fingerprint, 'held: not shape-only');
-          log(`leads: not filing ${e.lead.fingerprint}: ${err.message}`);
-          continue;
-        }
         issues.push({ e, issue });
       }
       if (issues.length) {
@@ -169,8 +170,8 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
                   // A repository that refuses the label (no permission to create it): file without it. Adoption finds
                   // such an issue by its title tag, so it is never filed twice either.
                   if (Number(err?.status) !== 422) throw err;
-                  note.writes += 1;
-                  return gh.request('POST', `/repos/${e.lead.repo}/issues`, { body: { title: issue.title, body: issue.body } });
+                  // The retry is a write of its own (R-LEAD-44): over the cap, the lead stays marked and is looked up next run.
+                  return write(() => gh.request('POST', `/repos/${e.lead.repo}/issues`, { body: { title: issue.title, body: issue.body } }));
                 }
               });
               if (!res) break;

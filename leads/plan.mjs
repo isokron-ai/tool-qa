@@ -11,12 +11,12 @@
 //
 // An issue holds the lead's shape only (state/leads.mjs SHAPE_COLUMNS), our
 // tool and its versions, counts, and a synthetic repro (leads/repro.mjs): never
-// a subject name, a run id, a payload or third-party code. assertShapeOnly()
-// checks every free word once more against every subject name the state knows
-// before anything is sent.
+// a subject name, a run id, a payload or third-party code; a tier breakdown
+// only with TIER_MIN_CARRIERS carriers or more, and never the priority.
+// assertShapeOnly() checks every field of the lead before it gets a filing slot.
 
 import { DEFAULT_CONFIG } from '../longitudinal/checkin.mjs';
-import { DETAIL_CLASS, word } from '../state/fingerprint.mjs';
+import { CODES, DETAIL_CLASS, OWN_TOOLS } from '../state/fingerprint.mjs';
 import { CAP_NEW_PER_REPO_PER_DAY, CAP_OPEN_PER_REPO, CLEAN_RECHECKS_TO_CLOSE, filingDecision, flakeStats, INFRA_MIN_DAYS, shapeOf } from '../state/leads.mjs';
 import { syntheticRepro } from './repro.mjs';
 
@@ -24,6 +24,8 @@ export const LABEL = 'loop-lead';
 /** The marker every lead issue's title starts with; filing looks it up by this after a crash. */
 export const titleTag = (fp) => `[lead ${fp}]`;
 export const MARKER = (fp) => `<!-- tool-qa lead ${fp} -->`;
+/** A tier breakdown is shown only with at least this many carriers: fewer, with the lane, idiom and layout, could point at one server in the public seed. */
+export const TIER_MIN_CARRIERS = 5;
 const SITE = 'https://isokron.ai/?utm_source=github&utm_medium=issue&utm_campaign=tool-qa-lead';
 
 const dayStart = (now) => { const d = new Date(now); d.setUTCHours(0, 0, 0, 0); return d.toISOString(); };
@@ -56,8 +58,10 @@ function carriers(db, fp, tierOf, tierWeights) {
  * @returns {{file: object[], held: object[], capped: object[], close: object[], reopen: object[], indoubt: object[], caps: object}}
  *   each entry {lead (shape), priority, carriers, decision, flake}
  */
-export function planFilings(db, { now, tierWeights, tierOf = null, config = DEFAULT_CONFIG, capNew = CAP_NEW_PER_REPO_PER_DAY, capOpen = CAP_OPEN_PER_REPO } = {}) {
-  const tiers = tierOf ?? (() => { const m = new Map(db.listSubjects().map((s) => [s.id, `T${s.tier}`])); return (id) => m.get(id) ?? 'T4'; })();
+export function planFilings(db, { now, tierWeights, tierOf = null, config = DEFAULT_CONFIG, capNew = CAP_NEW_PER_REPO_PER_DAY, capOpen = CAP_OPEN_PER_REPO, subjects = null } = {}) {
+  const known = db.listSubjects();
+  const tiers = tierOf ?? (() => { const m = new Map(known.map((s) => [s.id, `T${s.tier}`])); return (id) => m.get(id) ?? 'T4'; })();
+  const ids = subjects ?? known.flatMap((s) => [s.id, s.name].filter(Boolean));
   const leads = db.listLeads();
   const today = dayStart(now);
   const caps = {};
@@ -85,8 +89,16 @@ export function planFilings(db, { now, tierWeights, tierOf = null, config = DEFA
     const d = filingDecision(l, { pairs, now });
     if (!d) continue;
     e.decision = d;
-    if (d.file) entries.push(e);
-    else out.held.push(e);
+    // The shape guard runs before any daily room is handed out: a lead it holds never takes a filing slot (R-LEAD-42).
+    if (d.file) {
+      try {
+        assertShapeOnly(e.lead, { subjects: ids });
+        entries.push(e);
+      } catch (err) {
+        e.decision = { file: false, reason: 'not_shape_only' };
+        out.held.push(e);
+      }
+    } else out.held.push(e);
   }
   entries.sort((a, b) => b.priority - a.priority || b.carriers.current - a.carriers.current || a.lead.fingerprint.localeCompare(b.lead.fingerprint));
   for (const e of entries) {
@@ -102,7 +114,8 @@ export function issueFor(e, { now }) {
   const l = e.lead;
   const kind = kindOf(l);
   const versions = (Array.isArray(l.versions) ? l.versions : JSON.parse(l.versions ?? '[]')).join(', ') || 'none recorded';
-  const tiers = Object.entries(e.carriers.byTier).map(([t, n]) => `${t}: ${n}`).join(', ') || 'none now';
+  // Tiers only with enough carriers that no one server can be singled out (R-LEAD-40); never the priority.
+  const tiers = e.carriers.current >= TIER_MIN_CARRIERS ? ` (${Object.entries(e.carriers.byTier).map(([t, n]) => `${t}: ${n}`).join(', ')})` : '';
   const why = {
     reproduced: 'A re-run of the same server and lane, in another worker run on a fresh runner, showed it again',
     flake_rate: `It comes and goes on the same server: ${Math.round(e.flake.rate * 100)}% of ${e.flake.total} results over 14 days carried it`,
@@ -124,7 +137,7 @@ export function issueFor(e, { now }) {
     `| Layout | \`${l.layout}\` |`,
     `| Signature | \`${l.signature}\` |`,
     '',
-    `**Counts.** ${e.carriers.current} server${e.carriers.current === 1 ? '' : 's'} carry it on their latest result (${tiers}); seen ${l.sightings} times from ${l.first_seen.slice(0, 10)} to ${l.last_seen.slice(0, 10)}${l.reopened ? `; reopened ${l.reopened} time${l.reopened === 1 ? '' : 's'}` : ''}. Priority ${e.priority} (severity x tier weights of those servers).`,
+    `**Counts.** ${e.carriers.current} server${e.carriers.current === 1 ? ' carries' : 's carry'} it on ${e.carriers.current === 1 ? 'its' : 'their'} latest result${tiers}; seen ${l.sightings} times from ${l.first_seen.slice(0, 10)} to ${l.last_seen.slice(0, 10)}${l.reopened ? `; reopened ${l.reopened} time${l.reopened === 1 ? '' : 's'}` : ''}.`,
     '',
     `**Why it is filed.** ${why}.`,
     '',
@@ -142,33 +155,40 @@ export function issueFor(e, { now }) {
 }
 
 /**
- * Throw unless an issue holds no subject name: its free words (the
- * signature's error and list_error) are checked again against every subject
- * name the state knows now, and the text must not hold any subject id.
+ * Throw unless a lead's shape is shape-only, field by field: the signature's
+ * words are from our fixed code lists (state/fingerprint-codes.json), the tool
+ * and its versions are ours, idiom and layout have the closed lists' alphabet,
+ * and no field holds any subject id the state knows. Only the lead's own
+ * fields are looked at: the issue's fixed text and the repro templates are
+ * ours, and may name a public SDK repository a subject shares (R-LEAD-42).
  */
-export function assertShapeOnly(lead, text, { names, subjects = [] }) {
+export function assertShapeOnly(lead, { subjects = [] } = {}) {
+  const fail = (what) => { throw new Error(`lead ${lead.fingerprint}: ${what} is not shape-only`); };
   for (const m of String(lead.signature).matchAll(/(?:^|;)(error|list_error)=([^;]*)/g)) {
     const v = m[2];
     if (v === '-' || v === '<other>') continue;
-    if (word(v, names) !== v) throw new Error(`lead ${lead.fingerprint}: the ${m[1]} word is not shape-only`);
+    const ok = m[1] === 'error' ? CODES.error_names.some((n) => n.toLowerCase() === v) : CODES.list_errors.includes(v);
+    if (!ok) fail(`the ${m[1]} word`);
   }
-  const low = String(text).toLowerCase();
-  for (const s of subjects) {
-    const id = String(s).toLowerCase();
-    if (id.includes('/') && !id.startsWith('isokron-ai/') && low.includes(id)) throw new Error(`lead ${lead.fingerprint}: the issue holds a subject name`);
+  if (!OWN_TOOLS.includes(lead.tool) && lead.tool !== '<other>') fail('the tool');
+  const versions = Array.isArray(lead.versions) ? lead.versions : JSON.parse(lead.versions ?? '[]');
+  if (versions.some((v) => !/^[a-z0-9-]+@[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(v) || !OWN_TOOLS.includes(v.split('@')[0]))) fail('a version');
+  if (/[^a-z0-9/:#+._<>-]/i.test(lead.idiom) || /[^a-z0-9:;._<>-]/i.test(lead.layout)) fail('idiom or layout');
+  const fields = [lead.signature, lead.idiom, lead.layout, lead.tool, lead.lane, lead.component, lead.class, ...versions].map((v) => String(v ?? '').toLowerCase());
+  for (const sid of subjects) {
+    const id = String(sid).toLowerCase();
+    if (id.length >= 3 && fields.some((f) => f.includes(id))) fail('a field (it holds a subject id)');
   }
-  // idiom and layout are built from closed lists (state/fingerprint.mjs): their alphabet is all that can be checked.
-  if (/[^a-z0-9/:#+._<>-]/i.test(lead.idiom) || /[^a-z0-9:;._<>-]/i.test(lead.layout)) throw new Error(`lead ${lead.fingerprint}: idiom or layout is not shape-only`);
 }
 
 /** The plan as Markdown for a job summary (shapes only). */
 export function renderPlan(plan, { now, mode, done = null }) {
   const L = [];
-  const row = (e, what) => `| \`${e.lead.fingerprint}\` | ${e.lead.repo.replace('isokron-ai/', '')} | ${e.lead.lane} / ${e.lead.component} | ${kindOf(e.lead)} | ${e.lead.fault} | ${e.lead.idiom} | ${e.carriers.current} | ${e.priority} | ${what} |`;
+  const row = (e, what) => `| \`${e.lead.fingerprint}\` | ${e.lead.repo.replace('isokron-ai/', '')} | ${e.lead.lane} / ${e.lead.component} | ${kindOf(e.lead)} | ${e.lead.fault} | ${e.lead.idiom} | ${e.carriers.current} | ${what} |`;
   L.push(`## Leads (${mode}) at ${now}`, '');
   L.push(`${plan.file.length} to file now, ${plan.capped.length} over the caps, ${plan.held.length} held, ${plan.close.length} to close, ${plan.reopen.length} to reopen, ${plan.indoubt.length} filings to confirm.${mode === 'on' ? '' : ' Dry run: no issue is touched.'}`, '');
   L.push('Caps per repository (new today / open): ' + Object.entries(plan.caps).map(([r, c]) => `${r.replace('isokron-ai/', '')} ${c.new_today}/${c.open}`).join(', '), '');
-  L.push('| fingerprint | repo | lane / component | class | fault | idiom | now on | priority | action |', '|---|---|---|---|---|---|---|---|---|');
+  L.push('| fingerprint | repo | lane / component | class | fault | idiom | now on | action |', '|---|---|---|---|---|---|---|---|');
   for (const e of plan.file) L.push(row(e, done?.get(e.lead.fingerprint) ?? `file: ${e.decision.reason}`));
   for (const e of plan.close) L.push(row(e, `close #${e.lead.issue_number}`));
   for (const e of plan.reopen) L.push(row(e, `reopen #${e.lead.issue_number}`));

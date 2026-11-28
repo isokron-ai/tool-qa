@@ -9,7 +9,7 @@ import { openState } from '../../state/db.mjs';
 import { dueFromState, workflowProblems } from '../due.mjs';
 import { workerInputs } from '../dispatch.mjs';
 import { planShards } from '../tick.mjs';
-import { leadRecheckHook, recheckPairs, RECHECK_MAX_DUE } from '../../leads/recheck.mjs';
+import { leadRecheckHook, recheckPairs, RECHECK_MAX_DUE, RECHECK_TIMEOUT_MS } from '../../leads/recheck.mjs';
 
 const T0 = Date.parse('2026-11-24T12:00:00Z');
 const HOUR = 3_600_000;
@@ -161,4 +161,33 @@ test('R-LEAD-22: re-check dispatches that never come back (lapsed, refused, reje
   assert.deepEqual(due(db, t, hook()), [], 'not sent a fourth time');
   const rc = recheckPairs(db);
   assert.deepEqual([rc.pairs.size, rc.waiting, rc.given_up], [0, 0, 1]);
+});
+
+test('R-LEAD-39: a re-check that carries the lead but has no worker run id is one attempt and is due again; a pair left waiting by an unfolded result is due again after a day', () => {
+  const db = openState(':memory:');
+  db.setSubjectVersion({ id: 'acme/a', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 - DAY });
+  const L = lead(80);
+  accept(db, 'acme/a', [L], { runId: 1, now: T0 });
+  const hook = () => ({ leadReverify: leadRecheckHook(recheckPairs(db)) });
+  // The re-check comes back carrying it, from a run the store cannot name.
+  const t = T0 + HOUR;
+  const [d] = due(db, t, hook());
+  const lease = db.acquireLease(d.run_key, 'att-norun', { ttlMs: DAY, now: t });
+  db.createDispatch({ attemptId: 'att-norun', shardId: 's', workflow: 'scan-static', repo: 'o/r', workflowFile: 'f.yml', ref: 'main', expires: t + DAY, items: [{ run_key: d.run_key, subject: 'acme/a', fence: lease.fence }], now: t });
+  db.recordResult({ run_key: d.run_key, attempt_id: 'att-norun', fence: lease.fence, verdict: 'accepted', outcome: 'accepted', fault: 'tool', coverage: 'unassessed_tool', failures: [L], now: t + 1 });
+  const row = db.listLeads()[0];
+  assert.deepEqual([row.reproduced_at, row.recheck_attempts, row.recheck_subject], [null, 1, 'acme/a']);
+  assert.equal(due(db, t + HOUR, hook()).length, 1, 'due again, not stalled');
+
+  // A newer result that was never folded: waiting, then due again once it is a day old.
+  const db2 = openState(':memory:');
+  db2.setSubjectVersion({ id: 'acme/a', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 - DAY });
+  accept(db2, 'acme/a', [lead(81)], { runId: 1, now: T0 });
+  const [d2] = dueFromState(db2, { now: T0 + HOUR, tiers, workflows, hooks: { leadReverify: leadRecheckHook(recheckPairs(db2)) } });
+  const l2 = db2.acquireLease(d2.run_key, 'att-off2', { ttlMs: DAY, now: T0 + HOUR });
+  db2.createDispatch({ attemptId: 'att-off2', shardId: 's', workflow: 'scan-static', repo: 'o/r', workflowFile: 'f.yml', ref: 'main', expires: T0 + DAY, items: [{ run_key: d2.run_key, subject: 'acme/a', fence: l2.fence }], now: T0 + HOUR });
+  db2.recordResult({ run_key: d2.run_key, attempt_id: 'att-off2', fence: l2.fence, verdict: 'accepted', outcome: 'accepted', now: T0 + HOUR + 1 });
+  const h2 = () => ({ leadReverify: leadRecheckHook(recheckPairs(db2)) });
+  assert.deepEqual(dueFromState(db2, { now: T0 + 3 * HOUR, tiers, workflows, hooks: h2() }), []);
+  assert.equal(dueFromState(db2, { now: T0 + HOUR + RECHECK_TIMEOUT_MS + HOUR, tiers, workflows, hooks: h2() }).length, 1);
 });

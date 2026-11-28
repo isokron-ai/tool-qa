@@ -8,9 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { openState } from '../state/db.mjs';
-import { nameTokens } from '../state/fingerprint.mjs';
 import { CAP_NEW_PER_REPO_PER_DAY, CAP_OPEN_PER_REPO, CLEAN_RECHECKS_TO_CLOSE } from '../state/leads.mjs';
-import { assertShapeOnly, issueFor, kindOf, LABEL, planFilings, titleTag } from '../leads/plan.mjs';
+import { assertShapeOnly, issueFor, kindOf, LABEL, planFilings, renderPlan, titleTag } from '../leads/plan.mjs';
 import { syntheticRepro, languageOf } from '../leads/repro.mjs';
 import { leadStep, LEADS_LAST_KEY } from '../leads/step.mjs';
 import { API, fakeApi } from './lib/fake-api.mjs';
@@ -81,16 +80,20 @@ test('R-LEAD-25: an issue holds the shape only: title tag and marker, our tool, 
   assert.ok(issue.title.startsWith(titleTag(e.lead.fingerprint)));
   assert.deepEqual(issue.labels, [LABEL]);
   assert.match(issue.body, new RegExp(`<!-- tool-qa lead ${e.lead.fingerprint} -->`));
-  assert.match(issue.body, /3 servers carry it on their latest result \(T2: 3\)/);
+  assert.match(issue.body, /3 servers carry it on their latest result; seen/, 'a total only: no tiers under 5 carriers');
+  assert.ok(!/T2|Priority|priority/.test(issue.body), 'no tier breakdown and no priority');
+  const [big] = planFilings(reproduced(1, { subjectsPer: () => 5 }), { now: NOW, tierWeights }).file;
+  assert.match(issueFor(big, { now: NOW }).body, /5 servers carry it on their latest result \(T2: 5\)/);
   assert.match(issue.body, /### Synthetic repro/);
   assert.match(issue.body, /isokron\.ai\/\?utm_source=github/);
   const text = `${issue.title}\n${issue.body}`.toLowerCase();
   for (const bad of ['acme', 'server-0', 'run 1', 'run_id']) assert.ok(!text.includes(bad), `${bad} is in the issue`);
   const subjects = db.listSubjects().map((s) => s.id);
-  assert.doesNotThrow(() => assertShapeOnly(e.lead, text, { names: nameTokens(subjects), subjects }));
-  // The checks before sending: a signature word that is now a server's name, or a server id in the text, stops it.
-  assert.throws(() => assertShapeOnly({ ...e.lead, signature: 'class=tool_error;error=widgetfail' }, text, { names: nameTokens(['widgetfail/x']), subjects }), /not shape-only/);
-  assert.throws(() => assertShapeOnly(e.lead, `${text} acme-org/server-0-1`, { names: new Set(), subjects }), /subject name/);
+  assert.doesNotThrow(() => assertShapeOnly(e.lead, { subjects }));
+  // The guard, field by field: a word that is not one of our codes, a field holding a server id, a tool not ours.
+  assert.throws(() => assertShapeOnly({ ...e.lead, signature: 'class=tool_error;error=widgetfail' }, { subjects }), /error word is not shape-only/);
+  assert.throws(() => assertShapeOnly({ ...e.lead, layout: 'acme-org/server-0-1' }, { subjects }), /not shape-only/);
+  assert.throws(() => assertShapeOnly({ ...e.lead, tool: 'acme-scanner' }, { subjects }), /the tool is not shape-only/);
 });
 
 test('R-LEAD-25: the synthetic repro is our own template in the lead\'s language and layout, varied by its class; an idiom with no template says so', () => {
@@ -108,6 +111,7 @@ test('R-LEAD-25: the synthetic repro is our own template in the lead\'s language
   assert.equal(kindOf(lead(5)), 'no_tools_found', 'scan-static\'s detail word only restates the class');
 });
 
+const BOT = 'isokron-tool-qa[bot]';
 /** A fake GitHub for our repositories' issues. */
 function issuesApi({ refuseLabel = false, existing = [] } = {}) {
   const issues = [...existing];
@@ -119,9 +123,13 @@ function issuesApi({ refuseLabel = false, existing = [] } = {}) {
     }],
     ['POST', /^\/repos\/isokron-ai\/[a-z-]+\/issues$/, (req) => {
       if (refuseLabel && req.json.labels) return { status: 422, body: { message: 'Validation Failed' } };
-      const i = { number: issues.length + 1, title: req.json.title, body: req.json.body, state: 'open', labels: req.json.labels ?? [] };
+      const i = { number: issues.length + 1, title: req.json.title, body: req.json.body, state: 'open', labels: req.json.labels ?? [], user: { login: BOT } };
       issues.push(i);
       return { status: 201, body: i };
+    }],
+    ['GET', /^\/repos\/isokron-ai\/[a-z-]+\/issues\/\d+$/, (req) => {
+      const i = issues.find((x) => x.number === Number(req.path.split('/').pop()));
+      return i ? { body: { ...i } } : { status: 404, body: { message: 'Not Found' } };
     }],
     ['POST', /^\/repos\/isokron-ai\/[a-z-]+\/issues\/\d+\/comments$/, (req) => { comments.push({ path: req.path, body: req.json.body }); return { status: 201, body: { id: comments.length } }; }],
     ['PATCH', /^\/repos\/isokron-ai\/[a-z-]+\/issues\/\d+$/, (req) => {
@@ -201,6 +209,8 @@ test('R-LEAD-27: a failed save files nothing; a filing started but not confirmed
   // The pump died after creating the issue and before saving its number.
   const [l] = db.listLeads();
   issues.push({ number: 41, title: `${titleTag(l.fingerprint)} no_tools_found in scan-static static`, body: '', state: 'open', labels: [{ name: LABEL }] });
+  issues[0].body = `<!-- tool-qa lead ${l.fingerprint} -->`;
+  issues[0].user = { login: BOT };
   db.raw.prepare('UPDATE leads SET filing_started_at = ? WHERE fingerprint = ?').run(NOW, l.fingerprint);
   const second = await step(db, { mintToken: m.mint, save: async () => true, client });
   assert.deepEqual([second.adopted, second.filed], [1, 0]);
@@ -253,14 +263,14 @@ test('R-LEAD-28: at most MAX_WRITES issue writes per run; the rest wait for the 
   assert.ok(db2.listLeads()[0].filing_started_at, 'left marked: the next run looks it up first');
 });
 
-test('R-LEAD-25: the step re-checks every issue before sending: a lead whose signature word became a server\'s name is held, not filed', async () => {
+test('R-LEAD-25: the step files nothing the shape guard holds, and a held lead takes no filing slot', async () => {
   const db = reproduced(1, { over: () => ({ signature: 'class=tool_error;detail=-;error=widgetfail;list_error=-;http=-;fault=tool;retryable=false' }) });
   db.setSubjectVersion({ id: 'widgetfail/server', kind: 'repo', source: 'test', tier: 2, sha: 'a'.repeat(40), now: T0 });
   const { api, issues } = issuesApi();
   const m = minter();
   const note = await step(db, { mintToken: m.mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} } });
-  assert.deepEqual([note.filed, issues.length], [0, 0]);
-  assert.ok(note.errors >= 1);
+  assert.deepEqual([note.filed, issues.length, note.planned], [0, 0, 0]);
+  assert.ok(note.held >= 1);
 });
 
 test('R-LEAD-30: an issue filed without its label (the repository refused it) is still adopted by its title tag, never filed twice; a pull request with the tag is not an issue; a failed comment does not repeat the close', async () => {
@@ -268,8 +278,8 @@ test('R-LEAD-30: an issue filed without its label (the repository refused it) is
   const [l] = db.listLeads();
   const { api, issues, comments } = issuesApi({
     existing: [
-      { number: 1, title: `${titleTag(l.fingerprint)} a pull request`, body: '', state: 'open', labels: [], pull_request: { url: 'x' } },
-      { number: 2, title: `${titleTag(l.fingerprint)} no_tools_found in scan-static static`, body: '', state: 'open', labels: [] },
+      { number: 1, title: `${titleTag(l.fingerprint)} a pull request`, body: `<!-- tool-qa lead ${l.fingerprint} -->`, state: 'open', labels: [], pull_request: { url: 'x' }, user: { login: BOT } },
+      { number: 2, title: `${titleTag(l.fingerprint)} no_tools_found in scan-static static`, body: `<!-- tool-qa lead ${l.fingerprint} -->`, state: 'open', labels: [], user: { login: BOT } },
     ],
   });
   db.raw.prepare('UPDATE leads SET filing_started_at = ? WHERE fingerprint = ?').run(NOW, l.fingerprint);
@@ -280,7 +290,7 @@ test('R-LEAD-30: an issue filed without its label (the repository refused it) is
   assert.equal(db.listLeads()[0].issue_number, 2);
 
   // Close: the state is set first; a comment that fails is logged and not tried again.
-  db.raw.prepare("UPDATE leads SET status = 'closed', needs_sync = 1, clean_rechecks = 3 WHERE fingerprint = ?").run(l.fingerprint);
+  db.raw.prepare("UPDATE leads SET status = 'closed', needs_sync = 1, clean_rechecks = 3, issue_state = 'open' WHERE fingerprint = ?").run(l.fingerprint);
   const failingComments = fakeApi([
     ['POST', /\/comments$/, () => ({ status: 500, body: { message: 'boom' } })],
     ...api.routes,
@@ -293,4 +303,78 @@ test('R-LEAD-30: an issue filed without its label (the repository refused it) is
   const c2 = await step(db, { mintToken: m.mint, save: async () => true, client });
   assert.equal(c2.closed, 0, 'not closed (or commented) again');
   assert.equal(comments.length, 0);
+});
+
+test('R-LEAD-40: no issue or job summary can single out a server: a tier breakdown only with 5 or more carriers, and never the priority', async () => {
+  const small = planFilings(reproduced(1, { subjectsPer: () => 1 }), { now: NOW, tierWeights }).file[0];
+  const body = issueFor(small, { now: NOW }).body;
+  assert.match(body, /1 server carries it on its latest result; seen/);
+  assert.ok(!/\bT[0-4]\b/.test(body) && !/priority/i.test(body));
+  const md = renderPlan(planFilings(reproduced(2), { now: NOW, tierWeights }), { now: NOW, mode: 'dry-run' });
+  assert.ok(!/priority/i.test(md), 'the job summary has no priority column');
+  assert.ok(!/\bT[0-4]\b/.test(md));
+});
+
+test('R-LEAD-41: adoption takes only our App\'s issue with the lead\'s marker: an issue anyone else opened with the same title tag is never adopted', async () => {
+  const db = reproduced(1);
+  const [l] = db.listLeads();
+  const { api, issues } = issuesApi({
+    existing: [
+      { number: 1, title: `${titleTag(l.fingerprint)} copied by someone`, body: `<!-- tool-qa lead ${l.fingerprint} -->`, state: 'open', labels: [], user: { login: 'someone' } },
+      { number: 2, title: `${titleTag(l.fingerprint)} by our App, no marker`, body: 'text', state: 'open', labels: [], user: { login: BOT } },
+    ],
+  });
+  db.raw.prepare('UPDATE leads SET filing_started_at = ? WHERE fingerprint = ?').run(NOW, l.fingerprint);
+  const note = await step(db, { mintToken: minter().mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} } });
+  assert.deepEqual([note.adopted, note.refiled, note.filed], [0, 1, 1]);
+  assert.equal(db.listLeads()[0].issue_number, 3, 'filed as a new issue of ours');
+  assert.equal(issues[2].user.login, BOT);
+});
+
+test('R-LEAD-42: the shape guard runs before the daily room is handed out, field by field: a held lead takes no slot, and a subject named like a public SDK repository holds no lead', () => {
+  const db = reproduced(7, { over: (i) => (i === 6 ? { signature: 'class=tool_error;detail=-;error=widgetfail;list_error=-;http=-;fault=tool;retryable=false' } : {}) });
+  db.setSubjectVersion({ id: 'modelcontextprotocol/go-sdk', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 });
+  const plan = planFilings(db, { now: NOW, tierWeights });
+  assert.equal(plan.file.length, CAP_NEW_PER_REPO_PER_DAY, 'the held lead (the most carried) did not take a slot');
+  assert.ok(plan.held.some((e) => e.decision.reason === 'not_shape_only' && e.carriers.current === 7));
+  const go = { ...plan.file[0], lead: { ...plan.file[0].lead, idiom: 'source/derived/go' } };
+  assert.match(issueFor(go, { now: NOW }).body, /modelcontextprotocol\/go-sdk/, 'the Go template names the SDK');
+  assert.doesNotThrow(() => assertShapeOnly(go.lead, { subjects: ['modelcontextprotocol/go-sdk'] }), 'template text is ours: not checked');
+});
+
+test('R-LEAD-43: before closing or reopening, the issue is read: one a person closed or reopened, or one our App did not open, is left as it is', async () => {
+  for (const [humanState, author, want] of [['closed', BOT, 'closed'], ['open', 'someone', 'open']]) {
+    const db = reproduced(1);
+    const [l] = db.listLeads();
+    const { api, issues, comments } = issuesApi({ existing: [{ number: 1, title: `${titleTag(l.fingerprint)} x`, body: `<!-- tool-qa lead ${l.fingerprint} -->`, state: humanState, labels: [], user: { login: author } }] });
+    // The lead closed by itself while we recorded the issue as open; a person may have closed it already, or it is not ours.
+    db.raw.prepare("UPDATE leads SET status = 'closed', issue_number = 1, issue_state = 'open', needs_sync = 1 WHERE fingerprint = ?").run(l.fingerprint);
+    if (author === BOT) {
+      // A person closed it, then the lead came back: we must not reopen what they closed.
+      db.raw.prepare("UPDATE leads SET status = 'filed', issue_state = 'open', needs_sync = 1 WHERE fingerprint = ?").run(l.fingerprint);
+    }
+    const lines = [];
+    const note = await step(db, { mintToken: minter().mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} }, log: (x) => lines.push(x) });
+    assert.deepEqual([note.closed, note.reopened, comments.length], [0, 0, 0], `${humanState}/${author}`);
+    assert.equal(issues[0].state, want, 'left as it is');
+    assert.equal(db.listLeads()[0].needs_sync, 0);
+    assert.ok(lines.some((x) => /left as it is/.test(x)));
+  }
+});
+
+test('R-LEAD-44: each write guard alone holds the cap: only the leads that fit are marked, and a label retry is a write of its own', async () => {
+  // The selection guard: with room for 2 writes, only 2 of 4 leads are marked; the others are not left in doubt.
+  const db = reproduced(4);
+  const a = issuesApi();
+  const n1 = await step(db, { mintToken: minter().mint, save: async () => true, client: { fetch: a.api.fetch, apiUrl: API, sleep: async () => {} }, maxWrites: 2 });
+  assert.equal(n1.filed, 2);
+  assert.equal(db.listLeads().filter((l) => l.filing_started_at).length, 0, 'none left marked');
+  // The write guard: each create costs two writes when the label is refused; with 3 writes the second create stops.
+  const db2 = reproduced(2);
+  const b = issuesApi({ refuseLabel: true });
+  const n2 = await step(db2, { mintToken: minter().mint, save: async () => true, client: { fetch: b.api.fetch, apiUrl: API, sleep: async () => {} }, maxWrites: 3 });
+  const posts = b.api.calls.filter((c) => c.method === 'POST' && /\/issues$/.test(c.path)).length;
+  assert.ok(posts <= 3, `at most 3 issue writes, made ${posts}`);
+  assert.equal(n2.filed, 1);
+  assert.ok(n2.writes <= 3);
 });
