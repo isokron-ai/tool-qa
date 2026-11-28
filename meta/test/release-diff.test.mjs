@@ -448,7 +448,7 @@ test('release-diff worker: bundles pass ingest\'s checks against the pinned regi
   const obs = readFileSync(join(out, '0', 'bundle', 'observations', 'release-diff.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.deepEqual(obs.map((r) => r.field), ['release_artifacts', 'release_diff_summary', 'release_diff_findings', 'release_diff_held']);
   assert.equal(obs[2].value[0].kind, 'unexpected_file');
-  assert.equal(lane.version, '1.2.0');
+  assert.equal(lane.version, '1.3.0');
 });
 
 test('release-diff worker: the forgery control is contained (planted archive names, manifest keys and tags pose as a result)', async () => {
@@ -537,4 +537,28 @@ test('R-RD-01: a body that stops mid-read is a passing problem (upstream_unavail
 test('subjectOutput: the four fields, in order, every time', () => {
   const o = subjectOutput({ artifacts: [], summaries: [], findings: [], held: [], skips: [], stages: {} });
   assert.deepEqual(o.records.map((r) => [r.field, r.value]), [['release_artifacts', []], ['release_diff_summary', []], ['release_diff_findings', []], ['release_diff_held', []]]);
+});
+
+test('R-RD-21: a source-code extension alone is not "executable": an unexpected .ts/.js/.py file is medium, and high only with a mode bit, a launcher or native extension, a binary or an install file', () => {
+  const r = cmp({
+    pkg: {
+      'package.json': PKG_JSON, 'src/a.ts': 'export const a = 1;\n', 'extras/b.js': 'exports.b = 1;\n', 'tools/c.py': 'print(1)\n',
+      'bin/cli.js': '#!/usr/bin/env node\n', 'tools/d.sh': 'echo\n', 'run.cmd': 'echo\n', 'native/e.node': Buffer.from([0, 1, 2, 3]),
+    },
+    src: { 'package.json': SRC_JSON },
+    modes: { 'bin/cli.js': 0o755 },
+  });
+  const by = Object.fromEntries(r.findings.filter((f) => f.kind === 'unexpected_file').map((f) => [f.path, f]));
+  for (const p of ['src/a.ts', 'extras/b.js', 'tools/c.py']) {
+    assert.deepEqual([by[p].level, by[p].executable, by[p].code_extension], ['medium', false, true], p);
+  }
+  for (const p of ['bin/cli.js', 'tools/d.sh', 'run.cmd', 'native/e.node']) assert.equal(by[p].level, 'high', p);
+  assert.deepEqual([by['bin/cli.js'].executable, by['bin/cli.js'].code_extension], [true, false], 'the mode bit makes it executable, not a code-only file');
+  assert.deepEqual(r.summary.findings_by_level, { high: 4, medium: 3 }, 'every finding is counted by level, before any cap');
+});
+
+test('R-RD-21: a source file that differs from the repository stays high (the contents moved), whatever its extension', () => {
+  const r = cmp({ pkg: { 'package.json': PKG_JSON, 'index.ts': 'b\n' }, src: { 'package.json': SRC_JSON, 'index.ts': 'a\n' } });
+  const f = r.findings.find((x) => x.kind === 'content_differs');
+  assert.deepEqual([f.level, f.code_extension, f.executable], ['high', true, false]);
 });

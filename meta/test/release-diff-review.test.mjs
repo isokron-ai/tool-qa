@@ -10,7 +10,7 @@ import { createCache, createHttp, forbiddenKind } from '../lib/http.mjs';
 import { movedTo, readGitRefs } from '../lib/gitrefs.mjs';
 import { compareArtifact, ComputeBudget, indexByBase, MAX_HELD, onlyVersionLines } from '../lib/diff.mjs';
 import { createSourceIndex } from '../lib/indicators.mjs';
-import { collectSubject, pep440Key, resolveTag } from '../release-diff.mjs';
+import { collectSubject, pep440Key, resolveTag, settleTreeChecks, treesIdentical } from '../release-diff.mjs';
 import { pinnedRegistry } from './helpers.mjs';
 
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
@@ -355,7 +355,7 @@ test('R-RD-17: a changed executable file keeps medium when the only link is the 
   assert.equal(c.artifacts[0].linked_by, 'repository_field');
   const differs = c.findings.filter((f) => f.kind === 'content_differs');
   const js = differs.find((f) => f.path === 'lib/index.js');
-  assert.deepEqual([js.executable, js.level, js.level_capped_from, js.linked_by], [true, 'medium', 'high', 'repository_field']);
+  assert.deepEqual([js.executable, js.code_extension, js.level, js.level_capped_from, js.linked_by], [false, true, 'medium', 'high', 'repository_field']);
   // A differing text file that is not executable is capped to low as before; so is an unexpected executable file.
   assert.equal(differs.find((f) => f.path === 'docs.md').level, 'low');
   assert.equal(c.findings.find((f) => f.kind === 'unexpected_file' && f.path === 'bin/run.sh').level, 'low');
@@ -458,4 +458,36 @@ test('R-RD-20: forbiddenKind reads only GitHub\'s own repository-level messages 
   // Throttling still wins over a body that also names the repository.
   assert.equal((await kind(403, dmcaJson, { 'x-ratelimit-remaining': '0' })).kind, 'throttled');
   assert.equal((await kind(403, 'You have exceeded a secondary rate limit. Repository access blocked.')).kind, 'throttled');
+});
+
+test('R-RD-22: a tag that names another commit than the provenance, with the same source tree (a rebase), drops to low with tree_identical true; a different tree keeps its level; what we could not check says null', async () => {
+  const E = 'e'.repeat(40);
+  const same = { 'package.json': PKG_JSON, 'src/a.ts': 'export const a = 1;\n', 'run.sh': '#!/bin/sh\n' };
+  const f = mockFetch([
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${C}`, body: tgzOf(`tool-${C}`, same) },
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${D}`, body: tgzOf(`tool-${D}`, same) },
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${E}`, body: tgzOf(`tool-${E}`, { ...same, 'src/a.ts': 'export const a = 2;\n' }) },
+  ]);
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, D), { identical: true, why: null });
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, E), { identical: false, why: null });
+  // Not a commit the host has: unknown, never "differs".
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, 'f'.repeat(40)), { identical: null, why: 'source_not_found' });
+
+  const mk = (level = 'high') => ({ kind: 'tag_commit_differs_from_provenance', provenance_ref: 'this_tag', level });
+  const rebased = mk(); const moved = mk(); const missing = mk(); const capped = mk('medium');
+  await settleTreeChecks(http(f), 'acme/tool', [
+    { finding: rebased, tag: D, provenance: C },
+    { finding: capped, tag: D, provenance: C },
+    { finding: moved, tag: E, provenance: C },
+    { finding: missing, tag: 'f'.repeat(40), provenance: C },
+  ], { overBudget: () => false });
+  assert.deepEqual([rebased.level, rebased.tree_identical, rebased.level_before_tree_check], ['low', true, 'high']);
+  assert.deepEqual([capped.level, capped.tree_identical, capped.level_before_tree_check], ['low', true, 'medium']);
+  assert.deepEqual([moved.level, moved.tree_identical], ['high', false]);
+  // The per-subject cap: the third pair is not read, so it keeps its level (it is not blamed, not cleared either).
+  assert.deepEqual([missing.level, missing.tree_identical], ['high', null]);
+
+  const late = mk();
+  await settleTreeChecks(http(f), 'acme/tool', [{ finding: late, tag: D, provenance: C }], { overBudget: () => true });
+  assert.deepEqual([late.level, late.tree_identical], ['high', null], 'past the subject budget nothing is read');
 });

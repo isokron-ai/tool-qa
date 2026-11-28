@@ -308,13 +308,14 @@ each with a level:
 
 | Kind | Level |
 |---|---|
-| `unexpected_file` | high for executable, binary or install-time files; medium; low for docs and media |
+| `unexpected_file` | high for a file with a mode bit, a launcher or native extension, a binary or an install-time file; medium for source code (`.ts`, `.js`, `.py` ... alone, `code_extension` true, `executable` false) and other files; low for docs and media (R-RD-21) |
 | `content_differs` | high for code, else medium |
 | `manifest_differs` (package.json, pyproject.toml; explained keys left out) | high for added dependencies, install scripts or the build system |
 | `install_script` (preinstall, install, postinstall, implicit `binding.gyp`) | medium; high when the source manifest does not have it |
 | `setup_py_executes`, `in_tree_build_backend`, `pth_file` | low to high |
 | `no_matching_tag` | low |
 | `tag_commit_differs_from_provenance` | high when the build was from that very tag (the tag moved), else medium |
+| `tag_commit_differs_from_provenance` | high when the build ref is this very tag, else medium. When the tag's commit and the provenance commit have the same source tree (compared through both codeload archives, at most 2 pairs a subject), a rebase: low, with `tree_identical: true` and `level_before_tree_check`. `tree_identical: false` or `null` (not checked, or not readable) keeps the level (R-RD-22) |
 | `tag_commit_differs_from_git_head` | low (an attention item: release flows that commit after npm's `gitHead` trigger it) |
 | `source_commit_not_found` | medium |
 | `link_in_package`, `duplicate_entry`, `special_entry`, `unsafe_entry_refused`, `no_source_overlap`, `artifact_unreadable` | medium or high |
@@ -325,7 +326,7 @@ A package that reaches the subject only through its own `repository` field or
 PyPI project URLs (`linked_by` `repository_field` or `project_urls`) can name
 any repository. Its public findings are capped at `low`, with `level_capped_from`
 and `linked_by` on the finding; a changed executable file (`content_differs`
-with `executable`) is capped at `medium`, because for most npm packages, which
+with `executable` or `code_extension`) is capped at `medium`, because for most npm packages, which
 have no provenance, that field is the only link there is. Verified provenance and an attested deps.dev link
 keep their levels.
 

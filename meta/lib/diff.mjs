@@ -34,7 +34,12 @@ const DOC_RE = /(?:^|\/)(?:readme|license|licence|copying|notice|changelog|chang
 const NATIVE_EXT_RE = /\.(?:so|pyd|dylib|dll)(?:\.[0-9.]+)?$/i;
 const NATIVE_SRC_RE = /\.(?:c|cc|cpp|cxx|h|hpp|pyx|pxd|rs|go|f90|f)$/i;
 const VERSION_FILE_RE = /(?:^|\/)(?:_version|version|__version__|_build_info)\.pyi?$/i;
-const EXEC_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyw|pyc|pyo|sh|bash|zsh|bat|cmd|ps1|psm1|vbs|exe|dll|so|dylib|pyd|node|wasm|jar|bin|elf|com|scr|msi|app|appimage|deb|rpm|pl|rb|php|lua)$/i;
+// Files that are run directly, not read by an interpreter someone starts: native code and its containers (the binary
+// list below also catches most of them), launcher scripts and installable packages. A mode bit counts too.
+const EXEC_EXT_RE = /\.(?:sh|bash|zsh|bat|cmd|ps1|psm1|vbs|exe|dll|so|dylib|pyd|node|wasm|jar|bin|elf|com|scr|msi|app|appimage|deb|rpm)$/i;
+// Source code in a language an interpreter or a bundler reads. The extension alone says what kind of file it is, not that
+// it can be run: an unexpected one is worth a look (medium), not a "high" (R-RD-21).
+const CODE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyw|pyc|pyo|pl|rb|php|lua)$/i;
 const BINARY_EXT_RE = /\.(?:exe|dll|so|dylib|pyd|node|wasm|jar|bin|elf|com|scr|msi|o|a|lib|class|pyc|pyo|zip|tar|gz|tgz|xz|bz2|7z|rar)$/i;
 const IMAGE_FONT_RE = /\.(?:png|jpe?g|gif|webp|ico|svg|bmp|tiff?|woff2?|ttf|otf|eot|mp3|mp4|webm|wav|pdf)$/i;
 
@@ -117,6 +122,11 @@ export function indexByBase(paths) {
 
 function isExecutable(path, mode) {
   return EXEC_EXT_RE.test(path) || (mode & 0o111) !== 0;
+}
+
+/** A source-code extension and nothing that runs it by itself (no mode bit, no launcher or native extension). */
+function isCodeOnly(path, mode) {
+  return CODE_EXT_RE.test(path) && !isExecutable(path, mode);
 }
 
 function isBinary(path, data) {
@@ -442,15 +452,18 @@ export function compareArtifact(a, tree, { hint = null, expired = () => false } 
     else if (cls === 'absent') {
       counts.unexplained_absent++;
       const executable = isExecutable(path, f.mode);
+      const code_extension = isCodeOnly(path, f.mode);
       const binary = isBinary(path, f.data);
       findings.push({
-        kind: 'unexpected_file', artifact: a.kind, path, size: f.size, sha256: f.sha256, executable, binary,
+        kind: 'unexpected_file', artifact: a.kind, path, size: f.size, sha256: f.sha256, executable, code_extension, binary,
         level: executable || binary || installFiles.has(path) ? 'high' : DOC_RE.test(path) || IMAGE_FONT_RE.test(path) ? 'low' : 'medium',
       });
     } else {
       counts.unexplained_differs++;
       const executable = isExecutable(path, f.mode);
-      findings.push({ kind: 'content_differs', artifact: a.kind, path, size: f.size, sha256: f.sha256, source_sha256: src.sha256, executable, level: executable ? 'high' : 'medium' });
+      const code_extension = isCodeOnly(path, f.mode);
+      // A source file that differs from the repository's stays high, as before: the contents moved, not only the name.
+      findings.push({ kind: 'content_differs', artifact: a.kind, path, size: f.size, sha256: f.sha256, source_sha256: src.sha256, executable, code_extension, level: executable || code_extension ? 'high' : 'medium' });
     }
   }
 
@@ -507,6 +520,9 @@ export function compareArtifact(a, tree, { hint = null, expired = () => false } 
   // Highest level first (a stable sort keeps file order within a level), at most MAX_FINDINGS.
   findings.sort((x, y) => LEVEL_ORDER[x.level] - LEVEL_ORDER[y.level]);
   const truncated = Math.max(0, findings.length - MAX_FINDINGS);
+  // Counts of every finding by level, before the cap: a count of high findings must not depend on which 500 were kept (RD-13).
+  const byLevel = {};
+  for (const f of findings) byLevel[f.level] = (byLevel[f.level] ?? 0) + 1;
   findings.length = Math.min(findings.length, MAX_FINDINGS);
   const publicFiles = a.files.size - heldPaths.size;
   const summary = {
@@ -524,6 +540,7 @@ export function compareArtifact(a, tree, { hint = null, expired = () => false } 
     links: (a.archive.links ?? []).length,
     refused_entries: (a.archive.refused ?? []).length,
     findings_truncated: truncated,
+    findings_by_level: byLevel,
   };
   return { summary, findings, held, held_truncated: heldDropped };
 }
