@@ -62,6 +62,7 @@ export const FOUND_SCORE = 4;
  * only add up with a strong one; env names from code or config are strong for a hosted API (its key is how a server
  * reaches it), and the filesystem needs its file-shaped tools (FS_RULE).
  */
+export const ANCHOR_SIGNALS = new Set(['dependency', 'compose_image', 'prisma_provider', 'code_token', 'host_literal', 'tool_names']);
 export const STRONG_SIGNALS = new Set(['dependency', 'compose_image', 'prisma_provider', 'url_scheme', 'code_token', 'host_literal', 'tool_names']);
 export const HIGH_SCORE = 6;
 export const MIN_TOOLS_FOR_READ_ONLY = 3;
@@ -601,7 +602,11 @@ export function createAnalyzer({ table, index }) {
       scored.push({ id, b, score, signals: signals.sort(), kinds });
     }
     const routeRank = (b) => (usableStandIn(b) ? 0 : b.spec ? 1 : 2);
-    scored.sort((x, y) => y.score - x.score || routeRank(x.b) - routeRank(y.b) || (x.id < y.id ? -1 : 1));
+    // A backend the repository declares (a dependency, a compose image, a Prisma provider) or calls by name (a code
+    // token, an API host) ranks above one it only mentions (a URL scheme, an env name): a secret scanner's
+    // `postgres://` pattern does not make a SQLite server a Postgres one (R-WB-18).
+    const anchored = (s) => s.signals.some((k) => ANCHOR_SIGNALS.has(k));
+    scored.sort((x, y) => (anchored(y) - anchored(x)) || y.score - x.score || routeRank(x.b) - routeRank(y.b) || (x.id < y.id ? -1 : 1));
     // The generic SQL entry stands aside when a specific engine is found.
     const specificSql = scored.some((s) => s.id !== 'sql' && s.b.kind === 'sql' && s.score >= FOUND_SCORE);
     const strong = (s) => s.signals.some((k) => STRONG_SIGNALS.has(k) || (k === 'env_name' && s.b.kind === 'hosted_api'));

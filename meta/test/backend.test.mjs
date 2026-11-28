@@ -466,3 +466,13 @@ test('R-WB-16: the filesystem is a fallback: a SQLite server that also writes fi
   assert.equal(a.spec_url, b.spec_url);
   assert.match(a.spec_url, /\/api\/openapi\.json$/);
 });
+
+test('R-WB-18: a backend the repository declares outranks one it only mentions: a secret guard\'s postgres:// pattern does not make a SQLite server a Postgres one (kronicle-lite, 28 Nov)', () => {
+  const v = classify({
+    'package.json': pkg({ 'better-sqlite3': '12' }),
+    'src/secrets/guard.ts': "const PATTERNS = [/postgres:\\/\\/[^\\s]+/, 'postgres://user:password@localhost:5432/d'];\nconst k = process.env.PG_URL;\n",
+    'src/server.ts': "registerTool(\n 'put_document', {}, f);\n",
+  });
+  assert.deepEqual([v.class, v.backend.id, v.stand_in.id], ['local_full', 'sqlite', 'sqlite']);
+  assert.ok(v.backends.some((b) => b.id === 'postgres' && b.score > v.backends.find((x) => x.id === 'sqlite').score), 'postgres scored higher, and still ranks below');
+});
