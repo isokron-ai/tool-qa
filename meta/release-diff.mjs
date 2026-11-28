@@ -599,9 +599,12 @@ export function skipOf(stage, code) {
  * per stage skips. `pins` maps "npm:<name>" / "pypi:<name>" to a version (the
  * known-answer control reads fixed releases).
  */
-export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {}, clock = () => Date.now() } = {}) {
+export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {}, clock = () => Date.now(), readArtifactFn = readArtifact } = {}) {
   const t0 = clock();
   const overBudget = () => clock() - t0 > LIMITS.subjectBudgetMs;
+  // A read of an archive (artifact or source) may take the whole download timeout, so it starts only when that much of
+  // the subject budget is left: one reserve at every read site (R-RD-23). Small JSON reads only need overBudget.
+  const canRead = () => clock() - t0 + LIMITS.downloadTimeoutMs <= LIMITS.subjectBudgetMs;
   // The budget is checked before every network call, not only before downloads.
   const http = budgetHttp(guardHttp(rawHttp), overBudget);
   let budgetSkipped = false;
@@ -741,8 +744,6 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   if (jobs.some((j) => j.outcome === 'commit_limit')) skips.push(skipOf('source', 'reader_limit'));
   let computeSpent = 0;
   let computeOut = false;
-  let held_now = 0;
-  const memory = { peak_artifacts_held: 0, peak_inflated_bytes: 0 };
   for (const commit of commits.slice(0, LIMITS.commitsPerSubject)) {
     const group = jobs.filter((j) => !j.outcome && j.basis?.commit === commit);
     const names = new Set();
@@ -750,7 +751,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
     // let go of it before the next one. Pass 2 (below) reads each again, one at a time, and compares it at once, so
     // at most one inflated artifact is in memory at any moment, whatever the number of jobs (R-RD-23).
     for (const j of group) {
-      if (overBudget()) { j.outcome = 'subject_time_budget'; budgetSkip(); continue; }
+      if (!canRead()) { j.outcome = 'subject_time_budget'; budgetSkip(); continue; }
       try {
         const d = await download(http, j.url, j.download);
         if (d.status !== 'ok') {
@@ -772,7 +773,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
         j.sha256 = sha256(d.buf);
         let read;
         try {
-          read = await readArtifact(d.buf, j.kind, j.filename ?? '');
+          read = await readArtifactFn(d.buf, j.kind, j.filename ?? '');
         } catch (err) {
           // Our caps and our reader's limits are skips; only a damaged archive is a finding about the package.
           if (err instanceof ArchiveLimit || err instanceof ReaderLimit) throw err;
@@ -781,6 +782,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
           continue;
         }
         for (const p of read.files.keys()) names.add(p.slice(p.lastIndexOf('/') + 1));
+        read = null; // let go of it now (an async frame keeps a dead block variable's value otherwise)
         j.loaded = true;
       } catch (err) {
         const c = fail(j.p.ecosystem, err);
@@ -791,7 +793,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
     const ready = group.filter((j) => !j.outcome && j.loaded);
     if (ready.length === 0) continue;
     let t;
-    if (overBudget()) {
+    if (!canRead()) {
       for (const j of ready) j.outcome = 'subject_time_budget';
       budgetSkip();
       continue;
@@ -811,7 +813,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
         if (t.status === 'not_found') findings.push(capFinding({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, kind: 'source_commit_not_found', basis: j.basis.kind, level: 'medium' }, j));
       } else if (computeOut) {
         j.outcome = 'compute_budget';
-      } else if (overBudget()) {
+      } else if (!canRead()) {
         j.outcome = 'subject_time_budget';
         budgetSkip();
       } else {
@@ -819,7 +821,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
         let read = null;
         try {
           const d = await download(http, j.url, j.download);
-          if (d.status === 'ok' && sha256(d.buf) === j.sha256) read = await readArtifact(d.buf, j.kind, j.filename ?? '');
+          if (d.status === 'ok' && sha256(d.buf) === j.sha256) read = await readArtifactFn(d.buf, j.kind, j.filename ?? '');
         } catch (err) {
           const c = fail(j.p.ecosystem, err);
           j.outcome = c === 'subject_budget' ? 'subject_time_budget' : 'not_read';
@@ -832,8 +834,6 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
           skips.push(skipOf(j.p.ecosystem, 'upstream_unavailable'));
           continue;
         }
-        held_now++; memory.peak_artifacts_held = Math.max(memory.peak_artifacts_held, held_now);
-        memory.peak_inflated_bytes = Math.max(memory.peak_inflated_bytes, [...read.files.values()].reduce((n, f) => n + f.size, 0));
         const c0 = clock();
         let r;
         try {
@@ -859,12 +859,11 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
           j.outcome = 'compared';
         }
         read = null;
-        held_now--;
       }
     }
   }
 
-  await settleTreeChecks(http, sourceRepo, treeChecks, { canRead: () => clock() - t0 + LIMITS.downloadTimeoutMs <= LIMITS.subjectBudgetMs, clock });
+  await settleTreeChecks(http, sourceRepo, treeChecks, { canRead, clock });
 
   for (const j of jobs) {
     artifacts.push({
@@ -892,7 +891,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   // The private held list is capped like the findings; the count of what it left out is its last entry.
   if (held.length > MAX_HELD) { heldDropped += held.length - MAX_HELD; held.length = MAX_HELD; }
   if (heldDropped > 0) held.push({ kind: 'held_truncated', truncated: heldDropped });
-  return { repo, stages, skips, artifacts, summaries, findings, held, memory };
+  return { repo, stages, skips, artifacts, summaries, findings, held };
 }
 
 /** Observation records for one subject. */

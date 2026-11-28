@@ -193,5 +193,7 @@ test('R-META-13: only the proxy\'s own synthesized form (one line "module <the q
   assert.equal(syn('module "github.com/O/r"\n'), false, 'a quoted path');
   assert.equal(syn('module github.com/other/place\n'), false, 'another module path');
   assert.equal(syn('module github.com/O/r\nrequire x v1\n'), false, 'two lines');
+  assert.equal(syn('module (\n', null), false, 'a block or no path is not the one-line form');
+  assert.equal(goModFacts('module (\n').go_mod_synthesized, false);
   assert.equal(goModFacts('module github.com/O/r\n').go_mod_synthesized, true, 'without the queried path only the form is checked');
 });

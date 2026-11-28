@@ -280,10 +280,10 @@ hard links, devices and FIFOs are recorded and never followed or read. Caps:
 An artifact is read twice per commit, one at a time: first only for the names of its files (the source reader keeps
 bytes of those names), then again, alone, to compare it with the source tree; it is let go of before the next one is
 read, so at most one inflated artifact is in memory, whatever the number of artifacts (a test pins it). Its compressed
-plus inflated caps (640 MiB), with the kept source files (256 MiB), stay under 1 GiB on a 7 GB runner. A source archive
+plus inflated caps (640 MiB), with the kept source files (256 MiB), make a residual peak of about 900 MiB (128 + 512 + 256; the HTTP reader's chunks plus their concatenation, 2 x 128 MiB, are gone before the inflation starts), under 1 GiB on a 7 GB runner. A test checks with the garbage collector that no earlier result is still reachable when a read starts. A source archive
 is streamed and only files an artifact also has are kept, so its caps bound time, not memory; a slow read ends at the
-time limit as `reader_limit`. A source read (also those of the rebased-tag check) starts only when the subject's budget
-still holds a whole download timeout. The caps were raised on 27 Nov 2026 (R-RD-23) after nine subjects (large native, ML or monorepo packages) ended as
+time limit as `reader_limit`. Every archive read (artifact download, source tree, re-download, the rebased-tag check) starts only when the subject's
+budget still holds a whole download timeout (one shared check). The caps were raised on 27 Nov 2026 (R-RD-23) after nine subjects (large native, ML or monorepo packages) ended as
 `too_large`; an archive still over a cap stays a `too_large` skip of ours (fault tool, never a finding about the
 package), and streaming the zip central directory by range request was not chosen because it would skip the registry's
 digest check, which needs every byte.

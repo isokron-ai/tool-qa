@@ -490,7 +490,7 @@ export function goModFacts(modText, modulePath = null) {
   // Exactly that form: one line, `module <path>`, no directive, no comment, no quotes, and (when the queried path is known)
   // that path, compared without case. Anything else is a go.mod someone wrote (R-META-13).
   const nonBlank = lines.filter((l) => l.trim() !== '');
-  const oneLine = nonBlank.length === 1 ? /^module\s+([^\s"'`\/][^\s"'`]*)\s*$/.exec(nonBlank[0]) : null;
+  const oneLine = nonBlank.length === 1 ? /^module\s+([^\s"'`\/(][^\s"'`]*)\s*$/.exec(nonBlank[0]) : null;
   const synthesized = oneLine !== null && (modulePath === null || oneLine[1].toLowerCase() === modulePath.toLowerCase());
   return { deprecated, retract_directives: retracts, go_directive: goLine ? goLine.trim().split(/\s+/)[1] : null, go_mod_synthesized: synthesized };
 }
