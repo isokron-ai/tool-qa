@@ -80,7 +80,8 @@
 //                      "recheck" or "true"; ingest keeps each accepted result's
 //                      leads in the state (StateDb.noteLeads); with "recheck" or
 //                      "true" the due list also re-dispatches each open lead's
-//                      re-check pair (leads/recheck.mjs); every run writes the
+//                      re-check pair (leads/recheck.mjs), with LEADS_RECHECK_SLOTS
+//                      (default 1, 0 off) slots kept for them while one is due; every run writes the
 //                      filing plan to the job summary, and only "true" files,
 //                      closes and reopens issues on our repositories (leads/step.mjs)
 //   LANE_HEADS_ENABLED   only the exact value "true" runs the head poll
@@ -121,7 +122,7 @@ import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
 import { applyDiscovery, DISCOVER_KV_KEY, discoverEnabled, fetchCandidates } from './discover.mjs';
 import { HEADS_KV_KEY, headsEnabled, refreshHeads } from './heads.mjs';
-import { planShards, runTick } from './tick.mjs';
+import { planShards, recheckSlotsFrom, runTick } from './tick.mjs';
 import { backfillEnabled } from './backfill.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
@@ -678,6 +679,8 @@ export async function runPump({
       }
       const summary = await runTick({
         db, now, config: tickConfig, hooks, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
+        // The share of slots kept for lead re-checks while one is due (LEADS_RECHECK_SLOTS, default 1; R-LEAD-50).
+        recheckSlots: rechecksLeads(leadsMode(env)) ? recheckSlotsFrom(env, slots) : 0,
         backfill: backfillEnabled(env),
         // The pending dispatches are saved before any is sent (R-ING-10).
         beforeSend: () => save(`tick ${ticks}, before dispatching`),

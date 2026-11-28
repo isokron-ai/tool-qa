@@ -425,3 +425,25 @@ test('R-LEAD-46: a person\'s "not planned" close stands: a lead that comes back 
   db.raw.prepare('UPDATE leads SET needs_sync = 1 WHERE fingerprint = ?').run(l.fingerprint);
   assert.equal((await step(db, { mintToken: minter().mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} } })).reopened, 1);
 });
+
+test('R-LEAD-49: every run with the pipeline on logs one status line (counts and our reason codes only), even with nothing to file; off logs nothing', async () => {
+  for (const mode of ['dry-run', 'recheck', 'on']) {
+    const db = reproduced(2);
+    // One lead still waits for its re-check.
+    db.raw.prepare('UPDATE leads SET reproduced_at = NULL WHERE fingerprint = (SELECT MIN(fingerprint) FROM leads)').run();
+    db.setKv('leads.recheck', { at: NOW, mode, due: 1, waiting: 1, given_up: 0 }, { now: NOW });
+    const lines = [];
+    const { api } = issuesApi();
+    await step(db, { mode, log: (l) => lines.push(l), mintToken: minter().mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} } });
+    const status = lines.filter((l) => l.startsWith(`leads: ${mode}: `));
+    assert.equal(status.length, 1, `${mode}: ${lines.join(' | ')}`);
+    assert.match(status[0], /2 open|1 open/);
+    assert.match(status[0], /held \(recheck_pending 1\)/);
+    assert.match(status[0], /re-checks due 1, waiting 1, given up 0/);
+    assert.ok(!/acme|server-/.test(status[0]), 'no subject name');
+  }
+  const off = reproduced(1);
+  const lines = [];
+  await step(off, { mode: 'off', log: (l) => lines.push(l) });
+  assert.deepEqual(lines, []);
+});

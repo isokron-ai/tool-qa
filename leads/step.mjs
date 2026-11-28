@@ -62,6 +62,7 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
     }
     let plan = planFilings(db, { now: at(), tierWeights });
     Object.assign(note, counts(db), { planned: plan.file.length, capped: plan.capped.length, held: plan.held.length });
+    note.held_by = plan.held.reduce((m, e) => { const r = e.decision?.reason ?? 'held'; m[r] = (m[r] ?? 0) + 1; return m; }, {});
 
     if (filesLeads(mode) && typeof mintToken === 'function') {
       const ours = (i) => i?.user?.login === botLogin; // anyone may open an issue: only our App's count
@@ -211,7 +212,15 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
     note.history = hist.slice(-HISTORY_MAX);
     db.setKv(LEADS_LAST_KEY, note, { now: now() });
   } catch { /* the note is only for the watchdog */ }
-  if (note.filed || note.closed || note.reopened || note.errors) log(`leads: filed ${note.filed}, closed ${note.closed}, reopened ${note.reopened}, errors ${note.errors} (${mode})`);
+  // One status line every run the pipeline is on, so the pump log shows it ran even when there was nothing to file
+  // (R-LEAD-49). Counts and our reason codes only: no subject, no run id.
+  if (!note.off && mode !== 'off') {
+    const held = Object.entries(note.held_by ?? {}).map(([k, v]) => `${k} ${v}`).join(', ');
+    const rc = (() => { try { return db.getKv('leads.recheck'); } catch { return null; } })();
+    log(`leads: ${mode}: ${note.open ?? 0} open, ${note.filed_total ?? 0} filed, ${note.closed_total ?? 0} closed; this run: ${note.planned ?? 0} to file, `
+      + `${note.capped ?? 0} over the caps, ${note.held ?? 0} held${held ? ` (${held})` : ''}; filed ${note.filed}, closed ${note.closed}, reopened ${note.reopened}, `
+      + `adopted ${note.adopted}, errors ${note.errors}, writes ${note.writes}${rc ? `; re-checks due ${rc.due ?? 0}, waiting ${rc.waiting ?? 0}, given up ${rc.given_up ?? 0}` : ''}`);
+  }
   return note;
 }
 
