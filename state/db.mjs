@@ -27,7 +27,9 @@
 // Schema v10 adds the append-only events table (state/schema-v10.sql): each
 // event is written in the same transaction as the fact it describes.
 //
-// Schema v11 adds the leads tables (state/schema-v11.sql): bug fingerprints in
+// Schema v11 adds discovery_keys (state/schema-v11.sql): the subfolder and
+// purl keys the discover lane saw each subject under (pump/discover.mjs).
+// Schema v12 adds the leads tables (state/schema-v12.sql): bug fingerprints in
 // our own tools and where they were seen, folded from accepted results by
 // noteLeads() while LANE_LEADS_ENABLED is on (state/leads.mjs).
 
@@ -37,7 +39,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { deriveDisagreements, foldDisagreement, ORACLE_BUDGET_DAYS, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_LANES } from './oracle.mjs';
 import { CLEAN_RECHECKS_TO_CLOSE, mergeVersions, needsSync, pushLog, RECHECK_MAX_ATTEMPTS, repoFor, STALE_PAIR_DAYS } from './leads.mjs';
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -58,6 +60,7 @@ const MIGRATIONS = [
   { version: 9, sql: () => readFileSync(new URL('./schema-v9.sql', import.meta.url), 'utf8') },
   { version: 10, sql: () => readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8') },
   { version: 11, sql: () => readFileSync(new URL('./schema-v11.sql', import.meta.url), 'utf8') },
+  { version: 12, sql: () => readFileSync(new URL('./schema-v12.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -491,6 +494,30 @@ export class StateDb {
       }
       return n;
     });
+  }
+
+  /**
+   * Record that the discover lane saw `subject` under (subfolder, purl) in
+   * `feed`. Returns true when the key is new for the subject. repo_id is the
+   * subject's own when not given.
+   */
+  noteDiscoveryKey({ subject, repoId = null, subfolder = '', purl = '', feed, now }) {
+    const t = iso(now);
+    const cur = this.raw.prepare('SELECT feeds FROM discovery_keys WHERE subject = ? AND subfolder = ? AND purl = ?').get(subject, subfolder, purl);
+    if (cur) {
+      const feeds = [...new Set([...String(cur.feeds).split(','), feed])].filter(Boolean).sort().join(',');
+      this.raw.prepare('UPDATE discovery_keys SET feeds = ?, last_seen = ? WHERE subject = ? AND subfolder = ? AND purl = ?').run(feeds, t, subject, subfolder, purl);
+      return false;
+    }
+    const rid = repoId ?? this.getSubject(subject)?.repo_id ?? null;
+    this.raw.prepare('INSERT INTO discovery_keys (subject, repo_id, subfolder, purl, feeds, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)').run(subject, rid, subfolder, purl, String(feed), t, t);
+    return true;
+  }
+
+  listDiscoveryKeys(subject) {
+    return (subject === undefined
+      ? this.raw.prepare('SELECT * FROM discovery_keys ORDER BY subject, subfolder, purl').all()
+      : this.raw.prepare('SELECT * FROM discovery_keys WHERE subject = ? ORDER BY subfolder, purl').all(subject)).map(plain);
   }
 
   listSubjects() {
@@ -1267,7 +1294,7 @@ export class StateDb {
   }
 
   /**
-   * Fold one accepted result into the leads (state/leads.mjs, schema v11).
+   * Fold one accepted result into the leads (state/leads.mjs, schema v12).
    * Called inside recordResult()'s transaction while the lead pipeline is on.
    *
    * Each lead the result carries is counted on its (subject, lane): a new lead
@@ -1481,6 +1508,24 @@ export class StateDb {
       SELECT COUNT(*) AS n FROM attempts WHERE run_key = ? AND accepted = 0 AND reason NOT IN (${NOT_COUNTED})
         AND received > COALESCE((SELECT accepted_at FROM results WHERE run_key = ?), '')
     `).get(runKey, runKey).n;
+  }
+
+  /**
+   * Attempts at run_keys that HAVE an accepted result, made after it: a
+   * re-run of the same run_key (the backfill filler, pump/backfill.mjs).
+   * Map run_key -> {n: counted rejections since the result, last: newest
+   * attempt received since the result}. rejectedRunKeys() leaves these out
+   * on purpose (they still have their result), so the filler parks them
+   * itself (R-FILL-07).
+   */
+  attemptsSinceResult() {
+    const rows = this.raw.prepare(`
+      SELECT a.run_key, SUM(CASE WHEN a.accepted = 0 AND a.reason NOT IN (${NOT_COUNTED}) THEN 1 ELSE 0 END) AS n, MAX(a.received) AS last
+      FROM attempts a JOIN results r ON r.run_key = a.run_key
+      WHERE a.run_key IS NOT NULL AND a.received > r.accepted_at
+      GROUP BY a.run_key
+    `).all();
+    return new Map(rows.map((r) => [r.run_key, { n: Number(r.n) || 0, last: r.last }]));
   }
 
   /** [{run_key, n}] for run_keys with no accepted result and at least `min` counted rejections. */

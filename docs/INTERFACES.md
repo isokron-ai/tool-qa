@@ -394,6 +394,7 @@ after 8 days and always keeps the newest.
 | `registry_delta` | `noteRegistryDelta`, only when `action` is `dispatched` or `failed` | | `{ action }` |
 | `breaker_changed` | `noteBreaker` | | `{ tripped, reason, held }` |
 | `workflow_paused` | `noteShaMismatch` when it pauses (now one transaction) | workflow, 1 | `{ until }` |
+| `frame_grew` | `pump/discover.mjs` `noteFrame`, when a discover pass added subjects | , subjects added | `{ version }`: the new frame version (kv `frame`) |
 | `heads_polled` | `pump/heads.mjs`, one per GraphQL query applied, in the same transaction as its `noteHead` / `noteChange` writes | , repositories asked | `{ changed, head_first_seen, new_sha, new_release }` for that query |
 
 State calls:
@@ -418,7 +419,7 @@ State calls:
 - `db.log`: where a failed event insert is reported (stderr by default; the
   pump sets its own log).
 
-## Leads (schema v11)
+## Leads (schema v12)
 
 While `LANE_LEADS_ENABLED` is on (`dry-run`, `recheck` or `true`; see
 docs/OPERATIONS.md, "Leads"), ingest turns every accepted result into its
@@ -427,7 +428,7 @@ fingerprinting the check-in ranks by) and passes them to
 `recordResult({ ..., failures })`. `recordResult` folds them with
 `db.noteLeads(subject, lane, runKey, failures, { now, observedAt, runId, coverage })`
 in the same transaction as the result, so a sighting commits exactly when its
-result does (`state/schema-v11.sql`, rules in `state/leads.mjs`). With the
+result does (`state/schema-v12.sql`, rules in `state/leads.mjs`). With the
 switch off ingest passes no `failures` and nothing is kept.
 
 - `leads`: one row per fingerprint (the lead id is the fingerprint without tool

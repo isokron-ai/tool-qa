@@ -76,12 +76,12 @@ test('R-LEAD-16: at most RECHECK_MAX_DUE pairs are due at once, the leads most s
   assert.equal(rc.waiting, n);
   assert.ok(rc.pairs.has(`acme/s${n - 1}\u0000scan-static`), 'the lead two subjects carry is first');
   assert.equal(due(db, T0 + DAY, { leadReverify: leadRecheckHook(rc) }).length, RECHECK_MAX_DUE);
-  assert.deepEqual(recheckPairs(openStateV10()).pairs.size, 0, 'a state before v11 has none');
+  assert.deepEqual(recheckPairs(openStateV11()).pairs.size, 0, 'a state before v12 has none');
 });
 
-function openStateV10() {
+function openStateV11() {
   const db = openState(':memory:');
-  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 10');
+  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 11');
   return db;
 }
 
