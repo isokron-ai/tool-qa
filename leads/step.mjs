@@ -124,6 +124,8 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
             if (!ours(cur)) { synced(e.lead.issue_state, 'not opened by our App'); continue; }
             if (cur.state === state) { synced(state, null); continue; }
             if (cur.state !== e.lead.issue_state) { synced(cur.state === 'closed' ? 'closed' : 'open', `its state was changed by hand (${cur.state})`); continue; }
+            // A person's "not planned" close stands: the lead coming back does not reopen it (R-LEAD-46).
+            if (state === 'open' && cur.state_reason === 'not_planned') { synced('closed', 'closed as not planned by a person'); continue; }
             // Both writes (state, then the comment) count against the cap, and go only together (R-LEAD-44).
             if (note.writes + 2 > maxWrites) break;
             note.writes += 2;

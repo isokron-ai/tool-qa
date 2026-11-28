@@ -101,7 +101,12 @@ The publish workflow (`publish-results`, docs/PUBLISHING.md) is off unless
 `LOOP_PAUSE_UNTIL` and `LANE_PUBLISH_RESULTS_ENABLED`; it does not use slots.
 
 The lead pipeline (`LANE_LEADS_ENABLED`, read by the pump step; "Leads") is
-off unless set to `dry-run`, `recheck` or `true`.
+off unless set to `dry-run`, `recheck` or `true`. The `fingerprint-codes`
+workflow (`fingerprint-codes.yml`) checks daily, and on pull requests that
+touch it, that `state/fingerprint-codes.json` holds every code mcp-check's
+main declares; when it fails, refresh the file with
+`node scripts/fingerprint-codes.mjs --mcp-check <mcp-check checkout>` (it
+prints the lists; merge them into the file) and open a pull request.
 
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a

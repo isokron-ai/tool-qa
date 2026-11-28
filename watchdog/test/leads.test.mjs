@@ -62,9 +62,10 @@ test('R-LEAD-35: pump.yml gives the pump step LANE_LEADS_ENABLED and watchdog.ym
 });
 
 test('R-LEAD-45: a lead the store could not fold in the last day turns the leads item amber, with its error; an older one does not', () => {
-  const ff = { count: 2, last_at: iso(T0 - HOUR), last_error: 'NOT NULL constraint failed: leads.class' };
+  // The store keeps only the error's name and code (R-LEAD-47), and that is what the item shows.
+  const ff = { count: 2, last_at: iso(T0 - HOUR), last_error: 'Error ERR_SQLITE_ERROR' };
   const a = leadsCheck({ now: T0, mode: 'on', last: last(), foldFailures: ff });
-  assert.deepEqual([a.status, /could not be folded/.test(a.summary), /NOT NULL/.test(a.summary)], ['amber', true, true]);
+  assert.deepEqual([a.status, /could not be folded/.test(a.summary), /Error ERR_SQLITE_ERROR/.test(a.summary)], ['amber', true, true]);
   assert.equal(leadsCheck({ now: T0 + 2 * T.foldFailureMs, mode: 'on', last: last({ at: iso(T0 + 2 * T.foldFailureMs) }), foldFailures: ff }).status, 'green');
   const state = { openSlots: [], openDispatches: [], kv: { 'leads.last': last(), 'leads.fold_failures': ff } };
   assert.equal(evaluate({ now: T0, slots: 3, leadsMode: 'on', state }).checks.find((c) => c.id === 'leads').status, 'amber', 'read through evaluate');

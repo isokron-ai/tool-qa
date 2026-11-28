@@ -167,3 +167,12 @@ test('R-LEAD-38: the committed codes include the live-probe causes the review fo
   const [f] = failuresOf(itemFromBundle(bundle({ lane: 'live-probe', skips: [{ stage: 'resolve', reason: 'no_runnable_artifact', fault: 'tool' }], result: { status: 'skipped', detail: 'resolver_error' } })), { faults: ['tool'] });
   assert.match(f.signature, /;detail=resolver_error;/);
 });
+
+test('R-LEAD-48: the code list cannot fall behind silently: a daily workflow checks it against mcp-check main, and it holds commit_moved', async () => {
+  const { readFileSync } = await import('node:fs');
+  const wf = readFileSync(new URL('../.github/workflows/fingerprint-codes.yml', import.meta.url), 'utf8');
+  assert.match(wf, /\n {2}schedule:\n {4}- cron: '[^']+'\n/);
+  assert.match(wf, /repository: isokron-ai\/mcp-check\n\s+ref: main\n/);
+  assert.match(wf, /run: node scripts\/fingerprint-codes\.mjs --mcp-check mcp-check --check\n/);
+  assert.ok(loadCodes().details.includes('commit_moved'));
+});
