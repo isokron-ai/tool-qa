@@ -183,9 +183,10 @@ variable that turns it on: `LANE_WRITECHECK_FULL_ENABLED` for `full` (class `loc
 `LANE_WRITECHECK_MIN_ENABLED` for `min` (class `mock_min`), each on only at exactly `"true"`. While a mode is on,
 a subject whose latest accepted `write_backend` has that class is dispatched in that mode; other subjects are
 dispatched as today, with none of the inputs below (`modes.unmatched: "default"`), so the plan and catalog
-stages keep running for everyone. The mode and the backend go into the run_key (`settings_state` becomes
-`<settings_state>+mode=<mode>+backend=<id>`), so a subject whose class changes is due again, and a full-mode
-result is never filed as a default one.
+stages keep running for everyone. The mode, the backend and what it runs against go into the run_key
+(`settings_state` becomes `<settings_state>+mode=<mode>+backend=<id>+via=<stand-in id, or the first 12 hex of the
+spec URL's sha256>`), so a subject whose class, stand-in or spec changes is due again, and a full-mode result is
+never filed as a default one.
 
 A shard in a mode is homogeneous: every item has the same mode, backend id and stand-in (full) or spec URL
 (min), so the worker starts one stand-in or one mock per shard. On top of the inputs in "Worker dispatch", such
@@ -197,9 +198,9 @@ a shard carries, all strings:
 | `backend` | always | the backend id, a key of `meta/data/stand-ins.json` or `meta/data/spec-urls.json`: `^[a-z0-9][a-z0-9_.-]{0,63}$` |
 | `backend_kind` | always | the kind (table above) |
 | `stand_in` | `full` only (empty for `min`) | the stand-in id from `meta/data/stand-ins.json`, such as `postgres`, `redis`, `minio`, `mailpit`: `^[a-z0-9][a-z0-9_.-]{0,63}$` |
-| `spec_url` | `min` only (empty for `full`) | the API description's URL: https, no user, password or query, at most 512 characters |
+| `spec_url` | `min` only (empty for `full`) | the API description's URL: https, no user, password or query, at most 512 characters; exactly one of `meta/data/spec-urls.json`'s, or the subject's own file at a full commit on raw.githubusercontent.com (`/<owner>/<name>/<40 hex>/...`) |
 | `spec_format` | `min` only (empty for `full`) | the format (table above) |
-| `env_names` | always | JSON, a list aligned with `items` (same length, same order): for each item the list of env var names its server reads, each `^[A-Z][A-Z0-9_]{0,63}$`, at most 20 per item, the `base_url_env` names first. `[]` for an item with none |
+| `env_names` | always | JSON, a list aligned with `items` (same length, same order): for each item the list of env var names its server reads, each `^[A-Z][A-Z0-9_]{0,63}$`, at most 20 per item, the `base_url_env` names first; never a name the runtime, the shell or the runner owns (`PATH`, `HOME`, `LD_*`, `NODE_*`, `PYTHON*`, `RUNNER_*`, `ACTIONS_*` ...: meta/lib/backend-scan.mjs `ENV_DENY_RE`). `[]` for an item with none |
 
 GitHub allows 25 inputs on a `workflow_dispatch`; a mode shard uses 11 (`runner` is never sent to writecheck).
 The inputs are public in the worker's run page like the rest: they hold backend and stand-in ids, a public spec
@@ -229,10 +230,11 @@ URL and env var names read from public repositories, never a value, a token or a
 
 ### Coverage in a mode
 
-writecheck's coverage denominator, per mode, is the subjects whose latest `write_backend` has that mode's
-class (`state/coverage.mjs`). Subjects classified `none` are reported beside it as "not testable: hosted
-backend without a spec, or no write tools" with the reason counts, and subjects not yet classified as
-`unclassified`; neither is a failure, and neither is in a denominator.
+writecheck's coverage per mode (`state/coverage.mjs`, `modes: true`, the health issue) has as its denominator the
+subjects whose latest `write_backend` has that mode's class, and counts as assessed in the mode only results filed
+under it. Subjects classified `none` are reported beside it as "not testable here: hosted backend without a spec,
+no write tools ..." with the reason counts, and subjects not yet classified as `unclassified`; neither is a
+failure, and neither is in a mode's denominator. The lane's own four numbers stay those of the whole frame.
 
 ## Ingest in the pump
 
