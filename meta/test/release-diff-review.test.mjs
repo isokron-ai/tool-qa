@@ -503,3 +503,43 @@ test('R-RD-23: the archive caps hold large real packages (more than the old 20,0
   assert.equal(ok.files.size, 25_000, 'more than the old 20,000-entry cap');
   await assert.rejects(readArtifact(many(a.maxEntries + 1), 'npm_tarball'), (e) => e.name === 'ArchiveLimit');
 });
+
+test('R-RD-23: at most one inflated artifact is in memory at a time, however many artifacts a commit has (an sdist and a wheel are each read, compared and let go of in turn)', async () => {
+  const sdist = tgzOf('kit-1.0.0', { 'kit/__init__.py': 'x = 1\n', 'PKG-INFO': 'Name: kit\n' });
+  const wheel = makeZip([{ name: 'kit/__init__.py', data: 'x = 1\n' }, { name: 'kit-1.0.0.dist-info/METADATA', data: 'm' }]);
+  const f = mockFetch([
+    { prefix: 'https://pypi.org/pypi/kit/json', body: { info: { name: 'kit', version: '1.0.0', project_urls: { Source: 'https://github.com/acme/kit' } }, urls: [
+      { filename: 'kit-1.0.0.tar.gz', packagetype: 'sdist', size: sdist.length, digests: { sha256: sha256(sdist) }, url: 'https://files.pythonhosted.org/packages/aa/kit-1.0.0.tar.gz' },
+      { filename: 'kit-1.0.0-py3-none-any.whl', packagetype: 'bdist_wheel', size: wheel.length, digests: { sha256: sha256(wheel) }, url: 'https://files.pythonhosted.org/packages/cc/kit-1.0.0-py3-none-any.whl' },
+    ] } },
+    { prefix: 'https://files.pythonhosted.org/packages/aa/', body: sdist },
+    { prefix: 'https://files.pythonhosted.org/packages/cc/', body: wheel },
+    { method: 'POST', prefix: 'https://github.com/acme/kit.git/git-upload-pack', body: pkt([`${C} refs/tags/v1.0.0`]) },
+    { prefix: `https://codeload.github.com/acme/kit/tar.gz/${C}`, body: tgzOf(`kit-${C}`, { 'kit/__init__.py': 'x = 1\n' }) },
+  ]);
+  const c = await collectSubject(http(f), 'acme/kit', { seed: KIT_SEED });
+  assert.deepEqual(c.artifacts.map((a) => a.outcome), ['compared', 'compared']);
+  assert.equal(c.memory.peak_artifacts_held, 1, 'never two inflated artifacts at once');
+  assert.ok(c.memory.peak_inflated_bytes > 0 && c.memory.peak_inflated_bytes <= LIMITS.artifact.maxInflatedBytes);
+  assert.ok(c.memory.peak_inflated_bytes + LIMITS.source.maxKeptTotalBytes + LIMITS.artifact.maxCompressedBytes <= 1024 ** 3, 'the whole ceiling (one artifact, its bytes, the kept source) is under 1 GiB');
+  assert.equal(f.calls.filter((x) => x.url.startsWith('https://codeload.github.com/')).length, 1, 'one source archive for the commit');
+});
+
+test('R-RD-22: treesIdentical refuses an archive that is not the commit asked for (archive_commit differs: null, never a verdict), and does not start a read the subject budget cannot hold', async () => {
+  const E = 'e'.repeat(40);
+  const files = { 'package.json': PKG_JSON };
+  const withComment = (top, comment) => makeTgz(Object.entries(files).map(([n, d], i) => ({ name: `${top}/${n}`, data: d, ...(i === 0 ? { pax: { comment }, paxType: 'g' } : {}) })));
+  const f = mockFetch([
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${C}`, body: withComment(`tool-${C}`, C) },
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${D}`, body: withComment(`tool-${D}`, E) }, // says it is E
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${E}`, body: withComment(`tool-${E}`, E) },
+  ]);
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, D), { identical: null, why: 'archive_commit_mismatch' });
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, E), { identical: true, why: null }, 'a matching archive comment is read normally');
+  const calls = f.calls.length;
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, E, { canRead: () => false }), { identical: null, why: 'subject_time_budget' });
+  assert.equal(f.calls.length, calls, 'no source read starts without the budget for it');
+  let n = 0;
+  assert.equal((await treesIdentical(http(f), 'acme/tool', C, E, { canRead: () => n++ < 1 })).why, 'subject_time_budget');
+  assert.equal(f.calls.length, calls + 1, 'the second archive of a pair is not started past the budget');
+});

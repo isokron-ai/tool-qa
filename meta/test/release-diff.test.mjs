@@ -562,3 +562,14 @@ test('R-RD-21: a source file that differs from the repository stays high (the co
   const f = r.findings.find((x) => x.kind === 'content_differs');
   assert.deepEqual([f.level, f.code_extension, f.executable], ['high', true, false]);
 });
+
+test('R-RD-21: a script that names its interpreter (#!) is executable even where the archive kept no mode bit (wheel, zip): high; without #! a .py is medium', () => {
+  const r = cmp({
+    pkg: { 'package.json': PKG_JSON, 'tools/run': '#!/usr/bin/env python3\nprint(1)\n', 'tools/run.py': '#!/usr/bin/env python3\nprint(1)\n', 'tools/lib.py': 'print(1)\n' },
+    src: { 'package.json': SRC_JSON },
+  });
+  const by = Object.fromEntries(r.findings.filter((f) => f.kind === 'unexpected_file').map((f) => [f.path, f]));
+  assert.deepEqual([by['tools/run'].level, by['tools/run'].executable], ['high', true]);
+  assert.deepEqual([by['tools/run.py'].level, by['tools/run.py'].executable, by['tools/run.py'].code_extension], ['high', true, false]);
+  assert.deepEqual([by['tools/lib.py'].level, by['tools/lib.py'].code_extension], ['medium', true]);
+});
