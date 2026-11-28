@@ -309,8 +309,13 @@ test('R-LEAD-56: an open issue of ours is edited once when its repro verdict cha
   assert.equal(n3.refreshed, 1);
   assert.match(api.issues[0].body, /Confirmed: tool-qa lead-repro run 3/);
   assert.equal(api.calls.filter((c) => c.method === 'PATCH').length, 1);
+  const reads = () => api.calls.filter((c) => c.method === 'GET' && /\/issues\/\d+$/.test(c.path)).length;
+  const before = reads();
+  // Even with the counts changed (another sighting), an unchanged verdict means no read and no edit.
+  db.raw.prepare('UPDATE leads SET sightings = sightings + 1').run();
   const n4 = await step(db, { api, reproGate: gate('reproduced') });
   assert.equal(n4.refreshed, 0);
+  assert.equal(reads(), before, 'not even read');
   // An issue that is not ours, or not open, is never edited.
   api.issues[0].user.login = 'someone';
   const n5 = await step(db, { api, reproGate: gate('not_reproduced') });
