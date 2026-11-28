@@ -1,7 +1,7 @@
 {
-  "version": 1,
-  "updated": "2026-11-27",
-  "about": "The meta-backend lane's service -> public API description map (meta/backend.mjs). One entry per hosted API a server's write tools can write to that publishes a machine-readable description writecheck's min mode can build a mock from. `signals` say how the lane recognises the service in a repository; `spec` is the description: an https URL, its format (openapi3, swagger2, google_discovery, smithy, graphql_sdl, graphql_introspection), who publishes it (vendor: the service's owner, in its own repository or domain) and when the URL was last read (checked). A subject is mock_min when its primary backend has a spec here and no usable stand-in in stand-ins.json. A known hosted API with no published description has spec null and a note saying when it was looked for: its servers are none, hosted_without_spec, reported as not testable, never as failures. Every URL was read on 27 Nov 2026 and answered with a description of that format. An id that is also in stand-ins.json is the same backend, merged. Add a service or move a URL here, not in code; meta/test/backend.test.mjs checks the shape. LLM providers, telemetry and error-reporting SDKs are left out on purpose: they are not where a server's write tools write.",
+  "version": 2,
+  "updated": "2026-11-28",
+  "about": "The meta-backend lane's service -> public API description map (meta/backend.mjs). One entry per hosted API a server's write tools can write to that publishes a machine-readable description writecheck's min mode can build a mock from. `signals` say how the lane recognises the service in a repository; `spec` is the description: an https URL, its format (openapi3, swagger2, google_discovery, smithy, graphql_sdl, graphql_introspection), who publishes it (vendor: the service's owner, in its own repository or domain) and when the URL was last read (checked). A subject is mock_min when its primary backend has a spec here and no usable stand-in in stand-ins.json. A known hosted API with no published description has spec null and a note saying when it was looked for: its servers are none, hosted_without_spec, reported as not testable, never as failures. Every URL was read on 27 Nov 2026 and answered with a description of that format. An id that is also in stand-ins.json is the same backend, merged. A spec URL is one API's description file: never a repository page or a directory of APIs; its path ends in .json, .yaml, .yml or .graphql, or `endpoint: true` says the URL itself serves the description. `objects`: the words a write tool uses for the service's objects; a server whose write tools name none of them is low confidence and not routed (R-WB-22). Add a service or move a URL here, not in code; meta/test/backend.test.mjs checks the shape. LLM providers, telemetry and error-reporting SDKs are left out on purpose: they are not where a server's write tools write.",
   "services": {
     "github": {
       "name": "GitHub REST API",
@@ -12,9 +12,10 @@
         "go": ["github.com/google/go-github", "github.com/shurcooL/githubv4"],
         "cargo": ["octocrab"],
         "hosts": ["api.github.com"],
-        "env": ["GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN", "GITHUB_PAT", "GITHUB_API_URL", "GITHUB_HOST"],
-        "env_prefix": ["GITHUB_"]
-      }
+        "env": [],
+        "env_prefix": []
+      },
+      "objects": ["issue", "issues", "pull", "pulls", "pr", "prs", "repo", "repos", "repository", "repositories", "branch", "branches", "commit", "commits", "file", "files", "comment", "comments", "release", "releases", "gist", "gists", "label", "labels", "review", "reviews", "workflow", "workflows", "milestone", "project", "discussion", "fork", "star", "merge"]
     },
     "slack": {
       "name": "Slack Web API",
@@ -26,7 +27,8 @@
         "hosts": ["slack.com"],
         "env": ["SLACK_BOT_TOKEN", "SLACK_TOKEN", "SLACK_USER_TOKEN", "SLACK_APP_TOKEN", "SLACK_TEAM_ID", "SLACK_SIGNING_SECRET", "SLACK_MCP_XOXP_TOKEN"],
         "env_prefix": ["SLACK_"]
-      }
+      },
+      "objects": ["message", "messages", "channel", "channels", "reaction", "reactions", "file", "files", "thread", "reply", "status", "reminder", "post", "dm"]
     },
     "notion": {
       "name": "Notion API",
@@ -38,7 +40,8 @@
         "hosts": ["api.notion.com"],
         "env": ["NOTION_API_KEY", "NOTION_TOKEN", "NOTION_API_TOKEN", "NOTION_INTEGRATION_TOKEN", "NOTION_DATABASE_ID", "NOTION_PAGE_ID"],
         "env_prefix": ["NOTION_"]
-      }
+      },
+      "objects": ["page", "pages", "database", "databases", "block", "blocks", "comment", "comments", "property"]
     },
     "stripe": {
       "name": "Stripe API",
@@ -50,7 +53,8 @@
         "hosts": ["api.stripe.com"],
         "env": ["STRIPE_SECRET_KEY", "STRIPE_API_KEY", "STRIPE_KEY", "STRIPE_RESTRICTED_KEY"],
         "env_prefix": ["STRIPE_"]
-      }
+      },
+      "objects": ["customer", "customers", "payment", "payments", "invoice", "invoices", "subscription", "subscriptions", "product", "products", "price", "prices", "refund", "refunds", "charge", "charges", "coupon", "payout", "checkout", "session"]
     },
     "twilio": {
       "name": "Twilio REST API (2010-04-01)",
@@ -74,7 +78,8 @@
         "hosts": ["atlassian.net"],
         "env": ["JIRA_URL", "JIRA_API_TOKEN", "JIRA_EMAIL", "JIRA_USERNAME", "JIRA_HOST", "JIRA_BASE_URL", "JIRA_PERSONAL_TOKEN", "ATLASSIAN_API_TOKEN", "ATLASSIAN_EMAIL", "ATLASSIAN_SITE_NAME"],
         "env_prefix": ["JIRA_", "ATLASSIAN_"]
-      }
+      },
+      "objects": ["issue", "issues", "ticket", "tickets", "comment", "comments", "project", "sprint", "transition", "worklog", "epic"]
     },
     "confluence": {
       "name": "Confluence Cloud REST API v2",
@@ -128,11 +133,12 @@
         "hosts": ["api.linear.app"],
         "env": ["LINEAR_API_KEY", "LINEAR_TOKEN", "LINEAR_ACCESS_TOKEN", "LINEAR_TEAM_ID"],
         "env_prefix": ["LINEAR_"]
-      }
+      },
+      "objects": ["issue", "issues", "project", "projects", "comment", "comments", "cycle", "team", "label", "labels"]
     },
     "monday": {
       "name": "monday.com GraphQL API",
-      "spec": { "url": "https://api.monday.com/v2/get_schema", "format": "graphql_introspection", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://api.monday.com/v2/get_schema", "format": "graphql_introspection", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@mondaydotcomorg/api", "monday-sdk-js"],
         "pypi": ["monday", "monday-api-python-sdk"],
@@ -161,7 +167,8 @@
         "hosts": ["discord.com"],
         "env": ["DISCORD_TOKEN", "DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_GUILD_ID"],
         "env_prefix": ["DISCORD_"]
-      }
+      },
+      "objects": ["message", "messages", "channel", "channels", "role", "roles", "reaction", "reactions", "thread", "threads", "post", "send"]
     },
     "microsoft-graph": {
       "name": "Microsoft Graph v1.0 (Outlook, Teams, OneDrive, SharePoint, Entra ID)",
@@ -174,43 +181,47 @@
         "hosts": ["graph.microsoft.com"],
         "env": ["MS_CLIENT_ID", "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_CLIENT_SECRET", "MICROSOFT_CLIENT_ID", "MS_TENANT_ID", "GRAPH_CLIENT_ID"],
         "env_prefix": ["MS_GRAPH_", "MSGRAPH_"]
-      }
+      },
+      "objects": ["email", "emails", "mail", "message", "messages", "event", "events", "calendar", "file", "files", "drive", "team", "teams", "channel", "chat", "user", "send", "draft"]
     },
     "google-drive": {
       "name": "Google Drive API v3",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@googleapis/drive"],
         "hosts": ["www.googleapis.com/drive"],
         "code": ["google.drive(", "build('drive'", "build(\"drive\"", "drive_v3"],
         "env": ["GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_CREDENTIALS_PATH", "GOOGLE_DRIVE_CREDENTIALS"],
         "env_prefix": ["GDRIVE_", "GOOGLE_DRIVE_"]
-      }
+      },
+      "objects": ["file", "files", "folder", "folders", "drive", "permission", "share", "upload", "document", "doc", "sheet", "trash"]
     },
     "gmail": {
       "name": "Gmail API v1",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@googleapis/gmail"],
         "hosts": ["gmail.googleapis.com"],
         "code": ["google.gmail(", "build('gmail'", "build(\"gmail\"", "gmail_v1"],
         "env": ["GMAIL_CREDENTIALS_PATH", "GMAIL_OAUTH_PATH", "GMAIL_CLIENT_ID"],
         "env_prefix": ["GMAIL_"]
-      }
+      },
+      "objects": ["email", "emails", "mail", "message", "messages", "draft", "drafts", "label", "labels", "send", "thread", "reply"]
     },
     "google-calendar": {
       "name": "Google Calendar API v3",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@googleapis/calendar"],
         "code": ["google.calendar(", "build('calendar'", "build(\"calendar\"", "calendar_v3"],
         "env": ["GOOGLE_CALENDAR_ID", "GOOGLE_CALENDAR_CREDENTIALS"],
         "env_prefix": ["GOOGLE_CALENDAR_"]
-      }
+      },
+      "objects": ["event", "events", "calendar", "calendars", "meeting", "meetings", "invite"]
     },
     "google-sheets": {
       "name": "Google Sheets API v4",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/sheets/v4/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/sheets/v4/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@googleapis/sheets", "google-spreadsheet"],
         "pypi": ["gspread", "pygsheets"],
@@ -218,11 +229,12 @@
         "code": ["google.sheets(", "build('sheets'", "build(\"sheets\"", "sheets_v4"],
         "env": ["GOOGLE_SHEETS_ID", "SPREADSHEET_ID", "GOOGLE_SHEET_ID"],
         "env_prefix": ["GOOGLE_SHEETS_"]
-      }
+      },
+      "objects": ["sheet", "sheets", "spreadsheet", "spreadsheets", "row", "rows", "cell", "cells", "range", "values", "column"]
     },
     "google-docs": {
       "name": "Google Docs API v1",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/docs/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/docs/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@googleapis/docs"],
         "hosts": ["docs.googleapis.com"],
@@ -231,7 +243,7 @@
     },
     "youtube": {
       "name": "YouTube Data API v3",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/youtube/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/youtube/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@googleapis/youtube"],
         "code": ["google.youtube(", "build('youtube'", "build(\"youtube\""],
@@ -241,7 +253,7 @@
     },
     "google-workspace": {
       "name": "Google APIs (the googleapis client; the discovery directory names each API)",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": null,
       "signals": {
         "npm": ["googleapis", "google-auth-library"],
         "pypi": ["google-api-python-client", "google-auth-oauthlib"],
@@ -249,11 +261,12 @@
         "hosts": ["www.googleapis.com", "oauth2.googleapis.com"],
         "env": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_OAUTH_CLIENT_ID"],
         "env_prefix": []
-      }
+      },
+      "note": "the googleapis client reaches many APIs, each with its own discovery document: a server is mock_min only through the API it calls (google-drive, gmail, google-calendar, google-sheets, google-docs, youtube, bigquery); the directory of APIs is not one description; looked for on 2026-11-28"
     },
     "bigquery": {
       "name": "BigQuery API v2",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/bigquery/v2/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/bigquery/v2/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@google-cloud/bigquery"],
         "pypi": ["google-cloud-bigquery", "pandas-gbq"],
@@ -264,18 +277,19 @@
     },
     "firestore": {
       "name": "Cloud Firestore API v1",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/firestore/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/firestore/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {}
     },
     "gcs": {
       "name": "Cloud Storage JSON API v1",
-      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/storage/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/storage/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {}
     },
     "aws": {
       "name": "AWS service APIs (Smithy models, one folder per service)",
-      "spec": { "url": "https://github.com/aws/api-models-aws", "format": "smithy", "publisher": "vendor", "checked": "2026-11-27" },
-      "signals": {}
+      "spec": null,
+      "signals": {},
+      "note": "AWS publishes one Smithy model per service (github.com/aws/api-models-aws), not one description for \"AWS\": a server is mock_min only through a service with its own entry (dynamodb); looked for on 2026-11-28"
     },
     "dynamodb": {
       "name": "Amazon DynamoDB (Smithy model)",
@@ -292,7 +306,8 @@
         "hosts": ["api.cloudflare.com"],
         "env": ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL", "CF_API_TOKEN", "CF_ACCOUNT_ID"],
         "env_prefix": ["CLOUDFLARE_", "CF_"]
-      }
+      },
+      "objects": ["dns", "record", "records", "zone", "zones", "worker", "workers", "rule", "rules", "route", "routes", "redirect", "redirects", "page", "kv", "domain", "domains", "bucket", "tunnel", "apply", "rollback"]
     },
     "digitalocean": {
       "name": "DigitalOcean API v2",
@@ -308,7 +323,7 @@
     },
     "vercel": {
       "name": "Vercel REST API",
-      "spec": { "url": "https://openapi.vercel.sh/", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://openapi.vercel.sh/", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["@vercel/sdk", "@vercel/client"],
         "hosts": ["api.vercel.com"],
@@ -347,7 +362,7 @@
     },
     "supabase-management": {
       "name": "Supabase Management API v1",
-      "spec": { "url": "https://api.supabase.com/api/v1-json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "spec": { "url": "https://api.supabase.com/api/v1-json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
       "signals": {
         "npm": ["supabase-management-js"],
         "hosts": ["api.supabase.com"],
@@ -530,7 +545,8 @@
         "hosts": ["api.telegram.org"],
         "env": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_API_ID", "TELEGRAM_API_HASH"],
         "env_prefix": ["TELEGRAM_"]
-      }
+      },
+      "objects": ["message", "messages", "chat", "send", "post", "photo", "file"]
     },
     "todoist": {
       "name": "Todoist API",

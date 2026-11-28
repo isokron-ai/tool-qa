@@ -426,7 +426,9 @@ of (`lib/backend-scan.mjs`), so memory follows the largest file read, not the ar
 | OpenAPI and Swagger files (not in test, example or fixture folders; the Petstore sample is ignored) | path and version |
 | code (`.js`, `.ts`, `.py`, `.go`, `.rs`, `.java`, `.kt`, `.cs`, `.rb`, `.php` ...; at most 1 MiB a file, 48 MiB a subject) | env names read, connection URL schemes, API hosts, calls our maps name, file writes, tool names registered |
 
-Never read: `node_modules`, `vendor`, build output, lock files, virtualenvs, `.git`. Caps: 96 MiB compressed, 768 MiB
+Never read: `node_modules`, `vendor`, build output, lock files, virtualenvs, `.git`. The archive is downloaded in the
+lane's thread and scanned in a worker thread with a wall-clock limit of 60 seconds (`runScan`): a file that makes a
+scan slow costs that subject a `reader_limit` skip of ours, never the shard (R-WB-20). Caps: 96 MiB compressed, 768 MiB
 inflated, 150,000 entries, 90 seconds for the archive, 150 seconds a subject. An archive over a cap, or one that does
 not arrive in time, is read again as root files from raw.githubusercontent.com (`ROOT_FILES`); the result says
 `basis.source: root_files` and its confidence is at most medium. With no root file either, it is a `too_large` or
@@ -461,6 +463,30 @@ A server whose tool names (found in the code: `server.tool`, `registerTool`, `@m
 `@Tool`, `[McpServerTool]`, tool definition objects) are at least three and all read-like is `none`,
 `no_write_tools_seen`. Confidence: high at score 6 from two signal kinds, medium at 4, low otherwise; a generic ORM
 with no engine seen, root files, or a tie between two backends of different modes lowers it.
+
+### Precision first
+
+A wrong class becomes a wrong public claim, so the lane prefers `none` or low confidence to a guess (Opus review of
+#126, 28 Nov):
+
+- Code under `scripts/`, `.github/`, `.claude/`, `integrations/`, `deployment/`, `bench/`, test, example and docs
+  folders, and release, update-check and self-update files (`TOOLING_FILE_RE`) weighs like test code: the GitHub API
+  and its token in tooling do not make GitHub the backend. `GITHUB_*`, `GH_*` and the other runner and runtime names
+  are never signals (`ENV_DENY_RE`).
+- `requirements-dev*`, `requirements-test*`, `*-dev.in` and development extras are dev dependencies.
+- A backend the repository declares or calls (a dependency, a Prisma provider, a code token, an API host) ranks above
+  one only in a compose file, which ranks above one only mentioned; a cache or token store (Redis) never outranks a
+  hosted API the code calls.
+- A model provider SDK of a cloud vendor (Bedrock, Vertex AI) takes away what the generic cloud SDK gave `aws` or
+  `google-workspace`.
+- A hosted backend with no description is never paired with the repository's own, unrelated OpenAPI file.
+- **Plausibility** (R-WB-22): the write tools must name the backend's objects (`KIND_WORDS` per kind, the map's
+  `objects` per service). Without one, or with no tool names found at all, the class stays at low confidence and
+  `routable` is false: writecheck's modes take only routable subjects.
+
+The gold set (`test/fixtures/backend-gold.json`, 49 servers labelled by hand from their READMEs, manifests and tool
+code through the GitHub API) measures this: the dry run reports precision per class against it, and the modes stay
+off until precision on local_full and mock_min (routed) is at least 90%.
 
 ### The data maps
 

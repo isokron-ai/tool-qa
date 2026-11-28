@@ -22,6 +22,8 @@ import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 import { collectSubject } from './backend.mjs';
+import { loadMaps } from './lib/backend-maps.mjs';
+import { usableStandIn } from './lib/backend-scan.mjs';
 import { createCache, createHttp, mapLimit } from './lib/http.mjs';
 import { SUBJECT_RE } from './lib/common.mjs';
 
@@ -56,6 +58,7 @@ export function row(subject, c) {
     stand_in: v?.stand_in?.id ?? null,
     spec_url: v?.spec_url ?? null,
     confidence: v?.confidence ?? null,
+    routable: v?.routable ?? false,
     secondary: (v?.backends ?? []).filter((b) => b.role === 'secondary').map((b) => b.id),
     base_url_env: (v?.base_url_env ?? []).slice(0, 6),
     env_names: (v?.env_names ?? []).slice(0, 10),
@@ -86,6 +89,56 @@ export function summarize(rows) {
   return { total: rows.length, read: rows.filter((r) => r.class).length, skipped, by, top_backends: top, sample: sample.slice(0, 20) };
 }
 
+/** One markdown table cell: repository text can hold a newline or a pipe, which would break the table. */
+const cell = (x) => String(x ?? '-').replace(/[\r\n\u2028\u2029|]+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 400);
+
+export const GOLD_FILE = new URL('./test/fixtures/backend-gold.json', import.meta.url);
+/** The precision a class must reach on the gold set before writecheck's modes are switched on (owner rule, 28 Nov). */
+export const ROUTING_PRECISION = 0.9;
+const SQL_KIND = new Set(['postgres', 'mysql', 'sqlite', 'mssql', 'oracle', 'duckdb', 'clickhouse', 'sql']);
+
+/**
+ * The class a gold row should get with these maps: none without write tools or with a backend no map names; else the
+ * map's routing (a usable stand-in: local_full; a spec: mock_min; otherwise none).
+ */
+export function backendGoldClass(g, maps) {
+  if (g.has_write_tools !== true) return 'none';
+  const b = maps.table.get(g.backend);
+  if (!b || b.not_a_store) return 'none';
+  if (usableStandIn(b)) return 'local_full';
+  if (b.spec) return 'mock_min';
+  return 'none';
+}
+
+/**
+ * Precision per class against the gold set: of the rows the classifier put in a class, how many are right (the class,
+ * and for local_full and mock_min the backend too; a generic `sql` matches any SQL engine). `routed` counts only what
+ * the modes would take (routable). Rows not in the gold set are not counted.
+ */
+export function goldPrecision(rows, gold, maps) {
+  const by = new Map(gold.rows.map((g) => [g.subject.toLowerCase(), g]));
+  const out = {};
+  const wrong = [];
+  for (const cls of ['local_full', 'mock_min', 'none']) out[cls] = { predicted: 0, correct: 0, routed: 0, routed_correct: 0 };
+  for (const r of rows) {
+    const g = by.get(String(r.subject).toLowerCase());
+    if (!g || !r.class || g.has_write_tools === 'unknown') continue;
+    const want = backendGoldClass(g, maps);
+    const backendOk = r.class === 'none' || r.backend === g.backend || (r.backend === 'sql' && SQL_KIND.has(g.backend)) || (r.backend === 'repo-openapi' && want === 'mock_min');
+    const ok = r.class === want && backendOk;
+    const o = out[r.class];
+    o.predicted++; if (ok) o.correct++;
+    if (r.routable) { o.routed++; if (ok) o.routed_correct++; }
+    if (!ok) wrong.push({ subject: r.subject, predicted: `${r.class}${r.backend ? `:${r.backend}` : ''}${r.routable ? '' : ' (not routed)'}`, gold: `${want}:${g.backend}` });
+  }
+  for (const o of Object.values(out)) {
+    o.precision = o.predicted ? Math.round((o.correct / o.predicted) * 1000) / 1000 : null;
+    o.routed_precision = o.routed ? Math.round((o.routed_correct / o.routed) * 1000) / 1000 : null;
+  }
+  const gate = ['local_full', 'mock_min'].every((c) => out[c].routed_precision === null || out[c].routed_precision >= ROUTING_PRECISION);
+  return { classes: out, wrong, gate, threshold: ROUTING_PRECISION, gold_rows: gold.rows.length };
+}
+
 export function markdown(s) {
   const lines = [
     `## meta-backend dry run: ${s.total} subjects, ${s.read} classified, ${s.skipped} with a skip`,
@@ -105,9 +158,17 @@ export function markdown(s) {
     '### Sample of 20 for a hand check',
     '',
     '| Server | Class | Backend | Stand-in or spec | Confidence | Write tools | Evidence |', '|---|---|---|---|---|---|---|',
-    ...s.sample.map((r) => `| ${r.subject} | ${r.class}${r.reason ? ` (${r.reason})` : ''} | ${r.backend ?? '-'} | ${r.stand_in ?? r.spec_url ?? '-'} | ${r.confidence} | ${r.write_tools ? `${r.write_tools.write_like}/${r.write_tools.names_seen}` : '-'} | ${r.evidence.slice(0, 4).join('; ').replace(/\|/g, '/')} |`),
+    ...s.sample.map((r) => `| ${cell(r.subject)} | ${cell(`${r.class}${r.reason ? ` (${r.reason})` : ''}`)} | ${cell(r.backend)} | ${cell(r.stand_in ?? r.spec_url)} | ${cell(`${r.confidence}${r.routable ? '' : ', not routed'}`)} | ${r.write_tools ? `${r.write_tools.write_like}/${r.write_tools.names_seen}` : '-'} | ${cell(r.evidence.slice(0, 4).join('; '))} |`),
     '',
   ];
+  if (s.gold) {
+    const g = s.gold;
+    lines.push(`### Precision against the gold set (${g.gold_rows} hand-labelled servers; routing needs ${Math.round(g.threshold * 100)}% on local_full and mock_min)`, '',
+      '| Class | Predicted | Correct | Precision | Routed | Routed correct | Routed precision |', '|---|---|---|---|---|---|---|',
+      ...Object.entries(g.classes).map(([c, o]) => `| ${c} | ${o.predicted} | ${o.correct} | ${o.precision ?? '-'} | ${o.routed} | ${o.routed_correct} | ${o.routed_precision ?? '-'} |`),
+      '', `Gate: **${g.gate ? 'met' : 'not met'}**.`, '',
+      '| Server | Predicted | Gold |', '|---|---|---|', ...g.wrong.map((w) => `| ${cell(w.subject)} | ${cell(w.predicted)} | ${cell(w.gold)} |`), '');
+  }
   return lines.join('\n');
 }
 
@@ -146,9 +207,14 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return 0;
   }
   if (cmd === 'summarize') {
-    const files = argv.slice(1).filter((x, k, a) => x !== '--out' && a[k - 1] !== '--out');
+    const files = argv.slice(1).filter((x, k, a) => !['--out', '--gold'].includes(x) && !['--out', '--gold'].includes(a[k - 1]));
     const rows = files.flatMap((f) => readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)));
     const s = summarize(rows);
+    try {
+      s.gold = goldPrecision(rows, JSON.parse(readFileSync(arg(argv, '--gold') ?? GOLD_FILE, 'utf8')), loadMaps());
+    } catch (err) {
+      process.stderr.write(`gold set not read (${err.message})\n`);
+    }
     const md = markdown(s);
     const out = arg(argv, '--out');
     if (out) writeFileSync(out, md);

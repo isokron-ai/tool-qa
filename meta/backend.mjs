@@ -23,25 +23,24 @@
 // into what we keep: only names. A classification is never a finding about
 // the server: `none` means "not testable here".
 
-import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { Worker } from 'node:worker_threads';
 
-import { FetchProblem, forbiddenKind, readCapped } from './lib/http.mjs';
-import { looksText } from './lib/indicators.mjs';
+import { FetchProblem, forbiddenKind, readBytesCapped, readCapped } from './lib/http.mjs';
 import { record, skipFor } from './lib/common.mjs';
-import { buildIndex, createAnalyzer, fileRole, mapProblems, mergeMaps, SCAN_VERSION } from './lib/backend-scan.mjs';
-import { ArchiveError, ArchiveLimit, readTarGz } from '../scripts/lib/untar.mjs';
+import { SCAN_VERSION } from './lib/backend-scan.mjs';
+import { loadMaps } from './lib/backend-maps.mjs';
+import { scanArchive, scanFiles } from './lib/backend-archive.mjs';
 import { parseRegistry } from '../ingest/registry.mjs';
 
 export const LANE = 'meta-backend';
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 export const FIELD = 'write_backend';
 
 export const ALLOWED_HOSTS = Object.freeze(['codeload.github.com', 'raw.githubusercontent.com']);
 
 export const LIMITS = Object.freeze({
-  // The source archive is streamed; every file we read is scanned and let go of at once, so memory follows the largest
-  // kept file, not the archive. The caps bound time and work.
+  // The source archive is downloaded (at most maxCompressedBytes), then scanned in a worker thread: every file read is
+  // scanned and let go of at once, so memory follows the archive's compressed bytes and the largest kept file.
   archive: { maxCompressedBytes: 96 * 1024 ** 2, maxInflatedBytes: 768 * 1024 ** 2, maxEntries: 150_000, maxKeptEntryBytes: 4 * 1024 ** 2, maxKeptTotalBytes: 64 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
   downloadTimeoutMs: 90_000,
   // No network call starts once a subject has used this much time.
@@ -52,6 +51,9 @@ export const LIMITS = Object.freeze({
   specFileBytes: 4 * 1024 ** 2,
   otherFileBytes: 2 * 1024 ** 2,
   rootFileBytes: 1024 ** 2,
+  // One subject's scan, in its worker thread: past this it is stopped and the subject gets a reader_limit skip (R-WB-20).
+  scanTimeoutMs: 60_000,
+  scanMemoryMb: 1536,
 });
 
 /** Files read from raw.githubusercontent.com when the archive cannot be. */
@@ -59,8 +61,6 @@ export const ROOT_FILES = Object.freeze([
   'package.json', 'pyproject.toml', 'requirements.txt', 'setup.py', 'go.mod', 'Cargo.toml', 'docker-compose.yml', 'docker-compose.yaml',
   'compose.yml', 'compose.yaml', '.env.example', '.env.sample', 'server.json', 'manifest.json', 'README.md',
 ]);
-
-const DATA = new URL('./data/', import.meta.url);
 
 /**
  * The field's entry, exactly as isokron-ai/mcp-results declares it (fields/write-backend, R-RES-16). Until ingest's
@@ -78,22 +78,7 @@ export function withPendingField(registry) {
   return { ...registry, fields: new Map([...registry.fields, [FIELD, entry]]), pending: [FIELD] };
 }
 
-/** The two data maps, checked, merged and indexed. Throws on a bad map: a broken map is our bug and stops the lane. */
-export function loadMaps({ standIns, specUrls } = {}) {
-  const sText = standIns ?? readFileSync(new URL('stand-ins.json', DATA), 'utf8');
-  const uText = specUrls ?? readFileSync(new URL('spec-urls.json', DATA), 'utf8');
-  const s = typeof sText === 'string' ? JSON.parse(sText) : sText;
-  const u = typeof uText === 'string' ? JSON.parse(uText) : uText;
-  const problems = mapProblems(s, u);
-  if (problems.length) throw new Error(`meta-backend: the data maps are not valid: ${problems.slice(0, 5).join('; ')}`);
-  const table = mergeMaps(s, u);
-  const sha = (t) => createHash('sha256').update(typeof t === 'string' ? t : JSON.stringify(t)).digest('hex');
-  return {
-    table,
-    index: buildIndex(table),
-    versions: { stand_ins: s.version, spec_urls: u.version, stand_ins_sha256: sha(sText), spec_urls_sha256: sha(uText) },
-  };
-}
+export { loadMaps };
 
 const MAPS = loadMaps();
 
@@ -129,11 +114,10 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 const stripTop = (p) => { const i = p.indexOf('/'); return i < 0 ? null : p.slice(i + 1); };
 
 /**
- * Read the source archive into an analyzer. Returns { status: 'ok', commit, truncated, bytes } or
- * { status: 'not_found' | 'gone' | 'redirected' }; throws FetchProblem (passing), ArchiveLimit (our cap), or
- * SourceTimeLimit.
+ * Download the source archive. Returns { status: 'ok', buf } or { status: 'not_found' | 'gone' | 'redirected' |
+ * 'too_large' | 'reader_limit' }; throws FetchProblem for a passing problem.
  */
-export async function readArchive(http, repo, ref, analyzer, { clock = () => Date.now(), limits = LIMITS.archive } = {}) {
+export async function downloadArchive(http, repo, ref, { clock = () => Date.now(), limits = LIMITS.archive } = {}) {
   const url = `https://codeload.github.com/${repo}/tar.gz/${ref}`;
   if (!allowedUrl(url)) throw new HostRefused();
   const t0 = clock();
@@ -150,57 +134,61 @@ export async function readArchive(http, repo, ref, analyzer, { clock = () => Dat
     if (res.status === 429) throw new FetchProblem('rate_limited', `codeload.github.com: HTTP ${res.status}`, { status: res.status });
     throw new FetchProblem('upstream_unavailable', `codeload.github.com: HTTP ${res.status}`);
   }
-  let codeBytes = 0;
-  let truncated = false;
-  const keep = ({ path, size }) => {
-    const rel = stripTop(path);
-    if (!rel) return false;
-    const role = fileRole(rel);
-    if (!role) return false;
-    if (role === 'code') {
-      if (size > LIMITS.codeFileBytes || codeBytes + size > LIMITS.codeBytes) { truncated = true; return false; }
-      codeBytes += size;
-      return true;
-    }
-    const cap = role === 'maybe_spec' ? LIMITS.specFileBytes : LIMITS.otherFileBytes;
-    if (size > cap) { if (role !== 'maybe_spec') truncated = true; return false; }
-    return true;
-  };
-  let t;
   try {
-    t = await readTarGz(res.body, {
-      limits,
-      keep,
-      onFile: (f) => {
-        if (!f.data) return;
-        const rel = stripTop(f.path);
-        if (rel && looksText(f.data)) analyzer.addFile(rel, f.data.toString('utf8'));
-        f.data = null;
-      },
-    });
+    return { status: 'ok', buf: await readBytesCapped(res, limits.maxCompressedBytes, 'codeload.github.com') };
   } catch (err) {
-    if (err instanceof ArchiveLimit) throw err;
-    if (err instanceof ArchiveError) {
-      if (clock() - t0 >= LIMITS.downloadTimeoutMs * 0.9) throw new SourceTimeLimit();
-      throw new FetchProblem('upstream_unavailable', 'codeload.github.com: the source archive could not be read');
-    }
-    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') throw new SourceTimeLimit();
+    if (err instanceof FetchProblem && err.code === 'too_large') return { status: 'too_large' };
+    // A body that stopped at our time limit is ours: read the root files instead.
+    if (err instanceof FetchProblem && clock() - t0 >= LIMITS.downloadTimeoutMs * 0.9) return { status: 'reader_limit' };
     throw err;
   }
-  return { status: 'ok', commit: t.global_comment && SHA_RE.test(t.global_comment) ? t.global_comment : null, truncated, bytes: t.compressed_bytes ?? null };
 }
 
-/** A source archive that did not arrive within our time limit: our limit, read from root files instead. */
-export class SourceTimeLimit extends Error {
-  constructor() {
-    super('meta-backend: the source archive did not arrive within the time limit');
-    this.name = 'SourceTimeLimit';
+/** The scan stopped at its wall-clock limit, or its worker died: our limit, never the subject's. */
+export class ScanLimit extends Error {
+  constructor(why) {
+    super(`meta-backend: the scan ${why}`);
+    this.name = 'ScanLimit';
+    this.why = why;
   }
 }
 
-/** The fallback: a few root files from raw.githubusercontent.com. Returns how many were read. */
-export async function readRootFiles(http, repo, ref, analyzer, { overBudget = () => false } = {}) {
-  let read = 0;
+/**
+ * Run one scan job in a worker thread with a wall-clock limit (R-WB-20). job: { kind: 'archive', buf } or
+ * { kind: 'files', files: [[name, text]] }, plus repo, pinnedCommit, mapsSource. With isolate false (unit tests that
+ * hand over maps objects) it runs in this thread. Resolves to the scan's result; rejects with ScanLimit.
+ */
+export function runScan(job, { timeoutMs = LIMITS.scanTimeoutMs, isolate = true, maps = null } = {}) {
+  if (!isolate) {
+    const m = maps ?? loadMaps(job.mapsSource ?? undefined);
+    const opts = { maps: m, repo: job.repo, mapVersions: { stand_ins: m.versions.stand_ins, spec_urls: m.versions.spec_urls } };
+    return job.kind === 'archive'
+      ? scanArchive(job.buf, { ...opts, limits: job.limits, fileLimits: job.fileLimits, pinnedCommit: job.pinnedCommit ?? null })
+      : Promise.resolve(scanFiles(job.files, { ...opts, commit: job.pinnedCommit ?? null }));
+  }
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./lib/backend-scan-worker.mjs', import.meta.url), { resourceLimits: { maxOldGenerationSizeMb: LIMITS.scanMemoryMb }, env: {}, stdout: true, stderr: true });
+    let settled = false;
+    const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); worker.terminate().catch(() => {}); fn(v); };
+    const timer = setTimeout(() => done(reject, new ScanLimit('ran past its time limit')), timeoutMs);
+    worker.once('message', (m) => (m?.ok ? done(resolve, m.out) : done(reject, new ScanLimit(`failed (${m?.error ?? 'error'})`))));
+    worker.once('error', () => done(reject, new ScanLimit('failed in its worker')));
+    worker.once('exit', (code) => done(reject, new ScanLimit(`worker exited (${code})`)));
+    let msg = job;
+    const transfer = [];
+    if (job.kind === 'archive') {
+      // A fresh ArrayBuffer of exactly the archive's bytes, handed over without a copy.
+      const ab = job.buf.buffer.slice(job.buf.byteOffset, job.buf.byteOffset + job.buf.byteLength);
+      msg = { ...job, buf: ab };
+      transfer.push(ab);
+    }
+    worker.postMessage(msg, transfer);
+  });
+}
+
+/** The fallback: a few root files from raw.githubusercontent.com. Returns [[name, text], ...]. */
+export async function readRootFiles(http, repo, ref, { overBudget = () => false } = {}) {
+  const files = [];
   for (const name of ROOT_FILES) {
     if (overBudget()) break;
     const url = `https://raw.githubusercontent.com/${repo}/${ref}/${name}`;
@@ -211,71 +199,90 @@ export async function readRootFiles(http, repo, ref, analyzer, { overBudget = ()
     if (res.status !== 200) { await res.body?.cancel?.().catch(() => {}); throw new FetchProblem('upstream_unavailable', `raw.githubusercontent.com: HTTP ${res.status}`); }
     let text;
     try { text = await readCapped(res, LIMITS.rootFileBytes, 'raw.githubusercontent.com'); } catch (err) { if (err?.code === 'too_large') continue; throw err; }
-    analyzer.addFile(name, text);
-    read++;
+    files.push([name, text]);
   }
-  return read;
+  return files;
 }
 
 /**
  * Everything for one subject. Never throws for an upstream problem: those are
  * skips. `pins` maps a repository to the commit to read (the known-answer
  * control); otherwise the default branch (HEAD) is read and the archive's
- * commit is reported.
+ * commit is reported. The scan runs in a worker thread (runScan).
  */
-export async function collectSubject(http, repo, { pins = {}, maps = MAPS, clock = () => Date.now(), archiveLimits = LIMITS.archive } = {}) {
+export async function collectSubject(http, repo, { pins = {}, mapsSource = null, clock = () => Date.now(), archiveLimits = LIMITS.archive, scanTimeoutMs = LIMITS.scanTimeoutMs } = {}) {
   const t0 = clock();
   const overBudget = () => clock() - t0 > LIMITS.subjectBudgetMs;
   const ref = SHA_RE.test(pins?.[repo] ?? '') ? pins[repo] : 'HEAD';
+  const pinnedCommit = ref !== 'HEAD' ? ref : null;
   const stages = {};
   const skips = [];
-  let analyzer = createAnalyzer(maps);
-  let read = null;
-  let source = 'archive';
+  const base = { repo, pinnedCommit, mapsSource, limits: archiveLimits, fileLimits: LIMITS };
+  const scanLimited = (err) => {
+    stages.scan = 'reader_limit';
+    skips.push({ stage: 'scan', reason: 'reader_limit', fault: 'tool' });
+    return { repo, stages, skips, value: null, why: `our scan of this repository ${err.why}`, sha: null };
+  };
+  let dl;
   try {
-    read = await readArchive(http, repo, ref, analyzer, { clock, limits: archiveLimits });
-    stages.archive = read.status;
+    dl = await downloadArchive(http, repo, ref, { clock, limits: archiveLimits });
   } catch (err) {
-    if (err instanceof ArchiveLimit || err instanceof SourceTimeLimit) {
-      stages.archive = err instanceof ArchiveLimit ? 'too_large' : 'reader_limit';
-      // Start again from root files: what the archive gave before the cap is dropped, so the result says one basis.
-      analyzer = createAnalyzer(maps);
-      source = 'root_files';
-    } else if (err instanceof FetchProblem) {
-      stages.archive = err.code;
-      skips.push(skipFor('archive', err.code));
-      return { repo, stages, skips, value: null, why: 'the source archive could not be read', sha: null };
-    } else throw err;
+    if (!(err instanceof FetchProblem)) throw err;
+    stages.archive = err.code;
+    skips.push(skipFor('archive', err.code));
+    return { repo, stages, skips, value: null, why: 'the source archive could not be read', sha: null };
   }
-  if (read?.status === 'not_found') return { repo, stages, skips, value: null, why: 'the repository was not found, or is empty', sha: null };
-  if (read?.status === 'gone') {
+  stages.archive = dl.status;
+  if (dl.status === 'not_found') return { repo, stages, skips, value: null, why: 'the repository was not found, or is empty', sha: null };
+  if (dl.status === 'gone') {
     skips.push({ stage: 'archive', reason: 'upstream_unavailable', fault: 'subject' });
     return { repo, stages, skips, value: null, why: 'GitHub took the repository down', sha: null };
   }
-  if (read?.status === 'redirected') {
+  if (dl.status === 'redirected') {
     skips.push({ stage: 'archive', reason: 'upstream_unavailable', fault: 'tool', retryable: true });
     return { repo, stages, skips, value: null, why: 'codeload.github.com answered with a redirect we do not follow', sha: null };
   }
-  if (source === 'root_files') {
+  let out = null;
+  if (dl.status === 'ok') {
     try {
-      const n = await readRootFiles(http, repo, ref, analyzer, { overBudget });
-      stages.root_files = n;
-      if (n === 0) {
-        skips.push({ stage: 'archive', reason: stages.archive === 'too_large' ? 'too_large' : 'reader_limit', fault: 'tool' });
-        return { repo, stages, skips, value: null, why: 'the archive is over our caps and no root file could be read', sha: null };
-      }
+      out = await runScan({ ...base, kind: 'archive', buf: dl.buf }, { timeoutMs: scanTimeoutMs });
+    } catch (err) {
+      if (err instanceof ScanLimit) return scanLimited(err);
+      throw err;
+    }
+    if (out.status === 'too_large') { stages.archive = 'too_large'; out = null; }
+    else if (out.status === 'malformed') {
+      skips.push({ stage: 'archive', reason: 'upstream_unavailable', fault: 'infra', retryable: true });
+      return { repo, stages, skips, value: null, why: 'the source archive could not be read', sha: null };
+    }
+  }
+  if (!out) {
+    // Over our caps, or late: read again as root files, the result says one basis.
+    let files;
+    try {
+      files = await readRootFiles(http, repo, ref, { overBudget });
     } catch (err) {
       if (!(err instanceof FetchProblem)) throw err;
       stages.root_files = err.code;
       skips.push(skipFor('root_files', err.code));
       return { repo, stages, skips, value: null, why: 'the root files could not be read', sha: null };
     }
+    stages.root_files = files.length;
+    if (files.length === 0) {
+      skips.push({ stage: 'archive', reason: stages.archive === 'too_large' ? 'too_large' : 'reader_limit', fault: 'tool' });
+      return { repo, stages, skips, value: null, why: 'the archive is over our caps and no root file could be read', sha: null };
+    }
+    try {
+      out = await runScan({ ...base, kind: 'files', files }, { timeoutMs: scanTimeoutMs });
+    } catch (err) {
+      if (err instanceof ScanLimit) return scanLimited(err);
+      throw err;
+    }
   }
-  const commit = read?.commit ?? (ref !== 'HEAD' ? ref : null);
-  const value = analyzer.result({ repo, commit, source, truncated: read?.truncated ?? true, mapVersions: { stand_ins: maps.versions.stand_ins, spec_urls: maps.versions.spec_urls } });
+  const value = out.value;
   stages.class = value.class;
   stages.files = value.basis.files_read;
-  return { repo, stages, skips, value, why: null, sha: commit };
+  return { repo, stages, skips, value, why: null, sha: out.commit ?? null };
 }
 
 /** Observation records for one subject. */

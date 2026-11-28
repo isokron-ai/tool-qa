@@ -1,0 +1,349 @@
+{
+ "about": "Gold set for the meta-backend classifier (meta/dryrun-backend.mjs reports precision against it; meta/test/backend.test.mjs checks its shape). 49 servers drawn on 28 Nov 2026 from the dry run of the real frame (a stable hash pick: 18 the classifier called local_full, 14 mock_min, 18 none; AnxForever/stylekit was left out, unread). Each was labelled from its README, manifests and tool-registration source, read through the GitHub API (nothing cloned or run), by a second agent that was not shown the classifier's answer. has_write_tools: whether any MCP tool changes state; backend: where those writes go, as a map id, other:<name> for a hosted API no map names, or none. The expected class is derived from these with the maps in force (backendGoldClass), so a map change moves expectations with it. Precision beats recall: routing stays off until precision on local_full and mock_min is at least 90% on this set.",
+ "labelled": "2026-11-28",
+ "rows": [
+  {
+   "subject": "petros-poli/AICS-public",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "medium",
+   "note": "README: MCP registry entry (aics-mcp) is read-only with five tools and three resources; writes go through the CLI/client, not MCP."
+  },
+  {
+   "subject": "Caucus-Race/copilot-datagate",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README: read-only gateway; MCP tools are select, search, aggregate over postgres/mysql/sqlite, no writes."
+  },
+  {
+   "subject": "mm6502/enterprise-architect-mcp",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README: read-only server over a .qea SQLite export, never writes to it."
+  },
+  {
+   "subject": "Jackxiaozhiren/datasentry",
+   "has_write_tools": true,
+   "backend": "filesystem",
+   "confidence": "medium",
+   "note": "docs/MCP.md: repair/apply, PII restore and scheduler tools create state; repairs write repaired file copies plus rollback artifacts (src/datasentry/mcp_server.py)."
+  },
+  {
+   "subject": "zoharbabin/web-researcher-mcp",
+   "has_write_tools": true,
+   "backend": "other:internet-archive",
+   "confidence": "medium",
+   "note": "README: archive_source is a labelled write tool (Wayback Save Page Now); also saves own sessions, memory, monitors and logins, which are internal state."
+  },
+  {
+   "subject": "roboticforce/sugar",
+   "has_write_tools": true,
+   "backend": "sqlite",
+   "confidence": "medium",
+   "note": ".claude-plugin/mcp-server/sugar-mcp.js: createTask, updateTask, removeTask shell out to the sugar CLI, which keeps a local task DB (assumed sqlite)."
+  },
+  {
+   "subject": "prometheus/prometheus-mcp",
+   "has_write_tools": true,
+   "backend": "prometheus",
+   "confidence": "high",
+   "note": "pkg/mcp/tools.go registers delete_series, clean_tombstones, snapshot, reload and quit alongside the read-only query tools."
+  },
+  {
+   "subject": "alondmnt/joplin-mcp",
+   "has_write_tools": true,
+   "backend": "other:joplin",
+   "confidence": "high",
+   "note": "README tool list: create_note, update_note, delete_note, create_notebook, tag_note, import_from_file; writes via the joppy Joplin API."
+  },
+  {
+   "subject": "kamil5b/db2toon",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README: local MCP is read-only schema extraction to TOON (cmd/db2toon-mcp)."
+  },
+  {
+   "subject": "CloudCorpRecords/driveport",
+   "has_write_tools": true,
+   "backend": "google-drive",
+   "confidence": "high",
+   "note": "README tools include create_folder, upload_file, trash_file against the Google Drive API v3."
+  },
+  {
+   "subject": "cyclimse/mcp-scaleway-functions",
+   "has_write_tools": true,
+   "backend": "other:scaleway",
+   "confidence": "high",
+   "note": "internal/scaleway has create_deploy_function, update_function, delete_function, delete_function_namespace using the Scaleway Functions API."
+  },
+  {
+   "subject": "anasmughal239-alt/domain-setup-mcp",
+   "has_write_tools": true,
+   "backend": "cloudflare",
+   "confidence": "high",
+   "note": "README: domain_apply and domain_rollback write DNS records and redirect rules through Cloudflare batch API (src/domain_setup_mcp/cloudflare.py)."
+  },
+  {
+   "subject": "microsoft/mcp-dotnet-samples",
+   "has_write_tools": true,
+   "backend": "sqlite",
+   "confidence": "medium",
+   "note": "todo-list TodoTool.cs has add/update/complete/delete_todo_item on EF Core with UseSqlite; outlook-email send_email would use microsoft-graph."
+  },
+  {
+   "subject": "zelentsov-dev/apple-ads-mcp",
+   "has_write_tools": true,
+   "backend": "other:apple-ads",
+   "confidence": "high",
+   "note": "README: read-only by default, but mutations (preview then confirm) change campaigns via the Apple Ads Platform API (internal/appleads, live write tests)."
+  },
+  {
+   "subject": "AsterMindAI/astermind-mcp",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "medium",
+   "note": "README: local ELM rerank/filter of passages, no network calls; compute only (src/index.js, src/engine.js)."
+  },
+  {
+   "subject": "pineforge-4pass/pineforge-backtest-mcp",
+   "has_write_tools": true,
+   "backend": "filesystem",
+   "confidence": "medium",
+   "note": "README: fetch_binance_ohlcv writes a CSV; backtest_pine/backtest_pine_grid write oversized reports to a file; tools marked not read-only/destructive."
+  },
+  {
+   "subject": "ErikEJ/SqlServer.Rules",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "medium",
+   "note": "README: MCP server analyzes T-SQL scripts, dacpacs or databases for rule violations; analysis only. Source of the MCP tools was not read."
+  },
+  {
+   "subject": "eyloni/pythia-oracle",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "medium",
+   "note": "src/pythia_oracle/server.py is a thin fastmcp proxy to hosted pythia-mcp.fly.dev; README lists a single consult_oracle tool that returns a reading."
+  },
+  {
+   "subject": "CSOAI-ORG/landlaw-ai-mcp",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "server.py tools (search_land_registry, check_planning_permission, explain_covenant, calculate_sdlt, draft_section_notice, check_right_of_way) only query or compute."
+  },
+  {
+   "subject": "agentlabs-at/agentfenster-mcp",
+   "has_write_tools": true,
+   "backend": "browser",
+   "confidence": "high",
+   "note": "README: repo only has docs; 11 tools incl. desktop_task and open_app click, type and launch apps on a hidden Windows desktop (desktop automation)."
+  },
+  {
+   "subject": "delian/codeguide-mcp",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README: exposes guides://list and guides://{name} resources only; local cache is not a backend."
+  },
+  {
+   "subject": "CSOAI-ORG/sleep-tracker-ai-mcp",
+   "has_write_tools": true,
+   "backend": "sqlite",
+   "confidence": "high",
+   "note": "server.py log_sleep stores entries via persistence.py ServerStore, which is SQLite per server."
+  },
+  {
+   "subject": "pipeworx-io/mcp-hawaii-code",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README: hi_statute and hi_search read Hawaii statutes, keyless."
+  },
+  {
+   "subject": "alexgaoth/escalate-anything",
+   "has_write_tools": true,
+   "backend": "sqlite",
+   "confidence": "high",
+   "note": "src/escalate_anything/server.py has case_open, case log/close, record bill and report-fact tools (WRITE annotation) backed by a local SQLite store (store.py)."
+  },
+  {
+   "subject": "agentlabbusiness/intesta-mcp",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README: all tools (check_trust, get_passport, ask, search_entities, list_entities, get_trust_ladder) are read-only proxies to the public registry."
+  },
+  {
+   "subject": "mdfifty50-boop/mcp-registry-mcp",
+   "has_write_tools": true,
+   "backend": "sqlite",
+   "confidence": "high",
+   "note": "src/index.js register_server and similar tools write to a better-sqlite3 DB at ~/.mcp-registry-mcp/registry.db (src/db.js, src/storage.js)."
+  },
+  {
+   "subject": "kefyusuf/search-memory-mcp",
+   "has_write_tools": true,
+   "backend": "sqlite",
+   "confidence": "medium",
+   "note": "remember, forget, index_url and ingest_document write to the local memory and index store (src/tools/memory.ts, knowledge.ts); package.json uses better-sqlite3 and sqlite-vec."
+  },
+  {
+   "subject": "CloudCorpRecords/docbase",
+   "has_write_tools": true,
+   "backend": "mongodb",
+   "confidence": "high",
+   "note": "src/mcp.ts exposes insert-many, update-many, delete-many and index/collection tools that run MongoDB commands through mongosh (src/mongo.ts)."
+  },
+  {
+   "subject": "Ivolver/NDA-Handshake",
+   "has_write_tools": true,
+   "backend": "filesystem",
+   "confidence": "medium",
+   "note": "mcp_server.py tools such as confirm and handshake are annotated WRITES_LOCAL_FILES and save the company file and NDA documents in local folders; the server itself sends no email."
+  },
+  {
+   "subject": "JayQuan-McCleary/ZenLink-MCP",
+   "has_write_tools": true,
+   "backend": "browser",
+   "confidence": "high",
+   "note": "src/zenlink_mcp/server.py wraps the ZenLink bridge on localhost:8765 with tools like zen_click, zen_fill, zen_navigate and zen_cookies that drive Zen Browser."
+  },
+  {
+   "subject": "morluto/leantoken",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "medium",
+   "note": "README tools (leantoken.context, search, files, outline, read, history, json, receipt_rebase, savings) only read or compute; the local index is a cache."
+  },
+  {
+   "subject": "Arcaeon-io/arcaeon",
+   "has_write_tools": true,
+   "backend": "filesystem",
+   "confidence": "high",
+   "note": "src/arcaeon/mcp/ledger_server.py ledger_create and ledger_append write hash-chained .jsonl ledger files under a local root."
+  },
+  {
+   "subject": "cyanheads/faostat-mcp-server",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "medium",
+   "note": "README lists 7 tools that query a local SQLite mirror of FAOSTAT; dataframe_drop only drops session-staged canvas tables, which are a cache."
+  },
+  {
+   "subject": "HatmanStack/RAGStack-Lambda",
+   "has_write_tools": true,
+   "backend": "aws",
+   "confidence": "medium",
+   "note": "src/ragstack-mcp/src/ragstack_mcp/server.py has start_scrape_job, upload_document_url, upload_image_url and submit_image, which create jobs and uploads in the AWS stack (S3, DynamoDB, AppSync)."
+  },
+  {
+   "subject": "smarterweather/developer",
+   "has_write_tools": true,
+   "backend": "other:smarterweather-api",
+   "confidence": "medium",
+   "note": "The onboarding MCP (packages/mcp-onboarding README) has sign_up, start_trial, create_api_key, rotate_api_key and revoke_api_key against api.smarterweather.com; the weather MCP tools are read-only."
+  },
+  {
+   "subject": "asopitech-labs/global-executables",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "src/global_executables/mcp_server.py registers tools with READ_ONLY annotations (check_executable, check_executables, discover_published_package); they only look names up."
+  },
+  {
+   "subject": "andrey-tut/nummeropslag-api",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "mcp/nummeropslag_mcp/server.py tools lookup_number, check_spam, get_operator, search_businesses and api_status all use READ_ONLY annotations and GET requests."
+  },
+  {
+   "subject": "ayuanxx-max/signoff-cli",
+   "has_write_tools": true,
+   "backend": "filesystem",
+   "confidence": "low",
+   "note": "integrations/mcp/server.js runs the signoff CLI through signoff_run, signoff_dispute and others, which write .signoff/runs.log and evidence JSON."
+  },
+  {
+   "subject": "lmwharton/sieve-mcp",
+   "has_write_tools": true,
+   "backend": "other:sieve-api",
+   "confidence": "high",
+   "note": "src/sieve_mcp/server.py sieve_screen creates a screening deal and sieve_dataroom_add uploads files to api.sieve.arceusxventures.com."
+  },
+  {
+   "subject": "zscaler/zscaler-mcp-server",
+   "has_write_tools": true,
+   "backend": "other:zscaler-api",
+   "confidence": "high",
+   "note": "README says it is read-only by default, but create, update and delete tools exist behind --enable-write-tools plus a --write-tools allowlist."
+  },
+  {
+   "subject": "bawbel/scanner",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "low",
+   "note": "A static scanner CLI; server.json runs it over stdio with a --path argument and no state-changing MCP tools were found."
+  },
+  {
+   "subject": "composable-delivery/snowfakery-mcp",
+   "has_write_tools": true,
+   "backend": "filesystem",
+   "confidence": "low",
+   "note": "snowfakery_mcp/tools/run.py runs recipes and captures output and artifacts under a workspace root (core/paths.py)."
+  },
+  {
+   "subject": "pipeworx-io/mcp-newton",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README tools simplify, derive, integrate and factor are pure math calls to the Newton solver API."
+  },
+  {
+   "subject": "diyaluo/pdf-extract-mcp",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README tools are extract_pdf (returns CSV, JSON or XLSX content) and health; they compute and return output without changing external state."
+  },
+  {
+   "subject": "pipeworx-io/mcp-gtin",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README tools validate_gtin and gtin_check_digit are offline computations."
+  },
+  {
+   "subject": "clevertechca/Clevertech-mcp-server",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "medium",
+   "note": "src/clevertech_mcp/tools/*.py (census, property, business, safety and others) query Canadian open data."
+  },
+  {
+   "subject": "Roblox/studio-rust-mcp-server",
+   "has_write_tools": true,
+   "backend": "other:roblox-studio",
+   "confidence": "high",
+   "note": "README tools run_code and insert_model modify the open Roblox Studio place through the plugin."
+  },
+  {
+   "subject": "CloudCorpRecords/serpbridge",
+   "has_write_tools": false,
+   "backend": "none",
+   "confidence": "high",
+   "note": "README tools google_search, bing_search, duckduckgo_search and google_maps only forward search queries to the hosted Litescrape service."
+  },
+  {
+   "subject": "thalisantunes/govbr-apis-mcp",
+   "has_write_tools": true,
+   "backend": "other:govbr-apis",
+   "confidence": "medium",
+   "note": "README: call_api accepts POST, PUT, PATCH and DELETE with a body against Brazilian government APIs in the catalog (src/govbr_apis_mcp/server.py); the other four tools are catalog and spec lookups."
+  }
+ ]
+}

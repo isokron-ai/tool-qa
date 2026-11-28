@@ -34,7 +34,7 @@
   {
     "id": "WB5 a mentioned backend outranks a declared one",
     "file": "meta/lib/backend-scan.mjs",
-    "old": "(anchored(y) - anchored(x)) || ",
+    "old": "(level(y) - level(x)) || ",
     "new": "",
     "test": "meta/test/backend.test.mjs",
     "pattern": "R-WB-18"
@@ -62,5 +62,109 @@
     "new": "if (false) {",
     "test": "meta/test/backend.test.mjs",
     "pattern": "R-WB-03"
+  },
+  {
+    "id": "WB9 the scan has no wall-clock limit",
+    "file": "meta/backend.mjs",
+    "old": "const timer = setTimeout(() => done(reject, new ScanLimit('ran past its time limit')), timeoutMs);",
+    "new": "const timer = null;",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-20"
+  },
+  {
+    "id": "WB10 the TOML comment strip rescans blanks",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "    const hash = raw.search(/(?:^|[ \\t])#/);\n    const line = hash < 0 ? raw : raw.slice(0, hash);",
+    "new": "    const line = raw.replace(/\\s+#.*$/, '');",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-14"
+  },
+  {
+    "id": "WB11 GITHUB_* names are kept",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "'GITHUB_[A-Z0-9_]+', ",
+    "new": "",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-15"
+  },
+  {
+    "id": "WB12 release and update-check code weighs as server code",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "|| TOOLING_FILE_RE.test(p);",
+    "new": ";",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-21"
+  },
+  {
+    "id": "WB13 CI scripts weigh as server code",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "docs?|scripts?|\\.github|",
+    "new": "docs?|",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-21"
+  },
+  {
+    "id": "WB14 a cache in compose outranks the hosted API",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "const level = (s) => (hostedAnchored && s.b.kind === 'kv' ? Math.min(levelOf(s), 1) : levelOf(s));",
+    "new": "const level = (s) => levelOf(s);",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-21"
+  },
+  {
+    "id": "WB15 development requirements are production",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "const devFile = mk === 'requirements' && DEV_REQUIREMENTS_RE.test(path.slice(path.lastIndexOf('/') + 1));",
+    "new": "const devFile = false;",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-21"
+  },
+  {
+    "id": "WB16 a model SDK of a cloud vendor makes a cloud server",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "    if (llmSdk) {",
+    "new": "    if (false) {",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-21"
+  },
+  {
+    "id": "WB17 write tools need not touch the backend",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "        if (!related) {",
+    "new": "        if (false) {",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-22"
+  },
+  {
+    "id": "WB18 a spec URL need not be a description file",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "else if (!/\\.(?:json|ya?ml|graphql)$/i.test(u.pathname) && s.spec.endpoint !== true)",
+    "new": "else if (false)",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-23"
+  },
+  {
+    "id": "WB19 repository pages and API directories pass as specs",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "if (u.hostname === 'github.com' || u.hostname === 'gitlab.com' || /\\/discovery\\/v1\\/apis\\/?$/.test(u.pathname))",
+    "new": "if (false)",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-23"
+  },
+  {
+    "id": "WB20 markdown cells keep newlines",
+    "file": "meta/dryrun-backend.mjs",
+    "old": ".replace(/[\\r\\n\\u2028\\u2029|]+/g, ' ')",
+    "new": "",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-24"
+  },
+  {
+    "id": "WB21 the root-file fallback scan runs unbounded too",
+    "file": "meta/backend.mjs",
+    "old": "      out = await runScan({ ...base, kind: 'files', files }, { timeoutMs: scanTimeoutMs });",
+    "new": "      out = await runScan({ ...base, kind: 'files', files }, { isolate: false });",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-20"
   }
 ]

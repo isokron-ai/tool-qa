@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "updated": "2026-11-27",
+  "version": 2,
+  "updated": "2026-11-28",
   "about": "The meta-backend lane's backend -> stand-in map (meta/backend.mjs). One entry per backend a server's write tools can write to that may run inside a GitHub Actions job: the engine itself, or a self-hostable product, or an open-source stand-in for a hosted API. `signals` say how the lane recognises it in a repository (meta/README.md, \"meta-backend\"); `stand_in` says what writecheck's full mode would run. A subject is local_full only when its primary backend's stand-in has fidelity real or faithful AND cleared true. fidelity: real = the product itself; faithful = another implementation of the same API whose own semantics (versions, conflicts, transactions) hold; partial = the same API without the semantics writecheck's backend requirements need; not_faithful = a different API (a look-alike). cleared: the stand-in's licence and terms allow the loop to run it with no account, token or paid licence (false = a person has to decide). Sources: company-audit research/writecheck-coverage-2026-11-28/RESEARCH.md, section 2, and each product's own licence. Add a backend or change a stand-in here, not in code; meta/test/backend.test.mjs checks the shape. A backend that is also a hosted API with a published description has an entry of the same id in spec-urls.json; both are merged.",
   "backends": {
     "postgres": {
@@ -452,7 +452,7 @@
       "kind": "service",
       "stand_in": { "id": "localstack", "product": "LocalStack", "licence": "LocalStack terms (account and auth token since 23 Mar 2026)", "fidelity": "faithful", "cleared": false, "note": "needs an account and token: a person decides (RESEARCH.md section 2); moto's server mode is Apache-2.0 but not built for concurrent writers (partial)" },
       "signals": {
-        "npm": ["aws-sdk", "@aws-sdk/client-lambda", "@aws-sdk/client-sqs", "@aws-sdk/client-sns", "@aws-sdk/client-ec2", "@aws-sdk/client-cloudformation", "@aws-sdk/client-iam", "@aws-sdk/client-ses", "@aws-sdk/client-sesv2", "@aws-sdk/client-secrets-manager", "@aws-sdk/client-ssm", "@aws-sdk/client-bedrock-agent", "@aws-sdk/client-cloudwatch", "@aws-sdk/client-cloudwatch-logs", "@aws-sdk/client-ecs", "@aws-sdk/client-eventbridge", "@aws-sdk/client-kinesis", "@aws-sdk/client-sfn", "@aws-sdk/client-athena", "@aws-sdk/client-glue"],
+        "npm": ["aws-sdk", "@aws-sdk/client-lambda", "@aws-sdk/client-sqs", "@aws-sdk/client-sns", "@aws-sdk/client-ec2", "@aws-sdk/client-cloudformation", "@aws-sdk/client-iam", "@aws-sdk/client-ses", "@aws-sdk/client-sesv2", "@aws-sdk/client-secrets-manager", "@aws-sdk/client-ssm", "@aws-sdk/client-cloudwatch", "@aws-sdk/client-cloudwatch-logs", "@aws-sdk/client-ecs", "@aws-sdk/client-eventbridge", "@aws-sdk/client-kinesis", "@aws-sdk/client-sfn", "@aws-sdk/client-athena", "@aws-sdk/client-glue"],
         "pypi": ["boto3", "botocore", "aioboto3", "aws-cdk-lib"],
         "go": ["github.com/aws/aws-sdk-go-v2", "github.com/aws/aws-sdk-go"],
         "cargo": ["aws-config", "aws-sdk-lambda", "aws-sdk-sqs"],
@@ -556,7 +556,7 @@
         "pypi": ["docker", "aiodocker"],
         "go": ["github.com/docker/docker", "github.com/moby/moby"],
         "cargo": ["bollard"],
-        "env": ["DOCKER_HOST", "DOCKER_SOCKET", "DOCKER_SOCK"],
+        "env": [],
         "env_prefix": []
       }
     },

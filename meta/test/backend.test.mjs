@@ -228,8 +228,9 @@ test('R-WB-03: weak signals alone find nothing: a dev dependency, a code token u
 test('R-WB-03: two backends with the same score and different modes are low confidence; root files cap it at medium', () => {
   const tie = classify({ 'package.json': pkg({ pg: '8', '@slack/web-api': '7' }), 'src/a.ts': "server.tool('create_x', {}, f);\n" });
   assert.equal(tie.confidence, 'low');
+  // Root files hold no tool registrations, so the write tools cannot be checked against the backend: low, never routed (R-WB-22).
   const root = classify({ 'package.json': pkg({ pg: '8' }), '.env.example': 'DATABASE_URL=postgres://h/d\n' }, { source: 'root_files' });
-  assert.deepEqual([root.class, root.confidence, root.basis.source], ['local_full', 'medium', 'root_files']);
+  assert.deepEqual([root.class, root.confidence, root.basis.source, root.routable], ['local_full', 'low', 'root_files', false]);
 });
 
 test('R-WB-04: env names only, never values: base-URL knobs first; README names only when they configure a backend', () => {
@@ -337,7 +338,7 @@ test('R-WB-06: an archive over our caps is read again as root files (basis root_
   const c = await collectSubject(http(f), 'acme/big', { archiveLimits: caps });
   assert.equal(c.stages.archive, 'too_large');
   assert.equal(c.stages.root_files, 2);
-  assert.deepEqual([c.value.class, c.value.basis.source, c.value.confidence], ['local_full', 'root_files', 'medium']);
+  assert.deepEqual([c.value.class, c.value.basis.source, c.value.confidence, c.value.routable], ['local_full', 'root_files', 'low', false]);
   assert.deepEqual(c.skips, []);
   const none = await collectSubject(http(mockFetch([{ prefix: 'https://codeload.github.com/', body: huge }])), 'acme/big', { archiveLimits: caps });
   assert.equal(none.value, null);
@@ -440,6 +441,13 @@ test('R-WB-14: hostile configuration costs bounded time: blank-line compose and 
     'setup.py': big('install_requires=[', 100_000),
     'schema.prisma': `${big('datasource db {', 50_000)}`,
     'README.md': big('A_B_C_D_E_F_G_', 80_000),
+    // One long line each (no newline at all), and heads of newlines (Opus review of #126: 50 to 80 s each before).
+    'pyproject.toml': `a${' '.repeat(250_000)}b`,
+    'build.gradle': `implementation${' '.repeat(250_000)}x`,
+    'compose.yaml': `${' '.repeat(250_000)}-${' '.repeat(5000)}`,
+    'api/openapi.yaml': `${'\n'.repeat(4000)}openapi: 3.0.0`,
+    'spec.json': `${'\n \t'.repeat(1500)}{`,
+    'requirements-dev.txt': `x${' '.repeat(250_000)}#`,
   };
   for (const [p, t] of Object.entries(cases)) {
     const t0 = Date.now();
@@ -452,8 +460,14 @@ test('R-WB-14: hostile configuration costs bounded time: blank-line compose and 
 });
 
 test('R-WB-15: env names the runtime, the shell or the runner own are never kept or sent, whatever a repository reads', () => {
-  const v = classify({ 'src/a.ts': "process.env.PATH; process.env.LD_PRELOAD; process.env.NODE_OPTIONS; process.env.BASH_ENV; process.env.PYTHONPATH; process.env.RUNNER_TEMP; process.env.GITHUB_TOKEN; process.env.ACME_BASE_URL;\nserver.tool('create_x', {}, f);\n" });
-  assert.deepEqual(v.env_names, ['ACME_BASE_URL', 'GITHUB_TOKEN']);
+  const denied = ['PATH', 'LD_PRELOAD', 'NODE_OPTIONS', 'BASH_ENV', 'PYTHONPATH', 'RUNNER_TEMP', 'GITHUB_TOKEN', 'GITHUB_STATE', 'GITHUB_SERVER_URL', 'GITHUB_API_URL', 'GITHUB_GRAPHQL_URL',
+    'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'DOCKER_HOST', 'DOCKER_CONFIG', 'GOFLAGS', 'GOPROXY', 'CGO_ENABLED', 'DOTNET_ROOT', 'NUGET_PACKAGES', 'COREPACK_HOME', 'BUN_INSTALL', 'DENO_DIR',
+    'JAVA_TOOL_OPTIONS', 'MAVEN_OPTS', 'GRADLE_OPTS', 'EDITOR', 'VISUAL', 'PAGER', 'SSH_ASKPASS', 'SSH_AUTH_SOCK', 'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE',
+    'GIT_SSL_NO_VERIFY', 'GIT_HOOKS_PATH', 'PERL5OPT', 'RUBYOPT', 'GEM_HOME', 'BUNDLE_GEMFILE', 'AGENT_TOOLSDIRECTORY'];
+  const code = `${[...denied, 'ACME_BASE_URL', 'GOOGLE_API_KEY', 'GITLAB_TOKEN', 'GIT_REPO_PATH'].map((n) => `process.env.${n};`).join('\n')}\nserver.tool('create_x', {}, f);\n`;
+  const v = classify({ 'src/a.ts': code });
+  assert.deepEqual(v.env_names, ['ACME_BASE_URL', 'GIT_REPO_PATH', 'GITLAB_TOKEN', 'GOOGLE_API_KEY'].sort((a, b) => (BASE_URL_ENV_RE.test(b) - BASE_URL_ENV_RE.test(a)) || (a < b ? -1 : 1)));
+  for (const n of denied) assert.ok(!v.env_names.includes(n), n);
   // The maps cannot name one either.
   assert.match(mapProblems({ ...STAND_INS, backends: { ...STAND_INS.backends, bad: { kind: 'sql', stand_in: STAND_INS.backends.postgres.stand_in, signals: { env: ['LD_PRELOAD'] } } } }, SPEC_URLS).join(), /LD_PRELOAD is not an env var name we keep/);
 });
@@ -487,4 +501,95 @@ test('R-WB-19: tool names in FastMCP decorators whose arguments span lines and n
   });
   assert.deepEqual(v.write_tools, { names_seen: 2, write_like: 1, sample: ['mysql_insert_row', 'mysql_list_tables'] });
   assert.deepEqual([v.class, v.backend.id], ['local_full', 'mysql']);
+});
+
+test('R-WB-20: one subject\'s scan runs in a worker thread with a wall-clock limit: past it the subject gets a reader_limit skip of ours, the shard goes on', async () => {
+  const f = mockFetch([{ prefix: 'https://codeload.github.com/acme/slow/', body: archive(KRONICLE) }, { prefix: 'https://codeload.github.com/acme/fine/', body: archive(KRONICLE) }]);
+  const slow = await collectSubject(http(f), 'acme/slow', { scanTimeoutMs: 1 });
+  assert.equal(slow.value, null);
+  assert.deepEqual(slow.skips, [{ stage: 'scan', reason: 'reader_limit', fault: 'tool' }]);
+  assert.match(slow.why, /time limit/);
+  const fine = await collectSubject(http(f), 'acme/fine');
+  assert.equal(fine.value.class, 'local_full', 'the next subject is scanned as usual');  // The root-file fallback is scanned in the same way.
+  const caps = { ...LIMITS.archive, maxCompressedBytes: 64 };
+  const g = mockFetch([{ prefix: 'https://codeload.github.com/', body: archive({ 'blob.bin': randomBytes(4096) }) }, { prefix: 'https://raw.githubusercontent.com/acme/big/HEAD/package.json', body: pkg({ pg: '8' }) }]);
+  const root = await collectSubject(http(g), 'acme/big', { archiveLimits: caps, scanTimeoutMs: 1 });
+  assert.deepEqual([root.stages.archive, root.value, root.skips], ['too_large', null, [{ stage: 'scan', reason: 'reader_limit', fault: 'tool' }]]);
+});
+
+test('R-WB-21: precision rules: development requirements, a cache in compose next to a hosted API, a model SDK of a cloud vendor, and release or CI tooling are not the backend', () => {
+  // requirements-dev.txt, requirements-test.in and dev.in are dev dependencies.
+  const dev = classify({ 'requirements-dev.txt': 'psycopg\n', 'requirements_test.in': 'pymongo\n', 'dev.in': 'redis\n', 'requirements.txt': 'mcp\n', 'srv.py': '@mcp.tool\ndef add_item():\n    pass\n' });
+  assert.equal(dev.class, 'none');
+  // Redis as a cache in compose beside a Slack server: Slack's.
+  const cache = classify({ 'package.json': pkg({ '@slack/web-api': '7', ioredis: '5' }), 'docker-compose.yml': 'services:\n  cache:\n    image: redis:7\n', '.env.example': 'REDIS_URL=redis://cache:6379\n', 'src/a.ts': "server.tool('send_message', {}, f);\n" });
+  assert.equal(cache.backend.id, 'slack');
+  // boto3 used only for Bedrock: not an AWS server.
+  const llm = classify({ 'pyproject.toml': '[project]\ndependencies = ["boto3", "mcp"]\n', 'srv.py': "client = boto3.client('bedrock-runtime')\nclient.invoke_model(body=b)\n@mcp.tool\ndef write_summary():\n    pass\n" });
+  assert.ok(!llm.backends.some((b) => b.id === 'aws'), JSON.stringify(llm.backends));
+  // The GitHub API and its token in an update check and in CI scripts: not GitHub as the backend of a SQLite server.
+  const tooling = classify({
+    'package.json': pkg({ 'better-sqlite3': '12' }),
+    'src/update-check.ts': "fetch('https://api.github.com/repos/acme/x/releases/latest');\n",
+    'scripts/release.mjs': "fetch('https://api.github.com/repos/acme/x/releases', { headers: { authorization: process.env.GITHUB_TOKEN } });\n",
+    '.github/scripts/notify.js': "new Octokit({ auth: process.env.GH_TOKEN });\n",
+    'src/server.ts': "server.tool('add_note', {}, f);\n",
+  });
+  assert.deepEqual([tooling.class, tooling.backend.id], ['local_full', 'sqlite']);
+  assert.ok(!tooling.backends.some((b) => b.id === 'github' && b.signals.includes('host_literal')), 'release, update-check and CI code weighs as tooling');
+});
+
+test('R-WB-22: the write tools must plausibly touch the backend, or the class stays at low confidence and is not routed', () => {
+  const sqlite = classify({ 'package.json': pkg({ 'better-sqlite3': '12' }), 'src/a.ts': "server.tool('add_note', {}, f);\n" });
+  assert.deepEqual([sqlite.confidence !== 'low', sqlite.routable], [true, true]);
+  const elsewhere = classify({ 'package.json': pkg({ 'better-sqlite3': '12' }), 'src/a.ts': "server.tool('send_invite', {}, f);\nserver.tool('post_tweet', {}, f);\n" });
+  assert.deepEqual([elsewhere.class, elsewhere.confidence, elsewhere.routable], ['local_full', 'low', false]);
+  const gh = classify({ 'package.json': pkg({ '@octokit/rest': '20' }), 'src/a.ts': "server.tool('generate_report', {}, f);\n" });
+  assert.deepEqual([gh.class, gh.confidence, gh.routable], ['mock_min', 'low', false]);
+  const ghOk = classify({ 'package.json': pkg({ '@octokit/rest': '20' }), 'src/a.ts': "server.tool('create_issue', {}, f);\n" });
+  assert.equal(ghOk.routable, true);
+  const noTools = classify({ 'package.json': pkg({ pg: '8' }), 'src/a.ts': 'const x = 1;\n' });
+  assert.deepEqual([noTools.class, noTools.confidence, noTools.routable], ['local_full', 'low', false]);
+  assert.ok(noTools.evidence.some((e) => /not routed/.test(e.detail)));
+});
+
+test('R-WB-23: a spec URL is one API\'s description file: no repository page, no directory of APIs; a hosted backend without one is never paired with the repository\'s own OpenAPI file', () => {
+  assert.equal(SPEC_URLS.services.aws.spec, null);
+  assert.equal(SPEC_URLS.services['google-workspace'].spec, null);
+  const svc = (url, extra = {}) => ({ ...SPEC_URLS, services: { q: { name: 'q', spec: { url, format: 'openapi3', publisher: 'vendor', checked: '2026-11-28', ...extra }, signals: {} } } });
+  assert.match(mapProblems(STAND_INS, svc('https://github.com/acme/api-models')).join(), /a page or a directory/);
+  assert.match(mapProblems(STAND_INS, svc('https://www.googleapis.com/discovery/v1/apis')).join(), /a page or a directory/);
+  assert.match(mapProblems(STAND_INS, svc('https://api.acme.example/docs')).join(), /does not end in a description file/);
+  assert.deepEqual(mapProblems(STAND_INS, svc('https://api.acme.example/docs', { endpoint: true })), []);
+  const tg = classify({ 'package.json': pkg({ telegraf: '4' }), 'openapi.json': '{"openapi": "3.0.0", "paths": {}}', 'src/a.ts': "server.tool('send_message', {}, f);\n" });
+  assert.deepEqual([tg.class, tg.reason, tg.spec_url], ['none', 'hosted_without_spec', null]);
+});
+
+test('R-WB-24: the gold set is well formed, precision counts class and backend, and the dry run\'s markdown keeps repository text on one line', async () => {
+  const { backendGoldClass, goldPrecision, markdown, summarize, ROUTING_PRECISION } = await import('../dryrun-backend.mjs');
+  const gold = JSON.parse(readFileSync(new URL('./fixtures/backend-gold.json', import.meta.url), 'utf8'));
+  assert.ok(gold.rows.length >= 45);
+  for (const g of gold.rows) {
+    assert.match(g.subject, /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/);
+    assert.ok([true, false, 'unknown'].includes(g.has_write_tools), g.subject);
+    assert.ok(g.backend === 'none' || g.backend === 'not_found' || g.backend.startsWith('other:') || MAPS.table.has(g.backend), `${g.subject}: ${g.backend}`);
+    assert.equal(typeof g.note, 'string');
+  }
+  assert.equal(ROUTING_PRECISION, 0.9);
+  const g = { rows: [
+    { subject: 'a/pg', has_write_tools: true, backend: 'postgres' }, { subject: 'a/gh', has_write_tools: true, backend: 'github' },
+    { subject: 'a/ro', has_write_tools: false, backend: 'none' }, { subject: 'a/x', has_write_tools: true, backend: 'other:acme' },
+  ] };
+  assert.deepEqual(g.rows.map((r) => backendGoldClass(r, MAPS)), ['local_full', 'mock_min', 'none', 'none']);
+  const p = goldPrecision([
+    { subject: 'a/pg', class: 'local_full', backend: 'postgres', routable: true }, { subject: 'a/gh', class: 'local_full', backend: 'sqlite', routable: true },
+    { subject: 'a/ro', class: 'none', backend: null }, { subject: 'a/x', class: 'mock_min', backend: 'slack', routable: false }, { subject: 'not/gold', class: 'local_full', backend: 'x' },
+  ], g, MAPS);
+  assert.deepEqual([p.classes.local_full.predicted, p.classes.local_full.correct, p.classes.local_full.routed_precision], [2, 1, 0.5]);
+  assert.deepEqual([p.classes.mock_min.predicted, p.classes.mock_min.routed], [1, 0]);
+  assert.equal(p.gate, false);
+  const s = summarize([{ subject: 'o/r', class: 'local_full', backend: 'postgres', confidence: 'high', routable: true, evidence: ['dependency:postgres pg (a\nb|c.json)'] }]);
+  const md = markdown({ ...s, gold: p });
+  assert.ok(md.split('\n').filter((l) => l.startsWith('| o/r')).every((l) => l.endsWith('|') && !l.includes('a\nb')));
+  assert.match(md, /Gate: \*\*not met\*\*/);
 });
