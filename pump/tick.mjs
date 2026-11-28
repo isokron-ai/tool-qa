@@ -34,24 +34,33 @@ import { acquireDispatchSlot, leaseTtlMs, occupancy, reapExpired } from './slots
 
 /**
  * Cut the due list into shards. Within a workflow the due order is kept; across
- * workflows the shard with the higher top priority goes first.
+ * workflows the shard with the higher top priority goes first. On a lane that
+ * names a `recheck_runner`, lead re-checks (reason lead_reverify) go in shards
+ * of their own that carry `runner` (leads/recheck.mjs); slots_max holds over
+ * both kinds of shard.
  */
 export function planShards(due, workflows, { openByWorkflow = new Map() } = {}) {
   const groups = new Map();
   for (const d of due) {
-    if (!groups.has(d.workflow)) groups.set(d.workflow, []);
-    groups.get(d.workflow).push(d);
+    const runner = workflows[d.workflow]?.recheck_runner && d.reasons?.includes('lead_reverify') ? workflows[d.workflow].recheck_runner : null;
+    const key = runner ? `${d.workflow}\u0000${runner}` : d.workflow;
+    if (!groups.has(key)) groups.set(key, { name: d.workflow, runner, items: [] });
+    groups.get(key).items.push(d);
   }
   const shards = [];
-  for (const [name, items] of groups) {
+  const used = new Map(); // workflow -> shards planned so far, against slots_max
+  // Re-check groups first within a workflow, so a full lane still re-checks.
+  for (const { name, runner, items } of [...groups.values()].sort((a, b) => (a.runner ? 0 : 1) - (b.runner ? 0 : 1))) {
     const wf = workflows[name];
     if (!wf) continue;
     const size = Math.max(1, Math.trunc(Number(wf.shard_size)) || 1);
     const max = Number.isFinite(Number(wf.slots_max)) ? Number(wf.slots_max) : Infinity;
-    const cap = Math.max(0, max - (openByWorkflow.get(name) ?? 0));
-    for (let i = 0, n = 0; i < items.length && n < cap; i += size, n++) {
+    for (let i = 0; i < items.length; i += size) {
+      const n = used.get(name) ?? 0;
+      if (n >= Math.max(0, max - (openByWorkflow.get(name) ?? 0))) break;
+      used.set(name, n + 1);
       const chunk = items.slice(i, i + size);
-      shards.push({ workflow: name, items: chunk, priority: chunk[0].priority, order: n });
+      shards.push({ workflow: name, items: chunk, priority: chunk[0].priority, order: n, ...(runner ? { runner } : {}) });
     }
   }
   shards.sort((a, b) => b.priority - a.priority || a.order - b.order || (a.workflow < b.workflow ? -1 : a.workflow > b.workflow ? 1 : 0));
@@ -247,7 +256,7 @@ export async function runTick({
       for (const r of reserved) db.failDispatch(r.attemptId, { error: 'not sent: the tick failed before sending', withdrawn: true, now: now() });
       throw err;
     }
-    reserved.push({ shard, wf, attemptId, shardId, leased, workflowSha, toolSha, control, workflowFile });
+    reserved.push({ shard, wf, attemptId, shardId, leased, workflowSha, toolSha, control, workflowFile, runner: shard.runner ?? null });
   }
   if (reserved.length === 0) return summary;
 
@@ -280,7 +289,7 @@ export async function runTick({
   // and slot freed, so the work is due again on the next tick.
   const skip = new Set();
   for (let i = 0; i < reserved.length; i++) {
-    const { shard, wf, attemptId, shardId, leased, workflowSha, toolSha, control, workflowFile } = reserved[i];
+    const { shard, wf, attemptId, shardId, leased, workflowSha, toolSha, control, workflowFile, runner } = reserved[i];
     if (skip.has(shard.workflow)) {
       withdraw([reserved[i]], `an earlier ${shard.workflow} dispatch failed this tick`);
       continue;
@@ -300,7 +309,7 @@ export async function runTick({
           log(`${wf.repo} ${wf.ref} moved to ${fresh} since this tick began; ${shardId} expects that commit`);
         }
       }
-      const inputs = workerInputs({ shardId, attemptId, items: leased, toolSha, sendSha: wf.send_sha === true, style: wf.dispatch_style ?? null, extra: control?.inputs ?? null });
+      const inputs = workerInputs({ shardId, attemptId, items: leased, toolSha, sendSha: wf.send_sha === true, style: wf.dispatch_style ?? null, extra: control?.inputs ?? null, runner });
       const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile, ref: wf.ref, inputs, shardId });
       // The expected commit was recorded at creation; markDispatched keeps it.
       db.markDispatched(attemptId, { runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, correlatedBy: out?.correlatedBy ?? null, now: now() });
@@ -330,6 +339,10 @@ export async function runTick({
         withdraw(reserved.slice(i + 1), `dispatching stopped (${stop})`);
         break;
       }
+      // A lead re-check shard sent with its own runner input (leads/recheck.mjs) may fail for that input alone (a
+      // worker that does not declare it): the lane's other shards still go. Its dispatch counts against the lead's
+      // re-check attempts (recheckPairs), so it is not sent for ever.
+      if (runner) continue;
       skip.add(shard.workflow);
       summary.skippedWorkflows.push(shard.workflow);
     }

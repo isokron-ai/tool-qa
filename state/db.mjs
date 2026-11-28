@@ -1363,6 +1363,13 @@ export class StateDb {
         if (!fresh && !lead.reproduced_at && !reproduced && lead.recheck_subject == null && lead.recheck_attempts < RECHECK_MAX_ATTEMPTS) {
           Object.assign(cols, { recheck_subject: subject, recheck_lane: lane, recheck_after: t });
         }
+        // The re-check pair carried it again, but this result cannot count as a re-run on another runner (no worker
+        // run id, or the same run): it is one attempt, and the re-check is due again rather than waiting for ever (R-LEAD-39).
+        if (!fresh && !reproduced && !lead.reproduced_at && lead.recheck_subject === subject && lead.recheck_lane === lane && pair) {
+          const attempts = lead.recheck_attempts + 1;
+          Object.assign(cols, attempts < RECHECK_MAX_ATTEMPTS ? { recheck_attempts: attempts, recheck_after: t }
+            : { recheck_attempts: attempts, recheck_subject: null, recheck_lane: null, recheck_after: null });
+        }
         setLead(fp, cols);
         out.seen += 1;
       }
@@ -1375,7 +1382,8 @@ export class StateDb {
       `).run(fp, subject, lane, runKey, at, at, at, run, run, JSON.stringify(pushLog(pair ? JSON.parse(pair.log) : [], at, true, { now: at })));
     }
 
-    // Clean re-checks: only an assessed result says a stage ran and did not show the lead.
+    // Clean re-checks: only an assessed result says a stage ran and did not show the lead. A re-check that came
+    // back unassessed (a skip hid the stage, or another failure replaced it) is tried again, as one of its attempts.
     if (coverage !== 'assessed') {
       // Another failure at the same stage replaced it: the pair's latest result no longer carries it (current), but
       // that is no clean re-check. A skip at another stage says nothing about this one, and changes nothing.
@@ -1388,6 +1396,14 @@ export class StateDb {
             .run(at, run, p.fingerprint, subject, lane);
           out.replaced = (out.replaced ?? 0) + 1;
         }
+      }
+      const waiting = this.raw.prepare(`SELECT fingerprint, recheck_attempts FROM leads WHERE recheck_subject = ? AND recheck_lane = ? AND status = 'open'
+        AND reproduced_at IS NULL`).all(subject, lane).filter((l) => !carried.has(l.fingerprint));
+      for (const l of waiting) {
+        const attempts = l.recheck_attempts + 1;
+        setLead(l.fingerprint, attempts < RECHECK_MAX_ATTEMPTS ? { recheck_attempts: attempts, recheck_after: t }
+          : { recheck_attempts: attempts, recheck_subject: null, recheck_lane: null, recheck_after: null });
+        out.retried = (out.retried ?? 0) + 1;
       }
       return out;
     }

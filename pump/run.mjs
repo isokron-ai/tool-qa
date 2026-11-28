@@ -78,7 +78,9 @@
 //                      (pump/backfill.mjs)
 //   LANE_LEADS_ENABLED   the lead pipeline (state/leads.mjs): off unless "dry-run",
 //                      "recheck" or "true"; ingest keeps each accepted result's
-//                      leads in the state (StateDb.noteLeads)
+//                      leads in the state (StateDb.noteLeads); with "recheck" or
+//                      "true" the due list also re-dispatches each open lead's
+//                      re-check pair (leads/recheck.mjs)
 //   LANE_HEADS_ENABLED   only the exact value "true" runs the head poll
 //                      (pump/heads.mjs): new default-branch heads and releases
 //                      move subjects' sha and changed_at
@@ -120,6 +122,8 @@ import { planShards, runTick } from './tick.mjs';
 import { backfillEnabled } from './backfill.mjs';
 import { ensureRegistryDelta, registryLaneOn } from './registry-delta.mjs';
 import { liveEnabled, publishLive, publishRetry } from '../live/publish.mjs';
+import { leadsMode, rechecksLeads } from '../state/leads.mjs';
+import { leadRecheckHook, recheckPairs } from '../leads/recheck.mjs';
 import { NOT_BUILT_LANES } from '../live/build.mjs';
 import { computeCoverage, recordCoverageDay } from '../state/coverage.mjs';
 import { HISTORY_TIMES_KEY, HISTORY_TIMES_REFRESH_MS, historyList, historyTimesDue, refreshHistoryTimes } from './history-times.mjs';
@@ -138,6 +142,8 @@ export const REGISTRY_DELTA_KEY = 'pump.registry_delta';
 export const DISCOVER_WINDOW_MS = 90_000;
 export const BUDGET_KEY = 'pump.api_budget';
 export const BREAKER_KEY = 'pump.breaker';
+// What the lead re-checks did on the latest tick (leads/recheck.mjs), for the watchdog.
+export const LEADS_RECHECK_KEY = 'leads.recheck';
 export const CONFORMANCE_KEY = 'pump.conformance';
 // While a retry is open the live snapshot is uploaded at once, at most this often.
 export const LIVE_RETRY_UPLOAD_MS = 20_000;
@@ -653,8 +659,20 @@ export async function runPump({
       // result that came in on time is not sent again yet: a later tick
       // judges it first (R-CHAOS-02).
       const holdRunKeys = slots > 0 && collector && !(ingested && !ingested.stopped) ? unjudgedLateRunKeys(db, { now: now() }) : null;
+      // Lead re-checks (LANE_LEADS_ENABLED recheck or true): the due list's leadReverify hook, read fresh each tick.
+      // The sampling hooks (main) and, when on, the lead re-check hook.
+      let hooks = sampleHooks;
+      if (rechecksLeads(leadsMode(env))) {
+        try {
+          const rc = recheckPairs(db);
+          db.setKv(LEADS_RECHECK_KEY, { at: new Date(now()).toISOString(), mode: leadsMode(env), due: rc.pairs.size, waiting: rc.waiting, given_up: rc.given_up }, { now: now() });
+          hooks = { ...sampleHooks, leadReverify: leadRecheckHook(rc) };
+        } catch (err) {
+          say(`pump: lead re-checks unavailable this tick (continuing): ${err?.message ?? err}`);
+        }
+      }
       const summary = await runTick({
-        db, now, config: tickConfig, hooks: sampleHooks, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
+        db, now, config: tickConfig, hooks, workerSlots: slots, dispatcher: slots > 0 ? getDispatcher() : null, log: say, newId, deadline, holdRunKeys,
         backfill: backfillEnabled(env),
         // The pending dispatches are saved before any is sent (R-ING-10).
         beforeSend: () => save(`tick ${ticks}, before dispatching`),

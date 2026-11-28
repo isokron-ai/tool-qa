@@ -389,3 +389,21 @@ test('R-CHAOS-08: only the dispatch POST and the poll for its run count as maybe
   assert.equal(ambiguous(e(422, 'POST', '/repos/o/r/actions/workflows/w.yml/dispatches')), false);
   assert.equal(ambiguous(new BudgetExceededError('spent', { family: 'dispatch' })), false);
 });
+
+test('R-LEAD-23: a lead re-check shard refused for its runner input does not hold back the lane\'s other shards', async () => {
+  const { c, db, config, newId } = setup({ subjects: 5, workflows: { 'live-probe': wf({ recheck_runner: 'ubuntu-24.04-arm' }) } });
+  const d = recorder((req) => {
+    if (req.inputs.runner) throw new GitHubError('POST dispatches returned 422: Unexpected inputs ["runner"]', { status: 422 });
+    return {};
+  });
+  // One subject is a lead re-check (the hook), the rest are new work.
+  const hooks = { leadReverify: (s) => s.id === 'npm:pkg-0' };
+  const s = await runTick({ db, now: c.now, config, workerSlots: 10, dispatcher: d, newId, hooks });
+  const sent = d.calls.map((r) => r.inputs.runner ?? null);
+  assert.ok(sent.includes('ubuntu-24.04-arm'), 'the re-check shard was tried with its runner');
+  assert.equal(s.failed, 1);
+  assert.equal(s.withdrawn ?? 0, 0, 'no other shard was withdrawn');
+  assert.ok(s.dispatched >= 2, `the lane's other shards went: ${s.dispatched}`);
+  assert.deepEqual(s.skippedWorkflows ?? [], []);
+  db.close();
+});

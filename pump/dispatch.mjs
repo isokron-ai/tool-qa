@@ -11,6 +11,7 @@
 // named `shard <id>`. A dispatch that was accepted but can't be matched to a run
 // still counts as sent; its lease expires if no result comes back.
 
+import { RUNNER_RE } from '../leads/recheck.mjs';
 import { ApiBudget } from './budgets.mjs';
 import { createClient } from './github.mjs';
 
@@ -24,7 +25,7 @@ const TOKEN_MARGIN_MS = 5 * 60_000;
  * worker clones or reads what the repository is called now; the result is
  * still recorded under the subject key, by run_key (state schema v8).
  */
-export function workerInputs({ shardId, attemptId, items, toolSha = null, sendSha = false, style = null, extra = null }) {
+export function workerInputs({ shardId, attemptId, items, toolSha = null, sendSha = false, style = null, extra = null, runner = null }) {
   if (style === 't0') {
     // A T0 worker (pump/controls.mjs) takes one item as plain inputs: shard_id,
     // attempt_id, fence and run_key, plus the lane's own fixed inputs. The
@@ -47,6 +48,12 @@ export function workerInputs({ shardId, attemptId, items, toolSha = null, sendSh
   if (toolSha !== null && toolSha !== undefined) {
     if (!FULL_SHA_RE.test(toolSha)) throw new TypeError(`shard ${shardId}: tool_sha must be a full commit SHA`);
     inputs.tool_sha = toolSha;
+  }
+  // A lead re-check on a lane with a recheck_runner (leads/recheck.mjs): only then, since a worker
+  // workflow that does not declare the input refuses the dispatch.
+  if (runner !== null && runner !== undefined) {
+    if (!RUNNER_RE.test(String(runner))) throw new TypeError(`shard ${shardId}: runner must be a runner label`);
+    inputs.runner = String(runner);
   }
   return inputs;
 }

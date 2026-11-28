@@ -445,6 +445,8 @@ export function workflowProblems(workflows) {
     // R-SHA-05: a lane is held to the commit only once its worker is sent the commit and reads exactly it.
     if (wf.sha_check === 'enforce' && wf.send_sha !== true) p.push(`${name}: sha_check "enforce" needs send_sha true (its worker must be sent the commit and read exactly it)`);
     if (wf.runs_untrusted !== false && !(wf.sandbox_sha === null || /^[0-9a-f]{40}$/.test(String(wf.sandbox_sha)))) p.push(`${name}: sandbox_sha must be a full commit SHA or null`);
+    // A lead re-check runner label (leads/recheck.mjs), sent as the worker's `runner` input; absent or null for none.
+    if (wf.recheck_runner !== undefined && wf.recheck_runner !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(wf.recheck_runner))) p.push(`${name}: recheck_runner must be a runner label or null`);
   }
   p.push(...controlProblems(workflows));
   return p;
