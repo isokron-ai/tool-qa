@@ -37,7 +37,11 @@
       "release-diff": { "mode": "always", "max_age_days": 1 },
       "scan-deep": { "mode": "always", "max_age_days": null },
       "build-probe": { "mode": "always", "max_age_days": null },
-      "writecheck": { "mode": "always", "max_age_days": 1 }
+      "writecheck": { "mode": "always", "max_age_days": 1 },
+      "t0-defects": { "mode": "always", "max_age_days": 1 },
+      "t0-self": { "mode": "always", "max_age_days": 1 },
+      "t0-dogfood": { "mode": "always", "max_age_days": 1 },
+      "t0-fuzz": { "mode": "always", "max_age_days": 1 }
     },
     "T1": {
       "scan-static": { "mode": "always", "max_age_days": 7 },
@@ -47,7 +51,11 @@
       "release-diff": { "mode": "always", "max_age_days": 7 },
       "scan-deep": { "mode": "always", "max_age_days": null },
       "build-probe": { "mode": "always", "max_age_days": null },
-      "writecheck": { "mode": "always", "max_age_days": null }
+      "writecheck": { "mode": "always", "max_age_days": null },
+      "t0-defects": { "mode": "never", "max_age_days": null },
+      "t0-self": { "mode": "never", "max_age_days": null },
+      "t0-dogfood": { "mode": "never", "max_age_days": null },
+      "t0-fuzz": { "mode": "never", "max_age_days": null }
     },
     "T2": {
       "scan-static": { "mode": "always", "max_age_days": 14 },
@@ -57,7 +65,11 @@
       "release-diff": { "mode": "always", "max_age_days": 14 },
       "scan-deep": { "mode": "always", "max_age_days": null },
       "build-probe": { "mode": "always", "max_age_days": null },
-      "writecheck": { "mode": "sample", "max_age_days": null }
+      "writecheck": { "mode": "sample", "max_age_days": null },
+      "t0-defects": { "mode": "never", "max_age_days": null },
+      "t0-self": { "mode": "never", "max_age_days": null },
+      "t0-dogfood": { "mode": "never", "max_age_days": null },
+      "t0-fuzz": { "mode": "never", "max_age_days": null }
     },
     "T3": {
       "scan-static": { "mode": "always", "max_age_days": 30 },
@@ -67,7 +79,11 @@
       "release-diff": { "mode": "always", "max_age_days": 30 },
       "scan-deep": { "mode": "sample", "max_age_days": null },
       "build-probe": { "mode": "sample", "max_age_days": null },
-      "writecheck": { "mode": "sample", "max_age_days": null }
+      "writecheck": { "mode": "sample", "max_age_days": null },
+      "t0-defects": { "mode": "never", "max_age_days": null },
+      "t0-self": { "mode": "never", "max_age_days": null },
+      "t0-dogfood": { "mode": "never", "max_age_days": null },
+      "t0-fuzz": { "mode": "never", "max_age_days": null }
     },
     "T4": {
       "scan-static": { "mode": "always", "max_age_days": 90 },
@@ -77,7 +93,11 @@
       "release-diff": { "mode": "always", "max_age_days": 90 },
       "scan-deep": { "mode": "never", "max_age_days": null },
       "build-probe": { "mode": "never", "max_age_days": null },
-      "writecheck": { "mode": "never", "max_age_days": null }
+      "writecheck": { "mode": "never", "max_age_days": null },
+      "t0-defects": { "mode": "never", "max_age_days": null },
+      "t0-self": { "mode": "never", "max_age_days": null },
+      "t0-dogfood": { "mode": "never", "max_age_days": null },
+      "t0-fuzz": { "mode": "never", "max_age_days": null }
     }
   }
 }

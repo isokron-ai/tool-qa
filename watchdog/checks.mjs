@@ -58,6 +58,8 @@
 //                        keep_gaps) has its ingest-keepgap-<run>-<attempt> artifact
 //                        (keep/health.mjs markerCheck): red when the marker is missing
 //                        an hour after the seal, amber when it cannot be matched.
+//   t0:<lane>            the T0 control lanes t0-defects and t0-self (watchdog/t0-lanes.mjs):
+//                        amber when no result for 36 hours, red when a seeded defect was missed.
 //   leads                the lead pipeline (watchdog/leads.mjs): amber when the pump's lead
 //                        step stopped writing kv leads.last, had errors, or its queue grows
 //                        without bound; off unless LANE_LEADS_ENABLED is on.
@@ -75,6 +77,7 @@ import { identityCheck } from './identity.mjs';
 import { headsCheck } from './heads.mjs';
 import { selftestCheck } from './selftest.mjs';
 import { externalCheck, laneChecks } from './lanes.mjs';
+import { t0LaneChecks } from './t0-lanes.mjs';
 import { leadsCheck } from './leads.mjs';
 
 const MIN = 60_000;
@@ -269,6 +272,7 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, leadsMode = 'off'
     checks.push(liveSnapshotCheck({ now, on: liveSwitch === 'true', last: state.kv?.['live.last_upload'] ?? null }));
     const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
     const hd = headsCheck({ now, heads: state.kv?.['pump.heads'] }); if (hd) checks.push(hd); // head poll (watchdog/heads.mjs)
+    checks.push(...t0LaneChecks({ now, kv: state.kv?.['t0.lanes'] ?? null })); // T0 control lanes (watchdog/t0-lanes.mjs)
     checks.push(leadsCheck({ now, mode: leadsMode, last: state.kv?.['leads.last'] ?? null, recheck: state.kv?.['leads.recheck'] ?? null, foldFailures: state.kv?.['leads.fold_failures'] ?? null })); // the lead pipeline (watchdog/leads.mjs)
   }
 
