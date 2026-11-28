@@ -17,7 +17,7 @@ on:
   workflow_call:
     inputs:
       ref:
-        description: Branch or commit of the calling repository to test (empty: its default branch)
+        description: 'Branch or commit of the calling repository to test (empty: its default branch)'
         type: string
         required: false
         default: ''
@@ -27,17 +27,17 @@ on:
         required: false
         default: ''
       probe-files:
-        description: Space-separated probes files in the repository (JSON lists in the same format)
+        description: 'Space-separated probes files in the repository (JSON lists in the same format)'
         type: string
         required: false
         default: ''
       test:
-        description: Test file (run with node --test) or shell command, for probes that name none
+        description: 'Test file (run with node --test) or shell command, for probes that name none'
         type: string
         required: false
         default: ''
       build:
-        description: Optional shell command run first (for example npm ci --ignore-scripts)
+        description: 'Optional shell command run first (for example npm ci --ignore-scripts)'
         type: string
         required: false
         default: ''
@@ -46,14 +46,14 @@ on:
         required: false
         default: '24'
       probe-ref:
-        description: Commit SHA of isokron-ai/tool-qa whose scripts/mutation-probe.mjs to run (required from another repository)
+        description: 'Commit SHA of isokron-ai/tool-qa whose scripts/mutation-probe.mjs to run (required from another repository)'
         type: string
         required: false
         default: ''
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch or commit to test (empty: the default branch)
+        description: 'Branch or commit to test (empty: the default branch)'
         type: string
         required: false
         default: ''
@@ -63,17 +63,17 @@ on:
         required: false
         default: ''
       probe-files:
-        description: Space-separated probes files (empty with no mutations: every file under test/mutations/)
+        description: 'Space-separated probes files (empty with no mutations: every file under test/mutations/)'
         type: string
         required: false
         default: ''
       test:
-        description: Test file or shell command, for probes that name none
+        description: 'Test file or shell command, for probes that name none'
         type: string
         required: false
         default: ''
       build:
-        description: Optional shell command run first
+        description: 'Optional shell command run first'
         type: string
         required: false
         default: ''
@@ -82,7 +82,7 @@ on:
         required: false
         default: '24'
       probe-ref:
-        description: Commit SHA of tool-qa for the runner (empty: the ref being tested)
+        description: 'Commit SHA of tool-qa for the runner (empty: the ref being tested)'
         type: string
         required: false
         default: ''
