@@ -54,7 +54,12 @@ export const RUN_SKIPS = Object.freeze({
 export const RESULT_FORMAT = 'isokron-tool-qa-meta-result/1';
 const DEFAULT_DEADLINE_MIN = 22;
 
-class ControlFailure extends Error {}
+class ControlFailure extends Error {
+  constructor(message, detail = null) {
+    super(message);
+    this.detail = detail;
+  }
+}
 
 function numberEnv(env, key, dflt) {
   const v = env[key];
@@ -112,7 +117,7 @@ export async function runShard({
     // The control reads our own repositories only, so what it saw is public and says why it failed.
     let why = '';
     try { const o = JSON.parse(known.files['controls/known-answer.json']); why = `: mismatches ${JSON.stringify(o.mismatches)}; observed ${JSON.stringify(o.observed).slice(0, 1500)}`; } catch { /* nothing to add */ }
-    throw new ControlFailure(`the known-answer control gave ${known.control.observed}${why}`);
+    throw new ControlFailure(`the known-answer control gave ${known.control.observed}`, why ? `known-answer${why}` : null);
   }
   const firstForgery = await forgeryControl(lane, { marker: marker() });
   if (firstForgery.control.observed !== firstForgery.control.expected) throw new ControlFailure(`the forgery control gave ${firstForgery.control.observed}`);
@@ -206,6 +211,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
     }
     if (err instanceof ControlFailure) {
       write(`::error title=${laneName}::${err.message}; nothing is uploaded\n`);
+      if (err.detail) write(`${err.detail}\n`);
       return 3;
     }
     write(`::error title=${laneName}::harness error (${err?.name ?? 'Error'}); nothing is uploaded\n`);
