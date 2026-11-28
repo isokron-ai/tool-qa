@@ -69,8 +69,18 @@ export const MAX_EVIDENCE = 40;
 export const MAX_ENV_NAMES = 40;
 export const MAX_TOOL_NAMES = 500;
 export const MAX_TOOL_SAMPLE = 12;
+export const MAX_CONFIG_CHARS = 256 * 1024;
+export const MAX_README_CHARS = 512 * 1024;
 
 const ENV_NAME_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
+/**
+ * Env names never kept or sent (R-WB-15): the runtime's, the shell's, the CI runner's and the loader's own. A worker
+ * that sets every listed name to point at a stand-in must never be told to set one of these; a server that reads
+ * PATH or HOME says nothing about its backend.
+ */
+export const ENV_DENY_RE = /^(?:PATH|HOME|USER|USERNAME|LOGNAME|SHELL|PWD|OLDPWD|TERM|LANG|LANGUAGE|TZ|IFS|PS[1-4]|BASH_ENV|ENV|CDPATH|TMPDIR|TMP|TEMP|HOSTNAME|DEBUG|NODE_ENV|CI|LC_[A-Z_]+|LD_[A-Z0-9_]+|DYLD_[A-Z0-9_]+|NODE_[A-Z0-9_]+|NPM_[A-Z0-9_]+|YARN_[A-Z0-9_]+|PNPM_[A-Z0-9_]+|PYTHON[A-Z0-9_]*|PIP_[A-Z0-9_]+|VIRTUAL_ENV|CONDA_[A-Z0-9_]+|UV_[A-Z0-9_]+|GITHUB_(?:ACTIONS|ACTOR|ENV|EVENT_[A-Z_]+|OUTPUT|PATH|REF[A-Z_]*|REPOSITORY[A-Z_]*|RUN_[A-Z_]+|SHA|STEP_SUMMARY|WORKFLOW[A-Z_]*|WORKSPACE|JOB)|RUNNER_[A-Z0-9_]+|ACTIONS_[A-Z0-9_]+|XDG_[A-Z0-9_]+|SSL_CERT_[A-Z_]+|NODE_EXTRA_CA_CERTS|HTTPS?_PROXY|NO_PROXY|ALL_PROXY|GIT_[A-Z0-9_]+|JAVA_HOME|GOPATH|GOROOT|GOFLAGS|CARGO_[A-Z0-9_]+|RUST[A-Z0-9_]*)$/;
+/** An env name we keep: name-shaped and not one of ENV_DENY_RE. */
+export const keepEnvName = (n) => typeof n === 'string' && ENV_NAME_RE.test(n) && !ENV_DENY_RE.test(n);
 /** An env name that holds a hosted service's credential. */
 const HOSTED_KEY_ENV_RE = /_(?:API_KEY|API_TOKEN|ACCESS_TOKEN|AUTH_TOKEN|SECRET_KEY|PAT)$/;
 /** An env name that points a server at a host: its base-URL knob. */
@@ -215,10 +225,19 @@ export function manifestDeps(kind, text) {
   }
   if (kind === 'pyproject' || kind === 'pipfile' || kind === 'cargo') return tomlDeps(kind, text);
   if (kind === 'setup_py') {
-    const m = /install_requires\s*=\s*\[([\s\S]{0,20000}?)\]/.exec(text);
-    if (m) for (const q of m[1].matchAll(/['"]\s*([A-Za-z0-9][A-Za-z0-9._-]{0,100})/g)) add(q[1], false);
-    const t = /tests_require\s*=\s*\[([\s\S]{0,20000}?)\]/.exec(text);
-    if (t) for (const q of t[1].matchAll(/['"]\s*([A-Za-z0-9][A-Za-z0-9._-]{0,100})/g)) add(q[1], true);
+    // indexOf, then a bounded slice: no regex scans the whole file from every position (R-WB-14).
+    const list = (key) => {
+      const i = text.indexOf(key);
+      if (i < 0) return null;
+      const open = text.indexOf('[', i);
+      if (open < 0 || open - i > 40) return null;
+      const close = text.indexOf(']', open);
+      return text.slice(open + 1, close < 0 ? open + 20000 : Math.min(close, open + 20000));
+    };
+    const m = list('install_requires');
+    if (m) for (const q of m.matchAll(/['"][ \t]*([A-Za-z0-9][A-Za-z0-9._-]{0,100})/g)) add(q[1], false);
+    const t = list('tests_require');
+    if (t) for (const q of t.matchAll(/['"][ \t]*([A-Za-z0-9][A-Za-z0-9._-]{0,100})/g)) add(q[1], true);
     return out;
   }
   if (kind === 'setup_cfg') {
@@ -244,10 +263,12 @@ export function manifestDeps(kind, text) {
     return out;
   }
   if (kind === 'pom') {
-    for (const m of text.matchAll(/<dependency>([\s\S]{0,2000}?)<\/dependency>/g)) {
-      const g = /<groupId>\s*([^<\s]{1,200})\s*<\/groupId>/.exec(m[1]);
-      const a = /<artifactId>\s*([^<\s]{1,200})\s*<\/artifactId>/.exec(m[1]);
-      if (g && a) add(`${g[1]}:${a[1]}`, /<scope>\s*test\s*<\/scope>/.test(m[1]));
+    for (const part of text.split('<dependency>').slice(1)) {
+      const end = part.indexOf('</dependency>');
+      const body = part.slice(0, end < 0 ? 0 : Math.min(end, 2000));
+      const g = /<groupId>[ \t\r\n]*([^<\s]{1,200})[ \t\r\n]*<\/groupId>/.exec(body);
+      const a = /<artifactId>[ \t\r\n]*([^<\s]{1,200})[ \t\r\n]*<\/artifactId>/.exec(body);
+      if (g && a) add(`${g[1]}:${a[1]}`, /<scope>[ \t\r\n]*test[ \t\r\n]*<\/scope>/.test(body));
     }
     return out;
   }
@@ -292,11 +313,13 @@ function tomlDeps(kind, text) {
     if (kind === 'pyproject') {
       const isProjectDeps = table === 'project' && /^\s*dependencies\s*=\s*\[/.test(line);
       const isOptional = table === 'project.optional-dependencies' && /^\s*[A-Za-z0-9_.-]+\s*=\s*\[/.test(line);
+      // Extras named for development (dev, test, docs, lint ...) are dev dependencies.
+      const devExtra = isOptional && /^\s*["']?(?:dev|develop|development|test|tests|testing|docs?|lint|typing|types|ci|all-dev)["']?\s*=/.test(line);
       const isGroup = table === 'dependency-groups' && /^\s*[A-Za-z0-9_.-]+\s*=\s*\[/.test(line);
       const isUvDev = table === 'tool.uv' && /^\s*dev-dependencies\s*=\s*\[/.test(line);
       if (isProjectDeps || isOptional || isGroup || isUvDev) {
         const after = line.slice(line.indexOf('[') + 1);
-        const dev = isGroup || isUvDev;
+        const dev = isGroup || isUvDev || devExtra;
         for (const q of after.matchAll(/["']([^"']{1,300})["']/g)) { const n = reqName(q[1]); if (n) out.push({ name: n, dev }); }
         if (!after.replace(/["'][^"']*["']/g, '').includes(']')) { arrayKey = 'deps'; arrayDev = dev; }
         continue;
@@ -313,7 +336,8 @@ function tomlDeps(kind, text) {
 /** Image names of a compose file, normalised (no registry docker.io, no library/, no tag, no digest). */
 export function composeImages(text) {
   const out = [];
-  for (const m of text.matchAll(/^\s*image\s*:\s*["']?([^\s"'#]{1,300})/gm)) out.push(normImage(m[1]));
+  // [ \t]* after ^, never \s*: with the m flag, \s* would run over newlines from every line start (R-WB-14).
+  for (const m of text.matchAll(/^[ \t]*image[ \t]*:[ \t]*["']?([^\s"'#]{1,300})/gm)) out.push(normImage(m[1]));
   return out;
 }
 
@@ -339,7 +363,7 @@ export const FS_TOKENS = Object.freeze([
   ['rs_write_file', /\b(?:fs|std::fs)::(?:write|create_dir_all|remove_file|rename|copy)\s*\(|\bFile::create\s*\(/],
 ]);
 /** FS_RULE: the filesystem is a backend only when code writes files AND a write-like tool is file-shaped. */
-export const FILE_WORDS = new Set(['file', 'files', 'dir', 'dirs', 'directory', 'directories', 'folder', 'folders', 'path', 'note', 'notes', 'vault', 'markdown', 'md', 'doc', 'docs', 'document', 'documents', 'page', 'pages', 'text', 'csv', 'xlsx', 'spreadsheet', 'workbook', 'image', 'images']);
+export const FILE_WORDS = new Set(['file', 'files', 'dir', 'dirs', 'directory', 'directories', 'folder', 'folders', 'path', 'paths', 'vault', 'markdown', 'md', 'csv', 'xlsx', 'workbook']);
 
 /** Static tool names: registration calls and decorators in the common SDKs. */
 const TOOL_RES = Object.freeze([
@@ -368,7 +392,7 @@ export function toolWords(name) {
   return String(name).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[_.\-\s]+/).filter(Boolean);
 }
 
-/** Is this tool name write-like? A write verb anywhere in it, unless it is a pure read (`get_...`) with no write verb. */
+/** Is this tool name write-like? Any write verb anywhere in it (so `check_out` and `get_log` count: erring towards testing). */
 export function writeLike(name) {
   const w = toolWords(name);
   return w.some((x) => WRITE_VERBS.has(x));
@@ -404,7 +428,7 @@ export function createAnalyzer({ table, index }) {
   };
 
   const noteEnv = (name, where, path) => {
-    if (!ENV_NAME_RE.test(name)) return;
+    if (!keepEnvName(name)) return;
     if (!env.has(name)) env.set(name, where);
     for (const id of index.env.get(name) ?? []) {
       if (where === 'readme') hit(id, 'env_name_readme', WEIGHTS.env_name_readme, path, name);
@@ -448,12 +472,17 @@ export function createAnalyzer({ table, index }) {
     const role = fileRole(path);
     if (!role) return;
     filesRead++;
+    // Configuration and documentation are read in their first part only, so no scan costs more than a bounded amount
+    // (R-WB-14); code has its own caps in the lane, and a spec only its head is looked at.
+    if (role !== 'code' && role !== 'maybe_spec') text = text.slice(0, role === 'readme' ? MAX_README_CHARS : MAX_CONFIG_CHARS);
     const test = isTestPath(path);
     if (role === 'manifest') {
       const mk = manifestKind(path);
       if (mk === 'prisma') {
-        const ds = /datasource\s+\w+\s*\{([\s\S]{0,2000}?)\}/.exec(text);
-        const prov = ds && /provider\s*=\s*"([a-z]{1,30})"/.exec(ds[1]);
+        const at = text.indexOf('datasource');
+        const block = at < 0 ? '' : text.slice(at, at + 2000);
+        const close = block.indexOf('}');
+        const prov = at < 0 ? null : /provider[ \t]*=[ \t]*"([a-z]{1,30})"/.exec(close < 0 ? block : block.slice(0, close));
         if (prov) for (const id of index.prisma.get(prov[1]) ?? []) hit(id, 'prisma_provider', WEIGHTS.prisma_provider, path, prov[1]);
         return;
       }
@@ -467,12 +496,12 @@ export function createAnalyzer({ table, index }) {
           if (img === entry || (entry.includes('/') && img.endsWith(`/${entry}`))) for (const id of ids) hit(id, 'compose_image', test ? WEIGHTS.dev_dependency : WEIGHTS.compose_image, path, entry);
         }
       }
-      for (const m of text.matchAll(/^\s*-?\s*([A-Z][A-Z0-9_]{1,63})\s*[:=]/gm)) noteEnv(m[1], 'config', path);
+      for (const m of text.matchAll(/^[ \t]*-?[ \t]*([A-Z][A-Z0-9_]{1,63})[ \t]*[:=]/gm)) noteEnv(m[1], 'config', path);
       noteSchemes(text, path, WEIGHTS.url_scheme);
       return;
     }
     if (role === 'env_example') {
-      for (const m of text.matchAll(/^\s*(?:export\s+)?([A-Z][A-Z0-9_]{1,63})\s*=/gm)) noteEnv(m[1], 'config', path);
+      for (const m of text.matchAll(/^[ \t]*(?:export[ \t]+)?([A-Z][A-Z0-9_]{1,63})[ \t]*=/gm)) noteEnv(m[1], 'config', path);
       noteSchemes(text, path, WEIGHTS.url_scheme);
       return;
     }
@@ -576,7 +605,9 @@ export function createAnalyzer({ table, index }) {
     // The generic SQL entry stands aside when a specific engine is found.
     const specificSql = scored.some((s) => s.id !== 'sql' && s.b.kind === 'sql' && s.score >= FOUND_SCORE);
     const strong = (s) => s.signals.some((k) => STRONG_SIGNALS.has(k) || (k === 'env_name' && s.b.kind === 'hosted_api'));
-    const found = scored.filter((s) => s.score >= FOUND_SCORE && strong(s) && !(s.id === 'sql' && specificSql));
+    const found0 = scored.filter((s) => s.score >= FOUND_SCORE && strong(s) && !(s.id === 'sql' && specificSql));
+    // The filesystem is a fallback: a server whose writes go to a store we name is that store's, whatever its files (FS_RULE).
+    const found = [...found0.filter((s) => s.id !== 'filesystem'), ...found0.filter((s) => s.id === 'filesystem')];
     const primary = found[0] ?? null;
     const backends = scored.slice(0, 12).map((s) => ({
       id: s.id, kind: s.b.kind, score: s.score, signals: s.signals,
@@ -597,7 +628,8 @@ export function createAnalyzer({ table, index }) {
     const baseUrlEnv = envNames.filter((n) => BASE_URL_ENV_RE.test(n) && !/(?:TOKEN|KEY|SECRET|PASSWORD)/.test(n));
     const envOut = [...baseUrlEnv, ...envNames.filter((n) => !baseUrlEnv.includes(n))].slice(0, MAX_ENV_NAMES);
 
-    const repoSpec = realSpecs.length && commit && repo ? realSpecs[0] : null;
+    // The repository's own description: the shortest path, then the first by name (a stable pick, whatever the tar order).
+    const repoSpec = realSpecs.length && commit && repo ? [...realSpecs].sort((a, b) => a.path.length - b.path.length || (a.path < b.path ? -1 : 1))[0] : null;
     const repoSpecUrl = repoSpec ? `https://raw.githubusercontent.com/${repo}/${commit}/${repoSpec.path.split('/').map(encodeURIComponent).join('/')}` : null;
     const repoSpecFormat = repoSpec ? (/^2/.test(repoSpec.version) ? 'swagger2' : 'openapi3') : null;
 
@@ -684,7 +716,7 @@ export function mapProblems(standIns, specUrls) {
       if (!SIGNAL_KEYS.includes(k)) p.push(`${where}: unknown signal key ${k}`);
       else if (!Array.isArray(v) || v.some((x) => typeof x !== 'string' || x.length === 0 || x.length > 200)) p.push(`${where}.${k}: must be a list of non-empty strings`);
     }
-    for (const n of s.env ?? []) if (!ENV_NAME_RE.test(n)) p.push(`${where}.env: ${n} is not an env var name`);
+    for (const n of s.env ?? []) if (!keepEnvName(n)) p.push(`${where}.env: ${n} is not an env var name we keep (ENV_DENY_RE)`);
     for (const n of s.env_prefix ?? []) if (!/^[A-Z][A-Z0-9_]{0,30}_$/.test(n)) p.push(`${where}.env_prefix: ${n} must end in _`);
     for (const n of s.url_schemes ?? []) if (!/^[a-z][a-z0-9+]{0,20}$/.test(n) || n === 'http' || n === 'https') p.push(`${where}.url_schemes: ${n}`);
     for (const n of s.hosts ?? []) if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[A-Za-z0-9._~/-]*)?$/.test(n)) p.push(`${where}.hosts: ${n}`);

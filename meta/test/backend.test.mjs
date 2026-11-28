@@ -430,3 +430,39 @@ test('R-WB-09: the dry run\'s frame is the seed, then discover candidates in the
   assert.deepEqual(['local_full', 'mock_min', 'none'].map((c) => s.sample.filter((r) => r.class === c).length), [8, 6, 6]);
   assert.equal(s.skipped, 1);
 });
+
+test('R-WB-14: hostile configuration costs bounded time: blank-line compose and env files, unclosed pom dependencies, repeated setup.py lists, an open Prisma block', () => {
+  const big = (unit, n) => unit.repeat(n);
+  const cases = {
+    'docker-compose.yml': big('\n', 2 * 1024 * 1024),
+    '.env.example': big('\n \n', 700_000),
+    'pom.xml': big('<dependency><groupId>x', 100_000),
+    'setup.py': big('install_requires=[', 100_000),
+    'schema.prisma': `${big('datasource db {', 50_000)}`,
+    'README.md': big('A_B_C_D_E_F_G_', 80_000),
+  };
+  for (const [p, t] of Object.entries(cases)) {
+    const t0 = Date.now();
+    classify({ [p]: t });
+    assert.ok(Date.now() - t0 < 3000, `${p}: ${Date.now() - t0} ms`);
+  }
+});
+
+test('R-WB-15: env names the runtime, the shell or the runner own are never kept or sent, whatever a repository reads', () => {
+  const v = classify({ 'src/a.ts': "process.env.PATH; process.env.LD_PRELOAD; process.env.NODE_OPTIONS; process.env.BASH_ENV; process.env.PYTHONPATH; process.env.RUNNER_TEMP; process.env.GITHUB_TOKEN; process.env.ACME_BASE_URL;\nserver.tool('create_x', {}, f);\n" });
+  assert.deepEqual(v.env_names, ['ACME_BASE_URL', 'GITHUB_TOKEN']);
+  // The maps cannot name one either.
+  assert.match(mapProblems({ ...STAND_INS, backends: { ...STAND_INS.backends, bad: { kind: 'sql', stand_in: STAND_INS.backends.postgres.stand_in, signals: { env: ['LD_PRELOAD'] } } } }, SPEC_URLS).join(), /LD_PRELOAD is not an env var name we keep/);
+});
+
+test('R-WB-16: the filesystem is a fallback: a SQLite server that also writes files is SQLite\'s (kronicle-lite\'s shape); dev extras are dev; the repository spec is picked by path', () => {
+  const v = classify({ 'package.json': pkg({ 'better-sqlite3': '12' }), 'src/a.ts': "fs.mkdirSync(dir);\nregisterTool(\n 'write_file', {}, f);\n" });
+  assert.deepEqual([v.class, v.backend.id], ['local_full', 'sqlite']);
+  assert.ok(v.backends.some((b) => b.id === 'filesystem' && b.role === 'secondary'));
+  assert.deepEqual(manifestDeps('pyproject', '[project.optional-dependencies]\ndev = ["psycopg"]\nserver = ["redis"]\n').map((d) => `${d.name}${d.dev ? ':dev' : ''}`), ['psycopg:dev', 'redis']);
+  const spec = '{"openapi": "3.0.0", "paths": {}}';
+  const a = classify({ 'z/long/path/openapi.json': spec, 'api/openapi.json': spec, 'src/a.ts': "server.tool('create_x', {}, f);\n" });
+  const b = classify({ 'api/openapi.json': spec, 'z/long/path/openapi.json': spec, 'src/a.ts': "server.tool('create_x', {}, f);\n" });
+  assert.equal(a.spec_url, b.spec_url);
+  assert.match(a.spec_url, /\/api\/openapi\.json$/);
+});
