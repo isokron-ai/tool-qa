@@ -426,7 +426,7 @@ export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
   if (typeof db.retryLaterWaiting === 'function') for (const k of db.retryLaterWaiting({ now, baseMs, maxMs })) parked.add(k);
   // A state from before schema 9 has no oracle tables: nothing to boost (R-ORD-08).
   const oracle = new Map(db.schemaVersion() >= 9 ? db.listOracleDisagreements({ status: 'open' }).map((r) => [r.subject, r]) : []);
-  // Writecheck's mode routing (pump/modes.mjs): read only while some lane has a mode on; before schema 13 there is none.
+  // Writecheck's mode routing (pump/modes.mjs): read only while some lane has a mode on; before schema 14 there is none.
   const wantBackends = Object.values(workflows ?? {}).some((wf) => wf?.active_modes && Object.keys(wf.active_modes).length > 0);
   const backends = new Map(wantBackends && typeof db.listWriteBackends === 'function' ? db.listWriteBackends().map((r) => [r.subject, r]) : []);
   return { now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, oracle, backends, hooks };

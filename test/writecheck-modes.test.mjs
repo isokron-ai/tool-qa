@@ -1,4 +1,4 @@
-// Writecheck modes: the write_backend facts in the state (schema v13), the
+// Writecheck modes: the write_backend facts in the state (schema v14), the
 // pump's routing by mode (pump/modes.mjs: due list, run_keys, homogeneous
 // shards, the dispatch inputs), coverage per mode and the watchdog item.
 // docs/INTERFACES.md, "Writecheck modes".
@@ -37,10 +37,10 @@ function world(classes) {
 
 // ---------------------------------------------------------------- the state
 
-test('R-WB-10: schema 13 keeps each subject\'s write_backend facts; a malformed value is dropped field by field; a late result changes nothing', () => {
-  assert.equal(SCHEMA_VERSION, 13);
+test('R-WB-10: schema 14 keeps each subject\'s write_backend facts; a malformed value is dropped field by field; a late result changes nothing', () => {
+  assert.equal(SCHEMA_VERSION, 14);
   const db = openState(':memory:');
-  assert.equal(db.schemaVersion(), 13);
+  assert.equal(db.schemaVersion(), 14);
   const f = backendFacts({ ...PG, env_names: ['DATABASE_URL', 'bad name', 'PORT', ...Array.from({ length: 40 }, (_, i) => `X_${i}`)], backend: { id: 'Post Gres!', kind: 'sql' }, stand_in: { id: 'postgres' } });
   assert.equal(f.backend, null, 'an id outside the contract is not kept');
   assert.equal(f.mode, 'full');

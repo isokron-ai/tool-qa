@@ -1,5 +1,5 @@
-// The write_backend facts the state keeps per subject (schema v13,
-// state/schema-v13.sql): read from an accepted meta-backend bundle by ingest,
+// The write_backend facts the state keeps per subject (schema v14,
+// state/schema-v14.sql): read from an accepted meta-backend bundle by ingest,
 // stored by StateDb.noteWriteBackend() in the same transaction as the result,
 // read by the pump's writecheck mode routing (pump/modes.mjs) and by coverage
 // (state/coverage.mjs). Pure helpers; no state access here.

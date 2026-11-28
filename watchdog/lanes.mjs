@@ -121,8 +121,8 @@ export function readLaneData(db, now, { cfg = {}, tiers = null } = {}) {
       newestDispatch: all("SELECT MAX(created) AS at FROM dispatches WHERE status IN ('dispatched', 'done')")[0]?.at ?? null,
       rejects: { by_reason: rejects.filter((r) => watched.includes(r.reason)), newest_runs: runsNewest.map((r) => ({ run_id: r.run_id, bad: Number(r.bad) })) },
       backends: (() => {
-        // write_backends exists from state schema 13 on; before that there is nothing to count.
-        if (Number(db.raw.prepare('PRAGMA user_version').get().user_version) < 13) return null;
+        // write_backends exists from state schema 14 on; before that there is nothing to count.
+        if (Number(db.raw.prepare('PRAGMA user_version').get().user_version) < 14) return null;
         const b = all('SELECT COUNT(*) AS n, MAX(updated_at) AS newest FROM write_backends WHERE subject IN (SELECT id FROM subjects WHERE retired_at IS NULL AND gone_at IS NULL AND alias_of IS NULL)')[0];
         const byClass = Object.fromEntries(all('SELECT class, COUNT(*) AS n FROM write_backends GROUP BY class').map((r) => [r.class, Number(r.n)]));
         return { classified: Number(b?.n ?? 0), unclassified: Math.max(0, subjects.length - Number(b?.n ?? 0)), newest: b?.newest ?? null, by_class: byClass };
@@ -233,7 +233,7 @@ export function laneChecks({ now, slots, pumpOn, cfg, data, tick, breakerTripped
     const b = data.backends;
     if (!isEnabled(cfg[BACKEND_LANE])) items.push({ id, status: 'off', summary: `${BACKEND_LANE} is off (pump/workflows.json)` });
     else if (!running) items.push({ id, status: 'off', summary: 'the pump is off' });
-    else if (!b) items.push({ id, status: 'amber', summary: 'the state has no write_backends table yet (schema 13), so classification cannot be judged' });
+    else if (!b) items.push({ id, status: 'amber', summary: 'the state has no write_backends table yet (schema 14), so classification cannot be judged' });
     else {
       const age = b.newest ? ago(now, b.newest) : Infinity;
       const classes = Object.entries(b.by_class ?? {}).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';

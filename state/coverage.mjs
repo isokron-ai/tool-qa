@@ -58,7 +58,13 @@ export function frameOf(raw, subjects) {
 
 /** The newest accepted result of each (subject, workflow). */
 function latestResults(raw) {
-  const rows = raw.prepare('SELECT run_key, subject, workflow, accepted_at, coverage FROM results ORDER BY accepted_at, run_key').all();
+  // skip_codes (schema v13) is read when the state has it; a state copy from an older pump has no such column.
+  let rows;
+  try {
+    rows = raw.prepare('SELECT run_key, subject, workflow, accepted_at, coverage, skip_codes FROM results ORDER BY accepted_at, run_key').all();
+  } catch {
+    rows = raw.prepare('SELECT run_key, subject, workflow, accepted_at, coverage FROM results ORDER BY accepted_at, run_key').all();
+  }
   const map = new Map();
   for (const r of rows) map.set(`${r.subject}\u0000${r.workflow}`, r);
   return map;
@@ -68,6 +74,23 @@ function truthOf(raw) {
   const t = readKv(raw, TRUTH_KEY);
   return t && typeof t === 'object' && t.entries && typeof t.entries === 'object' ? t.entries : {};
 }
+
+/** The key of a result with no skip code of the side it is counted under. */
+export const UNCODED = 'uncoded';
+
+/**
+ * The code a result is counted under in its side's breakdown (R-COV-50): the
+ * first code its skips stated for that fault side, else UNCODED. One result is
+ * counted once, so the codes of a side add up to that side's count.
+ */
+export function codeOf(skipCodes, fault) {
+  let list;
+  try { list = typeof skipCodes === 'string' ? JSON.parse(skipCodes) : skipCodes; } catch { list = null; }
+  if (!Array.isArray(list)) return UNCODED;
+  const hit = list.find((c) => c && c.fault === fault && typeof c.code === 'string');
+  return hit ? hit.code : UNCODED;
+}
+const sortedCounts = (o) => Object.fromEntries(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 
 const NEVER = (cell) => !cell || cell.mode === 'never';
 
@@ -80,7 +103,7 @@ export const RULES = Object.freeze({ excludedLeaveDenominator: true, unmeasuredI
 /** What a lane with writecheck modes counts: the class each mode takes (pump/modes.mjs MODE_CLASS). */
 const MODE_CLASS = Object.freeze({ full: 'local_full', min: 'mock_min' });
 
-/** Each subject's write_backend facts ({class, reason}), or null before schema 13 / with no table. */
+/** Each subject's write_backend facts ({class, reason}), or null before schema 14 / with no table. */
 function backendsOf(raw) {
   try {
     return new Map(raw.prepare('SELECT subject, class, reason FROM write_backends').all().map((r) => [r.subject, { class: r.class, reason: r.reason }]));
@@ -113,7 +136,7 @@ export function computeCoverage(db, { tiers, workflows, skipLanes = [], rules = 
   const lanes = [];
   for (const id of laneIds) {
     const L = { id, on: workflows[id]?.enabled === true, frame: 0, excluded: 0, eligible: 0, reached: 0, assessed: 0, judged: 0, correct: 0, incorrect: 0,
-      unassessed: { not_reached: 0, tool: 0, infra: 0, unsupported: 0, legacy: 0 }, tiers: {}, t012: { eligible: 0, correct: 0 } };
+      unassessed: { not_reached: 0, tool: 0, infra: 0, unsupported: 0, legacy: 0 }, codes: { tool: {}, policy: {} }, tiers: {}, t012: { eligible: 0, correct: 0 } };
     // A lane with writecheck modes (asked for with `modes: true`: the health issue and the watchdog) gets a block per
     // mode whose denominator is the subjects the meta-backend lane classified for it (local_full for full, mock_min for
     // min). `none` ("not testable here": a hosted backend without a spec, no write tools ...) and subjects not yet
@@ -145,6 +168,9 @@ export function computeCoverage(db, { tiers, workflows, skipLanes = [], rules = 
       const T = (L.tiers[s.tier] ??= { frame: 0, excluded: 0, assessed: 0, judged: 0, correct: 0, incorrect: 0 });
       L.frame++; T.frame++;
       if (r) L.reached++;
+      // The codes behind the tool and policy counts (R-COV-50). Only read here: no number below depends on it.
+      if (r?.coverage === 'unassessed_tool' || r?.coverage === 'unassessed_unknown') { const k = codeOf(r.skip_codes, 'tool'); L.codes.tool[k] = (L.codes.tool[k] ?? 0) + 1; }
+      else if (r?.coverage === 'excluded') { const k = codeOf(r.skip_codes, 'policy'); L.codes.policy[k] = (L.codes.policy[k] ?? 0) + 1; }
       if (r?.coverage === 'excluded' || (!rules.toolSkipStaysEligible && (r?.coverage === 'unassessed_tool' || r?.coverage === 'unassessed_unknown'))) {
         L.excluded++; T.excluded++;
         if (rules.excludedLeaveDenominator) continue;
@@ -170,6 +196,8 @@ export function computeCoverage(db, { tiers, workflows, skipLanes = [], rules = 
     return {
       id: L.id, on: L.on, frame: L.frame, excluded: L.excluded, eligible: L.eligible, reached: L.reached, assessed: L.assessed,
       judged: L.judged, correct: L.correct, incorrect: L.incorrect, unassessed: L.unassessed,
+      // Why, in the skips' own words: per side, the count of results by their skip code ("uncoded" when none said). Adds nothing to the numbers.
+      unassessed_codes: { tool: sortedCounts(L.codes.tool), policy: sortedCounts(L.codes.policy) },
       // The four numbers. null = not yet measurable (no result of this lane has a correct/incorrect judgment).
       assessment: ratio(L.assessed, L.eligible),
       conditional: measurable ? (L.judged > 0 ? ratio(L.correct, L.judged) : 1) : null,

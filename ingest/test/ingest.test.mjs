@@ -859,3 +859,22 @@ test('R-ORD-07: an accepted live-probe bundle hands its oracle facts to the ledg
   assert.equal(retried.outcome, 'rejected');
   assert.equal(retried.oracle, undefined);
 });
+
+// ---- R-COV-49: a skip's code is checked and carried to the ledger ----
+
+test('R-COV-49: a skip code is carried to the ledger with its fault; a code outside the pattern refuses the bundle', async () => {
+  const skip = { stage: 'start', reason: 'no_runnable_artifact', fault: 'tool', code: 'go_install_not_supported', evidence: 'results/report.json' };
+  const { r, ledger } = await run({ bundle: makeBundle({ meta: { skips: [skip] } }) });
+  assert.equal(r.outcome, 'accepted');
+  assert.deepEqual(ledger.records[0].skipCodes, [{ fault: 'tool', code: 'go_install_not_supported' }]);
+  assert.deepEqual(json(r.outputs.get('accepted/att-1/0/ingest.json')).bundle.skip_codes, [{ fault: 'tool', code: 'go_install_not_supported' }]);
+  // No code: the record keeps its old shape.
+  const { code: _omit, ...uncoded } = skip;
+  const plain = await run({ bundle: makeBundle({ meta: { skips: [uncoded] } }) });
+  assert.equal(plain.ledger.records[0].skipCodes, undefined);
+  assert.equal(json(plain.r.outputs.get('accepted/att-1/0/ingest.json')).bundle.skip_codes, undefined);
+  // A bad code is refused.
+  const bad = await run({ bundle: makeBundle({ mutateManifest: (m) => { m.skips = [{ ...skip, code: 'Not A Code!' }]; } }) });
+  assert.equal(bad.r.outcome, 'rejected');
+  assert.equal(bad.r.reason, 'manifest_invalid');
+});

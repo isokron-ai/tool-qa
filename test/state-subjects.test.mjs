@@ -29,6 +29,7 @@ function downgradeToV7(db) {
     DROP TABLE subject_events;
     ALTER TABLE dispatch_items DROP COLUMN subject_name;
     ${['name', 'repo_id', 'node_id', 'repo_created_at', 'id_status', 'id_checked_at', 'gone_at', 'alias_of'].map((c) => `ALTER TABLE subjects DROP COLUMN ${c};`).join('\n')}
+    ALTER TABLE results DROP COLUMN skip_codes;
     PRAGMA user_version = 7;
   `);
 }
@@ -57,8 +58,8 @@ test('R-SUBJ-01: the v8 migration of a live-shaped v7 state keeps every row, nam
     const dueBefore = moments.map((now) => dueView(dueFromState(v7, { now, ...built.config })));
     const keysBefore = v7.raw.prepare('SELECT run_key FROM results ORDER BY run_key').all().map((r) => r.run_key);
 
-    assert.equal(v7.migrate(), 13);
-    assert.equal(SCHEMA_VERSION, 13);
+    assert.equal(v7.migrate(), 14);
+    assert.equal(SCHEMA_VERSION, 14);
     assert.deepEqual(counts(v7.raw), before, 'no row lost or added');
     assert.equal(v7.raw.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.equal(v7.raw.prepare("SELECT value FROM counters WHERE name = 'fence'").get().value, fence);

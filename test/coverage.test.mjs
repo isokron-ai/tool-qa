@@ -20,8 +20,8 @@ function world(spec = { 0: 2, 1: 2, 2: 4 }) {
   let seq = 0;
   const result = (subject, workflow, coverage, over = {}) => {
     const run_key = over.run_key ?? `rk${++seq}`;
-    db.raw.prepare('INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, accepted_at, coverage) VALUES (?, ?, ?, ?, 1, ?, ?, ?)')
-      .run(run_key, subject, workflow, `a${seq}`, 'ok', over.at ?? new Date(NOW - 3_600_000).toISOString(), coverage);
+    db.raw.prepare('INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, accepted_at, coverage, skip_codes) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)')
+      .run(run_key, subject, workflow, `a${seq}`, 'ok', over.at ?? new Date(NOW - 3_600_000).toISOString(), coverage, over.codes ? JSON.stringify(over.codes) : null);
     return run_key;
   };
   return { db, result };
@@ -260,4 +260,40 @@ test('R-COV-48: the health issue is rewritten for a new frame, a lane, a number 
   assert.equal(coverageChanged(base, cov([lane()], { milestones: { m3: { met: false } } })), true, 'M3 flipped');
   assert.equal(coverageChanged(null, base), true);
   assert.equal(coverageChanged(null, null), false);
+});
+
+test('R-COV-50: the tool and policy counts are broken down by skip code, and no existing number changes', () => {
+  const fill = (withCodes) => {
+    const { db, result } = world();
+    const c = (codes) => (withCodes ? { codes } : {});
+    result('t0-0', 'live-probe', 'unassessed_tool', c([{ fault: 'tool', code: 'go_install_not_supported' }]));
+    result('t0-1', 'live-probe', 'unassessed_tool', c([{ fault: 'tool', code: 'go_install_not_supported' }, { fault: 'policy', code: 'hosted_saas' }]));
+    result('t1-0', 'live-probe', 'unassessed_unknown', c([{ fault: 'tool', code: 'mock_gap' }]));
+    result('t1-1', 'live-probe', 'unassessed_tool'); // no code: uncoded
+    result('t2-0', 'live-probe', 'excluded', c([{ fault: 'policy', code: 'hosted_saas' }]));
+    result('t2-1', 'live-probe', 'excluded');
+    result('t2-2', 'live-probe', 'unassessed_infra', c([{ fault: 'infra', code: 'rate_gh' }]));
+    result('t2-3', 'live-probe', 'assessed');
+    return lane(computeCoverage(db, { tiers, workflows }), 'live-probe');
+  };
+  const coded = fill(true);
+  const plain = fill(false);
+  const { unassessed_codes: codes, ...rest } = coded;
+  const { unassessed_codes: none, ...restPlain } = plain;
+  assert.deepEqual(rest, restPlain, 'every existing number is the same with and without codes');
+  assert.deepEqual(codes, { tool: { go_install_not_supported: 2, mock_gap: 1, uncoded: 1 }, policy: { hosted_saas: 1, uncoded: 1 } });
+  assert.deepEqual(none, { tool: { uncoded: 4 }, policy: { uncoded: 2 } }, 'old rows with no codes are all uncoded');
+  const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+  assert.equal(sum(codes.tool), coded.unassessed.tool, 'the tool codes add up to the tool count');
+  assert.equal(sum(codes.policy), coded.excluded, 'the policy codes add up to the excluded count');
+  assert.equal(coded.unassessed.tool, 4);
+});
+
+test('R-COV-50: a state copy from before schema 13 (no skip_codes column) still reads, every code uncoded', () => {
+  const { db, result } = world();
+  result('t0-0', 'live-probe', 'unassessed_tool', { codes: [{ fault: 'tool', code: 'x_y' }] });
+  db.raw.exec('ALTER TABLE results DROP COLUMN skip_codes');
+  const L = lane(computeCoverage(db, { tiers, workflows }), 'live-probe');
+  assert.deepEqual(L.unassessed_codes, { tool: { uncoded: 1 }, policy: {} });
+  assert.equal(L.unassessed.tool, 1);
 });

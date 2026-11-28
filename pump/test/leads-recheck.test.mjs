@@ -81,7 +81,7 @@ test('R-LEAD-16: at most RECHECK_MAX_DUE pairs are due at once, the leads most s
 
 function openStateV11() {
   const db = openState(':memory:');
-  db.raw.exec('DROP TABLE write_backends; DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 11');
+  db.raw.exec('DROP TABLE write_backends; DROP TABLE lead_subjects; DROP TABLE leads; ALTER TABLE results DROP COLUMN skip_codes; PRAGMA user_version = 11');
   return db;
 }
 

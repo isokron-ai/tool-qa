@@ -110,7 +110,7 @@ action for it:
   | `unsupported_transport` | tool | tool, subject |
   | `build_failed_upstream` | subject | subject, tool, infra |
   | `install_failed_registry` | unknown | subject, tool, infra |
-  | `start_requires_credentials` | subject | subject |
+  | `start_requires_credentials` | subject | subject; tool only with a code `start_against_*` (the start ran against our own mock or stand-in) |
   | `no_local_backend` | subject | subject, tool |
   | `heavy_backend`, `cluster_member`, `quarantined`, `lane_disabled`, `policy_excluded` | policy | policy |
   | `timeout_start` | unknown | subject, tool, infra |
@@ -120,6 +120,26 @@ action for it:
   | `upstream_unavailable` | infra | infra, subject, tool |
   | `unsupported_language`, `unsupported_layout`, `reader_limit`, `too_large`, `tool_error` | tool | tool |
   | `no_tools_found` | tool | tool, subject |
+  | `mock_incomplete`, `stand_in_mismatch`, `declaration_missing`, `backend_semantics_not_exercised` | tool | tool |
+  | `target_not_standin`, `not_testable_backend` | policy | policy, tool |
+
+  The last three rows are for stand-ins (R-COV-49): `mock_incomplete` (our
+  mock lacks what the stage needed), `stand_in_mismatch` (it answers
+  differently from the real backend), `declaration_missing` (the subject
+  needs a declaration we do not have), `target_not_standin` (the target is
+  not the stand-in's own), `backend_semantics_not_exercised` (the stage ran
+  but not the backend behaviour the check is about) and `not_testable_backend`
+  (a hosted, desktop or credentials-only backend we cannot stand in). None of
+  them may say `subject`.
+
+- `skips[].code` (optional) is a short snake_case string that says more than
+  the reason, for example `go_install_not_supported` under
+  `no_runnable_artifact` (our limit: fault `tool`). It must match
+  `^[a-z][a-z0-9_]{1,47}$`; a bundle with any other value is refused as
+  `manifest_invalid`. Ingest keeps it in the state and coverage counts the
+  skipped results by code, so use a code instead of hiding the real cause in a
+  log. Codes are free-form but stable: reuse one rather than inventing a new
+  spelling.
 
   Ingest stores the result's fault (the first of tool, unknown, infra,
   subject, policy among its skips, so our limits are never hidden behind
