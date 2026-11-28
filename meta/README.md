@@ -502,7 +502,7 @@ subject is classified again with the new maps.
 ### Before it is switched on
 
 Ingest refuses a field its pinned registry does not declare. `write_backend` is declared in mcp-results
-(fields/write-backend, R-RES-16); until `ingest/registry.mjs` pins a commit that holds it, the fixture run and the
+(fields/write-backend, R-RES-18); until `ingest/registry.mjs` pins a commit that holds it, the fixture run and the
 tests judge with the entry added (`backend.mjs` `PENDING_FIELD_YAML`), and the lane stays `enabled: false`.
 
 ### Dry run
