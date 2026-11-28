@@ -41,7 +41,7 @@ import { readZipLenient } from '../scripts/lib/unzip.mjs';
 import { safeArchivePath } from '../scripts/lib/untar.mjs';
 
 export const LANE = 'release-diff';
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 
 const NPM = 'https://registry.npmjs.org';
 const PYPI = 'https://pypi.org';

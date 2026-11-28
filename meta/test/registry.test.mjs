@@ -59,7 +59,7 @@ test('npm: versions, publish dates, deprecations and provenance are kept; mainta
   assert.equal(by('npm_attestations')[0].recent_with_provenance, 2);
   const text = JSON.stringify(sanitize(o.records));
   assert.ok(!text.includes('maintainer-mail') && !text.includes('someone'), 'no maintainer name or email');
-  assert.equal(by('go_module_facts')[0].found, false);
+  assert.equal(by('go_module_facts')[0].found, null, 'a 404 from the cached-only Go proxy is unknown, not absent (R-META-13)');
   assert.deepEqual(o.skips, []);
 });
 
@@ -147,4 +147,36 @@ test('a subject with no registry entry reports an empty history', async () => {
   const c = await collectSubject(httpFor(registryFetch({})), 'a/b');
   const h = subjectOutput(c, OBS).records.find((r) => r.field === 'registry_entry_history');
   assert.deepEqual(h.value, []);
+});
+
+test('R-META-13: the Go proxy: a cached-only 404 is unknown (found null, stage not_cached), and a go.mod the proxy synthesized is no Go package of the subject (no deps.dev go lookup)', async () => {
+  const base = 'https://proxy.golang.org/cached-only/github.com/!o/r';
+  const missing = await collectSubject(httpFor(registryFetch()), 'O/r');
+  const m = subjectOutput(missing, OBS);
+  const mv = m.records.find((r) => r.field === 'go_module_facts').value;
+  assert.deepEqual([mv.found, mv.basis], [null, 'proxy.golang.org/cached-only']);
+  assert.match(mv.note, /unknown/);
+  assert.equal(m.stages.go, 'not_cached');
+  assert.deepEqual(m.skips, [], 'unknown is not a skip');
+
+  const f = registryFetch({
+    [`${base}/@latest`]: { Version: 'v0.0.0-20260101000000-abcdef123456', Time: '2026-01-01T00:00:00Z', Origin: { VCS: 'git', URL: 'https://github.com/O/r' } },
+    [`${base}/@v/list`]: { __text: '' },
+    [`${base}/@v/v0.0.0-20260101000000-abcdef123456.mod`]: { __text: 'module github.com/O/r\n' },
+  });
+  const synth = await collectSubject(httpFor(f), 'O/r');
+  const so = subjectOutput(synth, OBS);
+  const sv = so.records.find((r) => r.field === 'go_module_facts').value;
+  assert.deepEqual([sv.found, sv.go_mod_synthesized, sv.declares_go_module], [true, true, false]);
+  assert.equal(so.stages.go, 'synthesized_go_mod');
+  assert.ok(!f.calls.some((c) => /deps\.dev\/.*\/systems\/go\//i.test(c.url)), 'deps.dev is not asked for a Go package the repository does not declare');
+
+  const real = registryFetch({
+    [`${base}/@latest`]: { Version: 'v1.0.0', Time: '2026-01-01T00:00:00Z', Origin: { VCS: 'git', URL: 'https://github.com/O/r' } },
+    [`${base}/@v/list`]: { __text: 'v1.0.0\n' },
+    [`${base}/@v/v1.0.0.mod`]: { __text: 'module github.com/O/r\n\ngo 1.22\n' },
+  });
+  const ro = subjectOutput(await collectSubject(httpFor(real), 'O/r'), OBS);
+  assert.equal(ro.records.find((r) => r.field === 'go_module_facts').value.declares_go_module, true);
+  assert.equal(ro.stages.go, 'ok');
 });

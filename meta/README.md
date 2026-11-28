@@ -24,7 +24,7 @@ One bundle per item, sealed by the worker kit as
 | Path | What |
 |---|---|
 | `observations/<lane>.ndjson` | Field records from the mcp-results field registry (below) |
-| `results/<lane>.json` | Our report: outcome, the stage outcomes, fields emitted, the shard's API use |
+| `results/<lane>.json` | Our report: outcome, the stage outcomes, fields emitted, the shard's API use, and `reader` (`name`, `version`, and `build`: the commit of this repository the job ran, from `GITHUB_SHA`, or null). The workers run ref `main`, so the version alone does not tell two builds apart; `build` does (R-META-14) |
 | `controls/known-answer.json`, `controls/forgery.json` | The two controls |
 | `raw/control-forgery/answers.json` | The forgery target's planted answers, with the marker |
 | `logs/<lane>.log` | One line: outcome, record and skip counts |
@@ -72,6 +72,13 @@ packages each version declares; an empty list when there is none),
 `npm_version_doc`, `npm_maintainer_count_and_change`, `npm_attestations`,
 `pypi_info`, `pypi_project_status`, `pypi_provenance`, `crates_crate_facts`,
 `go_module_facts`, `depsdev_facts`, `oci_tag_digests`.
+
+`go_module_facts` is read from the proxy's `cached-only` endpoint, which answers 404 for any module nobody has fetched.
+`found` is therefore `true` (the proxy has it) or `null` (it did not answer 200: unknown, never "absent"; stage
+`go: not_cached`). When the proxy serves a one-line go.mod it made up for a repository without one,
+`go_mod_synthesized` is true, `declares_go_module` is false, the stage is `synthesized_go_mod`, and deps.dev is not asked
+for a Go package of the subject (R-META-13). Stage `private_vulnerability_reporting: archived` is GitHub's 422 on an
+archived repository (R-META-15).
 
 `oci_tag_digests` holds the digest each declared image tag resolves to, for at
 most five tags per subject: the subject owner's own registry entries first

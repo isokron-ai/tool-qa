@@ -239,3 +239,18 @@ test('R-META-12: a GitHub 403 on a REST read is classified: secondary throttling
   assert.deepEqual(o.skips.find((s) => s.stage === 'private_vulnerability_reporting'), { stage: 'private_vulnerability_reporting', reason: 'upstream_unavailable', fault: 'subject' });
   assert.deepEqual(o.skips.find((s) => s.stage === 'branch_rules'), { stage: 'branch_rules', reason: 'rate_limited', fault: 'infra', retryable: true });
 });
+
+test('R-META-15: private vulnerability reporting on an archived repository (GitHub answers 422) is stage "archived", not "http_422"; on a live repository the code stays', async () => {
+  const f = (archived) => githubFetch({
+    repos: { 'a/b': ghNode({ isArchived: archived }) },
+    rest: (url) => (url.endsWith('/private-vulnerability-reporting') ? new Response('{"message":"unprocessable"}', { status: 422, headers: { 'x-ratelimit-remaining': '800' } }) : undefined),
+  });
+  const run = async (archived) => {
+    const out = await collect({ http: httpFor(f(archived)), repos: ['a/b'], token: 't', budget: createBudget() });
+    return subjectOutput({ ...out.get('a/b'), observedAt: '2026-11-24T00:00:00Z' });
+  };
+  const arch = await run(true);
+  assert.equal(arch.stages.private_vulnerability_reporting, 'archived');
+  assert.equal(arch.records.find((r) => r.field === 'security_posture').value.private_vulnerability_reporting, null);
+  assert.equal((await run(false)).stages.private_vulnerability_reporting, 'http_422');
+});

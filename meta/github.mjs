@@ -33,7 +33,7 @@ import { FetchProblem, mapLimit, readJsonCapped } from './lib/http.mjs';
 import { bool, daysBetween, int, median, record, sanitize, sha256Hex, skipFor, stableJson, str, textDigest, time, toolErrorSkip } from './lib/common.mjs';
 
 export const LANE = 'meta-github';
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 const API = 'https://api.github.com';
 const SCORECARD = 'https://api.scorecard.dev/projects/github.com';
 export const GRAPHQL_BATCH = 10;
@@ -544,7 +544,8 @@ export function subjectOutput({ graph, rest = {}, scorecard, observedAt, error }
     }
 
     const p = rest.pvr;
-    stages.private_vulnerability_reporting = stageOf(p);
+    // GitHub answers 422 to this read for an archived repository: the label says why, not the HTTP code (RD-13).
+    stages.private_vulnerability_reporting = p?.status === 422 && g.repo_core.archived === true ? 'archived' : stageOf(p);
     if (p?.problem) skips.push(skipFor('private_vulnerability_reporting', p.problem));
     else if (p?.gone) skips.push(goneSkip('private_vulnerability_reporting'));
     records.push(record('security_posture', {

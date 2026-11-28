@@ -149,3 +149,19 @@ test('the conditional-request cache is saved and used by the next run (304s)', a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('R-META-14: every result names its reader: the lane, its version and the commit the job ran (GITHUB_SHA), null without a full sha', async () => {
+  const dir = tmp();
+  try {
+    const sha = 'c'.repeat(40);
+    const items = [{ subject: 'isokron-ai/mcp-check', run_key: runKey(21), fence: 5 }];
+    for (const [env, want] of [[{ GITHUB_SHA: sha }, sha], [{ GITHUB_SHA: 'not-a-sha' }, null], [{}, null]]) {
+      const out = join(dir, `out-${String(want)}-${Object.keys(env).length}`);
+      await runShard({ laneName: 'meta-registry', out, env: envFor(items, env), fetch: registryFetch(), sleep: async () => {} });
+      const report = JSON.parse(readFileSync(join(out, '0', 'bundle', 'results', 'meta-registry.json'), 'utf8'));
+      assert.deepEqual(report.reader, { name: 'tool-qa-meta-registry', version: report.lane_version, build: want });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -448,7 +448,7 @@ test('release-diff worker: bundles pass ingest\'s checks against the pinned regi
   const obs = readFileSync(join(out, '0', 'bundle', 'observations', 'release-diff.ndjson'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.deepEqual(obs.map((r) => r.field), ['release_artifacts', 'release_diff_summary', 'release_diff_findings', 'release_diff_held']);
   assert.equal(obs[2].value[0].kind, 'unexpected_file');
-  assert.equal(lane.version, '1.1.0');
+  assert.equal(lane.version, '1.2.0');
 });
 
 test('release-diff worker: the forgery control is contained (planted archive names, manifest keys and tags pose as a result)', async () => {
