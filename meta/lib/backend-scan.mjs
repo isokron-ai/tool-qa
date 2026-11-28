@@ -370,7 +370,8 @@ export const FILE_WORDS = new Set(['file', 'files', 'dir', 'dirs', 'directory', 
 const TOOL_RES = Object.freeze([
   // `server.registerTool('x'`, or a bound `registerTool(\n  'x'` (the name may be on the next line).
   /(?:\.|\b)(?:tool|registerTool|addTool|add_tool|register_tool)\(\s*['"`]([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]/g,
-  /@[\w.]{0,40}tool(?:\(([^)\n]{0,300})\))?[ \t]*\r?\n(?:[ \t]*@[^\n]{0,200}\r?\n){0,3}[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_]\w{0,63})/g,
+  // A decorator, its arguments on one line or several (FastMCP: `@mcp.tool(\n  name="x",\n  annotations=ToolAnnotations(...),\n)`), bounded.
+  /@[\w.]{0,40}tool\b(?:\(([\s\S]{0,800}?)\))?[ \t]*\r?\n(?:[ \t]*@[^\n]{0,200}\r?\n){0,3}[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_]\w{0,63})/g,
   /\bTool\(\s*name\s*=\s*['"]([A-Za-z][A-Za-z0-9_.-]{0,63})['"]/g,
   /\bmcp\.NewTool\(\s*"([A-Za-z][A-Za-z0-9_.-]{0,63})"/g,
   /#\[tool\([^\]\n]{0,300}\)\][\s]{0,200}(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+([a-z_]\w{0,63})/g,
