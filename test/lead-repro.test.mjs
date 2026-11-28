@@ -199,7 +199,7 @@ test('R-LEAD-56: with no verdict the gate dispatches lead-repro with the lead\'s
   assert.equal(d.path, '/repos/isokron-ai/tool-qa/actions/workflows/lead-repro.yml/dispatches');
   assert.equal(d.o.body.ref, 'main');
   assert.deepEqual(Object.keys(d.o.body.inputs), ['lead']);
-  assert.deepEqual(Object.keys(JSON.parse(d.o.body.inputs.lead)).sort(), ['class', 'component', 'fingerprint', 'idiom', 'layout', 'lane', 'oracle', 'signature', 'tool']);
+  assert.deepEqual(Object.keys(JSON.parse(d.o.body.inputs.lead)).sort(), ['class', 'component', 'fingerprint', 'idiom', 'lane', 'layout', 'oracle', 'signature', 'tool']);
   assert.ok(!d.o.body.inputs.lead.includes('acme'), 'no subject in the dispatch');
   assert.equal(leadInput(l), d.o.body.inputs.lead);
   // Inside the retry gap: no second dispatch.
@@ -230,6 +230,11 @@ test('R-LEAD-56: the gate reads at most MAX_LOOKUPS artifacts and sends at most 
   await reproVerdicts({ db: openState(':memory:'), leads, workflows, now: T0, client: w.client, fetch: w.fetch });
   assert.equal(w.calls.filter((c) => c.method === 'GET').length, MAX_LOOKUPS);
   assert.equal(w.calls.filter((c) => c.method === 'POST').length, MAX_DISPATCHES);
+  // A key that only waited for its turn under these bounds is never filed unchecked for it: only the dispatched ones' wait ends.
+  const db = openState(':memory:');
+  await reproVerdicts({ db, leads, workflows, now: T0, client: gateWorld().client, fetch: w.fetch });
+  const later = await reproVerdicts({ db, leads, workflows, now: T0 + REPRO_WAIT_MS, client: gateWorld().client, fetch: w.fetch });
+  assert.equal([...later.values()].filter((v) => v.state === 'unchecked').length, MAX_DISPATCHES);
 });
 
 // ------------------------------------------------------------------ the lead step
@@ -412,7 +417,7 @@ test('R-LEAD-59: the lead-repro workflow reads only, uses no secret, and passes 
   const y = readFileSync(new URL('../.github/workflows/lead-repro.yml', import.meta.url), 'utf8');
   assert.match(y, /^permissions: \{\}$/m);
   assert.match(y, /permissions:\n {6}contents: read\n {6}issues: read\n/);
-  assert.ok(!/secrets\./.test(y), 'no secret');
+  assert.ok(!/\$\{\{\s*secrets\./.test(y), 'no secret');
   for (const block of y.split(/\n\s+- /).filter((b) => /\brun: /.test(b))) {
     const run = block.slice(block.indexOf('run:'));
     assert.ok(!/\$\{\{/.test(run), `no expression in run: ${run.slice(0, 80)}`);

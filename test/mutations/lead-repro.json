@@ -102,5 +102,13 @@
     "new": "  const big = (top, where) => (false ?",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-55"
+  },
+  {
+    "id": "R14 a key waiting for its turn is counted as waiting",
+    "file": "leads/repro-gate.mjs",
+    "old": "    if (!rec?.first_wait_at && !rec?.first_dispatched_at && asked && !client) {",
+    "new": "    if (!rec?.first_wait_at && !rec?.first_dispatched_at) {",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-56"
   }
 ]

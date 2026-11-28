@@ -3,6 +3,7 @@
   "details": [
     "bad_subject",
     "bundle_error",
+    "bundle_fetch_refused",
     "bundle_hash_mismatch",
     "bundle_host_not_allowed",
     "bundle_invalid",

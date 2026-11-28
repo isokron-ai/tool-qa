@@ -156,14 +156,15 @@ export async function reproVerdicts({ db, leads, workflows, now, client: given =
         log(`leads: could not dispatch lead-repro for key ${key}: ${err?.message ?? err}`);
       }
     }
-    if (!rec?.first_wait_at) {
-      // The wait is counted from the first run that needed this key, dispatched or not: a lead-repro that can never be
-      // dispatched (no token) holds a lead for REPRO_WAIT_MS, not for ever.
+    if (!rec?.first_wait_at && !rec?.first_dispatched_at && asked && !client) {
+      // No token at all: the wait is counted from the first run that needed this key, so a lead-repro that can never be
+      // dispatched holds a lead for REPRO_WAIT_MS, not for ever. A key only waiting for its turn under our own per-run
+      // bounds is not counted: it is never filed unchecked for that.
       rec = { ...(rec ?? {}), first_wait_at: iso };
       kv[key] = rec;
       changed = true;
     }
-    const first = Date.parse(rec.first_dispatched_at ?? rec.first_wait_at);
+    const first = Date.parse(rec?.first_dispatched_at ?? rec?.first_wait_at ?? '');
     const waited = Number.isFinite(first) && now - first >= REPRO_WAIT_MS;
     const givenUp = tries >= REPRO_MAX_TRIES && Number.isFinite(last) && now - last >= REPRO_RETRY_MS;
     out.set(lead.fingerprint, { state: waited || givenUp ? 'unchecked' : 'pending', key, verdict: rec?.verdict === 'error' ? { verdict: 'error', key } : null });
