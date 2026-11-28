@@ -2252,8 +2252,10 @@ sandbox-guard action, and the lane's `sandbox_sha` is that same commit (78a7834)
 the workers run. `pump/test/t0-workers.test.mjs` reads every subject's worker file at the lane's ref: it must have a
 t0-manifest job and pin the lane's `sandbox_sha` (R-CTL-17, R-CTL-18). Bump the lane's `sandbox_sha` and the workers'
 `SANDBOX_REF` together. `dogfood-kubernetes.yml` is not in any lane: kind needs privileged Docker, which the sandbox cannot
-give, so it still runs third-party code on the plain runner and builds no result bundle. Switching
-`LANE_T0_DOGFOOD_ENABLED` on is the owner's call.
+give, so it still runs third-party code on the plain runner and builds no result bundle.
+
+**Do not turn on `LANE_T0_DOGFOOD_ENABLED` yet.** Switching it on is the owner's call, once this lane's pin and the worker
+check above are on `main`; the workers' own dispatch switch, `gh workflow enable`, is part of the same decision.
 
 **How it runs.** Each control subject stands for one worker file with fixed inputs (`control_subjects` in
 `pump/workflows.json`). A control subject is due only for its own lane and a control lane only for its own subjects.
