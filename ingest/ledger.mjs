@@ -270,7 +270,7 @@ function jsonLedger(path, now) {
       doc.results.push({
         run_key: r.run_key, attempt_id: r.attempt_id, fence: r.fence, outcome, accepted, reason,
         ...(accepted && r.resultOutcome ? { result_outcome: r.resultOutcome } : {}),
-        ...(accepted && r.coverage ? { fault: r.fault ?? null, coverage: r.coverage } : {}),
+        ...(accepted && r.coverage ? { fault: r.fault ?? null, coverage: r.coverage, ...(r.skipCodes ? { skip_codes: r.skipCodes } : {}) } : {}),
         recorded_at: now().toISOString(),
       });
       save();

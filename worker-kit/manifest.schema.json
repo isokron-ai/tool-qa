@@ -74,12 +74,15 @@
               "policy_excluded", "trace_unavailable", "bridge_required",
               "rate_limited", "upstream_unavailable",
               "unsupported_language", "unsupported_layout", "reader_limit", "no_tools_found",
-              "too_large", "tool_error"
+              "too_large", "tool_error",
+              "mock_incomplete", "stand_in_mismatch", "declaration_missing", "target_not_standin",
+              "backend_semantics_not_exercised", "not_testable_backend"
             ]
           },
           "evidence": { "$ref": "#/$defs/bundle_path" },
           "retryable": { "type": "boolean" },
-          "fault": { "enum": ["tool", "subject", "infra", "policy"] }
+          "fault": { "enum": ["tool", "subject", "infra", "policy"] },
+          "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,47}$" }
         }
       }
     },
