@@ -1,0 +1,74 @@
+[
+  {
+    "id": "WM1 a mode is on without its switch",
+    "file": "pump/modes.mjs",
+    "old": "if (env?.[def.switch] === 'true') active[mode] = def;",
+    "new": "active[mode] = def;",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-11"
+  },
+  {
+    "id": "WM2 a mode pair files under the default run_key",
+    "file": "pump/due.mjs",
+    "old": "fields: runKeyFields(subject, workflowName, mode ? { ...wf, settings_state: modeSettings(wf, mode) } : wf) };",
+    "new": "fields: runKeyFields(subject, workflowName, wf) };",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-11"
+  },
+  {
+    "id": "WM3 shards mix modes and backends",
+    "file": "pump/tick.mjs",
+    "old": "const mk = shardKey(d.mode);",
+    "new": "const mk = '';",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-11"
+  },
+  {
+    "id": "WM4 any https spec URL goes to a worker",
+    "file": "pump/modes.mjs",
+    "old": "  if (SPEC_URLS.has(url)) return true;\n",
+    "new": "  return true;\n",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-17"
+  },
+  {
+    "id": "WM5 runtime env names reach the state",
+    "file": "state/backends.mjs",
+    "old": "&& ENV_RE.test(n) && keepEnvName(n)))]",
+    "new": "&& ENV_RE.test(n)))]",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-17"
+  },
+  {
+    "id": "WM6 none and unclassified count in a mode's denominator",
+    "file": "state/coverage.mjs",
+    "old": "if (rules.notTestableLeavesDenominator && b?.class !== MODE_CLASS[mode]) continue;",
+    "new": "",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-12"
+  },
+  {
+    "id": "WM7 a late classification overwrites a newer one",
+    "file": "state/db.mjs",
+    "old": "if (prior && toMs(prior.observed_at) > toMs(at)) return false;",
+    "new": "",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-10"
+  },
+  {
+    "id": "WM8 the watchdog never goes amber",
+    "file": "watchdog/lanes.mjs",
+    "old": "if (b.unclassified > 0 && age > T.backendFreshMs) {",
+    "new": "if (false) {",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-13"
+  },
+  {
+    "id": "WM9 the live snapshot reads write_backends",
+    "file": "state/coverage.mjs",
+    "old": "const backends = withModes && Object.values(workflows ?? {}).some((wf) => wf?.modes?.list) ? backendsOf(raw) : null;",
+    "new": "const backends = Object.values(workflows ?? {}).some((wf) => wf?.modes?.list) ? backendsOf(raw) : null;",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-12"
+  }
+]
