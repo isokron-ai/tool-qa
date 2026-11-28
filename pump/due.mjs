@@ -101,6 +101,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import { controlProblems } from './controls.mjs';
+import { modeFor, modeProblems, modeSettings, unmatchedSkipped } from './modes.mjs';
 
 const DAY_MS = 86_400_000;
 const SEP = '\u0000';
@@ -236,6 +237,17 @@ export function runKeyFields(subject, workflowName, wf) {
   };
 }
 
+/**
+ * The run_key fields of a pair and the writecheck mode it goes in (pump/modes.mjs): a pair in a mode files under
+ * the mode's settings_state. `backends`: subject key -> write_backend facts (state write_backends). mode null: none.
+ * skip true: the lane has modes on with unmatched "skip" and this subject has none.
+ */
+export function pairFields(subject, workflowName, wf, backends) {
+  const mode = modeFor(wf, backends?.get?.(subject.id) ?? null);
+  if (!mode && unmatchedSkipped(wf)) return { skip: true, mode: null, fields: null };
+  return { skip: false, mode, fields: runKeyFields(subject, workflowName, mode ? { ...wf, settings_state: modeSettings(wf, mode) } : wf) };
+}
+
 /** sha256 (hex) of the canonical JSON of the run_key fields. */
 export function runKey(fields) {
   return createHash('sha256').update(canonicalJson(fields)).digest('hex');
@@ -300,7 +312,7 @@ function whyNoResult(fields, last) {
  *          subject: the subject key (run_keys name it); name: the owner/name to send
  *          gap: gapKind() of the pair's last result (R-COV-03)
  */
-export function computeDue({ now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, oracle: oracleOf = new Map(), hooks = NO_HOOKS }) {
+export function computeDue({ now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, oracle: oracleOf = new Map(), backends = new Map(), hooks = NO_HOOKS }) {
   const h = { ...NO_HOOKS, ...hooks };
   const weights = tiers.weights || {};
   const prio = tiers.priority || {};
@@ -321,7 +333,9 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       if (!cell || cell.mode === 'never') continue;
       const pk = pairKey(s.id, name);
       if (inFlight.has(pk)) continue;
-      const fields = runKeyFields(s, name, wf);
+      const pf = pairFields(s, name, wf, backends);
+      if (pf.skip) continue;
+      const fields = pf.fields;
       const key = runKey(fields);
       if (parked.has(key)) continue;
       const last = lastResults.get(pk);
@@ -366,6 +380,7 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
       out.push({
         subject: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, workflow: name, tier: s.tier, run_key: key, fields, reasons, priority, gap: gapKind(last, reasons),
         ...(oracle?.status === 'open' ? { oracle: oracle.kinds.map((k) => k.kind) } : {}),
+        ...(pf.mode ? { mode: pf.mode } : {}),
       });
     }
   }
@@ -411,7 +426,10 @@ export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
   if (typeof db.retryLaterWaiting === 'function') for (const k of db.retryLaterWaiting({ now, baseMs, maxMs })) parked.add(k);
   // A state from before schema 9 has no oracle tables: nothing to boost (R-ORD-08).
   const oracle = new Map(db.schemaVersion() >= 9 ? db.listOracleDisagreements({ status: 'open' }).map((r) => [r.subject, r]) : []);
-  return { now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, oracle, hooks };
+  // Writecheck's mode routing (pump/modes.mjs): read only while some lane has a mode on; before schema 13 there is none.
+  const wantBackends = Object.values(workflows ?? {}).some((wf) => wf?.active_modes && Object.keys(wf.active_modes).length > 0);
+  const backends = new Map(wantBackends && typeof db.listWriteBackends === 'function' ? db.listWriteBackends().map((r) => [r.subject, r]) : []);
+  return { now, subjects, workflows, tiers, lastResults, resultKeys, inFlight, parked, oracle, backends, hooks };
 }
 
 /** The due list for the current state. */
@@ -449,6 +467,7 @@ export function workflowProblems(workflows) {
     if (wf.recheck_runner !== undefined && wf.recheck_runner !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(wf.recheck_runner))) p.push(`${name}: recheck_runner must be a runner label or null`);
   }
   p.push(...controlProblems(workflows));
+  p.push(...modeProblems(workflows));
   return p;
 }
 

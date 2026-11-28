@@ -105,6 +105,9 @@ jobs:
           LANE_T0_SELF_ENABLED: ${{ vars.LANE_T0_SELF_ENABLED }}
           LANE_T0_DOGFOOD_ENABLED: ${{ vars.LANE_T0_DOGFOOD_ENABLED }}
           LANE_T0_FUZZ_ENABLED: ${{ vars.LANE_T0_FUZZ_ENABLED }}
+          # Writecheck's modes (pump/modes.mjs, docs/INTERFACES.md "Writecheck modes"): each only while its variable is exactly "true" (default off).
+          LANE_WRITECHECK_FULL_ENABLED: ${{ vars.LANE_WRITECHECK_FULL_ENABLED }}
+          LANE_WRITECHECK_MIN_ENABLED: ${{ vars.LANE_WRITECHECK_MIN_ENABLED }}
           # The lead pipeline (state/leads.mjs): off unless the variable is "dry-run", "recheck" or "true".
           LANE_LEADS_ENABLED: ${{ vars.LANE_LEADS_ENABLED }}
           # Shown by the live view's publish gate node (config.switches).

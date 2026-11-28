@@ -32,6 +32,10 @@
 // Schema v12 adds the leads tables (state/schema-v12.sql): bug fingerprints in
 // our own tools and where they were seen, folded from accepted results by
 // noteLeads() while LANE_LEADS_ENABLED is on (state/leads.mjs).
+// Schema v13 adds write_backends (state/schema-v13.sql): each subject's latest
+// write_backend facts from the meta-backend lane, kept by noteWriteBackend() in
+// the same transaction as the result (state/backends.mjs), for writecheck's
+// mode routing (pump/modes.mjs) and its per-mode coverage.
 
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -39,7 +43,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { deriveDisagreements, foldDisagreement, ORACLE_BUDGET_DAYS, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_LANES } from './oracle.mjs';
 import { CLEAN_RECHECKS_TO_CLOSE, mergeVersions, needsSync, pushLog, RECHECK_MAX_ATTEMPTS, repoFor, STALE_PAIR_DAYS } from './leads.mjs';
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -61,6 +65,7 @@ const MIGRATIONS = [
   { version: 10, sql: () => readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8') },
   { version: 11, sql: () => readFileSync(new URL('./schema-v11.sql', import.meta.url), 'utf8') },
   { version: 12, sql: () => readFileSync(new URL('./schema-v12.sql', import.meta.url), 'utf8') },
+  { version: 13, sql: () => readFileSync(new URL('./schema-v13.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -1115,12 +1120,15 @@ export class StateDb {
    *   oracle: the accepted bundle's oracle facts (state/oracle.mjs
    *   oracleFacts), folded into the subject's disagreement by noteOracle().
    *   It never changes fault or coverage.
+   *   backend: the accepted meta-backend bundle's write_backend facts
+   *   (state/backends.mjs backendFacts), kept per subject by noteWriteBackend().
+   *   It never changes fault or coverage.
    *   failures: the accepted bundle's leads (state/fingerprint.mjs leadFailures),
    *   folded into the leads tables by noteLeads(); absent (null) while the lead
    *   pipeline is off, so nothing is kept. An empty list is a result with none.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, failures = null, subjectSha = null, completedAt = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, failures = null, subjectSha = null, completedAt = null, backend = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -1195,6 +1203,7 @@ export class StateDb {
           `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0,
             fault, coverage, assessed);
           if (oracle || ORACLE_LANES.includes(item.workflow)) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now });
+          if (backend && this.schemaVersion() >= 13) this.noteWriteBackend(item.subject, runKey, backend, { now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now });
           if (Array.isArray(failures)) {
             this.foldLeads(item.subject, item.workflow, runKey, failures, {
               now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now, runId: d.run_id ?? null, coverage: skipsOnly ? null : coverage,
@@ -1482,6 +1491,35 @@ export class StateDb {
   /** Where a lead was seen: its (subject, lane) rows, logs parsed. */
   leadSubjects(fingerprint) {
     return this.raw.prepare('SELECT * FROM lead_subjects WHERE fingerprint = ? ORDER BY subject, lane').all(fingerprint).map((r) => ({ ...plain(r), log: JSON.parse(r.log) }));
+  }
+
+  /**
+   * Keep a subject's write_backend facts (state/backends.mjs backendFacts) from an accepted meta-backend result.
+   * Called inside recordResult()'s transaction. A result observed before the stored facts is late and changes
+   * nothing (versions are hashes with no order, so the observation time decides, as for oracle facts).
+   * @returns {boolean} whether the row was written
+   */
+  noteWriteBackend(subject, runKey, facts, { now, observedAt = now } = {}) {
+    if (!facts || typeof facts !== 'object') return false;
+    const at = iso(observedAt);
+    const prior = this.raw.prepare('SELECT observed_at FROM write_backends WHERE subject = ?').get(subject);
+    if (prior && toMs(prior.observed_at) > toMs(at)) return false;
+    this.raw.prepare(`
+      INSERT INTO write_backends (subject, run_key, class, mode, reason, backend, backend_kind, stand_in, spec_url, spec_format, confidence, env_names, observed_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (subject) DO UPDATE SET run_key = excluded.run_key, class = excluded.class, mode = excluded.mode, reason = excluded.reason,
+        backend = excluded.backend, backend_kind = excluded.backend_kind, stand_in = excluded.stand_in, spec_url = excluded.spec_url,
+        spec_format = excluded.spec_format, confidence = excluded.confidence, env_names = excluded.env_names,
+        observed_at = excluded.observed_at, updated_at = excluded.updated_at
+    `).run(subject, runKey, facts.class, facts.mode, facts.reason ?? null, facts.backend ?? null, facts.backend_kind ?? null, facts.stand_in ?? null,
+      facts.spec_url ?? null, facts.spec_format ?? null, facts.confidence ?? null, JSON.stringify(Array.isArray(facts.env_names) ? facts.env_names : []), at, iso(now));
+    return true;
+  }
+
+  /** Every subject's write_backend facts, env_names parsed; [] before schema 13. */
+  listWriteBackends() {
+    if (this.schemaVersion() < 13) return [];
+    return this.raw.prepare('SELECT * FROM write_backends ORDER BY subject').all().map((r) => ({ ...plain(r), env_names: JSON.parse(r.env_names) }));
   }
 
   /** The stored disagreement rows, parsed. `status` filters (default: all). */

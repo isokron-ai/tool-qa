@@ -34,7 +34,7 @@ function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 
 
 test('schema v3 adds the dispatch ledger tables and columns', () => {
   const db = fresh();
-  assert.equal(SCHEMA_VERSION, 12);
+  assert.equal(SCHEMA_VERSION, 13);
   assert.equal(db.schemaVersion(), 12);
   const tables = db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const t of ['dispatches', 'dispatch_items', 'results', 'run_keys', 'kv']) assert.ok(tables.includes(t), t);

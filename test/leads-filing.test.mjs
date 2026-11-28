@@ -165,7 +165,7 @@ test('R-LEAD-26: dry-run and recheck write the plan to the job summary and touch
     }
     // A state from before the leads tables (schema v11): noted as off, nothing read.
     const v11 = openState(':memory:');
-    v11.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 11');
+    v11.raw.exec('DROP TABLE write_backends; DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 11');
     assert.equal((await step(v11, { mode: 'on', mintToken: async () => assert.fail('no token') })).mode, 'on');
     assert.equal(v11.getKv(LEADS_LAST_KEY).off, true);
     const off = reproduced(1);

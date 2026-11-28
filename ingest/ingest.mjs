@@ -85,6 +85,7 @@ import { normalizeAttempt, openLedger } from './ledger.mjs';
 import { maskText, scanText } from './redact.mjs';
 import { loadRegistry } from './registry.mjs';
 import { oracleFactsFromFiles } from '../state/oracle.mjs';
+import { backendFactsFromFiles } from '../state/backends.mjs';
 import { itemFromBundle, leadFailures } from '../state/fingerprint.mjs';
 import { lanePinModes, laneShaModes } from '../pump/pins.mjs';
 
@@ -323,6 +324,8 @@ export async function openAttempt(input, deps) {
         // What the oracle lanes said, for the subject's disagreement record
         // (loop upgrade #7); it never changes the fault side or coverage.
         ...(outcome === 'accepted' && files ? (() => { const oracle = oracleFactsFromFiles(row.workflow_name, files); return oracle ? { oracle } : {}; })() : {}),
+        // What the meta-backend lane classified (state/backends.mjs), for writecheck's mode routing; never fault or coverage.
+        ...(outcome === 'accepted' && files ? (() => { const backend = backendFactsFromFiles(row.workflow_name, files); return backend ? { backend } : {}; })() : {}),
         // The bundle's leads (state/fingerprint.mjs), only while the lead pipeline is on (LANE_LEADS_ENABLED).
         // null (unreadable) passes nothing: the result is then not folded into any lead, never counted as clean.
         ...(outcome === 'accepted' && files && leads ? (() => { const failures = bundleLeads(manifestBytes, files, item, row.workflow_name, leads); return failures ? { failures } : {}; })() : {}),
