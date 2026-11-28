@@ -149,8 +149,9 @@ const minter = () => {
   const asked = [];
   return { asked, mint: async (args) => { asked.push(args); return { token: `tok-${asked.length}` }; } };
 };
-// The repro gate is stubbed (no verdicts: every issue says its repro was not checked) unless a test brings its own.
-const step = (db, over = {}) => leadStep({ db, mode: 'on', tierWeights, now: () => Date.parse(NOW), env: {}, reproGate: async () => new Map(), ...over });
+// The repro gate is stubbed (every lead has its verdict, not_reproduced: filed without a fixture) unless a test brings its own.
+const notReproduced = async ({ leads }) => new Map(leads.map((l) => [l.fingerprint, { state: 'ready', key: 'k', verdict: { verdict: 'not_reproduced', key: 'k' } }]));
+const step = (db, over = {}) => leadStep({ db, mode: 'on', tierWeights, now: () => Date.parse(NOW), env: {}, reproGate: notReproduced, ...over });
 
 test('R-LEAD-26: dry-run and recheck write the plan to the job summary and touch no issue; off writes nothing but its note', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'leads-'));

@@ -11,11 +11,30 @@
 // signature (R-LEAD-54). Classes a template cannot trigger are said to be so.
 
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 /** Bumped whenever a template or what a runner does with it changes: every repro key changes with it. */
-export const TEMPLATE_VERSION = 2;
+export const TEMPLATE_VERSION = 3;
 /** What a lead-repro run can say of a repro. `error`: the run itself failed (our harness), which says nothing either way. */
 export const REPRO_VERDICTS = Object.freeze(['reproduced', 'not_reproduced', 'not_reproducible_synthetically', 'error']);
+
+/**
+ * The fixtures' dependencies, pinned (R-LEAD-60): the TypeScript templates name exact versions and are installed
+ * with `npm ci` from leads/fixtures/npm/package-lock.json (the same tree as mcp-check's lockfile for these two
+ * packages); the Python ones get exactly PY_MCP. Their digest is part of every repro key, so a verdict goes stale when
+ * a dependency changes.
+ */
+export const NPM_DEPS = Object.freeze({ '@modelcontextprotocol/sdk': '1.32.2', zod: '4.6.7' });
+export const PY_MCP = 'mcp==1.30.0';
+export const NPM_LOCK_FILE = new URL('./fixtures/npm/package-lock.json', import.meta.url);
+const lockDigest = (() => { try { return createHash('sha256').update(readFileSync(NPM_LOCK_FILE)).digest('hex').slice(0, 16); } catch { return 'missing'; } })();
+export const DEPS = Object.freeze({ npm: NPM_DEPS, npm_lock: lockDigest, pip: PY_MCP });
+/**
+ * writecheck init cannot yet tell a slow start from a server with no read and update tool pair: both are
+ * timeout_start (mcp-writecheck-action loop/skips.mjs stageFailure; the split is isokron-ai/mcp-writecheck-action#84).
+ * Until it lands, a confirmed start-window fixture is confirmed for slow starts only, and the issue says so.
+ */
+export const WRITECHECK_START_CAVEAT = 'Confirmed for slow starts only: writecheck init cannot yet tell a slow start from a server with no read and update tool pair, so this lead may instead be a misclassified "no read/update pair" (the split is in progress, isokron-ai/mcp-writecheck-action#84).';
 
 /** The start-window templates do their start-up work for this long before they answer: longer than the 30 s window writecheck init gives. */
 export const START_UP_SECONDS = 60;
@@ -87,7 +106,7 @@ ${PY_PAIR('  # noqa: E402')}`,
   control: () => PY_PAIR(''),
   file: 'server.py',
   extra: (o) => (o.schemaModel ? { 'models.py': 'from pydantic import BaseModel\n\n\nclass EchoInput(BaseModel):\n    text: str\n' } : {}),
-  pkg: { 'pyproject.toml': '[project]\nname = "lead-fixture"\nversion = "0.0.1"\ndependencies = ["mcp"]\n\n[project.scripts]\nlead-fixture = "server:mcp.run"\n' },
+  pkg: { 'pyproject.toml': `[project]\nname = "lead-fixture"\nversion = "0.0.1"\ndependencies = ["${'mcp==1.30.0'}"]\n\n[project.scripts]\nlead-fixture = "server:mcp.run"\n` },
   start: 'python3 server.py',
   ecosystem: 'pypi',
 };
@@ -119,7 +138,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";`),
   file: 'src/index.ts',
   extra: () => ({}),
-  pkg: { 'package.json': '{\n  "name": "lead-fixture",\n  "version": "0.0.1",\n  "type": "module",\n  "bin": { "lead-fixture": "dist/index.js" },\n  "dependencies": { "@modelcontextprotocol/sdk": "^1", "zod": "^3" }\n}\n' },
+  pkg: { 'package.json': '{\n  "name": "lead-fixture",\n  "version": "0.0.1",\n  "type": "module",\n  "bin": { "lead-fixture": "dist/index.js" },\n  "dependencies": { "@modelcontextprotocol/sdk": "1.32.2", "zod": "4.6.7" }\n}\n' },
   // Node 22.6 and later run the TypeScript file as it is (types stripped): no build step stands between the fixture and the run.
   start: 'node --experimental-strip-types src/index.ts',
   ecosystem: 'npm',
@@ -410,9 +429,9 @@ export function pinsFor(lane, workflows) {
  * The repro key: what a verdict is about. The same template, run the same way, at the same pins, against the same
  * class and signature gives the same key, so one lead-repro run serves every lead that shares it.
  */
-export function reproKey(lead, spec, pins) {
+export function reproKey(lead, spec, pins, deps = DEPS) {
   const doc = {
-    v: TEMPLATE_VERSION, runner: spec.runner, files: spec.files, dir: spec.dir, start: spec.start, release: spec.release, pins,
+    v: TEMPLATE_VERSION, runner: spec.runner, files: spec.files, dir: spec.dir, start: spec.start, release: spec.release, pins, deps,
     expect: { lane: lead.lane, component: lead.component, class: lead.class, signature: lead.signature },
   };
   return createHash('sha256').update(JSON.stringify(doc)).digest('hex').slice(0, 16);
@@ -461,8 +480,10 @@ export function syntheticRepro(lead, { verdict = null } = {}) {
     const where = r.over_cap.where === 'source' ? `the source archive at its tag \`${r.tag}\` holds the same files` : 'the artifact holds the same files';
     L.push(`Published as the ${r.ecosystem === 'pypi' ? 'PyPI sdist' : 'npm tarball'} \`${r.name} ${r.version}\`; ${where} and \`${r.over_cap.path}\`, an entry whose header declares ${gib(r.over_cap.declared_bytes)} (over the reader's cap; our generator writes the header only).`, '');
   }
+  if (spec.files.some(([f]) => f.endsWith('package.json'))) L.push('Installed with `npm ci --ignore-scripts` from the lockfile tool-qa pins for its fixtures (`leads/fixtures/npm/package-lock.json`).', '');
   const run = runLine(spec);
   if (run) L.push(`Run: \`${run}\``, '');
+  if (spec.runner === 'writecheck-init' && lead.class === 'timeout_start') L.push(WRITECHECK_START_CAVEAT, '');
   L.push(`Expected: ${EXPECT[lead.class] ?? 'the stage finishes'}. The loop saw ${saw}.`);
   return L.join('\n');
 }

@@ -58,6 +58,10 @@ export function leadsCheck({ now, mode, last, recheck = null, foldFailures = nul
   // A lead the store could not fold (StateDb.foldLeads, R-LEAD-36): its result was kept, its lead was not.
   const ff = foldFailures && typeof foldFailures === 'object' ? foldFailures : null;
   if (ff && now - Date.parse(ff.last_at) <= t.foldFailureMs) problems.push(`a lead could not be folded into the state ${ago(now - Date.parse(ff.last_at))} (${n(ff.count)} in all; the result was kept): ${String(ff.last_error ?? '').slice(0, 80)}`);
+  // Fail closed means a lead-repro problem stops filing without failing anything: it must show (R-LEAD-60).
+  if (n(rec.repro_no_token) > 0) problems.push('no token for lead-repro: leads waiting for a repro verdict are not filed');
+  if (n(rec.repro_dispatch_errors) > 0) problems.push(`${n(rec.repro_dispatch_errors)} lead-repro dispatch${n(rec.repro_dispatch_errors) === 1 ? '' : 'es'} failed in the last run`);
+  if (n(rec.repro_stuck) > 0) problems.push(`${n(rec.repro_stuck)} lead${n(rec.repro_stuck) === 1 ? '' : 's'} stuck without a lead-repro verdict (not filed)`);
   const rc = recheck && typeof recheck === 'object' ? recheck : null;
   if (rc && n(rc.waiting) > t.recheckAmber) problems.push(`${n(rc.waiting)} leads wait for a re-check (more than ${t.recheckAmber})`);
   if (rc && n(rc.given_up) > t.givenUpAmber) problems.push(`${n(rc.given_up)} re-checks were given up because their worker never answered`);

@@ -21,9 +21,10 @@
 // A rate-limit refusal (403 or 429) or a spent budget stops the writes of this
 // run; the next run goes on.
 //
-// An issue shows a synthetic repro only once lead-repro reproduced it
-// (leads/repro-gate.mjs, R-LEAD-54): a lead whose check is still running waits;
-// the open issues of ours whose repro verdict changed are edited to say so.
+// An issue is filed only once lead-repro has a verdict for its repro, and shows
+// a fixture only when that verdict is reproduced (leads/repro-gate.mjs,
+// R-LEAD-54, R-LEAD-60): a lead whose check is running, stuck or failed is not
+// filed (fail closed); the open issues of ours whose verdict changed are edited.
 //
 // Never throws: a failure is logged and counted in kv leads.last, and the next
 // run tries again.
@@ -194,7 +195,8 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
         verdicts = await reproGate({ db, leads: [...plan.file, ...refresh].map((e) => e.lead), workflows, now: now(), getClient, fetch: fetchImpl, log, note });
       } catch (err) {
         note.errors += 1;
-        log(`leads: the lead-repro check failed (continuing; leads wait for it): ${err?.message ?? err}`);
+        note.repro_stuck = (note.repro_stuck ?? 0) + 1;
+        log(`leads: the lead-repro check failed (nothing waiting for it is filed this run): ${err?.message ?? err}`);
         verdicts = new Map([...plan.file, ...refresh].map((e) => [e.lead.fingerprint, { state: 'pending', key: null, verdict: null }]));
       }
       const reproOf = (e) => verdicts.get(e.lead.fingerprint) ?? null;
@@ -207,7 +209,7 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
       for (const e of refresh) {
         if (refreshed >= MAX_REFRESH || stopped()) break;
         const r = reproOf(e);
-        if (!r || r.state === 'pending') continue;
+        if (r?.state !== 'ready') continue;
         const want = stamp(r);
         if (bodies[e.lead.fingerprint] === want) continue;
         try {
@@ -237,7 +239,8 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
       for (const e of plan.file) {
         if (issues.length + note.writes >= writeCap) break;
         const r = reproOf(e);
-        if (r?.state === 'pending') { note.repro_waiting += 1; done.set(e.lead.fingerprint, 'waiting for lead-repro'); continue; }
+        // Fail closed: only a lead whose repro verdict is in is filed; waiting, stuck or no answer at all is not (R-LEAD-60).
+        if (r?.state !== 'ready') { note.repro_waiting += 1; done.set(e.lead.fingerprint, r?.state === 'stuck' ? 'lead-repro stuck: not filed' : 'waiting for lead-repro'); continue; }
         // Held leads never get here: planFilings runs the shape guard before handing out room (R-LEAD-42).
         const issue = issueFor(e, { now: at(), repro: r, recheckRunner: runnerOf(e) });
         issues.push({ e, issue, stamp: stamp(r) });
@@ -316,7 +319,8 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
     const rc = (() => { try { return db.getKv('leads.recheck'); } catch { return null; } })();
     log(`leads: ${mode}: ${note.open ?? 0} open, ${note.filed_total ?? 0} filed, ${note.closed_total ?? 0} closed; this run: ${note.planned ?? 0} to file, `
       + `${note.capped ?? 0} over the caps, ${note.held ?? 0} held${held ? ` (${held})` : ''}; filed ${note.filed}, closed ${note.closed}, reopened ${note.reopened}, `
-      + `adopted ${note.adopted}, edited ${note.refreshed}, waiting for lead-repro ${note.repro_waiting}, errors ${note.errors}, writes ${note.writes}/${note.caps.writes}${note.backed_off ? ' (backed off)' : ''}`
+      + `adopted ${note.adopted}, edited ${note.refreshed}, not filed for lead-repro ${note.repro_waiting} (waiting ${note.repro_pending ?? 0}, stuck ${note.repro_stuck ?? 0}, dispatch errors ${note.repro_dispatch_errors ?? 0}${note.repro_no_token ? ', no token' : ''}), `
+      + `errors ${note.errors}, writes ${note.writes}/${note.caps.writes}${note.backed_off ? ' (backed off)' : ''}`
       + `${rc ? `; re-checks due ${rc.due ?? 0}, waiting ${rc.waiting ?? 0}, given up ${rc.given_up ?? 0}` : ''}`);
   }
   return note;

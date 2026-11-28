@@ -12,10 +12,11 @@ import { openState } from '../state/db.mjs';
 import { CAP_BOUNDS, capsFrom } from '../state/leads.mjs';
 import { CONSTRUCT_KINDS, constructsOf, failuresOf, leadKeyOf } from '../state/fingerprint.mjs';
 import { issueFor, planFilings } from '../leads/plan.mjs';
-import { controlFiles, filesFromBody, NOT_CHECKED, NOT_CONFIRMED, pinsFor, reproKey, reproSpec, shapeFromBody, syntheticRepro } from '../leads/repro.mjs';
+import { controlFiles, DEPS, filesFromBody, NOT_CHECKED, NOT_CONFIRMED, NPM_DEPS, PY_MCP, pinsFor, reproKey, reproSpec, shapeFromBody, syntheticRepro, TEMPLATES, WRITECHECK_START_CAVEAT } from '../leads/repro.mjs';
 import { runRepro, verdictOf } from '../leads/repro-run.mjs';
-import { FINAL, leadInput, MAX_DISPATCHES, MAX_LOOKUPS, REPRO_KV, REPRO_RETRY_MS, REPRO_WAIT_MS, reproVerdicts, trustedArtifact, verdictFromArtifact } from '../leads/repro-gate.mjs';
+import { FINAL, leadInput, MAX_ARTIFACT_BYTES, MAX_DISPATCHES, MAX_LOOKUPS, REPRO_KV, REPRO_MAX_TRIES, REPRO_RETRY_MS, REPRO_STUCK_RETRY_MS, reproVerdicts, trustedArtifact, trustedRun, verdictFromArtifact } from '../leads/repro-gate.mjs';
 import { leadStep } from '../leads/step.mjs';
+import { leadsCheck } from '../watchdog/leads.mjs';
 import { InputProblem, parseInputs } from '../scripts/lead-repro.mjs';
 import { makeZip } from './archive-fixtures.mjs';
 
@@ -153,14 +154,16 @@ test('R-LEAD-55: verdictOf needs the lead\'s class, component and signature toge
 
 // ------------------------------------------------------------------ the pump's gate
 
-function gateWorld({ artifacts = [], zips = {}, failDispatch = false } = {}) {
+const RUN_OK = { id: 9, path: '.github/workflows/lead-repro.yml', event: 'workflow_dispatch', head_branch: 'main', repository: { full_name: 'isokron-ai/tool-qa' }, head_repository: { full_name: 'isokron-ai/tool-qa' } };
+function gateWorld({ artifacts = [], zips = {}, failDispatch = false, run = RUN_OK } = {}) {
   const calls = [];
   const client = {
     async request(method, path, o = {}) {
       calls.push({ method, path, o });
       if (method === 'GET' && path.endsWith('/actions/artifacts')) return { status: 200, data: { artifacts: artifacts.filter((a) => a.name === o.query.name) } };
+      if (method === 'GET' && /\/actions\/runs\/\d+$/.test(path)) return { status: 200, data: { ...run, id: Number(path.split('/').pop()) } };
       if (method === 'GET' && /\/actions\/artifacts\/\d+\/zip$/.test(path)) return { status: 302, headers: new Headers({ location: `https://blob.test/${path.split('/').at(-2)}` }), data: null };
-      if (method === 'POST' && path.endsWith('/dispatches')) { if (failDispatch) throw Object.assign(new Error('HTTP 500'), { status: 500 }); return { status: 204, data: null }; }
+      if (method === 'POST' && path.endsWith('/dispatches')) { if (failDispatch) throw Object.assign(new Error(`HTTP ${failDispatch}`), { status: failDispatch }); return { status: 204, data: null }; }
       throw new Error(`no route ${method} ${path}`);
     },
   };
@@ -168,7 +171,7 @@ function gateWorld({ artifacts = [], zips = {}, failDispatch = false } = {}) {
   return { client, fetch, calls };
 }
 const artifactOf = (id, key, doc, run = {}) => ({ id, name: `lead-repro-${key}`, size_in_bytes: 100, expired: false, created_at: '2026-11-28T11:00:00Z', workflow_run: { id: 9, repository_id: 1, head_repository_id: 1, head_branch: 'main', ...run } });
-const zipOf = (key, verdict) => makeZip([{ name: 'lead-repro.json', data: JSON.stringify({ format: 'isokron-lead-repro/1', run_id: 46102904712, results: [{ key, verdict, tool: 'mcp-check@abc', fingerprint: 'bee256dbce94' }] }) }]);
+const zipOf = (key, verdict, over = {}) => makeZip([{ name: 'lead-repro.json', data: JSON.stringify({ format: 'isokron-lead-repro/1', run_id: 46102904712, results: [{ key, verdict, tool: 'mcp-check@abc', fingerprint: 'bee256dbce94', ...over }] }) }]);
 
 test('R-LEAD-56: the gate reads a verdict back from a main-branch run of tool-qa itself, and never from a pull request or a fork', async () => {
   const l = readerLead();
@@ -179,17 +182,41 @@ test('R-LEAD-56: the gate reads a verdict back from a main-branch run of tool-qa
   assert.equal(trustedArtifact(artifactOf(1, key, null, { head_branch: 'leads/x' })), false);
   assert.equal(trustedArtifact(artifactOf(1, key, null, { head_repository_id: 2 })), false, 'a fork\'s run');
   assert.equal(trustedArtifact({ ...artifactOf(1, key), expired: true }), false);
-  for (const [run, want] of [[{}, 'reproduced'], [{ head_branch: 'leads/x' }, null], [{ head_repository_id: 2 }, null]]) {
+  // The run itself must be lead-repro.yml, started by workflow_dispatch on main of tool-qa (one GET of the run).
+  assert.equal(trustedRun({ ...RUN_OK, id: 8 }, artifactOf(1, key)), false, 'another run id');
+  assert.equal(trustedRun(RUN_OK, artifactOf(1, key)), true);
+  for (const bad of [{ path: '.github/workflows/test.yml' }, { event: 'pull_request' }, { event: 'push' }, { head_branch: 'x' }, { head_repository: { full_name: 'someone/tool-qa' } }]) {
+    assert.equal(trustedRun({ ...RUN_OK, ...bad }, artifactOf(1, key)), false, JSON.stringify(bad));
+  }
+  for (const [run, want, wrun] of [[{}, 'reproduced'], [{ head_branch: 'leads/x' }, null], [{ head_repository_id: 2 }, null], [{}, null, { ...RUN_OK, path: '.github/workflows/other.yml' }], [{}, null, { ...RUN_OK, event: 'pull_request' }]]) {
     const db = openState(':memory:');
-    const w = gateWorld({ artifacts: [artifactOf(5, key, null, run)], zips: { 5: zipOf(key, 'reproduced') } });
+    const w = gateWorld({ artifacts: [artifactOf(5, key, null, run)], zips: { 5: zipOf(key, 'reproduced') }, run: wrun ?? RUN_OK });
     const out = await reproVerdicts({ db, leads: [l], workflows, now: T0, client: w.client, fetch: w.fetch });
     const v = out.get(l.fingerprint);
     if (want) { assert.equal(v.state, 'ready'); assert.equal(v.verdict.verdict, want); assert.equal(db.getKv(REPRO_KV)[key].verdict, want, 'kept in the state'); }
-    else { assert.equal(v.state, 'pending', JSON.stringify(run)); assert.ok(w.calls.some((c) => c.method === 'POST'), 'dispatched instead'); }
+    else { assert.equal(v.state, 'pending', JSON.stringify(run)); assert.ok(w.calls.some((c) => c.method === 'POST'), 'dispatched instead'); assert.ok(!w.calls.some((c) => /\/zip$/.test(c.path)), 'never downloaded'); }
   }
 });
 
-test('R-LEAD-56: with no verdict the gate dispatches lead-repro with the lead\'s shape only, waits, sends again after the retry gap, and after the wait files without a fixture', async () => {
+test('R-LEAD-61: an artifact over 1 MiB is never downloaded, a download over it is refused, and tool and why reach the issue only as plain short text', async () => {
+  const l = readerLead();
+  const key = reproKey(l, reproSpec(l), pinsFor('scan-static', workflows));
+  const big = { ...artifactOf(5, key), size_in_bytes: MAX_ARTIFACT_BYTES + 1 };
+  assert.equal(trustedArtifact(big), false);
+  const w = gateWorld({ artifacts: [big], zips: { 5: zipOf(key, 'reproduced') } });
+  assert.equal((await reproVerdicts({ db: openState(':memory:'), leads: [l], workflows, now: T0, client: w.client, fetch: w.fetch })).get(l.fingerprint).state, 'pending');
+  assert.ok(!w.calls.some((c) => /\/zip$/.test(c.path)));
+  // A download larger than the listing said: refused.
+  const w2 = gateWorld({ artifacts: [artifactOf(5, key)], zips: { 5: Buffer.concat([zipOf(key, 'reproduced'), Buffer.alloc(MAX_ARTIFACT_BYTES)]) } });
+  assert.equal((await reproVerdicts({ db: openState(':memory:'), leads: [l], workflows, now: T0, client: w2.client, fetch: w2.fetch })).get(l.fingerprint).state, 'pending');
+  for (const bad of ['mcp-check@abc\n## injected', 'mcp-check@abc | x', '[link](http://x)', 'x'.repeat(301)]) {
+    assert.equal(verdictFromArtifact(zipOf(key, 'reproduced', { tool: bad }), key).tool, null, JSON.stringify(bad));
+    assert.equal(verdictFromArtifact(zipOf(key, 'reproduced', { why: bad }), key).why, null, JSON.stringify(bad));
+  }
+  assert.equal(verdictFromArtifact(zipOf(key, 'not_reproducible_synthetically', { why: 'the `live-probe` lane installs a registry package' }), key).why, 'the `live-probe` lane installs a registry package');
+});
+
+test('R-LEAD-56: with no verdict the gate dispatches lead-repro with the lead\'s shape only, waits, sends again after the retry gap, and ends stuck (never filed) when its tries are spent', async () => {
   const l = { ...readerLead(), repo: 'isokron-ai/mcp-check', recheck_subject: 'acme/secret-server', sightings: 3 };
   const db = openState(':memory:');
   const w = gateWorld();
@@ -209,18 +236,20 @@ test('R-LEAD-56: with no verdict the gate dispatches lead-repro with the lead\'s
   const w3 = gateWorld();
   await reproVerdicts({ db, leads: [l], workflows, now: T0 + REPRO_RETRY_MS, client: w3.client, fetch: w3.fetch });
   assert.equal(w3.calls.filter((c) => c.method === 'POST').length, 1);
-  // Past the wait: filed, saying the check did not finish.
-  const late = await reproVerdicts({ db, leads: [l], workflows, now: T0 + REPRO_WAIT_MS, client: null });
-  assert.equal(late.get(l.fingerprint).state, 'unchecked');
-  // No token at all: the wait still ends (counted from the first run that needed the key).
-  const db2 = openState(':memory:');
-  assert.equal((await reproVerdicts({ db: db2, leads: [l], workflows, now: T0, getClient: async () => { throw new Error('no app'); } })).get(l.fingerprint).state, 'pending');
-  assert.equal((await reproVerdicts({ db: db2, leads: [l], workflows, now: T0 + REPRO_WAIT_MS, getClient: async () => { throw new Error('no app'); } })).get(l.fingerprint).state, 'unchecked');
-  // A class no template triggers needs no run.
+  // Fail closed: tries spent with no verdict is stuck, never filed; it is sent again once every REPRO_STUCK_RETRY_MS.
   const w4 = gateWorld();
-  const n = await reproVerdicts({ db: openState(':memory:'), leads: [readerLead({ lane: 'live-probe', component: 'start', class: 'timeout_start' })], workflows, now: T0, client: w4.client, fetch: w4.fetch });
+  await reproVerdicts({ db, leads: [l], workflows, now: T0 + 2 * REPRO_RETRY_MS, client: w4.client, fetch: w4.fetch });
+  assert.equal(db.getKv(REPRO_KV)[reproKey(l, reproSpec(l), pinsFor('scan-static', workflows))].tries, REPRO_MAX_TRIES);
+  const spent = await reproVerdicts({ db, leads: [l], workflows, now: T0 + 3 * REPRO_RETRY_MS, client: gateWorld().client, fetch: w4.fetch });
+  assert.equal(spent.get(l.fingerprint).state, 'stuck');
+  const w5 = gateWorld();
+  await reproVerdicts({ db, leads: [l], workflows, now: T0 + 2 * REPRO_RETRY_MS + REPRO_STUCK_RETRY_MS, client: w5.client, fetch: w5.fetch });
+  assert.equal(w5.calls.filter((c) => c.method === 'POST').length, 1, 'a stuck key is tried again after the long gap');
+  // A class no template triggers needs no run.
+  const w6 = gateWorld();
+  const n = await reproVerdicts({ db: openState(':memory:'), leads: [readerLead({ lane: 'live-probe', component: 'start', class: 'timeout_start' })], workflows, now: T0, client: w6.client, fetch: w6.fetch });
   assert.equal(n.get('bee256dbce94').verdict.verdict, 'not_reproducible_synthetically');
-  assert.equal(w4.calls.length, 0);
+  assert.equal(w6.calls.length, 0);
   assert.ok(FINAL.has('not_reproduced') && !FINAL.has('error'));
 });
 
@@ -230,11 +259,44 @@ test('R-LEAD-56: the gate reads at most MAX_LOOKUPS artifacts and sends at most 
   await reproVerdicts({ db: openState(':memory:'), leads, workflows, now: T0, client: w.client, fetch: w.fetch });
   assert.equal(w.calls.filter((c) => c.method === 'GET').length, MAX_LOOKUPS);
   assert.equal(w.calls.filter((c) => c.method === 'POST').length, MAX_DISPATCHES);
-  // A key that only waited for its turn under these bounds is never filed unchecked for it: only the dispatched ones' wait ends.
-  const db = openState(':memory:');
-  await reproVerdicts({ db, leads, workflows, now: T0, client: gateWorld().client, fetch: w.fetch });
-  const later = await reproVerdicts({ db, leads, workflows, now: T0 + REPRO_WAIT_MS, client: gateWorld().client, fetch: w.fetch });
-  assert.equal([...later.values()].filter((v) => v.state === 'unchecked').length, MAX_DISPATCHES);
+  // A key only waiting for its turn under these bounds is pending, not stuck: nothing is wrong with it.
+  const note = {};
+  const out = await reproVerdicts({ db: openState(':memory:'), leads, workflows, now: T0, client: gateWorld().client, fetch: w.fetch, note });
+  assert.deepEqual([...new Set([...out.values()].map((v) => v.state))], ['pending']);
+  assert.deepEqual([note.repro_stuck, note.repro_pending], [0, 20]);
+});
+
+test('R-LEAD-60: fail closed: no token, or a dispatch GitHub refuses (403, 5xx), leaves the lead stuck and counted, a try spent, and the watchdog amber', async () => {
+  const l = readerLead();
+  const key = reproKey(l, reproSpec(l), pinsFor('scan-static', workflows));
+  const noTok = {};
+  const a = await reproVerdicts({ db: openState(':memory:'), leads: [l], workflows, now: T0, getClient: async () => { throw new Error('no app'); }, note: noTok });
+  assert.equal(a.get(l.fingerprint).state, 'stuck');
+  assert.deepEqual([noTok.repro_no_token, noTok.repro_stuck], [1, 1]);
+  for (const status of [403, 500, 502]) {
+    const db = openState(':memory:');
+    const note = {};
+    const w = gateWorld({ failDispatch: status });
+    const v = await reproVerdicts({ db, leads: [l], workflows, now: T0, client: w.client, fetch: w.fetch, note });
+    assert.equal(v.get(l.fingerprint).state, 'stuck', `HTTP ${status}`);
+    assert.deepEqual([note.repro_dispatch_errors, note.repro_stuck], [1, 1]);
+    const rec = db.getKv(REPRO_KV)[key];
+    assert.deepEqual([rec.tries, rec.dispatch_error], [1, `HTTP ${status}`], 'a refused dispatch spends a try, so it cannot stall silently');
+    // The next run, inside the retry gap, is still stuck (the error is remembered) and sends nothing.
+    const w2 = gateWorld();
+    assert.equal((await reproVerdicts({ db, leads: [l], workflows, now: T0 + 1, client: w2.client, fetch: w2.fetch })).get(l.fingerprint).state, 'stuck');
+    assert.equal(w2.calls.filter((c) => c.method === 'POST').length, 0);
+    // A dispatch GitHub takes clears it.
+    const w3 = gateWorld();
+    assert.equal((await reproVerdicts({ db, leads: [l], workflows, now: T0 + REPRO_RETRY_MS, client: w3.client, fetch: w3.fetch })).get(l.fingerprint).state, 'pending');
+  }
+  const last = { at: new Date(T0).toISOString(), mode: 'on', errors: 0, open: 1, filed: 0, closed: 0, reopened: 0, filed_total: 0, closed_total: 0 };
+  assert.equal(leadsCheck({ now: T0, mode: 'on', last }).status, 'green');
+  for (const extra of [{ repro_no_token: 1 }, { repro_dispatch_errors: 2 }, { repro_stuck: 1 }]) {
+    const c = leadsCheck({ now: T0, mode: 'on', last: { ...last, ...extra } });
+    assert.equal(c.status, 'amber', JSON.stringify(extra));
+    assert.match(c.summary, /lead-repro|stuck/);
+  }
 });
 
 // ------------------------------------------------------------------ the lead step
@@ -279,18 +341,28 @@ function issuesApi({ refuse = null } = {}) {
   };
   return { issues, calls, fetch };
 }
+const notReproduced = async ({ leads }) => new Map(leads.map((l) => [l.fingerprint, { state: 'ready', key: 'k', verdict: { verdict: 'not_reproduced', key: 'k' } }]));
 const step = (db, over = {}) => leadStep({
   db, mode: 'on', tierWeights, now: () => Date.parse(NOW), env: {}, save: async () => true, mintToken: async () => ({ token: 't' }),
   client: { fetch: over.api.fetch, apiUrl: 'https://api.github.test', sleep: async () => {} }, ...over,
 });
 
-test('R-LEAD-56: a lead whose repro check is still running is not filed yet, takes no mark, and is filed once the verdict is in', async () => {
+test('R-LEAD-60: a lead whose repro check is running, stuck, unanswered or failed is not filed and takes no mark; it is filed once the verdict is in', async () => {
   const db = reproduced(2);
   const api = issuesApi();
   const pending = async ({ leads }) => new Map(leads.map((l) => [l.fingerprint, { state: 'pending', key: 'k', verdict: null }]));
   const n1 = await step(db, { api, reproGate: pending });
   assert.deepEqual([n1.filed, n1.repro_waiting], [0, 2]);
   assert.ok(db.listLeads().every((l) => l.filing_started_at == null && l.issue_number == null), 'nothing marked');
+  // Fail closed: stuck, no answer for a lead, or a gate that throws files nothing either.
+  const stuck = async ({ leads }) => new Map(leads.map((l) => [l.fingerprint, { state: 'stuck', key: 'k', verdict: null }]));
+  for (const gate of [stuck, async () => new Map(), async () => { throw new Error('boom'); }]) {
+    const n = await step(db, { api, reproGate: gate });
+    assert.equal(n.filed, 0);
+    assert.equal(api.calls.filter((c) => c.method === 'POST').length, 0);
+  }
+  const thrown = await step(db, { api, reproGate: async () => { throw new Error('boom'); } });
+  assert.ok(thrown.repro_stuck >= 1, 'a gate that throws is counted, so the watchdog shows it');
   const ready = (verdict) => async ({ leads }) => new Map(leads.map((l) => [l.fingerprint, { state: 'ready', key: 'k', verdict: { verdict, run_id: 3, key: 'k' } }]));
   const n2 = await step(db, { api, reproGate: ready('not_reproduced') });
   assert.equal(n2.filed, 2);
@@ -316,9 +388,22 @@ test('R-LEAD-56: an open issue of ours is edited once when its repro verdict cha
   const n4 = await step(db, { api, reproGate: gate('reproduced') });
   assert.equal(n4.refreshed, 0);
   assert.equal(reads(), before, 'not even read');
-  // An issue that is not ours, or not open, is never edited.
+  // While its verdict is pending or stuck, an issue is never read or edited.
+  const r0 = reads();
+  for (const state of ['pending', 'stuck']) {
+    const n = await step(db, { api, reproGate: async ({ leads }) => new Map(leads.map((l) => [l.fingerprint, { state, key: 'k2', verdict: null }])) });
+    assert.equal(n.refreshed, 0, state);
+  }
+  assert.equal(reads(), r0);
+  // An issue of ours without this lead's marker is not edited.
+  const marker = api.issues[0].body.match(/<!-- tool-qa lead [0-9a-f]{12} -->/)[0];
+  api.issues[0].body = api.issues[0].body.replace(marker, '');
+  const n6 = await step(db, { api, reproGate: gate('not_reproduced') });
+  assert.equal(n6.refreshed, 0, 'no marker: left alone');
+  // An issue that is not ours is never edited.
+  api.issues[0].body = `${marker}\n${api.issues[0].body}`;
   api.issues[0].user.login = 'someone';
-  const n5 = await step(db, { api, reproGate: gate('not_reproduced') });
+  const n5 = await step(db, { api, reproGate: gate('reproduced') });
   assert.equal(n5.refreshed, 0);
 });
 
@@ -326,7 +411,7 @@ test('R-LEAD-56: a secondary rate limit (403) or 429 stops every write of the ru
   for (const status of [403, 429]) {
     const db = reproduced(5);
     const api = issuesApi({ refuse: status });
-    const note = await step(db, { api, reproGate: async () => new Map(), client: { fetch: api.fetch, apiUrl: 'https://api.github.test', sleep: async () => {}, maxAttempts: 1, retryTotalMs: 0 } });
+    const note = await step(db, { api, reproGate: notReproduced, client: { fetch: api.fetch, apiUrl: 'https://api.github.test', sleep: async () => {}, maxAttempts: 1, retryTotalMs: 0 } });
     assert.equal(note.backed_off, true, `HTTP ${status}`);
     assert.equal(api.calls.filter((c) => c.method === 'POST').length <= 2, true, `HTTP ${status}: writes stop at the first refusal (with its one retry at most)`);
   }
@@ -337,6 +422,18 @@ test('R-LEAD-56: a secondary rate limit (403) or 429 stops every write of the ru
 });
 
 // ------------------------------------------------------------------ caps
+
+test('R-LEAD-61: the issue writes of a run stop at the step\'s time budget', async () => {
+  const db = reproduced(3);
+  const api = issuesApi();
+  let t = Date.parse(NOW);
+  // Each GitHub call takes a minute of the clock: with a 2-minute budget the step stops after the first writes.
+  const slow = { fetch: async (u, i) => { t += 60_000; return api.fetch(u, i); }, apiUrl: 'https://api.github.test', sleep: async () => {} };
+  const note = await step(db, { api, reproGate: notReproduced, now: () => t, stepBudgetMs: 2 * 60_000, client: slow });
+  assert.ok(note.filed >= 1 && note.filed < 3, `filed ${note.filed}`);
+  const all = await step(reproduced(3), { api: issuesApi(), reproGate: notReproduced });
+  assert.equal(all.filed, 3, 'the default budget is not reached');
+});
 
 test('R-LEAD-57: the caps come from the repository variables, default 30 new a day, 150 open, 60 writes, and are bounded so a typo cannot flood', () => {
   assert.deepEqual(capsFrom({}), { capNew: 30, capOpen: 150, maxWrites: 60, notes: [] });
@@ -351,11 +448,11 @@ test('R-LEAD-57: the caps come from the repository variables, default 30 new a d
 test('R-LEAD-57: the lead step files within the caps the variables set', async () => {
   const db = reproduced(6);
   const api = issuesApi();
-  const note = await step(db, { api, env: { LEADS_CAP_NEW_PER_REPO_DAY: '4' }, reproGate: async () => new Map() });
+  const note = await step(db, { api, env: { LEADS_CAP_NEW_PER_REPO_DAY: '4' }, reproGate: notReproduced });
   assert.equal(note.filed, 4);
   assert.deepEqual(note.caps, { new_per_day: 4, open: 150, writes: 60 });
   const db2 = reproduced(6);
-  const n2 = await step(db2, { api: issuesApi(), env: { LEADS_MAX_WRITES: '2' }, reproGate: async () => new Map() });
+  const n2 = await step(db2, { api: issuesApi(), env: { LEADS_MAX_WRITES: '2' }, reproGate: notReproduced });
   assert.equal(n2.filed, 2);
   assert.equal(planFilings(reproduced(6), { now: NOW, tierWeights }).file.length, 6, 'the default room is 30 a day');
 });
@@ -428,4 +525,30 @@ test('R-LEAD-59: the lead-repro workflow reads only, uses no secret, and passes 
     assert.ok(!/\$\{\{/.test(run), `no expression in run: ${run.slice(0, 80)}`);
   }
   for (const m of y.matchAll(/uses: ([^\s]+)/g)) assert.match(m[1], /@[0-9a-f]{40}$/);
+  assert.match(y, /uses: actions\/checkout@[0-9a-f]{40} # [^\n]*\n {8}with:\n {10}persist-credentials: false\n/, 'the checkout keeps no token');
+});
+
+test('R-LEAD-60: the fixtures\' dependencies are pinned (exact npm versions with our lockfile, an exact mcp) and part of the repro key', () => {
+  const pkg = JSON.parse(TEMPLATES.ts.pkg['package.json']);
+  assert.deepEqual(pkg.dependencies, NPM_DEPS);
+  const lock = JSON.parse(readFileSync(new URL('../leads/fixtures/npm/package-lock.json', import.meta.url), 'utf8'));
+  assert.deepEqual(lock.packages[''].dependencies, NPM_DEPS);
+  for (const [name, v] of Object.entries(NPM_DEPS)) assert.equal(lock.packages[`node_modules/${name}`].version, v);
+  for (const [k, e] of Object.entries(lock.packages)) if (k) assert.match(e.integrity ?? '', /^sha512-/, `${k} has an integrity`);
+  assert.match(PY_MCP, /^mcp==\d+\.\d+\.\d+$/);
+  assert.match(TEMPLATES.python.pkg['pyproject.toml'], new RegExp(`"${PY_MCP.replace(/\./g, '\\.')}"`));
+  assert.match(DEPS.npm_lock, /^[0-9a-f]{16}$/);
+  const l = startLead();
+  const s = reproSpec(l);
+  const pins = pinsFor('writecheck', workflows);
+  assert.notEqual(reproKey(l, s, pins), reproKey(l, s, pins, { ...DEPS, npm_lock: '0'.repeat(16) }), 'another lockfile: another key');
+  assert.notEqual(reproKey(l, s, pins), reproKey(l, s, pins, { ...DEPS, pip: 'mcp==0.0.1' }));
+});
+
+test('R-LEAD-60: a confirmed writecheck start fixture says it is confirmed for slow starts only, while writecheck cannot tell one from a server with no read/update pair', () => {
+  const text = syntheticRepro(startLead(), { verdict: { verdict: 'reproduced', run_id: 1, key: 'k' } });
+  assert.ok(text.includes(WRITECHECK_START_CAVEAT));
+  assert.match(WRITECHECK_START_CAVEAT, /misclassified "no read\/update pair"/);
+  assert.ok(!syntheticRepro(readerLead(), { verdict: { verdict: 'reproduced' } }).includes(WRITECHECK_START_CAVEAT));
+  assert.ok(!syntheticRepro(startLead(), { verdict: { verdict: 'not_reproduced' } }).includes('```'));
 });

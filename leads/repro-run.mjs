@@ -16,13 +16,13 @@
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { itemFromBundle, leadFailures } from '../state/fingerprint.mjs';
-import { controlFiles, langPart } from './repro.mjs';
+import { controlFiles, langPart, NPM_DEPS, NPM_LOCK_FILE, PY_MCP } from './repro.mjs';
 
 /** The placeholder repository the fixtures are served as (mcp-check's own fixture fetch serves this name). */
 export const FIXTURE_REPO = 'isokron-fixture/known-answer';
@@ -107,16 +107,31 @@ export function startCommand(dir) {
   return null;
 }
 
-/** A Python fixture's dependency (the SDK) in a virtualenv of its own folder. */
+/** A Python fixture's dependency (the SDK, exactly PY_MCP) in a virtualenv of its own folder. */
 function installPython(dir, install) {
   const py = which('python3') ?? 'python3';
   const v = spawnSync(py, ['-m', 'venv', '.venv'], { cwd: dir, encoding: 'utf8', timeout: 120_000 });
-  const p = v.status === 0 ? spawnSync(join(dir, '.venv', 'bin', 'pip'), ['install', '--quiet', '--disable-pip-version-check', 'mcp'], { cwd: dir, encoding: 'utf8', timeout: 300_000 }) : v;
-  install.steps.push({ name: 'pip install mcp', exit: p.status, timed_out: p.error?.code === 'ETIMEDOUT' });
+  const p = v.status === 0 ? spawnSync(join(dir, '.venv', 'bin', 'pip'), ['install', '--quiet', '--disable-pip-version-check', PY_MCP], { cwd: dir, encoding: 'utf8', timeout: 300_000 }) : v;
+  install.steps.push({ name: `pip install ${PY_MCP}`, exit: p.status, timed_out: p.error?.code === 'ETIMEDOUT' });
   if (p.status !== 0) install.ok = false;
 }
 
 const tail = (t, n = 3000) => String(t ?? '').slice(-n);
+
+/**
+ * The fixture's npm dependencies: our pinned tree (`npm ci` from leads/fixtures/npm/package-lock.json) when its
+ * package.json names exactly NPM_DEPS, else what it declares (an issue's older fixture). No install scripts.
+ */
+export function installNpm(dir, install) {
+  let pinned = false;
+  try { pinned = JSON.stringify(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).dependencies) === JSON.stringify(NPM_DEPS); } catch { pinned = false; }
+  if (pinned) copyFileSync(NPM_LOCK_FILE, join(dir, 'package-lock.json'));
+  const args = pinned ? ['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'] : ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'];
+  const r = spawnSync('npm', args, { cwd: dir, encoding: 'utf8', timeout: 300_000 });
+  install.steps.push({ name: pinned ? 'npm ci (pinned lockfile)' : 'npm install (as declared)', exit: r.status, timed_out: r.error?.code === 'ETIMEDOUT' });
+  install.log = tail(`${r.stdout ?? ''}\n${r.stderr ?? ''}`);
+  if (r.status !== 0) install.ok = false;
+}
 
 /** writecheck init against one fixture folder: { install, step, log }. */
 function initOnce(files, spec, cliMain) {
@@ -124,12 +139,7 @@ function initOnce(files, spec, cliMain) {
   try {
     const dir = join(root, ...spec.dir.split('/').filter((s) => s !== '.'));
     const install = { ok: true, steps: [], log: '' };
-    if (existsSync(join(dir, 'package.json'))) {
-      const r = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: dir, encoding: 'utf8', timeout: 300_000 });
-      install.steps.push({ name: 'npm install', exit: r.status, timed_out: r.error?.code === 'ETIMEDOUT' });
-      install.log = tail(`${r.stdout ?? ''}\n${r.stderr ?? ''}`);
-      if (r.status !== 0) install.ok = false;
-    }
+    if (existsSync(join(dir, 'package.json'))) installNpm(dir, install);
     if (existsSync(join(dir, 'pyproject.toml'))) installPython(dir, install);
     const cmd = startCommand(dir);
     if (!cmd) return { install, step: null, log: '', error: 'no start command for this fixture (no src/index.ts or server.py)' };
@@ -154,11 +164,7 @@ export async function runWritecheckInit(lead, files, spec, { cliMain, cliCommit,
     const dir = join(root, ...spec.dir.split('/').filter((s) => s !== '.'));
     const install = { ok: true, steps: [] };
     // The fixture's declared dependencies, as the lane's install would give them (no install scripts).
-    if (existsSync(join(dir, 'package.json'))) {
-      const r = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: dir, encoding: 'utf8', timeout: 300_000 });
-      install.steps.push({ name: 'npm install', exit: r.status, timed_out: r.error?.code === 'ETIMEDOUT' });
-      if (r.status !== 0) install.ok = false;
-    }
+    if (existsSync(join(dir, 'package.json'))) installNpm(dir, install);
     if (existsSync(join(dir, 'pyproject.toml'))) installPython(dir, install);
     const cmd = startCommand(dir);
     if (!cmd) return { verdict: 'error', error: 'no start command for this fixture (no src/index.ts or server.py)', observed: [] };

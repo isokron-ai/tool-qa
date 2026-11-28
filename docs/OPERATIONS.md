@@ -2181,7 +2181,7 @@ the encrypted state; an issue holds the shape only.
    at most 20 a minute and 240 an hour (inside GitHub's limits for content
    creation); a 403 or 429 stops every write of that run. Before a lead is
    filed its repro is checked (below): a lead whose check is still running
-   waits and takes no mark. An issue gives the
+   is not filed and takes no mark (fail closed). An issue gives the
    number of servers that carry the lead, a tier breakdown only from 5 servers
    up, and no priority, so no single server can be picked out. Leads are marked
    and the state saved before an issue is made; a lead marked but with no issue
@@ -2214,8 +2214,19 @@ there it reads the artifact `lead-repro-<key>` of a run on main of tool-qa
 itself (a pull request's or a fork's never counts), else dispatches
 `lead-repro.yml` with the lead's shape (the `lead` input, shapes only); at
 most 10 lookups and 3 dispatches a run, sent again after 45 minutes, at most
-3 times. A lead waits at most 3 hours; then its issue says the check did not
-finish. An issue shows a fixture only with `reproduced`; otherwise it says
+3 times (a dispatch GitHub refuses spends a try). Fail closed: only a lead
+with a verdict is filed. No token, a refused dispatch, or tries spent with no
+verdict leaves it `stuck` and unfiled, counted in kv `leads.last`
+(`repro_no_token`, `repro_dispatch_errors`, `repro_stuck`), shown in the
+pump's `leads:` line and amber in the watchdog's `leads` item; a stuck key
+is sent again every 12 hours. An artifact counts only from a run of
+`lead-repro.yml` itself, started by `workflow_dispatch` on main (one GET of
+the run), at most 1 MiB, downloaded with a 30 s limit. The fixtures'
+dependencies are pinned (`leads/fixtures/npm/package-lock.json`, `npm ci`;
+an exact `mcp` for Python) and part of the repro key. A confirmed writecheck
+start fixture says it is confirmed for slow starts only, until
+mcp-writecheck-action#84 tells a slow start from a server with no read and
+update tool pair. An issue shows a fixture only with `reproduced`; otherwise it says
 "Synthetic repro: not confirmed (our template did not trigger it); evidence
 is the real-server re-check below." Open issues of ours are edited by the App
 when their verdict changes (kv `leads.bodies`). When scan-static gives the

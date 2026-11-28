@@ -2,113 +2,89 @@
   {
     "id": "R1 the fixture is shown without a reproduced verdict",
     "file": "leads/repro.mjs",
-    "old": "  if (!verdict || verdict.verdict !== 'reproduced') {",
-    "new": "  if (false) {",
+    "find": "  if (!verdict || verdict.verdict !== 'reproduced') {",
+    "replace": "  if (false) {",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-54"
   },
   {
     "id": "R2 an artifact of a pull request run counts",
     "file": "leads/repro-gate.mjs",
-    "old": "  if (run.head_branch !== 'main') return false;",
-    "new": "",
+    "find": "  if (run.head_branch !== 'main') return false;",
+    "replace": "",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-56"
   },
   {
-    "id": "R3 an artifact of a fork's run counts",
+    "id": "R3 an artifact of another workflow's run counts",
     "file": "leads/repro-gate.mjs",
-    "old": "  if (run.repository_id == null || run.head_repository_id !== run.repository_id) return false;",
-    "new": "",
+    "find": "  if (run.path !== REPRO_PATH || run.event !== 'workflow_dispatch' || run.head_branch !== 'main') return false;",
+    "replace": "",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-56"
   },
   {
-    "id": "R4 a lead whose check is running is filed anyway",
+    "id": "R4 a lead with no verdict is filed",
     "file": "leads/step.mjs",
-    "old": "        if (r?.state === 'pending') {",
-    "new": "        if (false) {",
+    "find": "        if (r?.state !== 'ready') {",
+    "replace": "        if (r?.state === 'pending') {",
     "test": "test/lead-repro.test.mjs",
-    "pattern": "R-LEAD-56"
+    "pattern": "R-LEAD-60"
   },
   {
     "id": "R5 no back-off on 403 or 429",
     "file": "leads/step.mjs",
-    "old": "        if (err?.name === 'BudgetExceededError' || status === 403 || status === 429) {",
-    "new": "        if (false) {",
+    "find": "        if (err?.name === 'BudgetExceededError' || status === 403 || status === 429) {",
+    "replace": "        if (false) {",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-56"
   },
   {
     "id": "R6 the cap bound is not applied",
     "file": "state/leads.mjs",
-    "old": "    if (n > max) {",
-    "new": "    if (false) {",
-    "test": "test/lead-repro.test.mjs",
-    "pattern": "R-LEAD-57"
-  },
-  {
-    "id": "R7 the caps ignore the variables",
-    "file": "leads/step.mjs",
-    "old": "  const caps = capsFrom(env);",
-    "new": "  const caps = capsFrom({});",
+    "find": "    if (n > max) {",
+    "replace": "    if (false) {",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-57"
   },
   {
     "id": "R8 the writecheck control is ignored",
     "file": "leads/repro-run.mjs",
-    "old": "  if (!controlRan) return",
-    "new": "  if (false) return",
+    "find": "  if (!controlRan) return",
+    "replace": "  if (false) return",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-55"
   },
   {
     "id": "R9 the construct kinds are dropped from the fingerprint",
     "file": "state/fingerprint.mjs",
-    "old": "      const kinds = (field) => constructsOf(l.unreadable_kinds?.[field]);",
-    "new": "      const kinds = () => [];",
+    "find": "      const kinds = (field) => constructsOf(l.unreadable_kinds?.[field]);",
+    "replace": "      const kinds = () => [];",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-58"
   },
   {
     "id": "R10 a verdict matches on class alone",
     "file": "leads/repro-run.mjs",
-    "old": "f.class === lead.class && f.component === lead.component && f.signature === lead.signature",
-    "new": "f.class === lead.class",
+    "find": "f.class === lead.class && f.component === lead.component && f.signature === lead.signature",
+    "replace": "f.class === lead.class",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-55"
-  },
-  {
-    "id": "R11 the artifact lookups are not bounded",
-    "file": "leads/repro-gate.mjs",
-    "old": "lookups < MAX_LOOKUPS && await net()",
-    "new": "await net()",
-    "test": "test/lead-repro.test.mjs",
-    "pattern": "R-LEAD-56"
-  },
-  {
-    "id": "R12 an edit is sent every run",
-    "file": "leads/step.mjs",
-    "old": "        if (bodies[e.lead.fingerprint] === want) continue;",
-    "new": "",
-    "test": "test/lead-repro.test.mjs",
-    "pattern": "R-LEAD-56"
   },
   {
     "id": "R13 the release template has no over-the-cap entry",
     "file": "leads/repro-run.mjs",
-    "old": "  const big = (top, where) => (r.over_cap && r.over_cap.where === where ?",
-    "new": "  const big = (top, where) => (false ?",
+    "find": "  const big = (top, where) => (r.over_cap && r.over_cap.where === where ?",
+    "replace": "  const big = (top, where) => (false ?",
     "test": "test/lead-repro.test.mjs",
     "pattern": "R-LEAD-55"
   },
   {
-    "id": "R14 a key waiting for its turn is counted as waiting",
+    "id": "R15 a refused dispatch is not stuck",
     "file": "leads/repro-gate.mjs",
-    "old": "    if (!rec?.first_wait_at && !rec?.first_dispatched_at && asked && !client) {",
-    "new": "    if (!rec?.first_wait_at && !rec?.first_dispatched_at) {",
+    "find": "    const stuck = (asked && !client) || dispatchFailed || !!rec?.dispatch_error || triesSpent;",
+    "replace": "    const stuck = (asked && !client) || triesSpent;",
     "test": "test/lead-repro.test.mjs",
-    "pattern": "R-LEAD-56"
+    "pattern": "R-LEAD-60"
   }
 ]
