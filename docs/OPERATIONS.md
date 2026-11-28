@@ -2246,7 +2246,9 @@ modes"):
 | `LANE_WRITECHECK_FULL_ENABLED` | no full-mode shard | subjects classified `local_full` go to writecheck in full mode, with `mode`, `backend`, `stand_in`, `env_names` |
 | `LANE_WRITECHECK_MIN_ENABLED` | no min-mode shard | subjects classified `mock_min` go in min mode, with `spec_url` and `spec_format` |
 
-Turn a mode on only once the writecheck worker (mcp-writecheck-action `corpus.yml`) declares the mode inputs: GitHub
+Turn a mode on only when the dry run (`meta-backend-dryrun.yml`) reports a routed precision of at least 90% on
+local_full and mock_min against the gold set (`meta/test/fixtures/backend-gold.json`; "Gate: met" in its job
+summary), and only subjects marked `routable` are ever routed. Turn a mode on only once the writecheck worker (mcp-writecheck-action `corpus.yml`) declares the mode inputs: GitHub
 refuses a dispatch with an input the workflow does not declare, and the pump would then skip the lane for the tick.
 Turning a mode on moves the run_keys of the subjects in it (their settings_state gains `+mode=...+backend=...+via=...`), so
 they are due again; turning it off moves them back. With every mode off nothing is sent that is not sent today.
