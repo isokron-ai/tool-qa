@@ -30,7 +30,7 @@
       "setup_minutes": 8,
       "minutes_per_subject": 3,
       "slots_max": 12,
-      "versions": { "tool": { "mcp-check": "3c4566e" }, "oracle": { "conformance": "0.2.0-alpha.12+f44482b", "sdk-typescript": "1.32.2", "client-typescript": "2.4.0", "sdk-python": "2.3.0", "sdk-go": "v1.8.0" }, "probe": { "mcp-surface-corpus": "3738f2c", "fuzz": "3c4566e" } },
+      "versions": { "tool": { "mcp-check": "e89d084" }, "oracle": { "conformance": "0.2.0-alpha.12+f44482b", "sdk-typescript": "1.32.2", "client-typescript": "2.4.0", "sdk-python": "2.3.0", "sdk-go": "v1.8.0" }, "probe": { "mcp-surface-corpus": "3738f2c", "fuzz": "e89d084" } },
       "image_digest": null,
       "settings_state": "default"
     },
@@ -78,7 +78,7 @@
       "setup_minutes": 12,
       "minutes_per_subject": 2,
       "slots_max": 2,
-      "versions": { "tool": { "mcp-writecheck-action": "22e56d2", "mcp-writecheck": "3af41c6" }, "oracle": {}, "probe": { "mcp-surface-corpus": "3738f2c" } },
+      "versions": { "tool": { "mcp-writecheck-action": "67cd21b", "mcp-writecheck": "3af41c6" }, "oracle": {}, "probe": { "mcp-surface-corpus": "3738f2c" } },
       "image_digest": null,
       "settings_state": "default"
     },
