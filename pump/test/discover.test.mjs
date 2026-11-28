@@ -163,12 +163,12 @@ test('R-DISC-07: the v11 migration of a v10 state keeps every row and adds disco
     const db = openState(file);
     db.setSubjectVersion({ id: 'a/b', kind: 'github', source: 'seed-v1', tier: 3, now: T });
     db.close();
-    // Back to v10 as the live state is: drop what v11 added.
+    // Back to v10 as the live state is: drop what v11 (and v12, the leads tables) added.
     const raw = new DatabaseSync(file);
-    raw.exec('DROP TABLE discovery_keys; PRAGMA user_version = 10;');
+    raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; DROP TABLE discovery_keys; PRAGMA user_version = 10;');
     raw.close();
     const db2 = openState(file);
-    assert.equal(db2.schemaVersion(), 11);
+    assert.equal(db2.schemaVersion(), 12);
     assert.equal(db2.getSubject('a/b').source, 'seed-v1');
     assert.equal(db2.noteDiscoveryKey({ subject: 'a/b', subfolder: 'x', purl: 'pkg:npm/x', feed: 'registry', now: T }), true);
     assert.equal(db2.noteDiscoveryKey({ subject: 'a/b', subfolder: 'x', purl: 'pkg:npm/x', feed: 'npm', now: T + 1 }), false);
