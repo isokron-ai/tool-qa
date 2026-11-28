@@ -63,7 +63,7 @@ export const ROOT_FILES = Object.freeze([
 ]);
 
 /**
- * The field's entry, exactly as isokron-ai/mcp-results declares it (fields/write-backend, R-RES-16). Until ingest's
+ * The field's entry, exactly as isokron-ai/mcp-results declares it (fields/write-backend, R-RES-18). Until ingest's
  * registry pin (ingest/registry.mjs) moves to a commit that holds it, ingest refuses this lane's bundles as
  * undeclared_field: the lane stays off (pump/workflows.json enabled false), and only the fixture run and the tests
  * judge with this entry added (withPendingField). Once the pin holds the entry, this is unused (a test fails if the
