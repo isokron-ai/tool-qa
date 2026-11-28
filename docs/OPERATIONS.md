@@ -107,11 +107,7 @@ workflow (`fingerprint-codes.yml`) checks daily, and on pull requests that
 touch it, that `state/fingerprint-codes.json` holds every code mcp-check's
 main declares; when it fails, refresh the file with
 `node scripts/fingerprint-codes.mjs --mcp-check <mcp-check checkout>` (it
-prints the lists; merge them into the file) and open a pull request. The `mutation-probe` workflow (`mutation-probe.yml`)
-proves the tests that pin a protection fail when it is switched off: run it by
-hand (Actions, mutation-probe, a probes file under `test/mutations/`), and it
-runs on pull requests that change a probes file. A surviving or stale probe
-turns it red.
+prints the lists; merge them into the file) and open a pull request. See "Mutation probes" below for `mutation-probe.yml`.
 
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a
@@ -2330,3 +2326,49 @@ runs a third-party server (`corpus/fuzz/calls/README.md` in mcp-check), and the 
 is unchanged. Controls: `known_good` (no finding on a build that expects none) and `known_bad` (every known fault found).
 Either failing is `control_failed` (class `control_miss`), so every miss is our stage's, and the health item `t0:t0-fuzz`
 goes red. It is trusted (`runs_untrusted` false): our seeded servers and tiny-tracker built with `--ignore-scripts`.
+
+## Mutation probes (`mutation-probe.yml`)
+
+Proves that the test pinning a protection fails when the protection is
+switched off. It replaces cloning a repository locally to check by hand. Each
+probe is `{id, file, find, replace, test?, pattern?}` (`old`/`new` are the same
+as `find`/`replace`): `find` must occur exactly once in `file`. One matrix cell
+per probe (20 at most) checks out the ref fresh, optionally builds, runs the
+test as a baseline (it must pass), applies the edit with a node script that
+reads its inputs from environment variables, runs the test again and records
+`killed` (it failed), `survived` (it passed), `stale` (`find` is not there
+exactly once) or `baseline_failed`. The job summary has the table; the
+`mutation-probe-results` artifact the JSON. The run fails unless every probe was
+killed. A `test` that is a plain `.mjs`/`.js` path runs as `node --test <file>`
+(with `pattern` as the test-name pattern); anything else runs as a shell command.
+Read-only token, no secrets, no `pull_request_target`. Call it once per workflow run: the result
+artifacts are named per run, so two calls in one run would mix their results.
+
+```text
+# here, a probes file under test/mutations/ (also runs on pull requests that change one)
+gh workflow run mutation-probe.yml -R isokron-ai/tool-qa -f ref=<branch> -f probe-files=test/mutations/leads-share.json
+# any repository with a thin caller (mutation-probe.yml in mcp-check, mcp-writecheck-action,
+# mcp-write-safety, mcp-surface-corpus), inline mutations:
+gh workflow run mutation-probe.yml -R isokron-ai/<repo> -f ref=<branch> -f test='node --test test/x.test.mjs' \
+  -f mutations='[{"id":"m1","file":"src/a.mjs","find":"x > 0","replace":"true"}]'
+```
+
+The other repositories call this workflow at a pinned commit and pass the same
+commit as `probe-ref` (the runner script is taken from there). When the runner
+changes, move that pin in each caller.
+
+## Lane drain (`lane-drain.yml`)
+
+Run before a pin move: `gh workflow run lane-drain.yml -R isokron-ai/tool-qa -f
+lanes=live-probe,writecheck`. It reads `pump/workflows.json` for the worker
+repository and workflow of each lane, polls (up to `wait-minutes`, default 90)
+until no run of those workflows is queued or in progress, then dispatches
+`pump.yml`, waits for it, and repeats (up to `max-pumps`, default 5) until the
+pump log's last `pump: ingest: ... waiting N` line says `waiting 0`. The job
+summary lists the runs waited on, each pump run and the final waiting count; the
+run fails on a timeout or when the count is not 0. It changes no variable and
+merges nothing: afterwards the coordinator flips `LOOP_SLOTS` and merges. Its
+token is the workflow's own (`contents: read`, `actions: write`); reading runs in
+the public worker repositories needs no other token. It needs the pump to run
+with `LOOP_SLOTS=0` or above 0; with the loop disabled (`LOOP_ENABLED`) the pump
+writes no ingest line and the drain fails with "no ingest line".

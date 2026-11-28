@@ -1,17 +1,91 @@
 name: mutation-probe
 
 # Mutation probes (scripts/mutation-probe.mjs): each probe switches one
-# protection off and checks that the tests pinning it fail. Run by hand with a
-# probes file, and on pull requests that change a probes file or the runner.
-# Read-only, no secrets.
+# protection off in a fresh checkout and checks that the test pinning it fails
+# ("killed"). One matrix cell per probe (20 at most); the run fails if any probe
+# survives, is stale (its `find` text is not there exactly once) or has a test
+# that fails before the edit. Read-only, no secrets, no pull_request_target.
+#
+# Here (tool-qa), by hand or on a pull request that touches a probes file:
+#   gh workflow run mutation-probe.yml -f ref=<branch> -f probe-files=test/mutations/leads-share.json
+# From another repository, through a thin caller (pin both to the same commit):
+#   uses: isokron-ai/tool-qa/.github/workflows/mutation-probe.yml@<sha>
+#   with: { probe-ref: <same sha>, ref: ..., mutations: '[...]', test: 'node --test test/x.test.mjs' }
+# The inputs go to the steps in environment variables only. See docs/OPERATIONS.md.
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Branch or commit of the calling repository to test (empty: its default branch)'
+        type: string
+        required: false
+        default: ''
+      mutations:
+        description: 'JSON list of {id, file, find, replace, test?, pattern?}; find must occur exactly once in file'
+        type: string
+        required: false
+        default: ''
+      probe-files:
+        description: 'Space-separated probes files in the repository (JSON lists in the same format)'
+        type: string
+        required: false
+        default: ''
+      test:
+        description: 'Test file (run with node --test) or shell command, for probes that name none'
+        type: string
+        required: false
+        default: ''
+      build:
+        description: 'Optional shell command run first (for example npm ci --ignore-scripts)'
+        type: string
+        required: false
+        default: ''
+      node-version:
+        type: string
+        required: false
+        default: '24'
+      probe-ref:
+        description: 'Commit SHA of isokron-ai/tool-qa whose scripts/mutation-probe.mjs to run (required from another repository)'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
-      probes:
-        description: 'Probes file(s), space-separated, under test/mutations/'
+      ref:
+        description: 'Branch or commit to test (empty: the default branch)'
+        type: string
         required: false
-        default: 'test/mutations/leads-share.json'
+        default: ''
+      mutations:
+        description: 'JSON list of {id, file, find, replace, test?, pattern?}; find must occur exactly once in file'
+        type: string
+        required: false
+        default: ''
+      probe-files:
+        description: 'Space-separated probes files (empty with no mutations: every file under test/mutations/)'
+        type: string
+        required: false
+        default: ''
+      test:
+        description: 'Test file or shell command, for probes that name none'
+        type: string
+        required: false
+        default: ''
+      build:
+        description: 'Optional shell command run first'
+        type: string
+        required: false
+        default: ''
+      node-version:
+        type: string
+        required: false
+        default: '24'
+      probe-ref:
+        description: 'Commit SHA of tool-qa for the runner (empty: the ref being tested)'
+        type: string
+        required: false
+        default: ''
   pull_request:
     paths:
       - 'test/mutations/**'
@@ -21,33 +95,155 @@ on:
 permissions: {}
 
 concurrency:
-  group: mutation-probe-${{ github.ref }}
-  cancel-in-progress: true
+  group: mutation-probe-${{ github.repository }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  # The inputs, only ever read by name from the shell and by node.
+  PROBE_REF: ${{ inputs.probe-ref }}
+  MUTATIONS: ${{ inputs.mutations }}
+  PROBE_FILES: ${{ inputs.probe-files }}
+  DEFAULT_TEST: ${{ inputs.test }}
+  BUILD_CMD: ${{ inputs.build }}
 
 jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - name: Check the runner commit
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -n "$PROBE_REF" ] && ! printf '%s' "$PROBE_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::probe-ref must be a full 40-character commit SHA"; exit 1
+          fi
+          if [ -z "$PROBE_REF" ] && [ "$REPO" != "isokron-ai/tool-qa" ]; then
+            echo "::error::probe-ref is required outside isokron-ai/tool-qa"; exit 1
+          fi
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Check out the runner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isokron-ai/tool-qa
+          ref: ${{ inputs.probe-ref || inputs.ref || github.sha }}
+          path: .probe-src
+          sparse-checkout: scripts/mutation-probe.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version || '24' }}
+          package-manager-cache: false
+      - name: Plan
+        id: plan
+        run: |
+          cp .probe-src/scripts/mutation-probe.mjs "$RUNNER_TEMP/mutation-probe.mjs"
+          rm -rf .probe-src
+          node "$RUNNER_TEMP/mutation-probe.mjs" plan
+
   probe:
-    name: mutation probes
+    name: ${{ matrix.id }}
+    needs: [plan]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - name: Check out
+      - name: Check out the repository (fresh, for this probe)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Check out the runner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isokron-ai/tool-qa
+          ref: ${{ inputs.probe-ref || inputs.ref || github.sha }}
+          path: .probe-src
+          sparse-checkout: scripts/mutation-probe.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version || '24' }}
+          package-manager-cache: false
+      - name: Move the runner out of the checkout
+        run: |
+          cp .probe-src/scripts/mutation-probe.mjs "$RUNNER_TEMP/mutation-probe.mjs"
+          rm -rf .probe-src
+      - name: Build
+        if: ${{ inputs.build != '' }}
+        run: bash -ceu "$BUILD_CMD"
+      - name: Baseline, then the probe
+        env:
+          PROBE_INDEX: ${{ matrix.idx }}
+          RESULT_DIR: ${{ runner.temp }}/mutation-result
+        run: node "$RUNNER_TEMP/mutation-probe.mjs" cell
+      - name: Keep the result
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-result-${{ matrix.idx }}
+          path: ${{ runner.temp }}/mutation-result/result-${{ matrix.idx }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  collect:
+    name: summary
+    needs: [plan, probe]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the runner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isokron-ai/tool-qa
+          ref: ${{ inputs.probe-ref || inputs.ref || github.sha }}
+          sparse-checkout: scripts/mutation-probe.mjs
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Run the probes
+      - name: Download the results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutation-result-*
+          path: ${{ runner.temp }}/results
+          merge-multiple: true
+      - name: Table and verdict
         env:
-          PROBES: ${{ inputs.probes || 'test/mutations/leads-share.json test/mutations/lead-repro.json' }}
+          PLANNED: ${{ needs.plan.outputs.count }}
+          RESULT_DIR: ${{ runner.temp }}/results
         run: |
-          set -euo pipefail
-          for f in $PROBES; do
-            case "$f" in test/mutations/*.json) ;; *) echo "probes must be under test/mutations/: $f"; exit 2 ;; esac
-          done
-          # shellcheck disable=SC2086
-          node scripts/mutation-probe.mjs $PROBES
+          mkdir -p "$RESULT_DIR"
+          node scripts/mutation-probe.mjs collect "$RESULT_DIR"
+      - name: Keep the JSON
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-probe-results
+          path: ${{ runner.temp }}/results/mutation-probe-results.json
+          if-no-files-found: ignore
+          retention-days: 30

@@ -1,0 +1,63 @@
+name: lane-drain
+
+# Before a pin move: wait until no run of the named lanes' worker workflows
+# (read from pump/workflows.json) is queued or in progress, then dispatch the
+# pump and wait for it, again and again, until its ingest line says `waiting 0`.
+# It changes no variable and merges nothing: the coordinator flips LOOP_SLOTS
+# and merges afterwards. The only write is the pump.yml dispatch.
+#
+#   gh workflow run lane-drain.yml -f lanes=live-probe,writecheck
+#
+# The inputs reach the script in environment variables. Reading runs in the
+# public worker repositories needs no extra token. See docs/OPERATIONS.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      lanes:
+        description: 'Lane names from pump/workflows.json, comma separated (for example live-probe,writecheck)'
+        type: string
+        required: true
+      max-pumps:
+        description: Most pump runs to dispatch
+        type: string
+        required: false
+        default: '5'
+      wait-minutes:
+        description: Most minutes to wait for the worker runs to finish
+        type: string
+        required: false
+        default: '90'
+
+permissions: {}
+
+concurrency:
+  group: lane-drain
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    name: drain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      actions: write # dispatch pump.yml, read its runs and logs
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Drain
+        env:
+          LANES: ${{ inputs.lanes }}
+          MAX_PUMPS: ${{ inputs.max-pumps }}
+          WAIT_MINUTES: ${{ inputs.wait-minutes }}
+          PUMP_REF: ${{ github.event.repository.default_branch }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/lane-drain.mjs
