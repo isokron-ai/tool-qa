@@ -100,6 +100,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+import { controlProblems } from './controls.mjs';
+
 const DAY_MS = 86_400_000;
 const SEP = '\u0000';
 
@@ -312,6 +314,9 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
     for (const name of names) {
       const wf = workflows[name];
       if (!isEnabled(wf)) continue;
+      // A control lane is due only for its own control subjects, and a control
+      // subject only for the lane that lists it (pump/controls.mjs).
+      if (wf.control_subjects ? !Object.hasOwn(wf.control_subjects, s.id) : s.kind === 'control') continue;
       const cell = cells[name];
       if (!cell || cell.mode === 'never') continue;
       const pk = pairKey(s.id, name);
@@ -373,7 +378,7 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
 /** Read computeDue() inputs from the state store. */
 export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
   const subjects = db.listSubjects().filter((s) => s.retired_at == null && s.gone_at == null && s.alias_of == null).map((s) => ({
-    id: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, tier: s.tier, sha: s.sha, artifact_digest: s.artifact_digest, changed_at: s.changed_at,
+    id: s.id, kind: s.kind, name: s.name ?? s.id, repo_id: s.repo_id ?? null, tier: s.tier, sha: s.sha, artifact_digest: s.artifact_digest, changed_at: s.changed_at,
   }));
   const lastResults = new Map();
   const resultKeys = new Set();
@@ -443,6 +448,7 @@ export function workflowProblems(workflows) {
     // A lead re-check runner label (leads/recheck.mjs), sent as the worker's `runner` input; absent or null for none.
     if (wf.recheck_runner !== undefined && wf.recheck_runner !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(wf.recheck_runner))) p.push(`${name}: recheck_runner must be a runner label or null`);
   }
+  p.push(...controlProblems(workflows));
   return p;
 }
 

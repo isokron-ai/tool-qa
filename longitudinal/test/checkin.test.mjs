@@ -405,3 +405,36 @@ test('R-CHECKIN-14: the lane is our own workflow name and is shown even when a s
   }
   assert.ok(failuresOf({ ...item, lane: 'bad lane;' }, DEFAULT_CONFIG, { names }).every((f) => f.lane === '<other>'), 'a malformed lane is still refused');
 });
+
+const missReport = (over = {}) => ({ attempt_id: 'att-9', outcome: 'rejected', reason: 'control_failed', ingested_at: '2026-11-28T10:00:00Z', ledger: { subject: 'isokron-ai/mcp-write-safety.defect-matrix', workflow_file: 'defect-matrix.yml' }, input: { run_id: 7 }, ...over });
+const missEntries = (rep = missReport(), index = 0) => [{ path: `rejected/${rep.attempt_id}/${index}/ingest.json`, data: Buffer.from(JSON.stringify(rep)) }];
+
+test('R-CTL-14: a control_failed rejection of a control subject is a tool-side lead in the check-in, ranked on its own fingerprint (class control_miss)', () => {
+  const items = itemsFromEntries([...entriesOf(), ...missEntries()]);
+  const miss = items.find((i) => i.control_miss);
+  assert.equal(miss.subject, 'isokron-ai/mcp-write-safety.defect-matrix');
+  assert.equal(miss.lane, 'defect-matrix');
+  const r = analyse(items, { seed: loadSeed(SEED_FILE), tierWeights });
+  const fp = r.fingerprints.find((f) => f.class === 'control_miss');
+  assert.ok(fp, 'a control_miss fingerprint');
+  assert.equal(fp.lane, 'defect-matrix');
+  assert.equal(fp.unlocks, 1);
+  assert.equal(fp.example.tier, 'T0', 'our own control subject is top tier');
+  assert.equal(fp.severity, 5);
+  assert.ok(r.fingerprints.indexOf(fp) <= 2, 'a miss of our own tool ranks near the top');
+  assert.equal(r.fingerprints.filter((f) => f.class !== 'control_miss').length > 0, true, 'the other fingerprints are unchanged');
+});
+
+test('R-CTL-14: only control_failed rejections count: other rejections, a missing subject and a bad time are not leads; a later accepted result heals the miss', () => {
+  for (const rep of [missReport({ reason: 'no_artifact' }), missReport({ reason: 'pin_mismatch' }), missReport({ ledger: {} }), missReport({ ingested_at: undefined })]) {
+    assert.deepEqual(itemsFromEntries(missEntries(rep)).filter((i) => i.control_miss), [], JSON.stringify(rep).slice(0, 80));
+  }
+  const accepted = entriesOf([{ attempt: 'att-10', index: 0, subject: 'isokron-ai/mcp-write-safety.defect-matrix', lane: 'defect-matrix', at: '2026-11-28T12:00:00Z', run_id: 8, tools: [{ name: 'x', version: '1' }], skips: [], sha: null, server_json: 1 }]);
+  const healed = analyse(itemsFromEntries([...missEntries(), ...accepted]), { seed: new Map(), tierWeights });
+  const fp = healed.fingerprints.find((f) => f.class === 'control_miss');
+  assert.equal(fp.unlocks, 0, 'no longer current');
+  assert.equal(fp.healed_since, 1);
+  const out = itemsFromEntries(missEntries());
+  assert.equal(failuresOf(out[0], DEFAULT_CONFIG, { names: new Set() })[0].cls, 'control_miss');
+  assert.deepEqual(failuresOf(out[0], { ...DEFAULT_CONFIG, faults: ['subject'] }, { names: new Set() }), []);
+});

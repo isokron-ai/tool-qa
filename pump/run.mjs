@@ -115,6 +115,7 @@ import { POLICY } from './retry.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.mjs';
 import { computeBudget, reapExpired } from './slots.mjs';
+import { applyControlSwitches, recordControlLanes, syncControlSubjects } from './controls.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
 import { applyDiscovery, DISCOVER_KV_KEY, discoverEnabled, fetchCandidates } from './discover.mjs';
@@ -238,7 +239,9 @@ export async function runPump({
   };
   const safe = (text) => scrub(text, secrets);
   const say = (line) => log(safe(line));
-  const cfg = config ?? loadConfig();
+  const loaded = config ?? loadConfig();
+  // Control lanes (pump/controls.mjs) are dispatched only while their repository variable is exactly "true".
+  const cfg = { ...loaded, workflows: applyControlSwitches(loaded.workflows, env) };
   const { requested, loopBudget, workerSlots } = computeBudget({ loopSlots: env.LOOP_SLOTS });
   say(`pump: LOOP_SLOTS=${requested}, loop budget ${loopBudget}, worker slots ${workerSlots}`);
 
@@ -543,6 +546,13 @@ export async function runPump({
     if (seeded.error) ok = false;
     // For the watchdog's `subjects` check (R-SUB-11).
     db.setKv('pump.subjects', { ok: !seeded.error, at: new Date(now()).toISOString(), summary: String(seeded.summary).slice(0, 300) }, { now: now() });
+    // Control lanes' pseudo-subjects (pump/controls.mjs); never fails the run.
+    try {
+      const ctl = syncControlSubjects(db, loaded.workflows, { now: now() });
+      if (ctl.added || ctl.retired) say(`pump: control subjects: ${ctl.subjects} listed, ${ctl.added} added or restored, ${ctl.retired} retired`);
+    } catch (err) {
+      say(`pump: could not load the control subjects: ${err?.message ?? err}`);
+    }
     // Subject ids (pump/identity.mjs): backfill and daily re-check, a few
     // GraphQL queries at most; never fails or holds the run (loop upgrade #15).
     if (identity !== null && identityEnabled(env)) {
@@ -691,6 +701,12 @@ export async function runPump({
         ? { checked: ingested.checked, judged: ingested.judged, recorded: ingested.recorded, outcomes: ingested.outcomes, errors: ingested.errors, stopped: ingested.stopped }
         : null;
       db.setKv('pump.last_tick', { ...summary, loopBudget, requested, ingest: ingestNote, blocked, breaker: breaker ? { tripped: breaker.tripped, reason: breaker.reason, held: breaker.held } : null }, { now: now() });
+      // For the watchdog's t0:<lane> items (watchdog/t0-lanes.mjs).
+      try {
+        recordControlLanes(db, { workflows: loaded.workflows, enabled: cfg.workflows, now: now() });
+      } catch (err) {
+        say(`pump: could not record the control lanes' status: ${err?.message ?? err}`);
+      }
       say(`pump: tick ${ticks}: due ${summary.due ?? '-'}${summary.backfill !== undefined ? `, backfill ${summary.backfill}` : ''}, dispatched ${summary.dispatched}, failed ${summary.failed}, reaped ${summary.reaped}${summary.stopped ? `, stopped (${summary.stopped})` : ''}`);
       flushRetries();
       await liveStep(`tick ${ticks}`);
