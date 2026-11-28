@@ -142,6 +142,98 @@ checks the lease against the run's completion (`completedAt`, R-CHAOS-02), and
 until ingest has looked at such an expired dispatch the pump does not send its
 work again (`holdRunKeys` in `runTick`).
 
+## Writecheck modes: the write-backend contract (proposed, 27 Nov 2026)
+
+Status: **proposed**. Nothing here is dispatched yet. The pump sends none of the inputs below until the
+writecheck worker (isokron-ai/mcp-writecheck-action `corpus.yml`) declares them and a mode switch is turned on;
+with both switches off (the default) writecheck is dispatched exactly as above. The full-mode work in
+mcp-writecheck-action and the min-mode work in mcp-write-safety build against this section; a change to it
+changes all three together.
+
+### Where the facts come from: `write_backend` (lane `meta-backend`)
+
+A trusted, static lane in this repository (`meta/backend.mjs`, workflow `meta-backend.yml`, like meta-github,
+meta-registry and release-diff: nothing from a subject is installed, built or run). It reads the subject's
+source archive from codeload.github.com as data (package manifests, compose files, `.env.example` and its
+siblings, `server.json`, READMEs, OpenAPI files, code text) and emits one observation per subject,
+`write_backend` (mcp-results `fields/registry.yaml`, class P-s, planned until seen):
+
+| Key | What |
+|---|---|
+| `class` | `local_full` (the backend runs inside a GitHub Actions job: the engine itself, or a stand-in listed as faithful and cleared in `meta/data/stand-ins.json`), `mock_min` (a hosted API with a published machine-readable description in `meta/data/spec-urls.json`, or an OpenAPI file in the repository), or `none` |
+| `mode` | `full`, `min` or `none`: the writecheck mode the class maps to (`local_full` -> `full`, `mock_min` -> `min`) |
+| `reason` | for `none` only: `no_backend_signal`, `hosted_without_spec`, `stand_in_not_cleared`, `no_stand_in`, `not_a_store`, `no_write_tools_seen`; otherwise null |
+| `backend` | the primary backend: `{ id, kind }`, `id` a key of one of the two maps (`postgres`, `redis`, `github`, `slack` ...), `kind` one of `sql`, `kv`, `document`, `search`, `graph`, `vector`, `queue`, `object_store`, `mail`, `filesystem`, `git`, `cluster`, `service`, `hosted_api` |
+| `backends` | every backend seen: `{ id, kind, score, signals, role }`, role `primary`, `secondary` or `candidate` |
+| `stand_in` | for `local_full`: `{ id, product, fidelity }` from the stand-in map (fidelity `real` or `faithful`); else null |
+| `spec_url`, `spec_format` | for `mock_min`: the description's https URL and its format (`openapi3`, `swagger2`, `google_discovery`, `smithy`, `graphql_sdl`, `graphql_introspection`); else null |
+| `env_names`, `base_url_env` | environment variable **names** the server reads (never values), sorted, at most 40; `base_url_env` the subset that points it at a host (`*_URL`, `*_URI`, `*_HOST`, `*_ENDPOINT`, `*_BASE_URL`, `*_ADDR`) |
+| `confidence` | `high`, `medium` or `low` |
+| `evidence` | `{ signal, backend, path, detail }`, at most 40: `dependency`, `dev_dependency`, `compose_image`, `prisma_provider`, `url_scheme`, `code_token`, `host_literal`, `env_name`, `openapi_file`, `fs_write`, `tool_names` |
+| `write_tools` | `{ names_seen, write_like, sample }`: tool names found statically in the code, and how many look like writes |
+| `basis` | `{ source: archive | root_files, commit, files_read, code_files_read, truncated }` and the versions of the two maps |
+
+The two maps are data, so a backend, stand-in or spec is added without a code change. `none` is a
+classification, never a finding: it means "not testable here", not "failed".
+
+### What the pump sends a writecheck worker in a mode
+
+`pump/workflows.json` `writecheck.modes` names each mode, the `write_backend` class it takes, and the repository
+variable that turns it on: `LANE_WRITECHECK_FULL_ENABLED` for `full` (class `local_full`) and
+`LANE_WRITECHECK_MIN_ENABLED` for `min` (class `mock_min`), each on only at exactly `"true"`. While a mode is on,
+a subject whose latest accepted `write_backend` has that class is dispatched in that mode; other subjects are
+dispatched as today, with none of the inputs below (`modes.unmatched: "default"`), so the plan and catalog
+stages keep running for everyone. The mode and the backend go into the run_key (`settings_state` becomes
+`<settings_state>+mode=<mode>+backend=<id>`), so a subject whose class changes is due again, and a full-mode
+result is never filed as a default one.
+
+A shard in a mode is homogeneous: every item has the same mode, backend id and stand-in (full) or spec URL
+(min), so the worker starts one stand-in or one mock per shard. On top of the inputs in "Worker dispatch", such
+a shard carries, all strings:
+
+| Input | Sent | Value |
+|---|---|---|
+| `mode` | always in a mode shard | `full` or `min` |
+| `backend` | always | the backend id, a key of `meta/data/stand-ins.json` or `meta/data/spec-urls.json`: `^[a-z0-9][a-z0-9_.-]{0,63}$` |
+| `backend_kind` | always | the kind (table above) |
+| `stand_in` | `full` only (empty for `min`) | the stand-in id from `meta/data/stand-ins.json`, such as `postgres`, `redis`, `minio`, `mailpit`: `^[a-z0-9][a-z0-9_.-]{0,63}$` |
+| `spec_url` | `min` only (empty for `full`) | the API description's URL: https, no user, password or query, at most 512 characters |
+| `spec_format` | `min` only (empty for `full`) | the format (table above) |
+| `env_names` | always | JSON, a list aligned with `items` (same length, same order): for each item the list of env var names its server reads, each `^[A-Z][A-Z0-9_]{0,63}$`, at most 20 per item, the `base_url_env` names first. `[]` for an item with none |
+
+GitHub allows 25 inputs on a `workflow_dispatch`; a mode shard uses 11 (`runner` is never sent to writecheck).
+The inputs are public in the worker's run page like the rest: they hold backend and stand-in ids, a public spec
+URL and env var names read from public repositories, never a value, a token or a canary.
+
+### What the worker must do with them
+
+- Treat every value as a **name to look up in its own allowlist**, pinned in the worker repository: a stand-in
+  id maps to a fixture the worker pins by digest (as `loop/fixtures.json` does), a spec URL must be one the worker
+  pins (host and path, or a content digest). An id or URL it does not know is a skip of ours (`stage: mode`,
+  `reason: unsupported_layout`, `fault: tool`), never a reason to pull an image or fetch a URL named only by an
+  input.
+- Set only the env names it was given, to values that point at the stand-in or the mock inside the sandbox
+  (connection strings, base URLs, dummy tokens); never a real credential; egress stays denied.
+- Report the mode it ran in every bundle: `results/writecheck.json` `mode`, and the harness basis on every
+  requirement record (`basis: stand-in-product` for a real or faithful stand-in, `capture-sink` or
+  `stateful-mock` for min). Backend-semantic requirements (UPD-1/2, CONC-1/2/3, TGT-1/3, RES-1, ATOM-2) are
+  `not tested` under min mode, never `held`.
+- A stand-in or mock that does not fit the server (it will not start against it, it wants an endpoint the mock
+  lacks) is a skip with `fault: tool` (`stand_in_mismatch`, or `mock_incomplete`), never the server's failure.
+  A classification we got wrong is our error too: the skip names the backend it was sent.
+- Report `mode`, `backend` and `stand_in` or `spec_url` in the manifest's `tools` settings, so the run is
+  auditable against the run_key.
+- The auto-accepted plan of the stand-in run tier (owner decision, 27 Nov) applies only when every write
+  target in the plan is the stand-in or the mock named by these inputs; anything else keeps today's
+  person-accepted plan rule.
+
+### Coverage in a mode
+
+writecheck's coverage denominator, per mode, is the subjects whose latest `write_backend` has that mode's
+class (`state/coverage.mjs`). Subjects classified `none` are reported beside it as "not testable: hosted
+backend without a spec, or no write tools" with the reason counts, and subjects not yet classified as
+`unclassified`; neither is a failure, and neither is in a denominator.
+
 ## Ingest in the pump
 
 Ingest runs inside the pump process, so the pump stays the only writer.
