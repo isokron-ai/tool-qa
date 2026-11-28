@@ -155,7 +155,7 @@ test('R-LEAD-55: verdictOf needs the lead\'s class, component and signature toge
 // ------------------------------------------------------------------ the pump's gate
 
 const RUN_OK = { id: 9, path: '.github/workflows/lead-repro.yml', event: 'workflow_dispatch', head_branch: 'main', repository: { full_name: 'isokron-ai/tool-qa' }, head_repository: { full_name: 'isokron-ai/tool-qa' } };
-function gateWorld({ artifacts = [], zips = {}, failDispatch = false, run = RUN_OK } = {}) {
+function gateWorld({ artifacts = [], zips = {}, lengths = {}, failDispatch = false, run = RUN_OK } = {}) {
   const calls = [];
   const client = {
     async request(method, path, o = {}) {
@@ -167,7 +167,7 @@ function gateWorld({ artifacts = [], zips = {}, failDispatch = false, run = RUN_
       throw new Error(`no route ${method} ${path}`);
     },
   };
-  const fetch = async (url) => new Response(zips[String(url).split('/').pop()] ?? Buffer.alloc(0), { status: 200 });
+  const fetch = async (url) => { const id = String(url).split('/').pop(); return new Response(zips[id] ?? Buffer.alloc(0), { status: 200, headers: lengths[id] ? { 'content-length': String(lengths[id]) } : {} }); };
   return { client, fetch, calls };
 }
 const artifactOf = (id, key, doc, run = {}) => ({ id, name: `lead-repro-${key}`, size_in_bytes: 100, expired: false, created_at: '2026-11-28T11:00:00Z', workflow_run: { id: 9, repository_id: 1, head_repository_id: 1, head_branch: 'main', ...run } });
@@ -209,6 +209,9 @@ test('R-LEAD-61: an artifact over 1 MiB is never downloaded, a download over it 
   // A download larger than the listing said: refused.
   const w2 = gateWorld({ artifacts: [artifactOf(5, key)], zips: { 5: Buffer.concat([zipOf(key, 'reproduced'), Buffer.alloc(MAX_ARTIFACT_BYTES)]) } });
   assert.equal((await reproVerdicts({ db: openState(':memory:'), leads: [l], workflows, now: T0, client: w2.client, fetch: w2.fetch })).get(l.fingerprint).state, 'pending');
+  // A download whose length says it is over the cap is refused before its body is read, though the zip itself is good.
+  const w3 = gateWorld({ artifacts: [artifactOf(5, key)], zips: { 5: zipOf(key, 'reproduced') }, lengths: { 5: MAX_ARTIFACT_BYTES + 1 } });
+  assert.equal((await reproVerdicts({ db: openState(':memory:'), leads: [l], workflows, now: T0, client: w3.client, fetch: w3.fetch })).get(l.fingerprint).state, 'pending');
   for (const bad of ['mcp-check@abc\n## injected', 'mcp-check@abc | x', '[link](http://x)', 'x'.repeat(301)]) {
     assert.equal(verdictFromArtifact(zipOf(key, 'reproduced', { tool: bad }), key).tool, null, JSON.stringify(bad));
     assert.equal(verdictFromArtifact(zipOf(key, 'reproduced', { why: bad }), key).why, null, JSON.stringify(bad));

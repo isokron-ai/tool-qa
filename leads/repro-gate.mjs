@@ -155,6 +155,9 @@ export async function reproVerdicts({ db, leads, workflows, now, client: given =
           if (!location) throw new Error(`expected a redirect to the artifact, got HTTP ${z.status}`);
           const blob = await fetchImpl(location, { headers: { 'user-agent': 'isokron-tool-qa' }, redirect: 'follow', signal: AbortSignal.timeout(BLOB_TIMEOUT_MS) });
           if (!blob.ok) throw new Error(`the artifact download returned HTTP ${blob.status}`);
+          // Refused before the body is read when its length says it is over the cap; checked again once read.
+          const declared = Number(blob.headers?.get?.('content-length'));
+          if (Number.isFinite(declared) && declared > MAX_ARTIFACT_BYTES) throw new Error(`the artifact download declares ${declared} bytes, over ${MAX_ARTIFACT_BYTES}`);
           const buf = Buffer.from(await blob.arrayBuffer());
           if (buf.length > MAX_ARTIFACT_BYTES) throw new Error(`the artifact is ${buf.length} bytes, over ${MAX_ARTIFACT_BYTES}`);
           const v = verdictFromArtifact(buf, key);

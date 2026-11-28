@@ -139,7 +139,9 @@ function issuesApi({ refuseLabel = false, existing = [] } = {}) {
     ['POST', /^\/repos\/isokron-ai\/[a-z-]+\/issues\/\d+\/comments$/, (req) => { comments.push({ path: req.path, body: req.json.body }); return { status: 201, body: { id: comments.length } }; }],
     ['PATCH', /^\/repos\/isokron-ai\/[a-z-]+\/issues\/\d+$/, (req) => {
       const i = issues.find((x) => x.number === Number(req.path.split('/').pop()));
-      i.state = req.json.state;
+      // A PATCH sets what it carries: the state (close, reopen) or the body (an edit, R-LEAD-56).
+      if (req.json.state !== undefined) i.state = req.json.state;
+      if (req.json.body !== undefined) i.body = req.json.body;
       return { body: i };
     }],
   ]);
