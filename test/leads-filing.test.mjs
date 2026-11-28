@@ -97,15 +97,16 @@ test('R-LEAD-25: an issue holds the shape only: title tag and marker, our tool, 
 });
 
 test('R-LEAD-25: the synthetic repro is our own template in the lead\'s language and layout, varied by its class; an idiom with no template says so', () => {
-  const r = syntheticRepro(lead(1, { class: 'reader_limit', signature: 'class=reader_limit;partial=unresolved_names', idiom: 'source/derived/repo:ts/js' }));
+  const ok = { verdict: { verdict: 'reproduced', run_id: 1, key: '0'.repeat(16), tool: 'mcp-check@abc' } };
+  const r = syntheticRepro(lead(1, { class: 'reader_limit', signature: 'class=reader_limit;partial=unresolved_names', idiom: 'source/derived/repo:ts/js' }), ok);
   assert.match(r, /TOOL_NAME = "echo"/);
   assert.match(r, /registerTool\(TOOL_NAME/);
   assert.match(r, /server\.json/);
   assert.match(r, /npx @isokron\/mcp-check --repo-dir \. --format json/);
-  const multi = syntheticRepro(lead(2, { class: 'unsupported_layout', layout: 'server_json:1;multi_server;via:github', idiom: 'none/repo:python' }));
+  const multi = syntheticRepro(lead(2, { class: 'unsupported_layout', layout: 'server_json:1;multi_server;via:github', idiom: 'none/repo:python' }), ok);
   assert.match(multi, /servers\/a\/server\.py/);
   assert.match(multi, /servers\/b\/server\.py/);
-  assert.match(syntheticRepro(lead(3, { idiom: 'none/repo:c#' })), /No fixture template for the idiom `none\/repo:c#` yet/);
+  assert.match(syntheticRepro(lead(3, { idiom: 'none/repo:c#' })), /no fixture template for the idiom `none\/repo:c#` yet/);
   assert.equal(languageOf('source/derived/go'), 'go');
   assert.equal(kindOf(lead(4, { class: 'timeout_start', signature: 'class=timeout_start;detail=start_env_limited' })), 'timeout_start/start_env_limited');
   assert.equal(kindOf(lead(5)), 'no_tools_found', 'scan-static\'s detail word only restates the class');

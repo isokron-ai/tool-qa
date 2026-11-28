@@ -2188,6 +2188,20 @@ the encrypted state; an issue holds the shape only.
    same issue) if it comes back. The issue is read first: one a person closed
    or reopened, or one our App did not open, is left as it is.
 
+**Synthetic repros (`lead-repro.yml`).** An issue shows a fixture of ours
+only when it was run and reproduced the lead. The `lead-repro` workflow
+(`scripts/lead-repro.mjs`, `leads/repro-run.mjs`) takes a lead issue
+(`isokron-ai/<repo>#<n>`), a fingerprint, or a lead's shape as JSON, and runs
+the fixture through the lane's own code at the lane's pin in
+`pump/workflows.json`: mcp-check's scan-static reader (reader classes),
+mcp-writecheck `init` with mcp-writecheck-action's skip rules (writecheck
+start classes), or this repository's release-diff (`too_large`). It reports
+`reproduced` (the loop's own fingerprint code finds the lead's class,
+component and signature), `not_reproduced`, `not_reproducible_synthetically`
+or `error`, in the job summary and the artifact `lead-repro-<repro key>`.
+Read-only, no secrets. On a pull request that changes it, it runs the issues
+in `leads/repro-cases.json`.
+
 **Rolling it out.** `dry-run` for a few pump runs and read the job summaries;
 then `recheck` for a day (a few extra worker runs); then `true`. Before `true`,
 check the App's repository access (below). To stop: unset the variable (or set
