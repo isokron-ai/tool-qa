@@ -54,23 +54,27 @@ const NOW = new Date(T0 + 2 * HOUR).toISOString();
 
 test('R-LEAD-24: at most 5 new issues per repository per day and 30 open, the leads that unlock most first', () => {
   const db = reproduced(8);
-  const plan = planFilings(db, { now: NOW, tierWeights });
-  assert.equal(plan.file.length, CAP_NEW_PER_REPO_PER_DAY);
-  assert.equal(plan.capped.length, 8 - CAP_NEW_PER_REPO_PER_DAY);
+  const five = { capNew: 5, capOpen: 30 };
+  const plan = planFilings(db, { now: NOW, tierWeights, ...five });
+  assert.equal(plan.file.length, 5);
+  assert.equal(plan.capped.length, 8 - 5);
   assert.deepEqual(plan.file.map((e) => e.carriers.current), [8, 7, 6, 5, 4], 'most carried first');
   // Filed today count against the day; the next day there is room again.
   for (const e of plan.file) db.raw.prepare("UPDATE leads SET status = 'filed', issue_number = 1, issue_state = 'open', filed_at = ? WHERE fingerprint = ?").run(NOW, e.lead.fingerprint);
-  assert.equal(planFilings(db, { now: NOW, tierWeights }).file.length, 0);
-  assert.equal(planFilings(db, { now: new Date(T0 + DAY + 2 * HOUR).toISOString(), tierWeights }).file.length, 3);
+  assert.equal(planFilings(db, { now: NOW, tierWeights, ...five }).file.length, 0);
+  assert.equal(planFilings(db, { now: new Date(T0 + DAY + 2 * HOUR).toISOString(), tierWeights, ...five }).file.length, 3);
   // Open issues cap: with 30 open there is no room, whatever the day.
   const many = reproduced(2);
-  for (let i = 0; i < CAP_OPEN_PER_REPO; i++) {
+  for (let i = 0; i < 30; i++) {
     many.raw.prepare(`INSERT INTO leads (fingerprint, repo, tool, lane, component, oracle, class, idiom, layout, signature, fault, status, first_seen, last_seen, issue_number, issue_state, filed_at, updated_at)
       VALUES (?, 'isokron-ai/mcp-check', 'mcp-check', 'scan-static', 'static', 'scan-static', 'tool_error', 'x', 'y', 'z', 'tool', 'filed', ?, ?, ?, 'open', '2026-01-01T00:00:00Z', ?)`).run(`open${i}`, NOW, NOW, 100 + i, NOW);
   }
-  const p2 = planFilings(many, { now: NOW, tierWeights });
+  const p2 = planFilings(many, { now: NOW, tierWeights, ...five });
   assert.deepEqual([p2.file.length, p2.capped.length], [0, 2]);
-  assert.equal(p2.caps['isokron-ai/mcp-check'].open, CAP_OPEN_PER_REPO);
+  assert.equal(p2.caps['isokron-ai/mcp-check'].open, 30);
+  // The defaults are 30 new a day and 150 open (R-LEAD-57).
+  assert.deepEqual([CAP_NEW_PER_REPO_PER_DAY, CAP_OPEN_PER_REPO], [30, 150]);
+  assert.equal(planFilings(reproduced(8), { now: NOW, tierWeights }).file.length, 8);
 });
 
 test('R-LEAD-25: an issue holds the shape only: title tag and marker, our tool, counts and a synthetic repro; no subject name, run id or third-party text', () => {
@@ -97,15 +101,16 @@ test('R-LEAD-25: an issue holds the shape only: title tag and marker, our tool, 
 });
 
 test('R-LEAD-25: the synthetic repro is our own template in the lead\'s language and layout, varied by its class; an idiom with no template says so', () => {
-  const r = syntheticRepro(lead(1, { class: 'reader_limit', signature: 'class=reader_limit;partial=unresolved_names', idiom: 'source/derived/repo:ts/js' }));
+  const ok = { verdict: { verdict: 'reproduced', run_id: 1, key: '0'.repeat(16), tool: 'mcp-check@abc' } };
+  const r = syntheticRepro(lead(1, { class: 'reader_limit', signature: 'class=reader_limit;partial=unresolved_names', idiom: 'source/derived/repo:ts/js' }), ok);
   assert.match(r, /TOOL_NAME = "echo"/);
   assert.match(r, /registerTool\(TOOL_NAME/);
   assert.match(r, /server\.json/);
   assert.match(r, /npx @isokron\/mcp-check --repo-dir \. --format json/);
-  const multi = syntheticRepro(lead(2, { class: 'unsupported_layout', layout: 'server_json:1;multi_server;via:github', idiom: 'none/repo:python' }));
+  const multi = syntheticRepro(lead(2, { class: 'unsupported_layout', layout: 'server_json:1;multi_server;via:github', idiom: 'none/repo:python' }), ok);
   assert.match(multi, /servers\/a\/server\.py/);
   assert.match(multi, /servers\/b\/server\.py/);
-  assert.match(syntheticRepro(lead(3, { idiom: 'none/repo:c#' })), /No fixture template for the idiom `none\/repo:c#` yet/);
+  assert.match(syntheticRepro(lead(3, { idiom: 'none/repo:c#' })), /no fixture template for the idiom `none\/repo:c#` yet/);
   assert.equal(languageOf('source/derived/go'), 'go');
   assert.equal(kindOf(lead(4, { class: 'timeout_start', signature: 'class=timeout_start;detail=start_env_limited' })), 'timeout_start/start_env_limited');
   assert.equal(kindOf(lead(5)), 'no_tools_found', 'scan-static\'s detail word only restates the class');
@@ -134,7 +139,9 @@ function issuesApi({ refuseLabel = false, existing = [] } = {}) {
     ['POST', /^\/repos\/isokron-ai\/[a-z-]+\/issues\/\d+\/comments$/, (req) => { comments.push({ path: req.path, body: req.json.body }); return { status: 201, body: { id: comments.length } }; }],
     ['PATCH', /^\/repos\/isokron-ai\/[a-z-]+\/issues\/\d+$/, (req) => {
       const i = issues.find((x) => x.number === Number(req.path.split('/').pop()));
-      i.state = req.json.state;
+      // A PATCH sets what it carries: the state (close, reopen) or the body (an edit, R-LEAD-56).
+      if (req.json.state !== undefined) i.state = req.json.state;
+      if (req.json.body !== undefined) i.body = req.json.body;
       return { body: i };
     }],
   ]);
@@ -144,7 +151,9 @@ const minter = () => {
   const asked = [];
   return { asked, mint: async (args) => { asked.push(args); return { token: `tok-${asked.length}` }; } };
 };
-const step = (db, over = {}) => leadStep({ db, mode: 'on', tierWeights, now: () => Date.parse(NOW), ...over });
+// The repro gate is stubbed (every lead has its verdict, not_reproduced: filed without a fixture) unless a test brings its own.
+const notReproduced = async ({ leads }) => new Map(leads.map((l) => [l.fingerprint, { state: 'ready', key: 'k', verdict: { verdict: 'not_reproduced', key: 'k' } }]));
+const step = (db, over = {}) => leadStep({ db, mode: 'on', tierWeights, now: () => Date.parse(NOW), env: {}, reproGate: notReproduced, ...over });
 
 test('R-LEAD-26: dry-run and recheck write the plan to the job summary and touch no issue; off writes nothing but its note', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'leads-'));
@@ -339,11 +348,11 @@ test('R-LEAD-41: adoption takes only our App\'s issue with the lead\'s marker: a
 test('R-LEAD-42: the shape guard runs before the daily room is handed out, field by field: a held lead takes no slot, and a subject named like a public SDK repository holds no lead', () => {
   const db = reproduced(7, { over: (i) => (i === 6 ? { signature: 'class=tool_error;detail=-;error=widgetfail;list_error=-;http=-;fault=tool;retryable=false' } : {}) });
   db.setSubjectVersion({ id: 'modelcontextprotocol/go-sdk', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 });
-  const plan = planFilings(db, { now: NOW, tierWeights });
-  assert.equal(plan.file.length, CAP_NEW_PER_REPO_PER_DAY, 'the held lead (the most carried) did not take a slot');
+  const plan = planFilings(db, { now: NOW, tierWeights, capNew: 5, capOpen: 30 });
+  assert.equal(plan.file.length, 5, 'the held lead (the most carried) did not take a slot');
   assert.ok(plan.held.some((e) => e.decision.reason === 'not_shape_only' && e.carriers.current === 7));
   const go = { ...plan.file[0], lead: { ...plan.file[0].lead, idiom: 'source/derived/go' } };
-  assert.match(issueFor(go, { now: NOW }).body, /modelcontextprotocol\/go-sdk/, 'the Go template names the SDK');
+  assert.match(issueFor(go, { now: NOW, repro: { state: 'ready', key: 'k', verdict: { verdict: 'reproduced' } } }).body, /modelcontextprotocol\/go-sdk/, 'the Go template names the SDK');
   assert.doesNotThrow(() => assertShapeOnly(go.lead, { subjects: ['modelcontextprotocol/go-sdk'] }), 'template text is ours: not checked');
 });
 

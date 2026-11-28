@@ -7,7 +7,9 @@
 //   - a lead is filed only after a re-run on another runner (another worker run
 //     of the same subject and lane) showed it again;
 //   - one issue per lead (fingerprint), with no third-party names or code;
-//   - at most 5 new issues per repository per day and 30 open per repository;
+//   - at most 30 new issues per repository per day and 150 open per repository
+//     (repository variables LEADS_CAP_NEW_PER_REPO_DAY and LEADS_CAP_OPEN_PER_REPO,
+//     bounded in code: capsFrom());
 //   - an infra failure (a passing condition) is filed only once it has lasted
 //     3 days; a flaky lead (it went away and came back on the same subject) only
 //     at a rate of 10% or more over 14 days;
@@ -28,8 +30,16 @@ export const FLAKE_WINDOW_DAYS = 14;
 export const INFRA_MIN_DAYS = 3;
 /** An infra lead must still be happening: seen within this long. */
 export const INFRA_RECENT_DAYS = 1;
-export const CAP_NEW_PER_REPO_PER_DAY = 5;
-export const CAP_OPEN_PER_REPO = 30;
+/** Defaults of the filing caps; each repository variable may set its own within CAP_BOUNDS (capsFrom). */
+export const CAP_NEW_PER_REPO_PER_DAY = 30;
+export const CAP_OPEN_PER_REPO = 150;
+/** Issue writes (create, close, reopen, comment, edit) per pump run at most, by default. */
+export const MAX_WRITES_PER_RUN = 60;
+/**
+ * The highest value each cap may be set to, whatever the variable says: a typo (300 for 30) is clamped here and
+ * can never flood a repository. 0 is allowed and stops that kind of write.
+ */
+export const CAP_BOUNDS = Object.freeze({ new_per_day: 50, open: 300, writes: 100 });
 /** A pair's log keeps at most this many results (the flake window's). */
 export const LOG_MAX = 32;
 export const VERSIONS_MAX = 10;
@@ -68,6 +78,31 @@ export function leadsMode(env = process.env) {
 export const recordsLeads = (mode) => mode !== 'off';
 export const rechecksLeads = (mode) => mode === 'recheck' || mode === 'on';
 export const filesLeads = (mode) => mode === 'on';
+
+/**
+ * The filing caps from the repository variables (LEADS_CAP_NEW_PER_REPO_DAY, LEADS_CAP_OPEN_PER_REPO,
+ * LEADS_MAX_WRITES): a whole number from 0 up, at most CAP_BOUNDS (a larger one is clamped to the bound);
+ * unset, empty or anything else is the default. `notes` says what was clamped or ignored, for the pump's log.
+ * @returns {{capNew: number, capOpen: number, maxWrites: number, notes: string[]}}
+ */
+export function capsFrom(env = process.env) {
+  const notes = [];
+  const one = (name, dflt, max) => {
+    const raw = env?.[name];
+    if (raw === undefined || raw === null || String(raw).trim() === '') return dflt;
+    const v = String(raw).trim();
+    if (!/^[0-9]{1,6}$/.test(v)) { notes.push(`${name}=${JSON.stringify(v.slice(0, 20))} is not a whole number: ${dflt} used`); return dflt; }
+    const n = Number(v);
+    if (n > max) { notes.push(`${name}=${n} is over the bound ${max}: ${max} used`); return max; }
+    return n;
+  };
+  return {
+    capNew: one('LEADS_CAP_NEW_PER_REPO_DAY', CAP_NEW_PER_REPO_PER_DAY, CAP_BOUNDS.new_per_day),
+    capOpen: one('LEADS_CAP_OPEN_PER_REPO', CAP_OPEN_PER_REPO, CAP_BOUNDS.open),
+    maxWrites: one('LEADS_MAX_WRITES', MAX_WRITES_PER_RUN, CAP_BOUNDS.writes),
+    notes,
+  };
+}
 
 let routingCache = null;
 /** leads/routing.json (read once). */

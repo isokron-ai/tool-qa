@@ -1,0 +1,137 @@
+# lead-repro: does a lead's synthetic repro reproduce? (scripts/lead-repro.mjs, leads/repro-run.mjs)
+#
+# Given a lead issue (owner/repo#number), a lead's fingerprint, or a lead's shape as JSON, it runs the fixture the
+# issue shows and the fixture our templates (leads/repro.mjs) make now, each through the lane's own code at the
+# lane's pinned version (pump/workflows.json): mcp-check's scan-static reader for reader classes, mcp-writecheck's
+# `init` with mcp-writecheck-action's skip rules for writecheck start classes, and this repository's release-diff
+# for `too_large`. Each run is reproduced (the loop's own fingerprint code finds the lead's class, component and
+# signature), not_reproduced, not_reproducible_synthetically (no template of ours can trigger the class) or error.
+# The job summary has the table; the JSON is the artifact lead-repro-<repro key> (one lead) that the pump reads
+# back before an issue shows a fixture (leads/repro-gate.mjs, R-LEAD-54).
+#
+# Runs on: workflow_dispatch (by hand, and by the pump's lead step), workflow_call, and pull requests that change
+# it (the cases of leads/repro-cases.json, our first filed lead issues).
+#
+# Security: permissions: {} at the top; the job reads only (contents: read, and issues: read for the lead issues).
+# No secrets. The inputs reach steps through env: only and are checked whole by the script before anything is read.
+# Actions are pinned by full SHA. Only our own code runs: our fixtures, and our tools fetched by full commit from
+# their public repositories with no token. The job's token is given to the plan step alone (it reads the issues
+# and resolves the pins); the fixture runs get none.
+
+name: lead-repro
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'A lead issue, isokron-ai/<repo>#<number>'
+        required: false
+        default: ''
+        type: string
+      fingerprint:
+        description: "A lead's fingerprint (12 hex); its issue is looked up by title tag"
+        required: false
+        default: ''
+        type: string
+      lead:
+        description: "A lead's shape, one line of JSON (fingerprint, tool, lane, component, oracle, class, idiom, layout, signature)"
+        required: false
+        default: ''
+        type: string
+  workflow_call:
+    inputs:
+      issue:
+        required: false
+        default: ''
+        type: string
+      fingerprint:
+        required: false
+        default: ''
+        type: string
+      lead:
+        required: false
+        default: ''
+        type: string
+  pull_request:
+    paths:
+      - 'leads/repro.mjs'
+      - 'leads/repro-run.mjs'
+      - 'leads/repro-cases.json'
+      - 'scripts/lead-repro.mjs'
+      - '.github/workflows/lead-repro.yml'
+
+permissions: {}
+
+concurrency:
+  group: lead-repro-${{ github.event_name }}-${{ github.ref }}-${{ inputs.fingerprint || inputs.issue || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  repro:
+    name: lead-repro
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - id: plan
+        name: Check the inputs and plan the runs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LEAD_ISSUE: ${{ inputs.issue }}
+          LEAD_FINGERPRINT: ${{ inputs.fingerprint }}
+          LEAD_SHAPE: ${{ inputs.lead }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/lead-repro.mjs plan "$RUNNER_TEMP/lead-repro"
+      - name: Fetch the pinned tools (public repositories, full commits, no token)
+        env:
+          MCP_CHECK_SHA: ${{ steps.plan.outputs.mcp_check_sha }}
+          ACTION_SHA: ${{ steps.plan.outputs.mcp_writecheck_action_sha }}
+          CLI_SHA: ${{ steps.plan.outputs.mcp_writecheck_sha }}
+        run: |
+          set -euo pipefail
+          sha_re='^[0-9a-f]{40}$'
+          tools="$RUNNER_TEMP/lead-repro-tools"
+          mkdir -p "$tools"
+          fetch_at() { # repo sha dir
+            [[ "$2" =~ $sha_re ]] || { echo "::error::$1: not a full commit SHA"; exit 1; }
+            git init -q "$3"
+            git -C "$3" remote add origin "https://github.com/$1.git"
+            git -C "$3" -c protocol.version=2 fetch -q --depth 1 --filter=blob:none origin "$2"
+            git -C "$3" -c advice.detachedHead=false checkout -q FETCH_HEAD
+            [ "$(git -C "$3" rev-parse HEAD)" = "$2" ] || { echo "::error::$1 is not at $2"; exit 1; }
+            echo "$1 at $2"
+          }
+          if [ -n "$MCP_CHECK_SHA" ]; then
+            fetch_at isokron-ai/mcp-check "$MCP_CHECK_SHA" "$tools/mcp-check"
+            echo "MCP_CHECK_DIR=$tools/mcp-check" >> "$GITHUB_ENV"
+          fi
+          if [ -n "$ACTION_SHA" ]; then
+            fetch_at isokron-ai/mcp-writecheck-action "$ACTION_SHA" "$tools/mcp-writecheck-action"
+            echo "WRITECHECK_ACTION_DIR=$tools/mcp-writecheck-action" >> "$GITHUB_ENV"
+          fi
+          if [ -n "$CLI_SHA" ]; then
+            fetch_at isokron-ai/mcp-write-safety "$CLI_SHA" "$tools/mws"
+            ( cd "$tools/mws/packages/writecheck" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error && npm run build --silent )
+            main="$tools/mws/packages/writecheck/dist/src/cli/main.js"
+            [ -f "$main" ] || { echo "::error::the mcp-writecheck build produced no entry script"; exit 1; }
+            echo "WRITECHECK_CLI_MAIN=$main" >> "$GITHUB_ENV"
+          fi
+      - name: Run the repros
+        run: node scripts/lead-repro.mjs run "$RUNNER_TEMP/lead-repro"
+      - name: Upload the verdicts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.plan.outputs.artifact }}
+          path: ${{ runner.temp }}/lead-repro/lead-repro.json
+          if-no-files-found: error
+          retention-days: 30

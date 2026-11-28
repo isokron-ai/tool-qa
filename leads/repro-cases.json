@@ -1,0 +1,12 @@
+{
+  "description": "Lead issues lead-repro checks on every pull request that changes it (.github/workflows/lead-repro.yml): the first seven filed, 28 Nov 2026.",
+  "cases": [
+    "isokron-ai/mcp-check#78",
+    "isokron-ai/mcp-check#79",
+    "isokron-ai/mcp-check#80",
+    "isokron-ai/mcp-check#81",
+    "isokron-ai/mcp-check#82",
+    "isokron-ai/mcp-writecheck-action#83",
+    "isokron-ai/tool-qa#118"
+  ]
+}
