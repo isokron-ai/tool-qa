@@ -2,7 +2,7 @@
 // Worker of the metadata lanes: one shard of subjects in, one bundle
 // directory per item out, ready for the worker kit.
 //
-//   node meta/run.mjs <meta-github|meta-registry|release-diff> <out-dir>
+//   node meta/run.mjs <meta-github|meta-registry|release-diff|meta-backend> <out-dir>
 //
 // Environment:
 //   SHARD_ID, ATTEMPT_ID, ITEMS   the dispatch inputs (docs/INTERFACES.md)
@@ -54,7 +54,12 @@ export const RUN_SKIPS = Object.freeze({
 export const RESULT_FORMAT = 'isokron-tool-qa-meta-result/1';
 const DEFAULT_DEADLINE_MIN = 22;
 
-class ControlFailure extends Error {}
+class ControlFailure extends Error {
+  constructor(message, detail = null) {
+    super(message);
+    this.detail = detail;
+  }
+}
 
 function numberEnv(env, key, dflt) {
   const v = env[key];
@@ -108,7 +113,12 @@ export async function runShard({
 
   // Controls first: a lane that fails them reports nothing.
   const known = await knownAnswerControl(lane, { http, token, budget, ...(knownAnswerSpec ? { spec: knownAnswerSpec } : {}) });
-  if (!known.unavailable && known.control.observed !== known.control.expected) throw new ControlFailure(`the known-answer control gave ${known.control.observed}`);
+  if (!known.unavailable && known.control.observed !== known.control.expected) {
+    // The control reads our own repositories only, so what it saw is public and says why it failed.
+    let why = '';
+    try { const o = JSON.parse(known.files['controls/known-answer.json']); why = `: mismatches ${JSON.stringify(o.mismatches)}; observed ${JSON.stringify(o.observed).slice(0, 1500)}`; } catch { /* nothing to add */ }
+    throw new ControlFailure(`the known-answer control gave ${known.control.observed}`, why ? `known-answer${why}` : null);
+  }
   const firstForgery = await forgeryControl(lane, { marker: marker() });
   if (firstForgery.control.observed !== firstForgery.control.expected) throw new ControlFailure(`the forgery control gave ${firstForgery.control.observed}`);
   log(`controls: known-answer ${known.unavailable ? `unavailable (${known.unavailable})` : known.control.observed}, forgery ${firstForgery.control.observed}`);
@@ -164,7 +174,7 @@ export async function runShard({
     writeFiles(bundle, files);
     const meta = {
       subject: { id: item.subject, repo: item.repo, sha: o.sha ?? null },
-      tools: [{ name: `tool-qa-${lane.name}`, version: lane.version }],
+      tools: lane.tools ? lane.tools.map((t) => ({ ...t })) : [{ name: `tool-qa-${lane.name}`, version: lane.version }],
       oracles: [],
       settings_manifest_digest: settingsDigest,
       started_at: startedAt,
@@ -182,8 +192,8 @@ export async function runShard({
 
 export async function main(argv = process.argv.slice(2), env = process.env, io = {}) {
   const write = io.write ?? ((s) => process.stdout.write(s));
-  if (argv.length !== 2 || !['meta-github', 'meta-registry', 'release-diff'].includes(argv[0])) {
-    write('usage: node meta/run.mjs <meta-github|meta-registry|release-diff> <out-dir>\n');
+  if (argv.length !== 2 || !['meta-github', 'meta-registry', 'release-diff', 'meta-backend'].includes(argv[0])) {
+    write('usage: node meta/run.mjs <meta-github|meta-registry|release-diff|meta-backend> <out-dir>\n');
     return 2;
   }
   const [laneName, out] = argv;
@@ -201,6 +211,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, io =
     }
     if (err instanceof ControlFailure) {
       write(`::error title=${laneName}::${err.message}; nothing is uploaded\n`);
+      if (err.detail) write(`${err.detail}\n`);
       return 3;
     }
     write(`::error title=${laneName}::harness error (${err?.name ?? 'Error'}); nothing is uploaded\n`);

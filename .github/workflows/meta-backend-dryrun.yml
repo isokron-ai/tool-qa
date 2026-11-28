@@ -1,0 +1,144 @@
+# A dry run of the meta-backend classifier (meta/backend.mjs) over the loop's frame: every seed subject plus discover
+# candidates in the order the pump adds them (meta/dryrun-backend.mjs). It reads each repository's source archive as
+# the lane does (codeload.github.com, raw.githubusercontent.com; as text, in memory; nothing from a subject runs),
+# prints the class, reason, backend and confidence counts and a sample of 20 to the job summary, and keeps the rows as
+# a short-lived artifact. Nothing is sealed, sent to ingest or written to the state: the lane itself (meta-backend.yml,
+# dispatched by the pump) is what records write_backend.
+#
+# Triggers: a pull request that changes the classifier or its maps (seed plus 200 discovered), a manual dispatch (any
+# number of discovered subjects; "all" for every candidate), and a weekly sweep of every candidate.
+#
+# Security: permissions: {} at the top; contents: read for every job, actions: read only for the job that downloads
+# the newest discover artifact of this repository. No secrets. Inputs reach steps through env: only. Actions are pinned
+# by full SHA.
+
+name: meta-backend-dryrun
+
+on:
+  pull_request:
+    paths:
+      - 'meta/backend.mjs'
+      - 'meta/lib/backend-scan.mjs'
+      - 'meta/data/**'
+      - 'meta/dryrun-backend.mjs'
+      - '.github/workflows/meta-backend-dryrun.yml'
+  workflow_dispatch:
+    inputs:
+      extra:
+        description: 'Discovered subjects to add to the seed, in the pump''s order: a number, or "all".'
+        required: false
+        type: string
+        default: '200'
+  schedule:
+    - cron: '23 6 * * 0' # weekly, after the 05:41 discover run
+
+permissions: {}
+
+concurrency:
+  group: meta-backend-dryrun-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frame:
+    name: frame
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read # download the newest discover artifact of this repository
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: The frame (seed and discovered subjects)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EXTRA: ${{ github.event_name == 'schedule' && 'all' || inputs.extra || '200' }}
+        run: |
+          if [[ "$EXTRA" == "all" ]]; then EXTRA=1000000; fi
+          if [[ ! "$EXTRA" =~ ^[0-9]{1,7}$ ]]; then echo "::error::extra must be a number or all"; exit 1; fi
+          mkdir -p .in
+          id=$(gh run list -R "$REPO" -w discover.yml -s success -L 1 --json databaseId -q '.[0].databaseId' || true)
+          cand=""
+          if [[ "$id" =~ ^[0-9]+$ ]] && gh run download "$id" -R "$REPO" -n "discover-$id" -D .in/discover; then
+            cand=$(find .in/discover -name 'candidates.json.gz' | head -n 1)
+            echo "discover candidates from run $id"
+          else
+            echo "::warning title=meta-backend-dryrun::No discover artifact; the seed only."
+          fi
+          node meta/dryrun-backend.mjs subjects --seed history/seed-v1.json ${cand:+--candidates "$cand"} --extra "$EXTRA" > subjects.txt
+          wc -l subjects.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: meta-backend-dryrun-subjects
+          path: subjects.txt
+          retention-days: 3
+
+  classify:
+    name: classify (${{ matrix.shard }}/12)
+    needs: frame
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: meta-backend-dryrun-subjects
+          path: .in
+      - name: Classify this shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: node meta/dryrun-backend.mjs classify --subjects .in/subjects.txt --shard "$SHARD/12" --out "rows-$SHARD.ndjson" --concurrency 6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: meta-backend-dryrun-rows-${{ matrix.shard }}
+          path: rows-${{ matrix.shard }}.ndjson
+          retention-days: 7
+
+  summarize:
+    name: summarize
+    needs: classify
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: meta-backend-dryrun-rows-*
+          merge-multiple: true
+          path: .in
+      - name: Counts and a sample of 20
+        run: node meta/dryrun-backend.mjs summarize --out summary.md .in/rows-*.ndjson
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: meta-backend-dryrun-summary
+          path: |
+            summary.md
+            summary.md.json
+          retention-days: 14

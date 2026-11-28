@@ -1,0 +1,603 @@
+{
+  "version": 2,
+  "updated": "2026-11-28",
+  "about": "The meta-backend lane's service -> public API description map (meta/backend.mjs). One entry per hosted API a server's write tools can write to that publishes a machine-readable description writecheck's min mode can build a mock from. `signals` say how the lane recognises the service in a repository; `spec` is the description: an https URL, its format (openapi3, swagger2, google_discovery, smithy, graphql_sdl, graphql_introspection), who publishes it (vendor: the service's owner, in its own repository or domain) and when the URL was last read (checked). A subject is mock_min when its primary backend has a spec here and no usable stand-in in stand-ins.json. A known hosted API with no published description has spec null and a note saying when it was looked for: its servers are none, hosted_without_spec, reported as not testable, never as failures. Every URL was read on 27 Nov 2026 and answered with a description of that format. An id that is also in stand-ins.json is the same backend, merged. A spec URL is one API's description file: never a repository page or a directory of APIs; its path ends in .json, .yaml, .yml or .graphql, or `endpoint: true` says the URL itself serves the description. `objects`: the words a write tool uses for the service's objects; a server whose write tools name none of them is low confidence and not routed (R-WB-22). Add a service or move a URL here, not in code; meta/test/backend.test.mjs checks the shape. LLM providers, telemetry and error-reporting SDKs are left out on purpose: they are not where a server's write tools write.",
+  "services": {
+    "github": {
+      "name": "GitHub REST API",
+      "spec": { "url": "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@octokit/rest", "octokit", "@octokit/core", "@octokit/graphql", "@octokit/app", "@octokit/plugin-rest-endpoint-methods"],
+        "pypi": ["pygithub", "githubkit", "ghapi", "github3.py"],
+        "go": ["github.com/google/go-github", "github.com/shurcooL/githubv4"],
+        "cargo": ["octocrab"],
+        "hosts": ["api.github.com"],
+        "env": [],
+        "env_prefix": []
+      },
+      "objects": ["issue", "issues", "pull", "pulls", "pr", "prs", "repo", "repos", "repository", "repositories", "branch", "branches", "commit", "commits", "file", "files", "comment", "comments", "release", "releases", "gist", "gists", "label", "labels", "review", "reviews", "workflow", "workflows", "milestone", "project", "discussion", "fork", "star", "merge"]
+    },
+    "slack": {
+      "name": "Slack Web API",
+      "spec": { "url": "https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_openapi_v2.json", "format": "swagger2", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@slack/web-api", "@slack/bolt", "slack"],
+        "pypi": ["slack-sdk", "slack_sdk", "slack-bolt", "slackclient"],
+        "go": ["github.com/slack-go/slack"],
+        "hosts": ["slack.com"],
+        "env": ["SLACK_BOT_TOKEN", "SLACK_TOKEN", "SLACK_USER_TOKEN", "SLACK_APP_TOKEN", "SLACK_TEAM_ID", "SLACK_SIGNING_SECRET", "SLACK_MCP_XOXP_TOKEN"],
+        "env_prefix": ["SLACK_"]
+      },
+      "objects": ["message", "messages", "channel", "channels", "reaction", "reactions", "file", "files", "thread", "reply", "status", "reminder", "post", "dm"]
+    },
+    "notion": {
+      "name": "Notion API",
+      "spec": { "url": "https://raw.githubusercontent.com/makenotion/notion-mcp-server/main/scripts/notion-openapi.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@notionhq/client", "notion-client", "@notion-render/client"],
+        "pypi": ["notion-client", "notion-sdk-py", "notion"],
+        "go": ["github.com/jomei/notionapi"],
+        "hosts": ["api.notion.com"],
+        "env": ["NOTION_API_KEY", "NOTION_TOKEN", "NOTION_API_TOKEN", "NOTION_INTEGRATION_TOKEN", "NOTION_DATABASE_ID", "NOTION_PAGE_ID"],
+        "env_prefix": ["NOTION_"]
+      },
+      "objects": ["page", "pages", "database", "databases", "block", "blocks", "comment", "comments", "property"]
+    },
+    "stripe": {
+      "name": "Stripe API",
+      "spec": { "url": "https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["stripe", "@stripe/agent-toolkit"],
+        "pypi": ["stripe", "stripe-agent-toolkit"],
+        "go": ["github.com/stripe/stripe-go"],
+        "hosts": ["api.stripe.com"],
+        "env": ["STRIPE_SECRET_KEY", "STRIPE_API_KEY", "STRIPE_KEY", "STRIPE_RESTRICTED_KEY"],
+        "env_prefix": ["STRIPE_"]
+      },
+      "objects": ["customer", "customers", "payment", "payments", "invoice", "invoices", "subscription", "subscriptions", "product", "products", "price", "prices", "refund", "refunds", "charge", "charges", "coupon", "payout", "checkout", "session"]
+    },
+    "twilio": {
+      "name": "Twilio REST API (2010-04-01)",
+      "spec": { "url": "https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["twilio"],
+        "pypi": ["twilio"],
+        "go": ["github.com/twilio/twilio-go"],
+        "hosts": ["api.twilio.com"],
+        "env": ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_API_KEY", "TWILIO_API_SECRET", "TWILIO_PHONE_NUMBER"],
+        "env_prefix": ["TWILIO_"]
+      }
+    },
+    "jira": {
+      "name": "Jira Cloud platform REST API v3",
+      "spec": { "url": "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["jira.js", "jira-client", "jira-connector"],
+        "pypi": ["jira", "atlassian-python-api"],
+        "go": ["github.com/andygrunwald/go-jira", "github.com/ctreminiom/go-atlassian"],
+        "hosts": ["atlassian.net"],
+        "env": ["JIRA_URL", "JIRA_API_TOKEN", "JIRA_EMAIL", "JIRA_USERNAME", "JIRA_HOST", "JIRA_BASE_URL", "JIRA_PERSONAL_TOKEN", "ATLASSIAN_API_TOKEN", "ATLASSIAN_EMAIL", "ATLASSIAN_SITE_NAME"],
+        "env_prefix": ["JIRA_", "ATLASSIAN_"]
+      },
+      "objects": ["issue", "issues", "ticket", "tickets", "comment", "comments", "project", "sprint", "transition", "worklog", "epic"]
+    },
+    "confluence": {
+      "name": "Confluence Cloud REST API v2",
+      "spec": { "url": "https://dac-static.atlassian.com/cloud/confluence/openapi-v2.v3.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["confluence.js", "confluence-api"],
+        "pypi": ["atlassian-python-api"],
+        "env": ["CONFLUENCE_URL", "CONFLUENCE_API_TOKEN", "CONFLUENCE_USERNAME", "CONFLUENCE_EMAIL", "CONFLUENCE_BASE_URL", "CONFLUENCE_PERSONAL_TOKEN", "CONFLUENCE_SPACE_KEY"],
+        "env_prefix": ["CONFLUENCE_"]
+      }
+    },
+    "trello": {
+      "name": "Trello REST API",
+      "spec": { "url": "https://developer.atlassian.com/cloud/trello/swagger.v3.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["trello.js", "trello", "node-trello"],
+        "pypi": ["py-trello"],
+        "hosts": ["api.trello.com"],
+        "env": ["TRELLO_API_KEY", "TRELLO_TOKEN", "TRELLO_BOARD_ID"],
+        "env_prefix": ["TRELLO_"]
+      }
+    },
+    "bitbucket": {
+      "name": "Bitbucket Cloud REST API",
+      "spec": { "url": "https://api.bitbucket.org/swagger.json", "format": "swagger2", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["bitbucket"],
+        "pypi": ["atlassian-python-api"],
+        "hosts": ["api.bitbucket.org"],
+        "env": ["BITBUCKET_USERNAME", "BITBUCKET_APP_PASSWORD", "BITBUCKET_TOKEN", "BITBUCKET_WORKSPACE", "BITBUCKET_URL", "BITBUCKET_ACCESS_TOKEN"],
+        "env_prefix": ["BITBUCKET_"]
+      }
+    },
+    "asana": {
+      "name": "Asana API",
+      "spec": { "url": "https://raw.githubusercontent.com/Asana/openapi/master/defs/asana_oas.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["asana"],
+        "pypi": ["asana"],
+        "hosts": ["app.asana.com"],
+        "env": ["ASANA_ACCESS_TOKEN", "ASANA_TOKEN", "ASANA_PAT", "ASANA_WORKSPACE_ID"],
+        "env_prefix": ["ASANA_"]
+      }
+    },
+    "linear": {
+      "name": "Linear GraphQL API",
+      "spec": { "url": "https://raw.githubusercontent.com/linear/linear/master/packages/sdk/src/schema.graphql", "format": "graphql_sdl", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@linear/sdk"],
+        "pypi": ["linear-api", "linear-py"],
+        "hosts": ["api.linear.app"],
+        "env": ["LINEAR_API_KEY", "LINEAR_TOKEN", "LINEAR_ACCESS_TOKEN", "LINEAR_TEAM_ID"],
+        "env_prefix": ["LINEAR_"]
+      },
+      "objects": ["issue", "issues", "project", "projects", "comment", "comments", "cycle", "team", "label", "labels"]
+    },
+    "monday": {
+      "name": "monday.com GraphQL API",
+      "spec": { "url": "https://api.monday.com/v2/get_schema", "format": "graphql_introspection", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@mondaydotcomorg/api", "monday-sdk-js"],
+        "pypi": ["monday", "monday-api-python-sdk"],
+        "hosts": ["api.monday.com"],
+        "env": ["MONDAY_API_TOKEN", "MONDAY_API_KEY", "MONDAY_TOKEN"],
+        "env_prefix": ["MONDAY_"]
+      }
+    },
+    "clickup": {
+      "name": "ClickUp API v2",
+      "spec": { "url": "https://developer.clickup.com/openapi/clickup-api-v2-reference.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "hosts": ["api.clickup.com"],
+        "env": ["CLICKUP_API_TOKEN", "CLICKUP_API_KEY", "CLICKUP_TOKEN", "CLICKUP_TEAM_ID", "CLICKUP_WORKSPACE_ID"],
+        "env_prefix": ["CLICKUP_"]
+      }
+    },
+    "discord": {
+      "name": "Discord HTTP API",
+      "spec": { "url": "https://raw.githubusercontent.com/discord/discord-api-spec/main/specs/openapi.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["discord.js", "@discordjs/rest", "eris", "discord-api-types"],
+        "pypi": ["discord.py", "discord-py", "py-cord", "nextcord", "hikari", "disnake"],
+        "go": ["github.com/bwmarrin/discordgo"],
+        "cargo": ["serenity", "twilight-http"],
+        "hosts": ["discord.com"],
+        "env": ["DISCORD_TOKEN", "DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID", "DISCORD_GUILD_ID"],
+        "env_prefix": ["DISCORD_"]
+      },
+      "objects": ["message", "messages", "channel", "channels", "role", "roles", "reaction", "reactions", "thread", "threads", "post", "send"]
+    },
+    "microsoft-graph": {
+      "name": "Microsoft Graph v1.0 (Outlook, Teams, OneDrive, SharePoint, Entra ID)",
+      "spec": { "url": "https://raw.githubusercontent.com/microsoftgraph/msgraph-metadata/master/openapi/v1.0/openapi.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@microsoft/microsoft-graph-client", "@microsoft/msgraph-sdk", "@azure/msal-node"],
+        "pypi": ["msgraph-sdk", "o365", "msal", "msgraph-core"],
+        "go": ["github.com/microsoftgraph/msgraph-sdk-go"],
+        "nuget": ["Microsoft.Graph"],
+        "hosts": ["graph.microsoft.com"],
+        "env": ["MS_CLIENT_ID", "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_CLIENT_SECRET", "MICROSOFT_CLIENT_ID", "MS_TENANT_ID", "GRAPH_CLIENT_ID"],
+        "env_prefix": ["MS_GRAPH_", "MSGRAPH_"]
+      },
+      "objects": ["email", "emails", "mail", "message", "messages", "event", "events", "calendar", "file", "files", "drive", "team", "teams", "channel", "chat", "user", "send", "draft"]
+    },
+    "google-drive": {
+      "name": "Google Drive API v3",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@googleapis/drive"],
+        "hosts": ["www.googleapis.com/drive"],
+        "code": ["google.drive(", "build('drive'", "build(\"drive\"", "drive_v3"],
+        "env": ["GOOGLE_DRIVE_FOLDER_ID", "GDRIVE_CREDENTIALS_PATH", "GOOGLE_DRIVE_CREDENTIALS"],
+        "env_prefix": ["GDRIVE_", "GOOGLE_DRIVE_"]
+      },
+      "objects": ["file", "files", "folder", "folders", "drive", "permission", "share", "upload", "document", "doc", "sheet", "trash"]
+    },
+    "gmail": {
+      "name": "Gmail API v1",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@googleapis/gmail"],
+        "hosts": ["gmail.googleapis.com"],
+        "code": ["google.gmail(", "build('gmail'", "build(\"gmail\"", "gmail_v1"],
+        "env": ["GMAIL_CREDENTIALS_PATH", "GMAIL_OAUTH_PATH", "GMAIL_CLIENT_ID"],
+        "env_prefix": ["GMAIL_"]
+      },
+      "objects": ["email", "emails", "mail", "message", "messages", "draft", "drafts", "label", "labels", "send", "thread", "reply"]
+    },
+    "google-calendar": {
+      "name": "Google Calendar API v3",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@googleapis/calendar"],
+        "code": ["google.calendar(", "build('calendar'", "build(\"calendar\"", "calendar_v3"],
+        "env": ["GOOGLE_CALENDAR_ID", "GOOGLE_CALENDAR_CREDENTIALS"],
+        "env_prefix": ["GOOGLE_CALENDAR_"]
+      },
+      "objects": ["event", "events", "calendar", "calendars", "meeting", "meetings", "invite"]
+    },
+    "google-sheets": {
+      "name": "Google Sheets API v4",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/sheets/v4/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@googleapis/sheets", "google-spreadsheet"],
+        "pypi": ["gspread", "pygsheets"],
+        "hosts": ["sheets.googleapis.com"],
+        "code": ["google.sheets(", "build('sheets'", "build(\"sheets\"", "sheets_v4"],
+        "env": ["GOOGLE_SHEETS_ID", "SPREADSHEET_ID", "GOOGLE_SHEET_ID"],
+        "env_prefix": ["GOOGLE_SHEETS_"]
+      },
+      "objects": ["sheet", "sheets", "spreadsheet", "spreadsheets", "row", "rows", "cell", "cells", "range", "values", "column"]
+    },
+    "google-docs": {
+      "name": "Google Docs API v1",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/docs/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@googleapis/docs"],
+        "hosts": ["docs.googleapis.com"],
+        "code": ["google.docs(", "build('docs'", "build(\"docs\"", "docs_v1"]
+      }
+    },
+    "youtube": {
+      "name": "YouTube Data API v3",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/youtube/v3/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@googleapis/youtube"],
+        "code": ["google.youtube(", "build('youtube'", "build(\"youtube\""],
+        "env": ["YOUTUBE_API_KEY"],
+        "env_prefix": ["YOUTUBE_"]
+      }
+    },
+    "google-workspace": {
+      "name": "Google APIs (the googleapis client; the discovery directory names each API)",
+      "spec": null,
+      "signals": {
+        "npm": ["googleapis", "google-auth-library"],
+        "pypi": ["google-api-python-client", "google-auth-oauthlib"],
+        "go": ["google.golang.org/api"],
+        "hosts": ["www.googleapis.com", "oauth2.googleapis.com"],
+        "env": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_OAUTH_CLIENT_ID"],
+        "env_prefix": []
+      },
+      "note": "the googleapis client reaches many APIs, each with its own discovery document: a server is mock_min only through the API it calls (google-drive, gmail, google-calendar, google-sheets, google-docs, youtube, bigquery); the directory of APIs is not one description; looked for on 2026-11-28"
+    },
+    "bigquery": {
+      "name": "BigQuery API v2",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/bigquery/v2/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@google-cloud/bigquery"],
+        "pypi": ["google-cloud-bigquery", "pandas-gbq"],
+        "go": ["cloud.google.com/go/bigquery"],
+        "env": ["BIGQUERY_PROJECT", "BIGQUERY_DATASET", "BQ_PROJECT_ID", "BIGQUERY_PROJECT_ID"],
+        "env_prefix": ["BIGQUERY_", "BQ_"]
+      }
+    },
+    "firestore": {
+      "name": "Cloud Firestore API v1",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/firestore/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {}
+    },
+    "gcs": {
+      "name": "Cloud Storage JSON API v1",
+      "spec": { "url": "https://www.googleapis.com/discovery/v1/apis/storage/v1/rest", "format": "google_discovery", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {}
+    },
+    "aws": {
+      "name": "AWS service APIs (Smithy models, one folder per service)",
+      "spec": null,
+      "signals": {},
+      "note": "AWS publishes one Smithy model per service (github.com/aws/api-models-aws), not one description for \"AWS\": a server is mock_min only through a service with its own entry (dynamodb); looked for on 2026-11-28"
+    },
+    "dynamodb": {
+      "name": "Amazon DynamoDB (Smithy model)",
+      "spec": { "url": "https://raw.githubusercontent.com/aws/api-models-aws/main/models/dynamodb/service/2012-08-10/dynamodb-2012-08-10.json", "format": "smithy", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {}
+    },
+    "cloudflare": {
+      "name": "Cloudflare API",
+      "spec": { "url": "https://raw.githubusercontent.com/cloudflare/api-schemas/main/openapi.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["cloudflare"],
+        "pypi": ["cloudflare"],
+        "go": ["github.com/cloudflare/cloudflare-go"],
+        "hosts": ["api.cloudflare.com"],
+        "env": ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL", "CF_API_TOKEN", "CF_ACCOUNT_ID"],
+        "env_prefix": ["CLOUDFLARE_", "CF_"]
+      },
+      "objects": ["dns", "record", "records", "zone", "zones", "worker", "workers", "rule", "rules", "route", "routes", "redirect", "redirects", "page", "kv", "domain", "domains", "bucket", "tunnel", "apply", "rollback"]
+    },
+    "digitalocean": {
+      "name": "DigitalOcean API v2",
+      "spec": { "url": "https://raw.githubusercontent.com/digitalocean/openapi/main/specification/DigitalOcean-public.v2.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@digitalocean/dots", "do-wrapper"],
+        "pypi": ["pydo", "python-digitalocean"],
+        "go": ["github.com/digitalocean/godo"],
+        "hosts": ["api.digitalocean.com"],
+        "env": ["DIGITALOCEAN_API_TOKEN", "DIGITALOCEAN_TOKEN", "DO_API_TOKEN", "DIGITALOCEAN_ACCESS_TOKEN"],
+        "env_prefix": ["DIGITALOCEAN_"]
+      }
+    },
+    "vercel": {
+      "name": "Vercel REST API",
+      "spec": { "url": "https://openapi.vercel.sh/", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["@vercel/sdk", "@vercel/client"],
+        "hosts": ["api.vercel.com"],
+        "env": ["VERCEL_TOKEN", "VERCEL_API_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"],
+        "env_prefix": ["VERCEL_"]
+      }
+    },
+    "netlify": {
+      "name": "Netlify API",
+      "spec": { "url": "https://raw.githubusercontent.com/netlify/open-api/master/swagger.yml", "format": "swagger2", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["netlify", "@netlify/api"],
+        "hosts": ["api.netlify.com"],
+        "env": ["NETLIFY_AUTH_TOKEN", "NETLIFY_TOKEN", "NETLIFY_SITE_ID", "NETLIFY_PERSONAL_ACCESS_TOKEN"],
+        "env_prefix": ["NETLIFY_"]
+      }
+    },
+    "render": {
+      "name": "Render public API",
+      "spec": { "url": "https://api-docs.render.com/openapi/render-public-api-1.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "hosts": ["api.render.com"],
+        "env": ["RENDER_API_KEY", "RENDER_API_TOKEN", "RENDER_OWNER_ID"],
+        "env_prefix": ["RENDER_"]
+      }
+    },
+    "neon": {
+      "name": "Neon API v2",
+      "spec": { "url": "https://neon.tech/api_spec/release/v2.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@neondatabase/api-client"],
+        "hosts": ["console.neon.tech"],
+        "env": ["NEON_API_KEY", "NEON_PROJECT_ID"],
+        "env_prefix": ["NEON_"]
+      }
+    },
+    "supabase-management": {
+      "name": "Supabase Management API v1",
+      "spec": { "url": "https://api.supabase.com/api/v1-json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27", "endpoint": true },
+      "signals": {
+        "npm": ["supabase-management-js"],
+        "hosts": ["api.supabase.com"],
+        "env": ["SUPABASE_ACCESS_TOKEN", "SUPABASE_PROJECT_REF", "SUPABASE_PERSONAL_ACCESS_TOKEN"],
+        "env_prefix": []
+      }
+    },
+    "sentry": {
+      "name": "Sentry API",
+      "spec": { "url": "https://raw.githubusercontent.com/getsentry/sentry-api-schema/main/openapi-derefed.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {}
+    },
+    "pagerduty": {
+      "name": "PagerDuty REST API v2",
+      "spec": { "url": "https://raw.githubusercontent.com/PagerDuty/api-schema/main/reference/REST/openapiv3.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@pagerduty/pdjs", "node-pagerduty"],
+        "pypi": ["pagerduty", "pdpyras"],
+        "go": ["github.com/PagerDuty/go-pagerduty"],
+        "hosts": ["api.pagerduty.com"],
+        "env": ["PAGERDUTY_API_KEY", "PAGERDUTY_TOKEN", "PAGERDUTY_USER_API_KEY", "PAGERDUTY_API_HOST"],
+        "env_prefix": ["PAGERDUTY_"]
+      }
+    },
+    "datadog": {
+      "name": "Datadog API v2",
+      "spec": { "url": "https://raw.githubusercontent.com/DataDog/datadog-api-client-python/master/.generator/schemas/v2/openapi.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@datadog/datadog-api-client"],
+        "pypi": ["datadog-api-client", "datadog"],
+        "go": ["github.com/DataDog/datadog-api-client-go"],
+        "hosts": ["api.datadoghq.com", "api.datadoghq.eu"],
+        "env": ["DD_API_KEY", "DD_APP_KEY", "DATADOG_API_KEY", "DATADOG_APP_KEY", "DD_SITE"],
+        "env_prefix": ["DATADOG_"]
+      }
+    },
+    "figma": {
+      "name": "Figma REST API",
+      "spec": { "url": "https://raw.githubusercontent.com/figma/rest-api-spec/main/openapi/openapi.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["figma-js", "@figma/rest-api-spec", "figma-api"],
+        "hosts": ["api.figma.com"],
+        "env": ["FIGMA_API_KEY", "FIGMA_ACCESS_TOKEN", "FIGMA_TOKEN", "FIGMA_PERSONAL_ACCESS_TOKEN"],
+        "env_prefix": ["FIGMA_"]
+      }
+    },
+    "box": {
+      "name": "Box Platform API",
+      "spec": { "url": "https://raw.githubusercontent.com/box/box-openapi/main/openapi.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["box-node-sdk", "box-typescript-sdk-gen"],
+        "pypi": ["boxsdk", "box-sdk-gen"],
+        "hosts": ["api.box.com"],
+        "env": ["BOX_CLIENT_ID", "BOX_CLIENT_SECRET", "BOX_DEVELOPER_TOKEN", "BOX_ENTERPRISE_ID"],
+        "env_prefix": ["BOX_"]
+      }
+    },
+    "x-twitter": {
+      "name": "X API v2",
+      "spec": { "url": "https://api.twitter.com/2/openapi.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["twitter-api-v2", "twitter"],
+        "pypi": ["tweepy", "twikit", "python-twitter"],
+        "hosts": ["api.twitter.com", "api.x.com"],
+        "env": ["TWITTER_API_KEY", "TWITTER_API_SECRET", "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET", "TWITTER_BEARER_TOKEN", "X_API_KEY", "X_BEARER_TOKEN"],
+        "env_prefix": ["TWITTER_"]
+      }
+    },
+    "resend": {
+      "name": "Resend API",
+      "spec": { "url": "https://raw.githubusercontent.com/resend/resend-openapi/main/resend.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["resend"],
+        "pypi": ["resend"],
+        "hosts": ["api.resend.com"],
+        "env": ["RESEND_API_KEY", "RESEND_FROM", "RESEND_FROM_EMAIL"],
+        "env_prefix": ["RESEND_"]
+      }
+    },
+    "mailchimp": {
+      "name": "Mailchimp Marketing API",
+      "spec": { "url": "https://raw.githubusercontent.com/mailchimp/mailchimp-client-lib-codegen/main/spec/marketing.json", "format": "swagger2", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["@mailchimp/mailchimp_marketing", "mailchimp-api-v3"],
+        "pypi": ["mailchimp-marketing", "mailchimp3"],
+        "hosts": ["api.mailchimp.com"],
+        "env": ["MAILCHIMP_API_KEY", "MAILCHIMP_SERVER_PREFIX", "MAILCHIMP_LIST_ID"],
+        "env_prefix": ["MAILCHIMP_"]
+      }
+    },
+    "plaid": {
+      "name": "Plaid API",
+      "spec": { "url": "https://raw.githubusercontent.com/plaid/plaid-openapi/master/2020-09-14.yml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["plaid"],
+        "pypi": ["plaid-python"],
+        "hosts": ["plaid.com"],
+        "env": ["PLAID_CLIENT_ID", "PLAID_SECRET", "PLAID_ENV"],
+        "env_prefix": ["PLAID_"]
+      }
+    },
+    "square": {
+      "name": "Square Connect API",
+      "spec": { "url": "https://raw.githubusercontent.com/square/connect-api-specification/master/api.json", "format": "swagger2", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["square"],
+        "pypi": ["squareup"],
+        "hosts": ["connect.squareup.com"],
+        "env": ["SQUARE_ACCESS_TOKEN", "SQUARE_LOCATION_ID", "SQUARE_ENVIRONMENT"],
+        "env_prefix": ["SQUARE_"]
+      }
+    },
+    "zendesk": {
+      "name": "Zendesk Support API",
+      "spec": { "url": "https://developer.zendesk.com/zendesk/oas.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["node-zendesk"],
+        "pypi": ["zenpy"],
+        "hosts": ["zendesk.com"],
+        "env": ["ZENDESK_SUBDOMAIN", "ZENDESK_EMAIL", "ZENDESK_API_TOKEN", "ZENDESK_TOKEN"],
+        "env_prefix": ["ZENDESK_"]
+      }
+    },
+    "intercom": {
+      "name": "Intercom API 2.11",
+      "spec": { "url": "https://raw.githubusercontent.com/intercom/Intercom-OpenAPI/main/descriptions/2.11/api.intercom.io.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["intercom-client"],
+        "pypi": ["python-intercom"],
+        "hosts": ["api.intercom.io"],
+        "env": ["INTERCOM_ACCESS_TOKEN", "INTERCOM_TOKEN"],
+        "env_prefix": ["INTERCOM_"]
+      }
+    },
+    "spotify": {
+      "name": "Spotify Web API",
+      "spec": { "url": "https://developer.spotify.com/reference/web-api/open-api-schema.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "npm": ["spotify-web-api-node", "@spotify/web-api-ts-sdk"],
+        "pypi": ["spotipy"],
+        "hosts": ["api.spotify.com"],
+        "env": ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_REDIRECT_URI", "SPOTIFY_REFRESH_TOKEN"],
+        "env_prefix": ["SPOTIFY_"]
+      }
+    },
+    "docker": {
+      "name": "Docker Engine API",
+      "spec": { "url": "https://docs.docker.com/reference/api/engine/version/v1.47.yaml", "format": "swagger2", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {}
+    },
+    "airbyte": {
+      "name": "Airbyte configuration API",
+      "spec": { "url": "https://raw.githubusercontent.com/airbytehq/airbyte-platform/main/airbyte-api/server-api/src/main/openapi/config.yaml", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {
+        "pypi": ["airbyte-api"],
+        "env": ["AIRBYTE_API_URL", "AIRBYTE_CLIENT_ID", "AIRBYTE_CLIENT_SECRET", "AIRBYTE_WORKSPACE_ID"],
+        "env_prefix": ["AIRBYTE_"]
+      }
+    },
+    "airtable": {
+      "name": "Airtable Web API",
+      "spec": null,
+      "note": "no machine-readable description published by Airtable (looked for on 2026-11-27: none at airtable.com/developers, none in Airtable's GitHub organisation)",
+      "signals": {
+        "npm": ["airtable"],
+        "pypi": ["pyairtable", "airtable-python-wrapper"],
+        "hosts": ["api.airtable.com"],
+        "env": ["AIRTABLE_API_KEY", "AIRTABLE_TOKEN", "AIRTABLE_PAT", "AIRTABLE_BASE_ID"],
+        "env_prefix": ["AIRTABLE_"]
+      }
+    },
+    "telegram": {
+      "name": "Telegram Bot API",
+      "spec": null,
+      "note": "the Bot API is documented as HTML only (looked for on 2026-11-27)",
+      "signals": {
+        "npm": ["node-telegram-bot-api", "telegraf", "grammy", "telegram"],
+        "pypi": ["python-telegram-bot", "pytelegrambotapi", "aiogram", "telethon", "pyrogram"],
+        "go": ["github.com/go-telegram-bot-api/telegram-bot-api", "github.com/go-telegram/bot"],
+        "hosts": ["api.telegram.org"],
+        "env": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_API_ID", "TELEGRAM_API_HASH"],
+        "env_prefix": ["TELEGRAM_"]
+      },
+      "objects": ["message", "messages", "chat", "send", "post", "photo", "file"]
+    },
+    "todoist": {
+      "name": "Todoist API",
+      "spec": null,
+      "note": "no public description file found at a stable URL (looked for on 2026-11-27); the typed SDK is not mapped yet",
+      "signals": {
+        "npm": ["@doist/todoist-api-typescript"],
+        "pypi": ["todoist-api-python"],
+        "hosts": ["api.todoist.com"],
+        "env": ["TODOIST_API_TOKEN", "TODOIST_API_KEY", "TODOIST_TOKEN"],
+        "env_prefix": ["TODOIST_"]
+      }
+    },
+    "shopify": {
+      "name": "Shopify Admin API",
+      "spec": null,
+      "note": "the Admin GraphQL schema is served only to an authenticated shop (looked for on 2026-11-27)",
+      "signals": {
+        "npm": ["@shopify/shopify-api", "@shopify/admin-api-client", "shopify-api-node"],
+        "pypi": ["shopifyapi"],
+        "hosts": ["myshopify.com"],
+        "env": ["SHOPIFY_ACCESS_TOKEN", "SHOPIFY_SHOP_DOMAIN", "SHOPIFY_STORE_DOMAIN", "SHOPIFY_API_KEY", "SHOPIFY_API_SECRET"],
+        "env_prefix": ["SHOPIFY_"]
+      }
+    },
+    "salesforce": {
+      "name": "Salesforce REST API",
+      "spec": null,
+      "note": "descriptions are generated per org behind a login (looked for on 2026-11-27)",
+      "signals": {
+        "npm": ["jsforce", "@jsforce/jsforce-node"],
+        "pypi": ["simple-salesforce"],
+        "hosts": ["salesforce.com", "force.com"],
+        "env": ["SALESFORCE_USERNAME", "SALESFORCE_PASSWORD", "SALESFORCE_TOKEN", "SALESFORCE_INSTANCE_URL", "SALESFORCE_CLIENT_ID", "SF_INSTANCE_URL"],
+        "env_prefix": ["SALESFORCE_", "SFDC_"]
+      }
+    },
+    "zoom": {
+      "name": "Zoom API",
+      "spec": null,
+      "note": "descriptions are downloadable only from the developer portal behind a login (looked for on 2026-11-27)",
+      "signals": {
+        "hosts": ["api.zoom.us"],
+        "env": ["ZOOM_ACCOUNT_ID", "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET", "ZOOM_API_KEY"],
+        "env_prefix": ["ZOOM_"]
+      }
+    },
+    "elasticsearch": {
+      "name": "Elasticsearch API (request and response specification)",
+      "spec": { "url": "https://raw.githubusercontent.com/elastic/elasticsearch-specification/main/output/openapi/elasticsearch-openapi.json", "format": "openapi3", "publisher": "vendor", "checked": "2026-11-27" },
+      "signals": {}
+    }
+  }
+}

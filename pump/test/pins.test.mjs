@@ -135,16 +135,16 @@ test('R-PIN-01: an enforce lane\'s own commit pin is the versions.tool entry nam
 });
 
 test('R-PIN-01: tool-qa\'s own lanes are enforced, and what their bundles report proves their pins', () => {
-  assert.deepEqual(Object.keys(LANES).sort(), ['meta-github', 'meta-registry', 'release-diff']);
+  assert.deepEqual(Object.keys(LANES).sort(), ['meta-backend', 'meta-github', 'meta-registry', 'release-diff']);
   for (const [name, lane] of Object.entries(LANES)) {
     assert.equal(shipped[name].pin_check, 'enforce', `${name} reports its version, so it is enforced`);
-    // meta/run.mjs reports the lane as tool-qa-<lane.name> at lane.version.
-    const d = pinDecision({ mode: 'enforce', expected: expectedPins(shipped[name].versions), tools: [{ name: `tool-qa-${lane.name}`, version: lane.version }] });
+    // meta/run.mjs reports the lane as tool-qa-<lane.name> at lane.version, or what the lane lists in `tools` (meta-backend: the lane and its maps).
+    const d = pinDecision({ mode: 'enforce', expected: expectedPins(shipped[name].versions), tools: lane.tools ?? [{ name: `tool-qa-${lane.name}`, version: lane.version }] });
     assert.equal(d.reason, null, `${name}: ${JSON.stringify(d.problems)}`);
     assert.equal(d.report.verified.length, Object.keys(shipped[name].versions.tool).length + Object.keys(shipped[name].versions.probe).length);
   }
   const meta = readFileSync(new URL('../../meta/run.mjs', import.meta.url), 'utf8');
-  assert.match(meta, /tools: \[\{ name: `tool-qa-\$\{lane\.name\}`, version: lane\.version \}\]/, 'meta/run.mjs still reports tool-qa-<lane> at its version');
+  assert.match(meta, /tools: lane\.tools \? lane\.tools\.map\(\(t\) => \(\{ \.\.\.t \}\)\) : \[\{ name: `tool-qa-\$\{lane\.name\}`, version: lane\.version \}\]/, 'meta/run.mjs still reports tool-qa-<lane> at its version, or the lane\'s own list');
 });
 
 test('R-PIN-03: live-probe\'s pins are ones its worker can prove: the fuzz stage at the mcp-check pin, the sandbox at sandbox_sha', () => {

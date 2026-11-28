@@ -66,7 +66,8 @@ Every loop workflow runs the guard first (`scripts/guard.mjs --job <job>`), so `
 | `watchdog.yml` | `LANE_WATCHDOG_ENABLED` | no; `LOOP_SLOTS=0` means no pump is expected |
 | `ingest.yml` (manual) | `LANE_INGEST_ENABLED`; also refuses to run unless `LANE_PUMP_ENABLED` is off | no |
 | `history-registry.yml`, `history-packages.yml`, `history-popularity.yml` | `LANE_HISTORY_REGISTRY_ENABLED`, `LANE_HISTORY_PACKAGES_ENABLED`, `LANE_HISTORY_POPULARITY_ENABLED` | no |
-| `meta-github.yml`, `meta-registry.yml`, `release-diff.yml` | `LANE_META_GITHUB_ENABLED`, `LANE_META_REGISTRY_ENABLED`, `LANE_RELEASE_DIFF_ENABLED` | no (source-only lanes) |
+| `meta-github.yml`, `meta-registry.yml`, `release-diff.yml`, `meta-backend.yml` | `LANE_META_GITHUB_ENABLED`, `LANE_META_REGISTRY_ENABLED`, `LANE_RELEASE_DIFF_ENABLED`, `LANE_META_BACKEND_ENABLED` | no (source-only lanes) |
+| `meta-backend-dryrun.yml` | none: it reads public archives and records nothing (a pull request that changes the classifier, a manual dispatch, a weekly sweep; meta/README.md, "Dry run") | no |
 | `state-snapshot.yml` | `LANE_STATE_SNAPSHOT_ENABLED` | no |
 | `offsite-backup.yml`, `keep-forever.yml` | `LANE_OFFSITE_ENABLED`, `LANE_KEEP_FOREVER_ENABLED` | no |
 | `ledger.yml`, `perf-baselines.yml` | `LANE_LEDGER_ENABLED`, `LANE_PERF_ENABLED` | no |

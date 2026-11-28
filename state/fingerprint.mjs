@@ -69,10 +69,10 @@ export const CLASSES = Object.freeze([...SKIP_REASONS, 'control_miss']);
  */
 /** The tools in OUR_TOOLS that are our own code (the rest are third-party tools our workers run). */
 export const OWN_TOOLS = Object.freeze(['t0-control', 'mcp-check', 'mcp-surface-corpus', 'mcp-surface-corpus-sandbox', 'mcp-writecheck', 'mcp-writecheck-action', 'mcp-catalog-snap',
-  'tool-qa', 'tool-qa-meta-github', 'tool-qa-meta-registry', 'tool-qa-release-diff', 'fuzz']);
+  'tool-qa', 'tool-qa-meta-github', 'tool-qa-meta-registry', 'tool-qa-release-diff', 'tool-qa-meta-backend', 'fuzz']);
 export const OUR_TOOLS = Object.freeze([
   't0-control', 'mcp-check', 'mcp-surface-corpus', 'mcp-surface-corpus-sandbox', 'mcp-writecheck', 'mcp-writecheck-action', 'mcp-catalog-snap',
-  'tool-qa', 'tool-qa-meta-github', 'tool-qa-meta-registry', 'tool-qa-release-diff', 'fuzz', 'gvisor',
+  'tool-qa', 'tool-qa-meta-github', 'tool-qa-meta-registry', 'tool-qa-release-diff', 'tool-qa-meta-backend', 'fuzz', 'gvisor',
   'conformance', 'inspector', 'sdk-typescript', 'client-typescript', 'sdk-python', 'sdk-go',
 ]);
 

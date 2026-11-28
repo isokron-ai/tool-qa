@@ -1,0 +1,90 @@
+[
+  {
+    "id": "WB1 a stand-in counts without being cleared",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "&& b.stand_in.cleared === true",
+    "new": "",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-03"
+  },
+  {
+    "id": "WB2 weak signals alone find a backend",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "s.score >= FOUND_SCORE && strong(s) &&",
+    "new": "s.score >= FOUND_SCORE &&",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-03"
+  },
+  {
+    "id": "WB3 the filesystem is no longer a fallback",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "const found = [...found0.filter((s) => s.id !== 'filesystem'), ...found0.filter((s) => s.id === 'filesystem')];",
+    "new": "const found = found0;",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-16"
+  },
+  {
+    "id": "WB4 runtime env names are kept",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "&& !ENV_DENY_RE.test(n);",
+    "new": ";",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-15"
+  },
+  {
+    "id": "WB5 a mentioned backend outranks a declared one",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "(level(y) - level(x)) || ",
+    "new": "",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-18"
+  },
+  {
+    "id": "WB6 the compose scan runs over newlines again",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "/^[ \\t]*image[ \\t]*:[ \\t]*[\"']?([^\\s\"'#]{1,300})/gm",
+    "new": "/^\\s*image\\s*:\\s*[\"']?([^\\s\"'#]{1,300})/gm",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-14"
+  },
+  {
+    "id": "WB7 configuration is read whole",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "if (role !== 'code' && role !== 'maybe_spec') text = text.slice(0, role === 'readme' ? MAX_README_CHARS : MAX_CONFIG_CHARS);",
+    "new": "",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-14"
+  },
+  {
+    "id": "WB8 a read-only tool list no longer makes none",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "if (toolList.length >= MIN_TOOLS_FOR_READ_ONLY && writeTools.length === 0) {",
+    "new": "if (false) {",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-03"
+  },
+  {
+    "id": "WB9 the scan has no wall-clock limit",
+    "file": "meta/backend.mjs",
+    "old": "const timer = setTimeout(() => done(reject, new ScanLimit('ran past its time limit')), timeoutMs);",
+    "new": "const timer = null;",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-20"
+  },
+  {
+    "id": "WB10 the TOML comment strip rescans blanks",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "    const hash = raw.search(/(?:^|[ \\t])#/);\n    const line = hash < 0 ? raw : raw.slice(0, hash);",
+    "new": "    const line = raw.replace(/\\s+#.*$/, '');",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-14"
+  },
+  {
+    "id": "WB11 GITHUB_* names are kept",
+    "file": "meta/lib/backend-scan.mjs",
+    "old": "'GITHUB_[A-Z0-9_]+', ",
+    "new": "",
+    "test": "meta/test/backend.test.mjs",
+    "pattern": "R-WB-15"
+  }
+]

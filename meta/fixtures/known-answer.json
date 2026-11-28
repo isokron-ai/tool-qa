@@ -1,5 +1,5 @@
 {
- "about": "Known answers for the metadata lanes' known-answer control (meta/controls.mjs): facts about our own repository that do not change (ids, creation times, first published versions), or only grow (release count). exact: equal; at_least: a number no smaller; contains: these elements are in the observed list. meta-registry facts come only from entries in the subject owner's own io.github namespace, and only the expected npm package is compared. release-diff names its own subjects and pins the versions it reads, so its facts are those of fixed, immutable releases.",
+ "about": "Known answers for the metadata lanes' known-answer control (meta/controls.mjs): facts about our own repository that do not change (ids, creation times, first published versions), or only grow (release count). exact: equal; at_least: a number no smaller; contains: these elements are in the observed list. meta-registry facts come only from entries in the subject owner's own io.github namespace, and only the expected npm package is compared. release-diff names its own subjects and pins the versions it reads, so its facts are those of fixed, immutable releases. meta-backend reads our own kronicle-lite at a pinned commit (a SQLite document store), so its facts are those of a fixed tree.",
  "subject": "isokron-ai/mcp-check",
  "meta-github": {
   "exact": {
@@ -100,6 +100,24 @@
      "findings": [],
      "held": 0
     }
+   ]
+  }
+ },
+ "meta-backend": {
+  "subjects": [
+   "isokron-ai/kronicle-lite"
+  ],
+  "pins": {
+   "isokron-ai/kronicle-lite": "6d4b9646f8c517871a8f4f1275ee08ce25cd2a04"
+  },
+  "exact": {
+   "class": "local_full",
+   "backend": "sqlite",
+   "stand_in": "sqlite"
+  },
+  "contains": {
+   "dependencies": [
+    "sqlite:better-sqlite3"
    ]
   }
  }

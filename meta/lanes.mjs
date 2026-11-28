@@ -1,4 +1,4 @@
-// The metadata lanes (meta-github, meta-registry) and release-diff behind one
+// The metadata lanes (meta-github, meta-registry), release-diff and meta-backend behind one
 // interface, so run.mjs and the controls treat them alike:
 //
 //   lane.collect({ http, repos, token, budget, deadline, log, seed })
@@ -8,6 +8,7 @@
 import * as gh from './github.mjs';
 import * as reg from './registry.mjs';
 import * as rd from './release-diff.mjs';
+import * as wb from './backend.mjs';
 import { mapLimit } from './lib/http.mjs';
 
 const GITHUB = {
@@ -171,10 +172,51 @@ const RELEASE_DIFF = {
   },
 };
 
-export const LANES = Object.freeze({ 'meta-github': GITHUB, 'meta-registry': REGISTRY, 'release-diff': RELEASE_DIFF });
+const BACKEND = {
+  name: wb.LANE,
+  version: wb.VERSION,
+  settings: wb.SETTINGS,
+  tools: wb.TOOLS,
+  needsToken: false,
+  /** Any passing problem stops the known answer: every fact comes from the one archive read. */
+  factProblem(output) {
+    return output.skips.find((sk) => sk.retryable === true)?.reason ?? null;
+  },
+  minIntervalMs: {},
+  async collect({ http, repos, deadline = () => false, log = () => {}, pins = {}, concurrency = 4, clock = () => Date.now() }) {
+    const out = new Map();
+    await mapLimit(repos, concurrency, async (repo, i) => {
+      if (deadline()) return;
+      const t0 = clock();
+      let o;
+      try {
+        o = wb.subjectOutput(await wb.collectSubject(http, repo, { pins, clock }));
+      } catch (err) {
+        // One subject's data never fails the shard; a throw here is our own failure (tool_error).
+        log(`subject ${i}: failed (${err?.name ?? 'Error'}); recorded as its own skip`);
+        o = wb.subjectErrorOutput();
+      }
+      o.stages.ms = Math.max(0, clock() - t0);
+      out.set(repo, o);
+      log(`subject ${i}: ${Object.entries(o.stages).map(([k, s]) => `${k}=${s}`).join(' ')}`);
+    });
+    return out;
+  },
+  facts(output) {
+    const v = output.records.find((r) => r.field === wb.FIELD)?.value ?? null;
+    return {
+      class: v?.class ?? null,
+      backend: v?.backend?.id ?? null,
+      stand_in: v?.stand_in?.id ?? null,
+      dependencies: (v?.evidence ?? []).filter((e) => e.signal === 'dependency').map((e) => `${e.backend}:${e.detail}`).sort(),
+    };
+  },
+};
+
+export const LANES = Object.freeze({ 'meta-github': GITHUB, 'meta-registry': REGISTRY, 'release-diff': RELEASE_DIFF, 'meta-backend': BACKEND });
 
 export function laneOf(name) {
   const l = LANES[name];
-  if (!l) throw new Error(`unknown lane ${JSON.stringify(name)} (meta-github, meta-registry or release-diff)`);
+  if (!l) throw new Error(`unknown lane ${JSON.stringify(name)} (meta-github, meta-registry, release-diff or meta-backend)`);
   return l;
 }
