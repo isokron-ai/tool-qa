@@ -78,7 +78,7 @@
       "setup_minutes": 12,
       "minutes_per_subject": 2,
       "slots_max": 2,
-      "versions": { "tool": { "mcp-writecheck-action": "a2230e5", "mcp-writecheck": "3af41c6" }, "oracle": {}, "probe": { "mcp-surface-corpus": "78a7834" } },
+      "versions": { "tool": { "mcp-writecheck-action": "a2230e5", "mcp-writecheck": "7001b62" }, "oracle": {}, "probe": { "mcp-surface-corpus": "78a7834" } },
       "image_digest": null,
       "settings_state": "default"
     },
