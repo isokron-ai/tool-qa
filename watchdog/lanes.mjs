@@ -28,6 +28,11 @@
 //   ingest-rejects         ingest rejects in the last 24 hours for pin_mismatch, pin_unverified and
 //                          schema reasons, by reason: amber when each of the two newest worker runs
 //                          had one.
+//   backend-classified     the meta-backend lane (meta/backend.mjs) keeps classifying new subjects: amber
+//                          when the lane is enabled, some active subjects have no write_backend yet, and
+//                          no subject was classified within LANE_THRESHOLDS.backendFreshMs (24 hours; also
+//                          amber when none ever was). Green with the counts otherwise; off while the lane
+//                          is off. Never red: an unclassified server is untested, not failed (R-WB-12).
 //   external-workflows     the workflows the lanes depend on outside this repository: the nightly
 //                          conformance and each enabled lane's workflow file. disabled_inactivity is
 //                          amber (the watchdog's token cannot enable them), not found is amber,
@@ -56,7 +61,9 @@ export const LANE_THRESHOLDS = Object.freeze({
   toolRed: 0.5,
   coverageAmber: 0.8,
   coverageRed: 0.5,
+  backendFreshMs: 24 * HOUR,
 });
+export const BACKEND_LANE = 'meta-backend';
 
 const ago = (now, iso) => {
   const t = Date.parse(iso);
@@ -113,6 +120,13 @@ export function readLaneData(db, now, { cfg = {}, tiers = null } = {}) {
       // only dispatches that started a run: a failed or expired one is not work going out
       newestDispatch: all("SELECT MAX(created) AS at FROM dispatches WHERE status IN ('dispatched', 'done')")[0]?.at ?? null,
       rejects: { by_reason: rejects.filter((r) => watched.includes(r.reason)), newest_runs: runsNewest.map((r) => ({ run_id: r.run_id, bad: Number(r.bad) })) },
+      backends: (() => {
+        // write_backends exists from state schema 14 on; before that there is nothing to count.
+        if (Number(db.raw.prepare('PRAGMA user_version').get().user_version) < 14) return null;
+        const b = all('SELECT COUNT(*) AS n, MAX(updated_at) AS newest FROM write_backends WHERE subject IN (SELECT id FROM subjects WHERE retired_at IS NULL AND gone_at IS NULL AND alias_of IS NULL)')[0];
+        const byClass = Object.fromEntries(all('SELECT class, COUNT(*) AS n FROM write_backends GROUP BY class').map((r) => [r.class, Number(r.n)]));
+        return { classified: Number(b?.n ?? 0), unclassified: Math.max(0, subjects.length - Number(b?.n ?? 0)), newest: b?.newest ?? null, by_class: byClass };
+      })(),
     };
   } catch {
     return null;
@@ -212,6 +226,25 @@ export function laneChecks({ now, slots, pumpOn, cfg, data, tick, breakerTripped
   items.push(d.n > 0 && dAge > T.disagreementAgeMs
     ? { id: 'oracle-disagreements', status: 'amber', summary: `${plural(d.n, 'open oracle disagreement')}; the oldest has been open ${(dAge / (24 * HOUR)).toFixed(0)} days (opened ${d.oldest}) and is not settling` }
     : { id: 'oracle-disagreements', status: 'green', summary: `${plural(d.n, 'open oracle disagreement')}` });
+
+  // the meta-backend lane keeps classifying new subjects (R-WB-12)
+  if (cfg?.[BACKEND_LANE]) {
+    const id = 'backend-classified';
+    const b = data.backends;
+    if (!isEnabled(cfg[BACKEND_LANE])) items.push({ id, status: 'off', summary: `${BACKEND_LANE} is off (pump/workflows.json)` });
+    else if (!running) items.push({ id, status: 'off', summary: 'the pump is off' });
+    else if (!b) items.push({ id, status: 'amber', summary: 'the state has no write_backends table yet (schema 14), so classification cannot be judged' });
+    else {
+      const age = b.newest ? ago(now, b.newest) : Infinity;
+      const classes = Object.entries(b.by_class ?? {}).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
+      const counts = `${b.classified} classified (${classes}), ${b.unclassified} not yet`;
+      if (b.unclassified > 0 && age > T.backendFreshMs) {
+        items.push({ id, status: 'amber', summary: b.newest ? `no subject classified for ${hours(age)} (newest ${b.newest}) while ${counts}` : `no subject classified yet; ${counts}`, ...(b.newest ? { at: b.newest } : {}) });
+      } else {
+        items.push({ id, status: 'green', summary: b.newest ? `newest classification ${hours(age)} ago; ${counts}` : counts, ...(b.newest ? { at: b.newest } : {}) });
+      }
+    }
+  }
 
   // ingest rejects that are the loop's own to fix
   const rj = data.rejects ?? { by_reason: [], newest_runs: [] };

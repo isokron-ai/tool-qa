@@ -49,10 +49,10 @@ test('R-LEAD-02: the v12 migration of a v11 state keeps every row and the due li
   for (const d of dueFromState(db, { tiers, workflows: wf, now: T0 })) accept(db, { subject: d.subject, failures: null });
   const dueBefore = dueFromState(db, { tiers, workflows: wf, now: T0 + 40 * DAY }).map((d) => [d.subject, d.reasons, d.priority]);
   const results = db.raw.prepare('SELECT COUNT(*) AS n FROM results').get().n;
-  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; ALTER TABLE results DROP COLUMN skip_codes; PRAGMA user_version = 11');
+  db.raw.exec('DROP TABLE write_backends; DROP TABLE lead_subjects; DROP TABLE leads; ALTER TABLE results DROP COLUMN skip_codes; PRAGMA user_version = 11');
   assert.equal(db.schemaVersion(), 11);
   assert.equal(db.migrate(), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 13);
+  assert.equal(SCHEMA_VERSION, 14);
   assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM results').get().n, results);
   assert.deepEqual(dueFromState(db, { tiers, workflows: wf, now: T0 + 40 * DAY }).map((d) => [d.subject, d.reasons, d.priority]), dueBefore);
   assert.deepEqual(db.listLeads(), []);

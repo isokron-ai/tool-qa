@@ -41,7 +41,7 @@
 //
 // Switch: LANE_BACKFILL_ENABLED. Only the exact value "true" turns it on.
 
-import { isEnabled, maxAgeDays, runKey, runKeyFields, skipsOnlyWaitDays } from './due.mjs';
+import { isEnabled, maxAgeDays, pairFields, runKey, skipsOnlyWaitDays } from './due.mjs';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -82,7 +82,7 @@ const toMs = (t) => (typeof t === 'number' ? t : Date.parse(t));
  *   since: db.attemptsSinceResult(), run_key -> {n, last}: re-runs since the result (R-FILL-07)
  */
 export function backfillCandidates(input, { exclude = new Set(), holdRunKeys = null, since = new Map() } = {}) {
-  const { now, subjects, workflows, tiers, lastResults, inFlight, parked } = input;
+  const { now, subjects, workflows, tiers, lastResults, inFlight, parked, backends = new Map() } = input;
   const weights = tiers.weights || {};
   const prio = tiers.priority || {};
   const maxRejections = Number.isInteger(tiers.max_rejections) && tiers.max_rejections > 0 ? tiers.max_rejections : 3;
@@ -107,7 +107,10 @@ export function backfillCandidates(input, { exclude = new Set(), holdRunKeys = n
       if (!(age >= floorMs)) continue;
       const skipsDays = skipsOnlyWaitDays(last, tiers, maxAgeDays(cell, s, tiers, tierName));
       if (skipsDays !== null && age <= skipsDays * DAY) continue;
-      const fields = runKeyFields(s, name, wf);
+      // The same run_key and mode the due list would give the pair (pump/modes.mjs).
+      const pf = pairFields(s, name, wf, backends);
+      if (pf.skip) continue;
+      const fields = pf.fields;
       const key = runKey(fields);
       if (parked.has(key) || holdRunKeys?.has(key)) continue;
       // A re-run refused max_rejections times stops; any re-run restarts the floor (R-FILL-07).
@@ -116,7 +119,7 @@ export function backfillCandidates(input, { exclude = new Set(), holdRunKeys = n
       if (re?.last && now - toMs(re.last) < floorMs) continue;
       const ageDays = age / DAY;
       const priority = Number(weights[tierName] || 0) + Math.min(Number(prio.age_max ?? 30), ageDays * Number(prio.age_per_day ?? 1)) - BACKFILL_BAND;
-      out.push({ subject: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, workflow: name, tier: s.tier, run_key: key, fields, reasons: ['backfill'], priority, gap: null });
+      out.push({ subject: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, workflow: name, tier: s.tier, run_key: key, fields, reasons: ['backfill'], priority, gap: null, ...(pf.mode ? { mode: pf.mode } : {}) });
     }
   }
   out.sort((a, b) => b.priority - a.priority || a.tier - b.tier

@@ -2234,6 +2234,30 @@ The first good snapshot upload of each UTC day also writes the day before, once 
 
 To stop publishing: set `LANE_LIVE_SNAPSHOT_ENABLED` to anything but `true` (`gh variable set LANE_LIVE_SNAPSHOT_ENABLED --body false --repo isokron-ai/tool-qa`); the next pump tick makes no call, and the watchdog item turns `off`. The last objects stay in the bucket until their lifecycle rules expire them; to take the page down at once, delete `v1/latest.json` in the bucket, or revoke the key.
 
+## Write backends and writecheck's modes
+
+The meta-backend lane (meta/README.md, "meta-backend") classifies every subject's write backend: `local_full`,
+`mock_min` or `none`. The pump then routes writecheck by it (`pump/modes.mjs`, docs/INTERFACES.md "Writecheck
+modes"):
+
+| Variable | Off (default) | Exactly `true` |
+|---|---|---|
+| `LANE_META_BACKEND_ENABLED` | the worker job stops at its guard | the lane runs when `pump/workflows.json` has `meta-backend.enabled: true` (off until ingest's registry pin holds `write_backend`) |
+| `LANE_WRITECHECK_FULL_ENABLED` | no full-mode shard | subjects classified `local_full` go to writecheck in full mode, with `mode`, `backend`, `stand_in`, `env_names` |
+| `LANE_WRITECHECK_MIN_ENABLED` | no min-mode shard | subjects classified `mock_min` go in min mode, with `spec_url` and `spec_format` |
+
+Turn a mode on only when the dry run (`meta-backend-dryrun.yml`) reports a routed precision of at least 90% on
+local_full and mock_min against the gold set (`meta/test/fixtures/backend-gold.json`; "Gate: met" in its job
+summary), and only subjects marked `routable` are ever routed. Turn a mode on only once the writecheck worker (mcp-writecheck-action `corpus.yml`) declares the mode inputs: GitHub
+refuses a dispatch with an input the workflow does not declare, and the pump would then skip the lane for the tick.
+Turning a mode on moves the run_keys of the subjects in it (their settings_state gains `+mode=...+backend=...+via=...`), so
+they are due again; turning it off moves them back. With every mode off nothing is sent that is not sent today.
+
+The health issue shows writecheck's coverage per mode (the classified, testable servers), the servers that are not
+testable here (classified `none`, with the reason counts; never counted as failures) and the ones not classified
+yet. The watchdog item `backend-classified` goes amber when the lane is on, servers wait, and nothing was classified
+for 24 hours.
+
 ## T0 control lanes (`t0-defects`, `t0-self`, `t0-dogfood`)
 
 Pump lanes that dispatch T0 workers: dispatch-only workflows that test OUR tools against OUR own fixtures and servers. They

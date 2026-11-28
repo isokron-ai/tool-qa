@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 import { BudgetExceededError } from './budgets.mjs';
 import { controlTarget } from './controls.mjs';
 import { workerInputs } from './dispatch.mjs';
+import { modeInputs, shardKey } from './modes.mjs';
 import { computeDue, loadDueInputs, NO_HOOKS } from './due.mjs';
 import { backfillCandidates, backfillFor, reserveSlots } from './backfill.mjs';
 import { pinCheckMode, selfPin } from './pins.mjs';
@@ -53,7 +54,9 @@ export function planShards(due, workflows, { openByWorkflow = new Map(), recheck
     const isRecheck = d.reasons?.includes('lead_reverify') === true;
     const runner = workflows[d.workflow]?.recheck_runner && isRecheck ? workflows[d.workflow].recheck_runner : null;
     const recheck = isRecheck && (separate || runner !== null);
-    const key = recheck ? `${d.workflow}\u0000recheck\u0000${runner ?? ''}` : d.workflow;
+    // A writecheck mode shard holds one mode, one backend and one stand-in or spec URL (pump/modes.mjs).
+    const mk = shardKey(d.mode);
+    const key = `${d.workflow}\u0000${recheck ? 'recheck' : ''}\u0000${runner ?? ''}\u0000${mk}`;
     if (!groups.has(key)) groups.set(key, { name: d.workflow, runner, recheck, items: [] });
     groups.get(key).items.push(d);
   }
@@ -270,7 +273,7 @@ export async function runTick({
       const l = db.acquireLease(it.run_key, attemptId, { ttlMs, now: t });
       // subject: the key the result is recorded under; subject_name: the
       // current owner/name, what the worker clones or reads (schema v8).
-      if (l.acquired) leased.push({ run_key: it.run_key, subject: it.subject, subject_name: it.name ?? it.subject, fence: l.fence, sha: it.fields?.sha ?? null });
+      if (l.acquired) leased.push({ run_key: it.run_key, subject: it.subject, subject_name: it.name ?? it.subject, fence: l.fence, sha: it.fields?.sha ?? null, ...(it.mode ? { mode: it.mode } : {}) });
     }
     if (leased.length === 0) {
       db.releaseSlotForAttempt(attemptId, 'nothing_leased', { now: t });
@@ -340,7 +343,9 @@ export async function runTick({
           log(`${wf.repo} ${wf.ref} moved to ${fresh} since this tick began; ${shardId} expects that commit`);
         }
       }
-      const inputs = workerInputs({ shardId, attemptId, items: leased, toolSha, sendSha: wf.send_sha === true, style: wf.dispatch_style ?? null, extra: control?.inputs ?? null, runner });
+      // The mode inputs of docs/INTERFACES.md, only on a shard in a mode (a worker that does not declare them is never sent them).
+      const modes = modeInputs(leased);
+      const inputs = { ...workerInputs({ shardId, attemptId, items: leased, toolSha, sendSha: wf.send_sha === true, style: wf.dispatch_style ?? null, extra: control?.inputs ?? null, runner }), ...(modes ?? {}) };
       const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile, ref: wf.ref, inputs, shardId });
       // The expected commit was recorded at creation; markDispatched keeps it.
       db.markDispatched(attemptId, { runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, correlatedBy: out?.correlatedBy ?? null, now: now() });

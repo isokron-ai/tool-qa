@@ -117,6 +117,7 @@ import { createReleaseClient } from '../snapshot/github.mjs';
 import { NAME_RE as SNAPSHOT_NAME_RE, SNAPSHOT_TAG } from '../snapshot/snapshot.mjs';
 import { computeBudget, reapExpired } from './slots.mjs';
 import { applyControlSwitches, recordControlLanes, syncControlSubjects } from './controls.mjs';
+import { applyModeSwitches } from './modes.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
 import { applyDiscovery, DISCOVER_KV_KEY, discoverEnabled, fetchCandidates } from './discover.mjs';
@@ -242,7 +243,8 @@ export async function runPump({
   const say = (line) => log(safe(line));
   const loaded = config ?? loadConfig();
   // Control lanes (pump/controls.mjs) are dispatched only while their repository variable is exactly "true".
-  const cfg = { ...loaded, workflows: applyControlSwitches(loaded.workflows, env) };
+  // Control lanes and writecheck's modes (pump/modes.mjs) follow their repository variables, each off unless exactly "true".
+  const cfg = { ...loaded, workflows: applyModeSwitches(applyControlSwitches(loaded.workflows, env), env) };
   const { requested, loopBudget, workerSlots } = computeBudget({ loopSlots: env.LOOP_SLOTS });
   say(`pump: LOOP_SLOTS=${requested}, loop budget ${loopBudget}, worker slots ${workerSlots}`);
 

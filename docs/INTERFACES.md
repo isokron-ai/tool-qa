@@ -440,6 +440,21 @@ switch off ingest passes no `failures` and nothing is kept.
   state.
 - `db.listLeads({ status })` and `db.leadSubjects(fingerprint)` read them.
 
+## Write backends (schema v14)
+
+What the meta-backend lane classified, per subject, for writecheck's modes (docs/INTERFACES.md, "Writecheck modes",
+in force behind `LANE_WRITECHECK_FULL_ENABLED` and `LANE_WRITECHECK_MIN_ENABLED`, both off by default).
+
+- Ingest reads the `write_backend` record of every accepted meta-backend bundle (`state/backends.mjs`
+  `backendFactsFromFiles`), checks each field against the dispatch contract (ids, an https spec URL with no query, env
+  names, at most 20) and passes it as `recordResult({ ..., backend })`, stored by
+  `db.noteWriteBackend(subject, runKey, facts, { now, observedAt })` in the same transaction as the result. A result
+  observed before the stored facts changes nothing; a record with no value leaves the row as it was.
+- `db.listWriteBackends()` returns every row (`[]` before schema 14). The due list reads it only while a mode is on
+  (`pump/modes.mjs`); coverage reads it for a lane with `modes` (`state/coverage.mjs`), and the watchdog item
+  `backend-classified` counts it.
+- Nothing here changes a result's fault or coverage state.
+
 ## Keys the pump keeps in `kv`
 
 | Key | Value |
