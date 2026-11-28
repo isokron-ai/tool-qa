@@ -107,7 +107,11 @@ workflow (`fingerprint-codes.yml`) checks daily, and on pull requests that
 touch it, that `state/fingerprint-codes.json` holds every code mcp-check's
 main declares; when it fails, refresh the file with
 `node scripts/fingerprint-codes.mjs --mcp-check <mcp-check checkout>` (it
-prints the lists; merge them into the file) and open a pull request.
+prints the lists; merge them into the file) and open a pull request. The `mutation-probe` workflow (`mutation-probe.yml`)
+proves the tests that pin a protection fail when it is switched off: run it by
+hand (Actions, mutation-probe, a probes file under `test/mutations/`), and it
+runs on pull requests that change a probes file. A surviving or stale probe
+turns it red.
 
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a

@@ -920,3 +920,46 @@ test('R-COV-47: each pump run records one coverage entry per UTC day, with the f
   h.cleanup();
   bad.cleanup();
 });
+
+/**
+ * One worker slot, frame work (new subjects) that outranks a lead re-check, and
+ * one lead on live-probe waiting for its re-check (R-LEAD-51). Returns the
+ * subjects the one tick sent.
+ */
+async function recheckShareRun(env) {
+  const { dueFromState } = await import('../due.mjs');
+  const h = harness({ slots: '1', subjects: 3 });
+  try {
+    const db = openState(h.stateFile);
+    const now = h.c.t - 3_600_000;
+    db.setSubjectVersion({ id: 'npm:lead', kind: 'package', source: 'npm', tier: 1, sha: 'e'.repeat(40), now: now - 1000 });
+    const [d] = dueFromState(db, { now, tiers, workflows: { 'live-probe': wf } }).filter((x) => x.subject === 'npm:lead');
+    const lease = db.acquireLease(d.run_key, 'att-seed', { ttlMs: 3_600_000, now });
+    db.recordRunKey(d.run_key, { subject: 'npm:lead', workflow: 'live-probe', fields: d.fields, now });
+    db.createDispatch({ attemptId: 'att-seed', shardId: 's', workflow: 'live-probe', repo: wf.repo, workflowFile: wf.file, ref: 'main', expires: now + 3_600_000, items: [{ run_key: d.run_key, subject: 'npm:lead', fence: lease.fence }], now });
+    db.setDispatchRun('att-seed', { runId: 7, runUrl: null, correlatedBy: 'test', now });
+    db.recordResult({
+      run_key: d.run_key, attempt_id: 'att-seed', fence: lease.fence, verdict: 'accepted', outcome: 'accepted', fault: 'tool', coverage: 'unassessed_tool', now: now + 1,
+      failures: [{ fingerprint: 'abcdefabcdef', tool: 'mcp-check', lane: 'live-probe', component: 'start', oracle: 'live-probe', class: 'timeout_start', idiom: 'none/repo:python', layout: 'unknown', signature: 'class=timeout_start;detail=start_env_limited', partial: false, fault: 'tool', versions: ['mcp-check@1'] }],
+    });
+    db.close();
+    await runPump({ ...h.opts, env: { ...h.opts.env, ...env }, maxRunMs: 60_000, identity: null, fetch: async () => { throw new Error('no network in this test'); } });
+    return h.calls.dispatch.flatMap((r) => JSON.parse(r.inputs.items).map((i) => i.subject));
+  } finally {
+    h.cleanup();
+  }
+}
+
+test('R-LEAD-51: the pump keeps LEADS_RECHECK_SLOTS slots for a due lead re-check (unset is 1); 0 turns it off, and so does a mode that does not re-check', async () => {
+  for (const [label, env, want] of [
+    ['unset', { LANE_LEADS_ENABLED: 'recheck' }, true],
+    ['2', { LANE_LEADS_ENABLED: 'recheck', LEADS_RECHECK_SLOTS: '2' }, true],
+    ['true mode', { LANE_LEADS_ENABLED: 'true' }, true],
+    ['0', { LANE_LEADS_ENABLED: 'recheck', LEADS_RECHECK_SLOTS: '0' }, false],
+    ['dry-run', { LANE_LEADS_ENABLED: 'dry-run' }, false],
+  ]) {
+    const sent = await recheckShareRun(env);
+    assert.equal(sent.length > 0, true, `${label}: the one slot was used`);
+    assert.equal(sent.includes('npm:lead'), want, `${label}: ${JSON.stringify(sent)}`);
+  }
+});
