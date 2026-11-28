@@ -38,33 +38,61 @@ import { acquireDispatchSlot, leaseTtlMs, occupancy, reapExpired } from './slots
  * names a `recheck_runner`, lead re-checks (reason lead_reverify) go in shards
  * of their own that carry `runner` (leads/recheck.mjs); slots_max holds over
  * both kinds of shard.
+ *
+ * recheckSlots (LEADS_RECHECK_SLOTS, R-LEAD-50): with it above 0, every lead
+ * re-check goes in a shard of its own (`recheck: true`), and the first
+ * `recheckSlots` of them (by priority) are the reserved share (`reserved: true`):
+ * they come first in the list, so the next free slot is theirs before any frame
+ * work, and they may run over their lane's slots_max by that share. With no
+ * re-check due, nothing is reserved and the frame has every slot.
  */
-export function planShards(due, workflows, { openByWorkflow = new Map() } = {}) {
+export function planShards(due, workflows, { openByWorkflow = new Map(), recheckSlots = 0 } = {}) {
   const groups = new Map();
+  const separate = recheckSlots > 0;
   for (const d of due) {
-    const runner = workflows[d.workflow]?.recheck_runner && d.reasons?.includes('lead_reverify') ? workflows[d.workflow].recheck_runner : null;
-    const key = runner ? `${d.workflow}\u0000${runner}` : d.workflow;
-    if (!groups.has(key)) groups.set(key, { name: d.workflow, runner, items: [] });
+    const isRecheck = d.reasons?.includes('lead_reverify') === true;
+    const runner = workflows[d.workflow]?.recheck_runner && isRecheck ? workflows[d.workflow].recheck_runner : null;
+    const recheck = isRecheck && (separate || runner !== null);
+    const key = recheck ? `${d.workflow}\u0000recheck\u0000${runner ?? ''}` : d.workflow;
+    if (!groups.has(key)) groups.set(key, { name: d.workflow, runner, recheck, items: [] });
     groups.get(key).items.push(d);
   }
   const shards = [];
   const used = new Map(); // workflow -> shards planned so far, against slots_max
   // Re-check groups first within a workflow, so a full lane still re-checks.
-  for (const { name, runner, items } of [...groups.values()].sort((a, b) => (a.runner ? 0 : 1) - (b.runner ? 0 : 1))) {
+  for (const { name, runner, recheck, items } of [...groups.values()].sort((a, b) => (a.recheck ? 0 : 1) - (b.recheck ? 0 : 1))) {
     const wf = workflows[name];
     if (!wf) continue;
     const size = Math.max(1, Math.trunc(Number(wf.shard_size)) || 1);
     const max = Number.isFinite(Number(wf.slots_max)) ? Number(wf.slots_max) : Infinity;
     for (let i = 0; i < items.length; i += size) {
       const n = used.get(name) ?? 0;
-      if (n >= Math.max(0, max - (openByWorkflow.get(name) ?? 0))) break;
-      used.set(name, n + 1);
+      const capped = n >= Math.max(0, max - (openByWorkflow.get(name) ?? 0));
+      // A capped lane's re-checks are still planned when the share is on: the reserved ones may run over slots_max.
+      if (capped && !(separate && recheck)) break;
+      if (!capped) used.set(name, n + 1);
       const chunk = items.slice(i, i + size);
-      shards.push({ workflow: name, items: chunk, priority: chunk[0].priority, order: n, ...(runner ? { runner } : {}) });
+      shards.push({ workflow: name, items: chunk, priority: chunk[0].priority, order: n, ...(runner ? { runner } : {}), ...(recheck ? { recheck: true } : {}), ...(capped ? { overCap: true } : {}) });
     }
   }
   shards.sort((a, b) => b.priority - a.priority || a.order - b.order || (a.workflow < b.workflow ? -1 : a.workflow > b.workflow ? 1 : 0));
-  return shards;
+  if (!separate) return shards;
+  // The reserved share first; a re-check over its lane's cap that is not in the share is not sent.
+  const share = shards.filter((x) => x.recheck).slice(0, recheckSlots);
+  for (const x of share) x.reserved = true;
+  return [...share, ...shards.filter((x) => !x.reserved && !x.overCap)];
+}
+
+/**
+ * The share of worker slots kept for lead re-checks: LEADS_RECHECK_SLOTS, a
+ * whole number from 0 (off) up to the worker slots; unset or not a whole
+ * number is the default, 1 (R-LEAD-50).
+ */
+export const DEFAULT_RECHECK_SLOTS = 1;
+export function recheckSlotsFrom(env, workerSlots) {
+  const raw = env?.LEADS_RECHECK_SLOTS;
+  const n = raw === undefined || raw === '' || !/^\d{1,3}$/.test(String(raw)) ? DEFAULT_RECHECK_SLOTS : Number(raw);
+  return Math.max(0, Math.min(n, Number.isFinite(workerSlots) ? workerSlots : n));
 }
 
 const SENT_RE = /\/actions\/workflows\/[^/]+\/(dispatches|runs)$/;
@@ -107,13 +135,15 @@ function stopReason(err) {
  *   holds work whose expired dispatch ingest has not looked at yet; R-CHAOS-02).
  *   backfill: true to give free slots the due list leaves to the frame's
  *   oldest results (pump/backfill.mjs; LANE_BACKFILL_ENABLED).
+ *   recheckSlots: the share of worker slots kept for lead re-checks while one is
+ *   due (planShards; LEADS_RECHECK_SLOTS; R-LEAD-50).
  *   beforeSend: optional async () => boolean, called once after the tick's
  *   dispatches are recorded as pending and before any is sent; the pump saves
  *   the state there. false (or a throw) withdraws them all unsent.
  */
 export async function runTick({
   db, now = Date.now, config, workerSlots, dispatcher, log = () => {}, newId = randomUUID, hooks = NO_HOOKS, deadline, beforeSend,
-  holdRunKeys = null, backfill = false,
+  holdRunKeys = null, backfill = false, recheckSlots = 0,
 }) {
   const t0 = now();
   const reaped = reapExpired(db, { now: t0 });
@@ -156,7 +186,8 @@ export async function runTick({
   }
   if (due.length === 0 && fill.length === 0) return summary;
 
-  const shards = planShards([...due, ...fill], config.workflows, { openByWorkflow });
+  // The reserved share for lead re-checks (R-LEAD-50): only while one is due; a paused lane's re-checks are not in `due`.
+  const shards = planShards([...due, ...fill], config.workflows, { openByWorkflow, recheckSlots });
   summary.planned = shards.length;
 
   // 1. Reserve: for each shard, while a slot is free, take the slot and the

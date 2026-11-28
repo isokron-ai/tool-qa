@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { openState } from '../../state/db.mjs';
 import { dueFromState, workflowProblems } from '../due.mjs';
 import { workerInputs } from '../dispatch.mjs';
-import { planShards } from '../tick.mjs';
+import { planShards, recheckSlotsFrom, runTick } from '../tick.mjs';
 import { leadRecheckHook, recheckPairs, RECHECK_MAX_DUE, RECHECK_TIMEOUT_MS } from '../../leads/recheck.mjs';
 
 const T0 = Date.parse('2026-11-24T12:00:00Z');
@@ -81,7 +81,7 @@ test('R-LEAD-16: at most RECHECK_MAX_DUE pairs are due at once, the leads most s
 
 function openStateV11() {
   const db = openState(':memory:');
-  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 11');
+  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; ALTER TABLE results DROP COLUMN skip_codes; PRAGMA user_version = 11');
   return db;
 }
 
@@ -190,4 +190,88 @@ test('R-LEAD-39: a re-check that carries the lead but has no worker run id is on
   const h2 = () => ({ leadReverify: leadRecheckHook(recheckPairs(db2)) });
   assert.deepEqual(dueFromState(db2, { now: T0 + 3 * HOUR, tiers, workflows, hooks: h2() }), []);
   assert.equal(dueFromState(db2, { now: T0 + HOUR + RECHECK_TIMEOUT_MS + HOUR, tiers, workflows, hooks: h2() }).length, 1);
+});
+
+/**
+ * A tick with 5 worker slots, 4 of them busy: two lanes, frame work on each
+ * (new subjects, which outrank a re-check) and one lead re-check on scan-static.
+ */
+async function shareTick({ recheckSlots, recheck = true, pause = false, capScanStatic = false, leadSubjects = ['acme/lead'], busy = 4 } = {}) {
+  const lanes = { 'scan-static': wf({ shard_size: 1, slots_max: capScanStatic ? 1 : 5, setup_minutes: 3, minutes_per_subject: 1 }), 'meta-github': wf({ file: 'm.yml', shard_size: 1, slots_max: 5, setup_minutes: 3, minutes_per_subject: 1 }) };
+  const db = openState(':memory:');
+  for (const id of [...leadSubjects, 'acme/new1', 'acme/new2']) db.setSubjectVersion({ id, kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 - DAY });
+  // Each lead subject has results on both lanes (so only the re-check makes it due) and a lead on scan-static.
+  for (const [k, subject] of leadSubjects.entries()) for (const lane of ['scan-static', 'meta-github']) {
+    const [d] = dueFromState(db, { now: T0, tiers, workflows: { [lane]: lanes[lane] } }).filter((x) => x.subject === subject);
+    const att = `att-seed-${lane}-${k}`;
+    const lease = db.acquireLease(d.run_key, att, { ttlMs: DAY, now: T0 });
+    db.recordRunKey(d.run_key, { subject, workflow: lane, fields: d.fields, now: T0 });
+    db.createDispatch({ attemptId: att, shardId: 's', workflow: lane, repo: 'o/r', workflowFile: 'f.yml', ref: 'main', expires: T0 + DAY, items: [{ run_key: d.run_key, subject, fence: lease.fence }], now: T0 });
+    db.setDispatchRun(att, { runId: 10 * k + (lane === 'scan-static' ? 1 : 2), runUrl: null, correlatedBy: 'test', now: T0 });
+    db.recordResult({ run_key: d.run_key, attempt_id: att, fence: lease.fence, verdict: 'accepted', outcome: 'accepted', fault: 'tool', coverage: 'unassessed_tool', failures: lane === 'scan-static' && recheck ? [lead(90 + k)] : [], now: T0 + 1 });
+  }
+  const t = T0 + HOUR;
+  // Four of the five slots are busy with other work (one of them on scan-static when its cap is 1).
+  for (let i = 0; i < busy; i++) {
+    db.acquireSlot(`busy-${i}`, { budget: 5, ttlMs: DAY, now: t });
+    const rk = sha(`busy-${i}`);
+    const l = db.acquireLease(rk, `busy-${i}`, { ttlMs: DAY, now: t });
+    db.createDispatch({ attemptId: `busy-${i}`, shardId: 'b', workflow: capScanStatic && i === 0 ? 'scan-static' : 'other', repo: 'o/r', workflowFile: 'x.yml', ref: 'main', expires: t + DAY, items: [{ run_key: rk, subject: `busy/${i}`, fence: l.fence }], now: t });
+  }
+  if (pause) db.pausePinRefused('scan-static', { reason: 'pin_mismatch', now: t });
+  const sent = [];
+  const dispatcher = { dispatch: async (req) => { sent.push(req); return { runId: 100 + sent.length, runUrl: null, correlatedBy: 'response' }; }, resolveRef: async () => 'f'.repeat(40) };
+  let n = 0;
+  const summary = await runTick({ db, now: () => t, config: { tiers, workflows: lanes }, workerSlots: 5, dispatcher, newId: () => `att-${++n}`, hooks: { leadReverify: leadRecheckHook(recheckPairs(db)) }, recheckSlots });
+  const subjects = sent.map((r) => JSON.parse(r.inputs.items).map((i) => i.subject)).flat();
+  return { summary, subjects, sent };
+}
+
+test('R-LEAD-50: while a lead re-check is due, the frame cannot take the reserved slot: the one free slot goes to the re-check, though frame work outranks it', async () => {
+  const on = await shareTick({ recheckSlots: 1 });
+  assert.deepEqual(on.subjects, ['acme/lead'], 'the free slot went to the re-check');
+  assert.equal(on.summary.stopped, 'slots_full');
+  // Without the share the higher-priority frame work takes it, as before.
+  const off = await shareTick({ recheckSlots: 0 });
+  assert.equal(off.subjects.length, 1);
+  assert.notEqual(off.subjects[0], 'acme/lead');
+});
+
+test('R-LEAD-50: with no re-check due the frame has every slot; a lane paused on pin_mismatch still gets no re-check and holds no slot; the share may run over its lane\'s slots_max', async () => {
+  const none = await shareTick({ recheckSlots: 1, recheck: false });
+  assert.equal(none.subjects.length, 1);
+  assert.notEqual(none.subjects[0], 'acme/lead', 'nothing reserved: the frame took the slot');
+  const paused = await shareTick({ recheckSlots: 1, pause: true });
+  assert.ok(!paused.subjects.includes('acme/lead'), 'the paused lane is not re-checked');
+  assert.equal(paused.subjects.length, 1, 'and its share went back to the frame');
+  assert.ok(paused.sent.every((r) => r.workflowFile !== 'f.yml' || !JSON.parse(r.inputs.items).some((i) => i.subject === 'acme/lead')));
+  const capped = await shareTick({ recheckSlots: 1, capScanStatic: true });
+  assert.deepEqual(capped.subjects, ['acme/lead'], 'scan-static is at slots_max, and the reserved re-check still goes');
+  assert.deepEqual([recheckSlotsFrom({}, 5), recheckSlotsFrom({ LEADS_RECHECK_SLOTS: '0' }, 5), recheckSlotsFrom({ LEADS_RECHECK_SLOTS: '2' }, 5), recheckSlotsFrom({ LEADS_RECHECK_SLOTS: '9' }, 5), recheckSlotsFrom({ LEADS_RECHECK_SLOTS: 'x' }, 5)], [1, 0, 2, 5, 1]);
+});
+
+test('R-LEAD-52: the share is exactly LEADS_RECHECK_SLOTS: with two re-checks due and two slots free, share 1 sends one and share 2 sends two; on a lane at its cap a re-check outside the share is not sent', async () => {
+  const two = ['acme/lead', 'acme/leadb'];
+  const one = await shareTick({ recheckSlots: 1, leadSubjects: two, busy: 3 });
+  assert.equal(one.subjects.filter((x) => two.includes(x)).length, 1, `share 1: ${JSON.stringify(one.subjects)}`);
+  assert.equal(one.subjects.length, 2, 'the second slot went to frame work, which outranks the second re-check');
+  const both = await shareTick({ recheckSlots: 2, leadSubjects: two, busy: 3 });
+  assert.deepEqual(both.subjects.filter((x) => two.includes(x)).sort(), two, `share 2: ${JSON.stringify(both.subjects)}`);
+  // scan-static at its cap (one busy dispatch, slots_max 1) with slots to spare: the reserved re-check goes over the
+  // cap, the other does not, though a slot is left for it.
+  const capped = await shareTick({ recheckSlots: 1, leadSubjects: two, busy: 1, capScanStatic: true });
+  assert.ok(capped.summary.stopped !== 'slots_full', 'slots were left over');
+  assert.equal(capped.subjects.filter((x) => two.includes(x)).length, 1, `capped: ${JSON.stringify(capped.subjects)}`);
+  assert.equal(capped.sent.filter((r) => r.workflowFile === 'f.yml').length, 1, 'nothing else went to the capped lane');
+});
+
+test('R-LEAD-53: with LEADS_RECHECK_SLOTS 0 the shards are planned exactly as before the share: a re-check shares its lane\'s shard with frame work, and a lane at its cap sends no re-check', () => {
+  const item = (subject, reasons, priority) => ({ subject, workflow: 'scan-static', run_key: sha(subject), reasons, priority, fields: {} });
+  const list = [item('a', ['stale'], 200), item('b', ['lead_reverify'], 150), item('c', ['stale'], 120)];
+  const lanes = { 'scan-static': wf({ shard_size: 3, slots_max: 3 }) };
+  const off = planShards(list, lanes, { recheckSlots: 0 });
+  assert.deepEqual(off.map((x) => x.items.map((i) => i.subject)), [['a', 'b', 'c']], 'one shard, as before');
+  assert.ok(off.every((x) => !x.recheck && !x.reserved && !x.overCap));
+  assert.deepEqual(planShards(list, lanes, { recheckSlots: 0 }), planShards(list, lanes), 'the same as with no option at all');
+  assert.deepEqual(planShards(list, lanes, { recheckSlots: 0, openByWorkflow: new Map([['scan-static', 3]]) }), [], 'a lane at its cap sends nothing, re-checks included');
 });

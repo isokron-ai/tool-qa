@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { loadConfig } from '../due.mjs';
 import { jobNames, t0WorkerProblems, workerFileUrl } from '../t0-workers.mjs';
 
+// A sandbox commit for the synthetic worker files below (any full commit; the shipped lane is checked against the real workers).
 const SHA = '78a7834cf028507b03e90e266b87bebeacfccd51';
 const OTHER = '11974fbb75a8c276214c887a079d6ad6df374124';
 
@@ -70,7 +71,9 @@ test('R-CTL-17: a worker that builds no result bundle, or pins another sandbox t
 test('R-CTL-18: the shipped t0-dogfood lane lists the five sandboxed workers, at the sandbox commit they pin; kubernetes is out', () => {
   const lane = loadConfig().workflows['t0-dogfood'];
   assert.equal(lane.runs_untrusted, true);
-  assert.equal(lane.sandbox_sha, SHA, 'the commit the workers pin (mcp-writecheck-action SANDBOX_REF, wca#80)');
+  // The workers' SANDBOX_REF is read at the lane's ref in the test below; here, only a full commit, never the pre-sandbox pin.
+  assert.match(lane.sandbox_sha, /^[0-9a-f]{40}$/);
+  assert.notEqual(lane.sandbox_sha, OTHER, 'not the pin from before the workers ran in the sandbox');
   assert.deepEqual(Object.keys(lane.control_subjects).map((x) => x.split('.').pop()).sort(), ['dogfood-grafana', 'dogfood-kronicle-lite', 'dogfood-payload', 'dogfood-sea-lite', 'dogfood-writesafe']);
   assert.equal(lane.control_subjects['isokron-ai/mcp-writecheck-action.dogfood-kubernetes'], undefined, 'kind keeps it outside the sandbox: it builds no bundle (wca R-DSB-03)');
   assert.equal(workerFileUrl(lane, 'isokron-ai/mcp-writecheck-action.dogfood-grafana'), 'https://raw.githubusercontent.com/isokron-ai/mcp-writecheck-action/main/.github/workflows/dogfood-grafana.yml');

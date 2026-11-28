@@ -106,7 +106,7 @@ workflow (`fingerprint-codes.yml`) checks daily, and on pull requests that
 touch it, that `state/fingerprint-codes.json` holds every code mcp-check's
 main declares; when it fails, refresh the file with
 `node scripts/fingerprint-codes.mjs --mcp-check <mcp-check checkout>` (it
-prints the lists; merge them into the file) and open a pull request.
+prints the lists; merge them into the file) and open a pull request. See "Mutation probes" below for `mutation-probe.yml`.
 
 The watchdog also reads every lane switch above: a lane that is off shows as
 `off` on the health issue instead of red, and the watchdog does not dispatch a
@@ -2160,7 +2160,13 @@ the encrypted state; an issue holds the shape only.
 1. Seen: the lead opens (`open`) and names one (subject, lane) to re-check.
 2. Re-check (`recheck`, `true`): the due list makes that pair due again
    (`lead_reverify`), a new worker run on a fresh runner. At most 20 due at
-   once; a pair whose re-checks never come back is given up after 3.
+   once; a pair whose re-checks never come back is given up after 3. While a
+   re-check is due, `LEADS_RECHECK_SLOTS` worker slots (repository variable; a
+   whole number, default 1, `0` turns the share off) are kept for it: the next
+   free slot goes to the re-check before any frame work, and a reserved
+   re-check may run over its lane's `slots_max` by that share. With no re-check
+   due the frame has every slot. A lane paused on `pin_mismatch` gets no
+   re-check and holds no slot.
 3. Reproduced: the re-run shows it again, from another worker run. Infra leads
    instead need 3 days of sightings; a flaky lead (gone and back on one server)
    needs 10% or more of its results over 14 days.
@@ -2248,7 +2254,7 @@ The worker repositories also have their own kill switch, `LOOP_ENABLED` (the wor
 
 **The t0-dogfood workers run in the sandbox (since wca#80, 28 Nov 2026).** Each runs its third-party install, build and
 run steps inside mcp-surface-corpus's sandbox at its `SANDBOX_REF`, after the reusable sandbox-conformance job and the
-sandbox-guard action, and the lane's `sandbox_sha` is that same commit (78a7834), so the sandbox breaker gates the sandbox
+sandbox-guard action, and the lane's `sandbox_sha` is that same commit, so the sandbox breaker gates the sandbox
 the workers run. `pump/test/t0-workers.test.mjs` reads every subject's worker file at the lane's ref: it must have a
 t0-manifest job and pin the lane's `sandbox_sha` (R-CTL-17, R-CTL-18). Bump the lane's `sandbox_sha` and the workers'
 `SANDBOX_REF` together. `dogfood-kubernetes.yml` is not in any lane: kind needs privileged Docker, which the sandbox cannot
@@ -2289,3 +2295,49 @@ runs a third-party server (`corpus/fuzz/calls/README.md` in mcp-check), and the 
 is unchanged. Controls: `known_good` (no finding on a build that expects none) and `known_bad` (every known fault found).
 Either failing is `control_failed` (class `control_miss`), so every miss is our stage's, and the health item `t0:t0-fuzz`
 goes red. It is trusted (`runs_untrusted` false): our seeded servers and tiny-tracker built with `--ignore-scripts`.
+
+## Mutation probes (`mutation-probe.yml`)
+
+Proves that the test pinning a protection fails when the protection is
+switched off. It replaces cloning a repository locally to check by hand. Each
+probe is `{id, file, find, replace, test?, pattern?}` (`old`/`new` are the same
+as `find`/`replace`): `find` must occur exactly once in `file`. One matrix cell
+per probe (20 at most) checks out the ref fresh, optionally builds, runs the
+test as a baseline (it must pass), applies the edit with a node script that
+reads its inputs from environment variables, runs the test again and records
+`killed` (it failed), `survived` (it passed), `stale` (`find` is not there
+exactly once) or `baseline_failed`. The job summary has the table; the
+`mutation-probe-results` artifact the JSON. The run fails unless every probe was
+killed. A `test` that is a plain `.mjs`/`.js` path runs as `node --test <file>`
+(with `pattern` as the test-name pattern); anything else runs as a shell command.
+Read-only token, no secrets, no `pull_request_target`. Call it once per workflow run: the result
+artifacts are named per run, so two calls in one run would mix their results.
+
+```text
+# here, a probes file under test/mutations/ (also runs on pull requests that change one)
+gh workflow run mutation-probe.yml -R isokron-ai/tool-qa -f ref=<branch> -f probe-files=test/mutations/leads-share.json
+# any repository with a thin caller (mutation-probe.yml in mcp-check, mcp-writecheck-action,
+# mcp-write-safety, mcp-surface-corpus), inline mutations:
+gh workflow run mutation-probe.yml -R isokron-ai/<repo> -f ref=<branch> -f test='node --test test/x.test.mjs' \
+  -f mutations='[{"id":"m1","file":"src/a.mjs","find":"x > 0","replace":"true"}]'
+```
+
+The other repositories call this workflow at a pinned commit and pass the same
+commit as `probe-ref` (the runner script is taken from there). When the runner
+changes, move that pin in each caller.
+
+## Lane drain (`lane-drain.yml`)
+
+Run before a pin move: `gh workflow run lane-drain.yml -R isokron-ai/tool-qa -f
+lanes=live-probe,writecheck`. It reads `pump/workflows.json` for the worker
+repository and workflow of each lane, polls (up to `wait-minutes`, default 90)
+until no run of those workflows is queued or in progress, then dispatches
+`pump.yml`, waits for it, and repeats (up to `max-pumps`, default 5) until the
+pump log's last `pump: ingest: ... waiting N` line says `waiting 0`. The job
+summary lists the runs waited on, each pump run and the final waiting count; the
+run fails on a timeout or when the count is not 0. It changes no variable and
+merges nothing: afterwards the coordinator flips `LOOP_SLOTS` and merges. Its
+token is the workflow's own (`contents: read`, `actions: write`); reading runs in
+the public worker repositories needs no other token. It needs the pump to run
+with `LOOP_SLOTS=0` or above 0; with the loop disabled (`LOOP_ENABLED`) the pump
+writes no ingest line and the drain fails with "no ingest line".
