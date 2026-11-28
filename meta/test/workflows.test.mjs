@@ -10,21 +10,23 @@ const read = (rel) => parseYaml(readFileSync(new URL(rel, ROOT), 'utf8'));
 
 test('the committed workflows are what meta/gen-workflows.mjs writes', () => {
   assert.equal(gen(['--check']), 0);
-  assert.deepEqual(Object.keys(FILES).sort(), ['.github/workflows/meta-fixture.yml', '.github/workflows/meta-github.yml', '.github/workflows/meta-registry.yml', '.github/workflows/release-diff.yml']);
+  assert.deepEqual(Object.keys(FILES).sort(), ['.github/workflows/meta-backend.yml', '.github/workflows/meta-fixture.yml', '.github/workflows/meta-github.yml', '.github/workflows/meta-registry.yml', '.github/workflows/release-diff.yml']);
 });
 
 test('pump/workflows.json dispatches these files with a shard no larger than the slots', () => {
   const wf = JSON.parse(readFileSync(new URL('pump/workflows.json', ROOT), 'utf8')).workflows;
-  for (const lane of ['meta-github', 'meta-registry', 'release-diff']) {
+  for (const lane of ['meta-github', 'meta-registry', 'release-diff', 'meta-backend']) {
     assert.equal(wf[lane].repo, 'isokron-ai/tool-qa');
     assert.equal(wf[lane].file, `${lane}.yml`);
     assert.ok(wf[lane].shard_size <= LANE_SLOTS[lane], `${lane} shard_size ${wf[lane].shard_size} > ${LANE_SLOTS[lane]} slots`);
   }
   // Switched on by review on 25 Nov 2026 (all three lanes); pinned so a change needs a reviewed test change.
   for (const lane of ['meta-github', 'meta-registry', 'release-diff']) assert.equal(wf[lane].enabled, true, `${lane} is on`);
+  // meta-backend stays off until ingest's registry pin holds write_backend (meta/backend.mjs PENDING_FIELD_YAML).
+  assert.equal(wf['meta-backend'].enabled, false, 'meta-backend is off until its field is at the registry pin');
 });
 
-for (const lane of ['meta-github', 'meta-registry', 'release-diff']) {
+for (const lane of ['meta-github', 'meta-registry', 'release-diff', 'meta-backend']) {
   test(`${lane}.yml follows the worker contract`, () => {
     const w = read(`.github/workflows/${lane}.yml`);
     assert.deepEqual(Object.keys(w.on), ['workflow_dispatch']);
@@ -39,7 +41,7 @@ for (const lane of ['meta-github', 'meta-registry', 'release-diff']) {
     assert.match(job.steps[0].run, /"\$LOOP_ENABLED" == "true"/);
     const guard = job.steps.find((s) => s.id === 'guard');
     assert.match(guard.run, new RegExp(`scripts/guard.mjs --job ${lane} --no-slots`));
-    assert.ok(Object.keys(guard.env).includes(`LANE_${lane.toUpperCase().replace('-', '_')}_ENABLED`));
+    assert.ok(Object.keys(guard.env).includes(`LANE_${lane.toUpperCase().replace(/-/g, '_')}_ENABLED`));
     const kit = job.steps.filter((s) => typeof s.uses === 'string' && s.uses.startsWith('isokron-ai/tool-qa/worker-kit@'));
     assert.equal(kit.length, LANE_SLOTS[lane]);
     kit.forEach((s, i) => {
@@ -68,6 +70,7 @@ test('meta-fixture.yml runs on pull requests only, dry-run, and judges the bundl
   assert.equal(kit.length, SLOTS);
   assert.ok(kit.every((s) => s.with['dry-run'] === "${{ matrix.mode == 'check' && 'true' || 'false' }}"));
   assert.deepEqual(w.jobs.fixture.strategy.matrix.mode, ['check', 'upload']);
+  assert.deepEqual(w.jobs.fixture.strategy.matrix.lane, ['meta-github', 'meta-registry', 'meta-backend']);
   assert.match(steps.at(-1).run, /meta\/fixture\.mjs judge/);
   const rd = w.jobs['release-diff-fixture'];
   assert.deepEqual(rd.permissions, { contents: 'read' });
@@ -82,7 +85,7 @@ test('R-META-11: every meta lane\'s workflow, and the fixture, pins a worker kit
   const pinned = PINS.workerKit.split(' ')[0];
   assert.equal(pinned.match(kitPin)?.[1], '2ffcea16117ec679398f83eefe8c6fa66d38bac6');
   assert.equal(PINS.workerKitFault, undefined, 'one kit pin for every lane');
-  for (const file of ['meta-github', 'meta-registry', 'release-diff', 'meta-fixture']) {
+  for (const file of ['meta-github', 'meta-registry', 'release-diff', 'meta-backend', 'meta-fixture']) {
     const w = read(`.github/workflows/${file}.yml`);
     const uses = Object.values(w.jobs).flatMap((j) => j.steps).map((s) => s.uses).filter((u) => typeof u === 'string' && u.startsWith('isokron-ai/tool-qa/worker-kit@'));
     assert.ok(uses.length > 0, file);

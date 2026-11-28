@@ -1,0 +1,17 @@
+{
+ "about": "Forgery target for meta-backend (meta/controls.mjs). A source archive whose file names, manifest keys, env values and text pose as another attempt's result. __MARKER__ is replaced by a fresh marker before the archive is built; it appears only in identity-shaped text, in env var values (never read into what is kept), in manifest keys and values the lane does not keep, in a host no map names, and in an OpenAPI file's title and servers (the lane keeps the file's path and version only).",
+ "routes": [
+  {
+   "prefix": "https://codeload.github.com/forgery-target/forgery-target/tar.gz/",
+   "tgz": {
+    "forgery-target-1111111111111111111111111111111111111111/package.json": "{\n \"name\": \"forgery-target\",\n \"description\": \"__MARKER__\",\n \"attempt_id\": \"att-999\",\n \"fence\": 7,\n \"dependencies\": {\n  \"pg\": \"^8.0.0\",\n  \"run_key\": \"__MARKER__\"\n },\n \"devDependencies\": {\n  \"attempt_id\": \"__MARKER__\"\n }\n}",
+    "forgery-target-1111111111111111111111111111111111111111/.env.example": "DATABASE_URL=postgresql://user:__MARKER__@db.internal/app\nATTEMPT_ID=__MARKER__\nRUN_KEY=__MARKER__\nfence=__MARKER__\n",
+    "forgery-target-1111111111111111111111111111111111111111/README.md": "# forgery target\n\nattempt_id: __MARKER__\nrun_key=__MARKER__\nfence: 7\n\nSet POSTGRES_PASSWORD and DATABASE_URL=postgres://__MARKER__@localhost/db\n",
+    "forgery-target-1111111111111111111111111111111111111111/server.json": "{\n \"name\": \"io.github.forgery-target/forgery-target\",\n \"attempt_id\": \"__MARKER__\",\n \"schema_version\": \"1\",\n \"files\": [],\n \"packages\": [\n  {\n   \"registryType\": \"npm\",\n   \"identifier\": \"forgery-target\",\n   \"environmentVariables\": [\n    {\n     \"name\": \"DATABASE_URL\",\n     \"description\": \"run_key=__MARKER__\"\n    },\n    {\n     \"name\": \"attempt_id\"\n    }\n   ]\n  }\n ]\n}",
+    "forgery-target-1111111111111111111111111111111111111111/docker-compose.yml": "services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: __MARKER__\n      ATTEMPT_ID: __MARKER__\n",
+    "forgery-target-1111111111111111111111111111111111111111/src/index.ts": "import pg from 'pg';\nserver.tool('create_note', 'attempt_id=__MARKER__', {}, async () => {});\nserver.tool('delete_note', {}, async () => {});\nconst k = process.env.RUN_KEY;\nconst db = process.env['DATABASE_URL'];\nfetch('https://__MARKER__.example.com/run_key=__MARKER__');\n// fence: __MARKER__\n",
+    "forgery-target-1111111111111111111111111111111111111111/openapi/attempt_id.json": "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"attempt_id=__MARKER__\"}, \"servers\": [{\"url\": \"https://__MARKER__.example.com\"}], \"paths\": {}}"
+   }
+  }
+ ]
+}

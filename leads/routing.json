@@ -10,7 +10,8 @@
     "writecheck": "isokron-ai/mcp-writecheck-action",
     "meta-github": "isokron-ai/tool-qa",
     "meta-registry": "isokron-ai/tool-qa",
-    "release-diff": "isokron-ai/tool-qa"
+    "release-diff": "isokron-ai/tool-qa",
+    "meta-backend": "isokron-ai/tool-qa"
   },
   "components": {
     "live-probe": {

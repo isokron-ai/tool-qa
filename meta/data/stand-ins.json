@@ -1,0 +1,807 @@
+{
+  "version": 1,
+  "updated": "2026-11-27",
+  "about": "The meta-backend lane's backend -> stand-in map (meta/backend.mjs). One entry per backend a server's write tools can write to that may run inside a GitHub Actions job: the engine itself, or a self-hostable product, or an open-source stand-in for a hosted API. `signals` say how the lane recognises it in a repository (meta/README.md, \"meta-backend\"); `stand_in` says what writecheck's full mode would run. A subject is local_full only when its primary backend's stand-in has fidelity real or faithful AND cleared true. fidelity: real = the product itself; faithful = another implementation of the same API whose own semantics (versions, conflicts, transactions) hold; partial = the same API without the semantics writecheck's backend requirements need; not_faithful = a different API (a look-alike). cleared: the stand-in's licence and terms allow the loop to run it with no account, token or paid licence (false = a person has to decide). Sources: company-audit research/writecheck-coverage-2026-11-28/RESEARCH.md, section 2, and each product's own licence. Add a backend or change a stand-in here, not in code; meta/test/backend.test.mjs checks the shape. A backend that is also a hosted API with a published description has an entry of the same id in spec-urls.json; both are merged.",
+  "backends": {
+    "postgres": {
+      "kind": "sql",
+      "stand_in": { "id": "postgres", "product": "PostgreSQL", "licence": "PostgreSQL", "fidelity": "real", "cleared": true, "note": "already a writecheck fixture (pg-tracker, R-WC-14)" },
+      "signals": {
+        "npm": ["pg", "postgres", "pg-promise", "slonik", "@neondatabase/serverless", "@vercel/postgres", "pg-pool", "@electric-sql/pglite"],
+        "pypi": ["psycopg", "psycopg2", "psycopg2-binary", "psycopg-binary", "asyncpg", "pg8000", "psycopg-pool", "aiopg"],
+        "go": ["github.com/lib/pq", "github.com/jackc/pgx"],
+        "cargo": ["tokio-postgres", "postgres", "deadpool-postgres"],
+        "maven": ["org.postgresql:postgresql"],
+        "nuget": ["Npgsql"],
+        "images": ["postgres", "pgvector/pgvector", "postgis/postgis", "bitnami/postgresql", "supabase/postgres", "timescale/timescaledb", "ankane/pgvector"],
+        "url_schemes": ["postgres", "postgresql"],
+        "prisma": ["postgresql", "postgres", "cockroachdb"],
+        "env": ["POSTGRES_URL", "POSTGRES_HOST", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_USER", "POSTGRES_CONNECTION_STRING", "PG_CONNECTION_STRING", "PGHOST", "PGDATABASE", "PGPASSWORD", "PGUSER", "PG_HOST", "PG_URL", "PG_DATABASE"],
+        "env_prefix": ["POSTGRES_", "PG_"],
+        "code": ["drizzle-orm/pg-core", "drizzle-orm/node-postgres", "drizzle-orm/postgres-js", "sqlalchemy.dialects.postgresql"]
+      }
+    },
+    "mysql": {
+      "kind": "sql",
+      "stand_in": { "id": "mysql", "product": "MySQL Community Server (or MariaDB)", "licence": "GPL-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["mysql", "mysql2", "mariadb"],
+        "pypi": ["mysql-connector-python", "pymysql", "mysqlclient", "aiomysql", "asyncmy", "mariadb"],
+        "go": ["github.com/go-sql-driver/mysql"],
+        "cargo": ["mysql", "mysql_async"],
+        "maven": ["com.mysql:mysql-connector-j", "mysql:mysql-connector-java", "org.mariadb.jdbc:mariadb-java-client"],
+        "nuget": ["MySql.Data", "MySqlConnector"],
+        "images": ["mysql", "mariadb", "bitnami/mysql", "bitnami/mariadb"],
+        "url_schemes": ["mysql", "mariadb"],
+        "prisma": ["mysql"],
+        "env": ["MYSQL_HOST", "MYSQL_URL", "MYSQL_DATABASE", "MYSQL_PASSWORD", "MYSQL_USER", "MYSQL_PORT", "MARIADB_HOST"],
+        "env_prefix": ["MYSQL_", "MARIADB_"],
+        "code": ["drizzle-orm/mysql-core", "drizzle-orm/mysql2"]
+      }
+    },
+    "sqlite": {
+      "kind": "sql",
+      "stand_in": { "id": "sqlite", "product": "SQLite (a file in the sandbox)", "licence": "public domain", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["better-sqlite3", "sqlite3", "sqlite", "@libsql/client", "sql.js", "libsql"],
+        "pypi": ["aiosqlite", "sqlite-utils", "apsw", "sqlean.py", "libsql-client"],
+        "go": ["github.com/mattn/go-sqlite3", "modernc.org/sqlite", "github.com/glebarez/sqlite", "github.com/ncruces/go-sqlite3"],
+        "cargo": ["rusqlite", "libsql"],
+        "maven": ["org.xerial:sqlite-jdbc"],
+        "nuget": ["Microsoft.Data.Sqlite", "System.Data.SQLite"],
+        "url_schemes": ["sqlite"],
+        "prisma": ["sqlite"],
+        "env": ["SQLITE_PATH", "SQLITE_DB", "SQLITE_DB_PATH", "SQLITE_FILE", "DB_PATH", "DATABASE_PATH"],
+        "env_prefix": ["SQLITE_"],
+        "code": ["sqlite3.connect(", "from 'node:sqlite'", "from \"node:sqlite\"", "require('node:sqlite')", "drizzle-orm/better-sqlite3", "drizzle-orm/sqlite-core", "bun:sqlite"]
+      }
+    },
+    "sql": {
+      "kind": "sql",
+      "stand_in": { "id": "postgres", "product": "PostgreSQL (the server reaches its database through a portable ORM or query builder)", "licence": "PostgreSQL", "fidelity": "real", "cleared": true, "note": "generic: used only when no specific engine is seen; confidence is capped at medium" },
+      "signals": {
+        "npm": ["prisma", "@prisma/client", "knex", "typeorm", "sequelize", "drizzle-orm", "kysely", "@mikro-orm/core"],
+        "pypi": ["sqlalchemy", "sqlmodel", "peewee", "databases", "tortoise-orm", "pony", "records"],
+        "go": ["gorm.io/gorm", "github.com/jmoiron/sqlx", "entgo.io/ent", "github.com/uptrace/bun"],
+        "cargo": ["sqlx", "diesel", "sea-orm"],
+        "env": ["DATABASE_URL", "DB_URL", "DB_HOST", "DB_PASSWORD", "DB_NAME", "DB_USER", "DATABASE_HOST", "DB_CONNECTION_STRING", "SQL_CONNECTION_STRING"],
+        "env_prefix": [],
+        "code": []
+      }
+    },
+    "mssql": {
+      "kind": "sql",
+      "stand_in": { "id": "mssql", "product": "SQL Server Developer or Express edition (container)", "licence": "Microsoft EULA", "fidelity": "real", "cleared": false, "note": "proprietary EULA: a person decides whether the loop may run it" },
+      "signals": {
+        "npm": ["mssql", "tedious"],
+        "pypi": ["pymssql", "pyodbc", "aioodbc"],
+        "go": ["github.com/microsoft/go-mssqldb", "github.com/denisenkom/go-mssqldb"],
+        "cargo": ["tiberius"],
+        "maven": ["com.microsoft.sqlserver:mssql-jdbc"],
+        "nuget": ["Microsoft.Data.SqlClient", "System.Data.SqlClient"],
+        "images": ["mcr.microsoft.com/mssql/server", "mcr.microsoft.com/azure-sql-edge"],
+        "url_schemes": ["mssql", "sqlserver"],
+        "prisma": ["sqlserver"],
+        "env": ["MSSQL_HOST", "MSSQL_SERVER", "MSSQL_PASSWORD", "MSSQL_DATABASE", "SQLSERVER_HOST"],
+        "env_prefix": ["MSSQL_", "SQLSERVER_"]
+      }
+    },
+    "oracle": {
+      "kind": "sql",
+      "stand_in": { "id": "oracle-free", "product": "Oracle Database Free (container)", "licence": "Oracle Free Use Terms", "fidelity": "real", "cleared": false, "note": "proprietary terms: a person decides" },
+      "signals": {
+        "npm": ["oracledb"],
+        "pypi": ["oracledb", "cx-oracle", "cx_oracle"],
+        "go": ["github.com/godror/godror", "github.com/sijms/go-ora"],
+        "images": ["gvenzl/oracle-free", "gvenzl/oracle-xe", "container-registry.oracle.com/database/free"],
+        "env": ["ORACLE_HOST", "ORACLE_DSN", "ORACLE_CONNECTION_STRING", "ORACLE_PASSWORD"],
+        "env_prefix": ["ORACLE_"]
+      }
+    },
+    "duckdb": {
+      "kind": "sql",
+      "stand_in": { "id": "duckdb", "product": "DuckDB (embedded)", "licence": "MIT", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["duckdb", "@duckdb/node-api", "duckdb-async", "@duckdb/duckdb-wasm"],
+        "pypi": ["duckdb"],
+        "go": ["github.com/marcboeker/go-duckdb"],
+        "cargo": ["duckdb"],
+        "url_schemes": ["duckdb"],
+        "env": ["DUCKDB_PATH", "DUCKDB_DATABASE"],
+        "env_prefix": ["DUCKDB_"]
+      }
+    },
+    "redis": {
+      "kind": "kv",
+      "stand_in": { "id": "redis", "product": "Redis (or Valkey)", "licence": "AGPL-3.0 / BSD-3 (Valkey)", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["redis", "ioredis", "@redis/client"],
+        "pypi": ["redis", "aioredis", "valkey"],
+        "go": ["github.com/redis/go-redis", "github.com/go-redis/redis", "github.com/gomodule/redigo"],
+        "cargo": ["redis", "fred"],
+        "maven": ["redis.clients:jedis", "io.lettuce:lettuce-core"],
+        "nuget": ["StackExchange.Redis"],
+        "images": ["redis", "valkey/valkey", "redis/redis-stack", "redis/redis-stack-server", "bitnami/redis"],
+        "url_schemes": ["redis", "rediss"],
+        "env": ["REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD", "REDIS_URI", "VALKEY_URL"],
+        "env_prefix": ["REDIS_", "VALKEY_"]
+      }
+    },
+    "memcached": {
+      "kind": "kv",
+      "stand_in": { "id": "memcached", "product": "memcached", "licence": "BSD-3", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["memjs", "memcached"],
+        "pypi": ["pymemcache", "python-memcached"],
+        "images": ["memcached"],
+        "env": ["MEMCACHED_HOST", "MEMCACHED_SERVERS"],
+        "env_prefix": ["MEMCACHED_"]
+      }
+    },
+    "mongodb": {
+      "kind": "document",
+      "stand_in": { "id": "mongodb", "product": "MongoDB Community Server", "licence": "SSPL-1.0", "fidelity": "real", "cleared": true, "note": "SSPL applies to offering it as a service; running it in a test job is allowed" },
+      "signals": {
+        "npm": ["mongodb", "mongoose"],
+        "pypi": ["pymongo", "motor", "mongoengine", "beanie"],
+        "go": ["go.mongodb.org/mongo-driver"],
+        "cargo": ["mongodb"],
+        "maven": ["org.mongodb:mongodb-driver-sync", "org.mongodb:mongodb-driver-reactivestreams"],
+        "nuget": ["MongoDB.Driver"],
+        "images": ["mongo", "mongodb/mongodb-community-server", "bitnami/mongodb"],
+        "url_schemes": ["mongodb", "mongodb+srv"],
+        "prisma": ["mongodb"],
+        "env": ["MONGODB_URI", "MONGODB_URL", "MONGO_URI", "MONGO_URL", "MONGODB_CONNECTION_STRING", "MONGO_CONNECTION_STRING", "MONGODB_DATABASE"],
+        "env_prefix": ["MONGODB_", "MONGO_"]
+      }
+    },
+    "couchdb": {
+      "kind": "document",
+      "stand_in": { "id": "couchdb", "product": "Apache CouchDB", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["nano", "pouchdb"],
+        "pypi": ["couchdb", "pycouchdb", "ibmcloudant"],
+        "images": ["couchdb", "apache/couchdb"],
+        "env": ["COUCHDB_URL", "COUCHDB_HOST", "COUCHDB_PASSWORD"],
+        "env_prefix": ["COUCHDB_"]
+      }
+    },
+    "cassandra": {
+      "kind": "document",
+      "stand_in": { "id": "cassandra", "product": "Apache Cassandra", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["cassandra-driver"],
+        "pypi": ["cassandra-driver", "scylla-driver"],
+        "go": ["github.com/gocql/gocql"],
+        "images": ["cassandra", "scylladb/scylla"],
+        "env": ["CASSANDRA_HOST", "CASSANDRA_HOSTS", "CASSANDRA_CONTACT_POINTS", "CASSANDRA_KEYSPACE"],
+        "env_prefix": ["CASSANDRA_"]
+      }
+    },
+    "surrealdb": {
+      "kind": "document",
+      "stand_in": { "id": "surrealdb", "product": "SurrealDB", "licence": "BSL-1.1", "fidelity": "real", "cleared": false, "note": "BSL 1.1: a person decides" },
+      "signals": {
+        "npm": ["surrealdb", "surrealdb.js"],
+        "pypi": ["surrealdb"],
+        "images": ["surrealdb/surrealdb"],
+        "env": ["SURREALDB_URL", "SURREAL_URL"],
+        "env_prefix": ["SURREALDB_", "SURREAL_"]
+      }
+    },
+    "elasticsearch": {
+      "kind": "search",
+      "stand_in": { "id": "elasticsearch", "product": "Elasticsearch", "licence": "AGPL-3.0 (one of its three licences)", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@elastic/elasticsearch", "elasticsearch"],
+        "pypi": ["elasticsearch", "elasticsearch-dsl", "elasticsearch8"],
+        "go": ["github.com/elastic/go-elasticsearch"],
+        "images": ["elasticsearch", "docker.elastic.co/elasticsearch/elasticsearch", "bitnami/elasticsearch"],
+        "env": ["ELASTICSEARCH_URL", "ELASTICSEARCH_HOST", "ELASTICSEARCH_HOSTS", "ES_URL", "ES_HOST", "ELASTICSEARCH_API_KEY", "ELASTICSEARCH_PASSWORD"],
+        "env_prefix": ["ELASTICSEARCH_", "ELASTIC_"]
+      }
+    },
+    "opensearch": {
+      "kind": "search",
+      "stand_in": { "id": "opensearch", "product": "OpenSearch", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@opensearch-project/opensearch"],
+        "pypi": ["opensearch-py"],
+        "go": ["github.com/opensearch-project/opensearch-go"],
+        "images": ["opensearchproject/opensearch"],
+        "env": ["OPENSEARCH_URL", "OPENSEARCH_HOST", "OPENSEARCH_PASSWORD"],
+        "env_prefix": ["OPENSEARCH_"]
+      }
+    },
+    "meilisearch": {
+      "kind": "search",
+      "stand_in": { "id": "meilisearch", "product": "Meilisearch", "licence": "MIT", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["meilisearch"],
+        "pypi": ["meilisearch"],
+        "go": ["github.com/meilisearch/meilisearch-go"],
+        "images": ["getmeili/meilisearch"],
+        "env": ["MEILI_HOST", "MEILISEARCH_HOST", "MEILI_MASTER_KEY", "MEILISEARCH_URL", "MEILI_URL"],
+        "env_prefix": ["MEILI_", "MEILISEARCH_"]
+      }
+    },
+    "typesense": {
+      "kind": "search",
+      "stand_in": { "id": "typesense", "product": "Typesense", "licence": "GPL-3.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["typesense"],
+        "pypi": ["typesense"],
+        "images": ["typesense/typesense"],
+        "env": ["TYPESENSE_HOST", "TYPESENSE_API_KEY", "TYPESENSE_URL"],
+        "env_prefix": ["TYPESENSE_"]
+      }
+    },
+    "neo4j": {
+      "kind": "graph",
+      "stand_in": { "id": "neo4j", "product": "Neo4j Community Edition", "licence": "GPL-3.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["neo4j-driver"],
+        "pypi": ["neo4j", "py2neo", "neomodel"],
+        "go": ["github.com/neo4j/neo4j-go-driver"],
+        "maven": ["org.neo4j.driver:neo4j-java-driver"],
+        "images": ["neo4j"],
+        "url_schemes": ["neo4j", "neo4j+s", "bolt", "bolt+s"],
+        "env": ["NEO4J_URI", "NEO4J_URL", "NEO4J_PASSWORD", "NEO4J_USERNAME", "NEO4J_DATABASE"],
+        "env_prefix": ["NEO4J_"]
+      }
+    },
+    "memgraph": {
+      "kind": "graph",
+      "stand_in": { "id": "memgraph", "product": "Memgraph", "licence": "BSL-1.1", "fidelity": "real", "cleared": false, "note": "BSL 1.1: a person decides" },
+      "signals": {
+        "pypi": ["gqlalchemy"],
+        "images": ["memgraph/memgraph", "memgraph/memgraph-mage"],
+        "env": ["MEMGRAPH_URL", "MEMGRAPH_HOST"],
+        "env_prefix": ["MEMGRAPH_"]
+      }
+    },
+    "arangodb": {
+      "kind": "graph",
+      "stand_in": { "id": "arangodb", "product": "ArangoDB", "licence": "BSL-1.1 (3.12 and later)", "fidelity": "real", "cleared": false, "note": "BSL 1.1 since 3.12: a person decides" },
+      "signals": {
+        "npm": ["arangojs"],
+        "pypi": ["python-arango"],
+        "images": ["arangodb"],
+        "env": ["ARANGO_URL", "ARANGODB_URL", "ARANGO_HOST"],
+        "env_prefix": ["ARANGO_", "ARANGODB_"]
+      }
+    },
+    "clickhouse": {
+      "kind": "sql",
+      "stand_in": { "id": "clickhouse", "product": "ClickHouse", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@clickhouse/client", "@clickhouse/client-web"],
+        "pypi": ["clickhouse-connect", "clickhouse-driver", "aiochclient"],
+        "go": ["github.com/ClickHouse/clickhouse-go"],
+        "images": ["clickhouse/clickhouse-server", "yandex/clickhouse-server"],
+        "url_schemes": ["clickhouse"],
+        "env": ["CLICKHOUSE_HOST", "CLICKHOUSE_URL", "CLICKHOUSE_PASSWORD", "CLICKHOUSE_USER", "CLICKHOUSE_DATABASE"],
+        "env_prefix": ["CLICKHOUSE_"]
+      }
+    },
+    "influxdb": {
+      "kind": "sql",
+      "stand_in": { "id": "influxdb", "product": "InfluxDB OSS", "licence": "MIT", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@influxdata/influxdb-client", "@influxdata/influxdb3-client"],
+        "pypi": ["influxdb-client", "influxdb", "influxdb3-python"],
+        "go": ["github.com/influxdata/influxdb-client-go"],
+        "images": ["influxdb"],
+        "env": ["INFLUXDB_URL", "INFLUX_URL", "INFLUXDB_TOKEN", "INFLUX_TOKEN", "INFLUXDB_HOST"],
+        "env_prefix": ["INFLUXDB_", "INFLUX_"]
+      }
+    },
+    "qdrant": {
+      "kind": "vector",
+      "stand_in": { "id": "qdrant", "product": "Qdrant", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@qdrant/js-client-rest", "@qdrant/qdrant-js"],
+        "pypi": ["qdrant-client"],
+        "go": ["github.com/qdrant/go-client"],
+        "cargo": ["qdrant-client"],
+        "images": ["qdrant/qdrant"],
+        "env": ["QDRANT_URL", "QDRANT_HOST", "QDRANT_API_KEY", "QDRANT_LOCAL_PATH"],
+        "env_prefix": ["QDRANT_"]
+      }
+    },
+    "chroma": {
+      "kind": "vector",
+      "stand_in": { "id": "chroma", "product": "Chroma", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["chromadb"],
+        "pypi": ["chromadb", "chromadb-client"],
+        "images": ["chromadb/chroma"],
+        "env": ["CHROMA_HOST", "CHROMA_URL", "CHROMA_PATH", "CHROMA_DB_PATH"],
+        "env_prefix": ["CHROMA_"]
+      }
+    },
+    "weaviate": {
+      "kind": "vector",
+      "stand_in": { "id": "weaviate", "product": "Weaviate", "licence": "BSD-3-Clause", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["weaviate-client", "weaviate-ts-client"],
+        "pypi": ["weaviate-client"],
+        "go": ["github.com/weaviate/weaviate-go-client"],
+        "images": ["semitechnologies/weaviate", "cr.weaviate.io/semitechnologies/weaviate"],
+        "env": ["WEAVIATE_URL", "WEAVIATE_HOST", "WEAVIATE_API_KEY"],
+        "env_prefix": ["WEAVIATE_"]
+      }
+    },
+    "milvus": {
+      "kind": "vector",
+      "stand_in": { "id": "milvus", "product": "Milvus (standalone)", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@zilliz/milvus2-sdk-node"],
+        "pypi": ["pymilvus"],
+        "go": ["github.com/milvus-io/milvus-sdk-go"],
+        "images": ["milvusdb/milvus"],
+        "env": ["MILVUS_URI", "MILVUS_HOST", "MILVUS_URL", "MILVUS_TOKEN"],
+        "env_prefix": ["MILVUS_"]
+      }
+    },
+    "lancedb": {
+      "kind": "vector",
+      "stand_in": { "id": "lancedb", "product": "LanceDB (embedded)", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@lancedb/lancedb", "vectordb"],
+        "pypi": ["lancedb"],
+        "env": ["LANCEDB_PATH", "LANCEDB_URI"],
+        "env_prefix": ["LANCEDB_"]
+      }
+    },
+    "pinecone": {
+      "kind": "vector",
+      "stand_in": { "id": "pinecone-local", "product": "Pinecone Local (emulator)", "licence": "Pinecone terms", "fidelity": "partial", "cleared": false, "note": "an in-memory emulator, not the service; not checked for terms" },
+      "signals": {
+        "npm": ["@pinecone-database/pinecone"],
+        "pypi": ["pinecone", "pinecone-client"],
+        "hosts": ["pinecone.io"],
+        "env": ["PINECONE_API_KEY", "PINECONE_INDEX", "PINECONE_INDEX_NAME", "PINECONE_ENVIRONMENT"],
+        "env_prefix": ["PINECONE_"]
+      }
+    },
+    "kafka": {
+      "kind": "queue",
+      "stand_in": { "id": "kafka", "product": "Apache Kafka", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["kafkajs", "@confluentinc/kafka-javascript", "node-rdkafka"],
+        "pypi": ["kafka-python", "confluent-kafka", "aiokafka"],
+        "go": ["github.com/segmentio/kafka-go", "github.com/IBM/sarama", "github.com/Shopify/sarama", "github.com/confluentinc/confluent-kafka-go", "github.com/twmb/franz-go"],
+        "cargo": ["rdkafka"],
+        "images": ["apache/kafka", "confluentinc/cp-kafka", "bitnami/kafka", "redpandadata/redpanda"],
+        "url_schemes": ["kafka"],
+        "env": ["KAFKA_BROKERS", "KAFKA_BOOTSTRAP_SERVERS", "KAFKA_BROKER", "KAFKA_URL"],
+        "env_prefix": ["KAFKA_"]
+      }
+    },
+    "rabbitmq": {
+      "kind": "queue",
+      "stand_in": { "id": "rabbitmq", "product": "RabbitMQ", "licence": "MPL-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["amqplib", "amqp-connection-manager", "rabbitmq-client"],
+        "pypi": ["pika", "aio-pika", "kombu", "aiormq"],
+        "go": ["github.com/rabbitmq/amqp091-go", "github.com/streadway/amqp"],
+        "cargo": ["lapin"],
+        "images": ["rabbitmq"],
+        "url_schemes": ["amqp", "amqps"],
+        "env": ["RABBITMQ_URL", "RABBITMQ_HOST", "AMQP_URL", "RABBITMQ_PASSWORD"],
+        "env_prefix": ["RABBITMQ_", "AMQP_"]
+      }
+    },
+    "nats": {
+      "kind": "queue",
+      "stand_in": { "id": "nats", "product": "NATS Server", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["nats", "@nats-io/transport-node"],
+        "pypi": ["nats-py"],
+        "go": ["github.com/nats-io/nats.go"],
+        "cargo": ["async-nats"],
+        "images": ["nats"],
+        "url_schemes": ["nats"],
+        "env": ["NATS_URL", "NATS_SERVERS"],
+        "env_prefix": ["NATS_"]
+      }
+    },
+    "s3": {
+      "kind": "object_store",
+      "stand_in": { "id": "minio", "product": "MinIO (pinned by digest)", "licence": "AGPL-3.0", "fidelity": "faithful", "cleared": true, "note": "S3 semantics are strong, but the open edition went into maintenance on 3 Dec 2025 and its repository was archived in 2026: pin a last good build by digest (RESEARCH.md section 2)" },
+      "signals": {
+        "npm": ["@aws-sdk/client-s3", "@aws-sdk/lib-storage", "minio", "@aws-sdk/s3-request-presigner"],
+        "pypi": ["minio", "s3fs", "aiobotocore"],
+        "go": ["github.com/aws/aws-sdk-go-v2/service/s3", "github.com/minio/minio-go"],
+        "cargo": ["aws-sdk-s3", "rust-s3"],
+        "images": ["minio/minio", "bitnami/minio", "quay.io/minio/minio"],
+        "url_schemes": ["s3"],
+        "env": ["S3_BUCKET", "S3_ENDPOINT", "S3_ENDPOINT_URL", "AWS_S3_BUCKET", "S3_BUCKET_NAME", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_ROOT_USER", "AWS_ENDPOINT_URL_S3"],
+        "env_prefix": ["S3_", "MINIO_"],
+        "code": ["boto3.client('s3'", "boto3.client(\"s3\"", "boto3.resource('s3'", "boto3.resource(\"s3\"", "new S3Client(", "S3Client({"]
+      }
+    },
+    "azure-blob": {
+      "kind": "object_store",
+      "stand_in": { "id": "azurite", "product": "Azurite (Microsoft's storage emulator)", "licence": "MIT", "fidelity": "faithful", "cleared": true, "note": "blob, queue and table APIs" },
+      "signals": {
+        "npm": ["@azure/storage-blob", "@azure/storage-queue", "@azure/data-tables"],
+        "pypi": ["azure-storage-blob", "azure-storage-queue", "azure-data-tables"],
+        "go": ["github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"],
+        "nuget": ["Azure.Storage.Blobs"],
+        "images": ["mcr.microsoft.com/azure-storage/azurite"],
+        "env": ["AZURE_STORAGE_CONNECTION_STRING", "AZURE_STORAGE_ACCOUNT", "AZURE_STORAGE_ACCOUNT_NAME", "AZURE_STORAGE_KEY"],
+        "env_prefix": ["AZURE_STORAGE_"]
+      }
+    },
+    "gcs": {
+      "kind": "object_store",
+      "stand_in": { "id": "fake-gcs-server", "product": "fake-gcs-server", "licence": "BSD-2-Clause", "fidelity": "partial", "cleared": true, "note": "a community emulator: generations and preconditions are not checked to hold" },
+      "signals": {
+        "npm": ["@google-cloud/storage"],
+        "pypi": ["google-cloud-storage", "gcsfs"],
+        "go": ["cloud.google.com/go/storage"],
+        "images": ["fsouza/fake-gcs-server"],
+        "url_schemes": ["gs"],
+        "env": ["GCS_BUCKET", "GCS_BUCKET_NAME", "GOOGLE_CLOUD_STORAGE_BUCKET", "STORAGE_EMULATOR_HOST"],
+        "env_prefix": ["GCS_"]
+      }
+    },
+    "aws": {
+      "kind": "service",
+      "stand_in": { "id": "localstack", "product": "LocalStack", "licence": "LocalStack terms (account and auth token since 23 Mar 2026)", "fidelity": "faithful", "cleared": false, "note": "needs an account and token: a person decides (RESEARCH.md section 2); moto's server mode is Apache-2.0 but not built for concurrent writers (partial)" },
+      "signals": {
+        "npm": ["aws-sdk", "@aws-sdk/client-lambda", "@aws-sdk/client-sqs", "@aws-sdk/client-sns", "@aws-sdk/client-ec2", "@aws-sdk/client-cloudformation", "@aws-sdk/client-iam", "@aws-sdk/client-ses", "@aws-sdk/client-sesv2", "@aws-sdk/client-secrets-manager", "@aws-sdk/client-ssm", "@aws-sdk/client-bedrock-agent", "@aws-sdk/client-cloudwatch", "@aws-sdk/client-cloudwatch-logs", "@aws-sdk/client-ecs", "@aws-sdk/client-eventbridge", "@aws-sdk/client-kinesis", "@aws-sdk/client-sfn", "@aws-sdk/client-athena", "@aws-sdk/client-glue"],
+        "pypi": ["boto3", "botocore", "aioboto3", "aws-cdk-lib"],
+        "go": ["github.com/aws/aws-sdk-go-v2", "github.com/aws/aws-sdk-go"],
+        "cargo": ["aws-config", "aws-sdk-lambda", "aws-sdk-sqs"],
+        "images": ["localstack/localstack"],
+        "env": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_SESSION_TOKEN"],
+        "env_prefix": ["AWS_"]
+      }
+    },
+    "dynamodb": {
+      "kind": "document",
+      "stand_in": { "id": "dynamodb-local", "product": "Amazon DynamoDB Local", "licence": "DynamoDB Local licence", "fidelity": "faithful", "cleared": false, "note": "free, but under Amazon's own licence, not checked: a person decides" },
+      "signals": {
+        "npm": ["@aws-sdk/client-dynamodb", "@aws-sdk/lib-dynamodb", "dynamoose", "electrodb"],
+        "pypi": ["pynamodb"],
+        "go": ["github.com/aws/aws-sdk-go-v2/service/dynamodb", "github.com/guregu/dynamo"],
+        "cargo": ["aws-sdk-dynamodb"],
+        "images": ["amazon/dynamodb-local"],
+        "env": ["DYNAMODB_TABLE", "DYNAMODB_TABLE_NAME", "DYNAMODB_ENDPOINT", "AWS_ENDPOINT_URL_DYNAMODB"],
+        "env_prefix": ["DYNAMODB_"],
+        "code": ["boto3.client('dynamodb'", "boto3.client(\"dynamodb\"", "boto3.resource('dynamodb'", "boto3.resource(\"dynamodb\"", "new DynamoDBClient("]
+      }
+    },
+    "firestore": {
+      "kind": "document",
+      "stand_in": { "id": "firebase-emulator", "product": "Firebase Local Emulator Suite", "licence": "firebase-tools MIT; emulator binaries under Google's terms", "fidelity": "faithful", "cleared": false, "note": "the emulator jars are fetched under Google's terms and need Java: a person decides" },
+      "signals": {
+        "npm": ["firebase-admin", "firebase", "@google-cloud/firestore"],
+        "pypi": ["firebase-admin", "google-cloud-firestore"],
+        "go": ["firebase.google.com/go", "cloud.google.com/go/firestore"],
+        "env": ["FIREBASE_PROJECT_ID", "FIREBASE_SERVICE_ACCOUNT", "FIREBASE_CREDENTIALS", "FIRESTORE_EMULATOR_HOST", "FIREBASE_DATABASE_URL"],
+        "env_prefix": ["FIREBASE_", "FIRESTORE_"]
+      }
+    },
+    "smtp": {
+      "kind": "mail",
+      "stand_in": { "id": "mailpit", "product": "Mailpit (SMTP sink with a read-back API)", "licence": "MIT", "fidelity": "faithful", "cleared": true, "note": "send semantics only: no versions, so no concurrency requirements (RESEARCH.md section 2)" },
+      "signals": {
+        "npm": ["nodemailer", "emailjs", "smtp-client"],
+        "pypi": ["aiosmtplib", "yagmail", "smtplib2", "fastapi-mail", "flask-mail"],
+        "go": ["github.com/wneessen/go-mail", "gopkg.in/gomail.v2", "github.com/jordan-wright/email"],
+        "cargo": ["lettre"],
+        "images": ["axllent/mailpit", "mailhog/mailhog"],
+        "url_schemes": ["smtp", "smtps"],
+        "env": ["SMTP_HOST", "SMTP_SERVER", "SMTP_PORT", "SMTP_USER", "SMTP_USERNAME", "SMTP_PASSWORD", "EMAIL_HOST", "MAIL_HOST", "SMTP_URL"],
+        "env_prefix": ["SMTP_"],
+        "code": ["smtplib.SMTP(", "smtplib.SMTP_SSL(", "nodemailer.createTransport(", "net/smtp\""]
+      }
+    },
+    "imap": {
+      "kind": "mail",
+      "stand_in": { "id": "greenmail", "product": "GreenMail (IMAP, POP3 and SMTP test server)", "licence": "Apache-2.0", "fidelity": "faithful", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["imapflow", "imap", "node-imap", "imap-simple"],
+        "pypi": ["imapclient", "imap-tools", "aioimaplib"],
+        "go": ["github.com/emersion/go-imap"],
+        "cargo": ["imap", "async-imap"],
+        "images": ["greenmail/standalone"],
+        "url_schemes": ["imap", "imaps"],
+        "env": ["IMAP_HOST", "IMAP_SERVER", "IMAP_PORT", "IMAP_USER", "IMAP_USERNAME", "IMAP_PASSWORD"],
+        "env_prefix": ["IMAP_"],
+        "code": ["imaplib.IMAP4_SSL(", "imaplib.IMAP4("]
+      }
+    },
+    "git": {
+      "kind": "git",
+      "stand_in": { "id": "git-local", "product": "a local Git repository in the sandbox", "licence": "GPL-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["simple-git", "isomorphic-git", "nodegit"],
+        "pypi": ["gitpython", "dulwich", "pygit2"],
+        "go": ["github.com/go-git/go-git"],
+        "cargo": ["git2", "gix"],
+        "env": ["GIT_REPO_PATH", "GIT_REPOSITORY", "REPO_PATH"],
+        "env_prefix": [],
+        "code": ["execFile('git'", "execFile(\"git\"", "spawn('git'", "spawn(\"git\"", "[\"git\", \"commit\"", "['git', 'commit'", "exec.Command(\"git\""]
+      }
+    },
+    "filesystem": {
+      "kind": "filesystem",
+      "stand_in": { "id": "tmpdir", "product": "a scratch folder in the sandbox", "licence": null, "fidelity": "real", "cleared": true, "note": "only when file writes and file-shaped write tools are both seen (meta/backend.mjs FS_RULE)" },
+      "signals": {}
+    },
+    "kubernetes": {
+      "kind": "cluster",
+      "stand_in": { "id": "kind", "product": "kind (Kubernetes in Docker)", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": "already a dogfood worker (t0-dogfood); heavy" },
+      "signals": {
+        "npm": ["@kubernetes/client-node"],
+        "pypi": ["kubernetes", "kubernetes-asyncio", "kr8s", "lightkube"],
+        "go": ["k8s.io/client-go", "sigs.k8s.io/controller-runtime"],
+        "cargo": ["kube"],
+        "images": ["kindest/node", "rancher/k3s"],
+        "env": ["KUBECONFIG", "KUBE_CONTEXT", "KUBERNETES_CONTEXT", "K8S_CONTEXT"],
+        "env_prefix": [],
+        "code": ["execFile('kubectl'", "spawn('kubectl'", "[\"kubectl\",", "['kubectl',", "exec.Command(\"kubectl\""]
+      }
+    },
+    "docker": {
+      "kind": "cluster",
+      "stand_in": { "id": "docker-engine", "product": "Docker Engine", "licence": "Apache-2.0", "fidelity": "real", "cleared": false, "note": "needs a Docker socket inside the writecheck sandbox, which it does not give a server: a person decides" },
+      "signals": {
+        "npm": ["dockerode", "docker-modem"],
+        "pypi": ["docker", "aiodocker"],
+        "go": ["github.com/docker/docker", "github.com/moby/moby"],
+        "cargo": ["bollard"],
+        "env": ["DOCKER_HOST", "DOCKER_SOCKET", "DOCKER_SOCK"],
+        "env_prefix": []
+      }
+    },
+    "gitlab": {
+      "kind": "service",
+      "stand_in": { "id": "gitlab-ce", "product": "GitLab Community Edition", "licence": "MIT", "fidelity": "real", "cleared": true, "note": "heavy: minutes to start and several GB of memory; one Docker-backed run at a time" },
+      "signals": {
+        "npm": ["@gitbeaker/rest", "@gitbeaker/node", "@gitbeaker/core"],
+        "pypi": ["python-gitlab"],
+        "go": ["gitlab.com/gitlab-org/api/client-go", "github.com/xanzy/go-gitlab"],
+        "images": ["gitlab/gitlab-ce"],
+        "hosts": ["gitlab.com"],
+        "env": ["GITLAB_TOKEN", "GITLAB_PERSONAL_ACCESS_TOKEN", "GITLAB_API_URL", "GITLAB_URL", "GITLAB_HOST", "GITLAB_PROJECT_ID"],
+        "env_prefix": ["GITLAB_"]
+      }
+    },
+    "gitea": {
+      "kind": "service",
+      "stand_in": { "id": "gitea", "product": "Gitea (or Forgejo)", "licence": "MIT (Gitea), GPL-3.0 (Forgejo)", "fidelity": "real", "cleared": true, "note": "for servers built for the Gitea or Forgejo API only" },
+      "signals": {
+        "npm": ["gitea-js"],
+        "pypi": ["giteapy", "py-gitea"],
+        "go": ["code.gitea.io/sdk/gitea", "codeberg.org/mvdkleijn/forgejo-sdk"],
+        "images": ["gitea/gitea", "codeberg.org/forgejo/forgejo"],
+        "hosts": ["codeberg.org", "gitea.com"],
+        "env": ["GITEA_TOKEN", "GITEA_HOST", "GITEA_URL", "GITEA_ACCESS_TOKEN", "FORGEJO_TOKEN", "FORGEJO_URL", "FORGEJO_HOST"],
+        "env_prefix": ["GITEA_", "FORGEJO_"]
+      }
+    },
+    "github": {
+      "kind": "hosted_api",
+      "stand_in": { "id": "gitea", "product": "Gitea", "licence": "MIT", "fidelity": "not_faithful", "cleared": true, "note": "Gitea's API is at /api/v1 with its own shapes; a GitHub server would have to be rewritten for it (RESEARCH.md section 2). GitHub servers go to min mode through GitHub's own OpenAPI description" },
+      "signals": {}
+    },
+    "grafana": {
+      "kind": "service",
+      "stand_in": { "id": "grafana", "product": "Grafana OSS", "licence": "AGPL-3.0", "fidelity": "real", "cleared": true, "note": "already a dogfood worker" },
+      "signals": {
+        "go": ["github.com/grafana/grafana-openapi-client-go"],
+        "pypi": ["grafana-client", "grafana-api"],
+        "images": ["grafana/grafana", "grafana/grafana-oss"],
+        "hosts": ["grafana.net"],
+        "env": ["GRAFANA_URL", "GRAFANA_API_KEY", "GRAFANA_SERVICE_ACCOUNT_TOKEN", "GRAFANA_TOKEN", "GRAFANA_HOST"],
+        "env_prefix": ["GRAFANA_"]
+      }
+    },
+    "home-assistant": {
+      "kind": "service",
+      "stand_in": { "id": "home-assistant", "product": "Home Assistant Core", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["home-assistant-js-websocket"],
+        "pypi": ["homeassistant-api", "hass-client", "homeassistant"],
+        "images": ["homeassistant/home-assistant", "ghcr.io/home-assistant/home-assistant"],
+        "env": ["HASS_TOKEN", "HASS_URL", "HASS_HOST", "HOMEASSISTANT_URL", "HOMEASSISTANT_TOKEN", "HOME_ASSISTANT_URL", "HOME_ASSISTANT_TOKEN", "HA_URL", "HA_TOKEN"],
+        "env_prefix": ["HASS_", "HOMEASSISTANT_", "HOME_ASSISTANT_"]
+      }
+    },
+    "mattermost": {
+      "kind": "service",
+      "stand_in": { "id": "mattermost", "product": "Mattermost Team Edition", "licence": "MIT (binaries) / AGPL-3.0 (source)", "fidelity": "real", "cleared": true, "note": "for servers built for the Mattermost API; not a stand-in for Slack" },
+      "signals": {
+        "npm": ["@mattermost/client"],
+        "pypi": ["mattermostdriver"],
+        "images": ["mattermost/mattermost-team-edition", "mattermost/mattermost-preview"],
+        "env": ["MATTERMOST_URL", "MATTERMOST_TOKEN", "MATTERMOST_HOST", "MATTERMOST_TEAM"],
+        "env_prefix": ["MATTERMOST_"]
+      }
+    },
+    "wordpress": {
+      "kind": "service",
+      "stand_in": { "id": "wordpress", "product": "WordPress", "licence": "GPL-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["wpapi", "@wordpress/api-fetch"],
+        "pypi": ["python-wordpress-xmlrpc"],
+        "images": ["wordpress", "bitnami/wordpress"],
+        "env": ["WORDPRESS_URL", "WORDPRESS_USERNAME", "WORDPRESS_APP_PASSWORD", "WORDPRESS_PASSWORD", "WP_URL", "WP_SITE_URL", "WP_USERNAME", "WP_APP_PASSWORD", "WORDPRESS_SITE_URL"],
+        "env_prefix": ["WORDPRESS_", "WP_"]
+      }
+    },
+    "ghost": {
+      "kind": "service",
+      "stand_in": { "id": "ghost", "product": "Ghost", "licence": "MIT", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@tryghost/admin-api", "@tryghost/content-api"],
+        "images": ["ghost"],
+        "env": ["GHOST_URL", "GHOST_ADMIN_API_KEY", "GHOST_API_URL", "GHOST_CONTENT_API_KEY"],
+        "env_prefix": ["GHOST_"]
+      }
+    },
+    "strapi": {
+      "kind": "service",
+      "stand_in": { "id": "strapi", "product": "Strapi", "licence": "MIT", "fidelity": "real", "cleared": true, "note": "already a dogfood target" },
+      "signals": {
+        "npm": ["@strapi/client", "@strapi/sdk-js"],
+        "images": ["strapi/strapi"],
+        "env": ["STRAPI_URL", "STRAPI_API_TOKEN", "STRAPI_API_URL", "STRAPI_TOKEN"],
+        "env_prefix": ["STRAPI_"]
+      }
+    },
+    "directus": {
+      "kind": "service",
+      "stand_in": { "id": "directus", "product": "Directus", "licence": "BSL-1.1", "fidelity": "real", "cleared": false, "note": "BSL 1.1: a person decides" },
+      "signals": {
+        "npm": ["@directus/sdk"],
+        "images": ["directus/directus"],
+        "env": ["DIRECTUS_URL", "DIRECTUS_TOKEN", "DIRECTUS_API_TOKEN"],
+        "env_prefix": ["DIRECTUS_"]
+      }
+    },
+    "n8n": {
+      "kind": "service",
+      "stand_in": { "id": "n8n", "product": "n8n", "licence": "Sustainable Use License", "fidelity": "real", "cleared": false, "note": "fair-code licence: a person decides" },
+      "signals": {
+        "images": ["n8nio/n8n", "docker.n8n.io/n8nio/n8n"],
+        "env": ["N8N_API_URL", "N8N_API_KEY", "N8N_HOST", "N8N_BASE_URL", "N8N_URL"],
+        "env_prefix": ["N8N_"]
+      }
+    },
+    "odoo": {
+      "kind": "service",
+      "stand_in": { "id": "odoo", "product": "Odoo Community", "licence": "LGPL-3.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "pypi": ["odoorpc", "odoo-client-lib"],
+        "npm": ["odoo-await", "odoo-xmlrpc"],
+        "images": ["odoo"],
+        "env": ["ODOO_URL", "ODOO_DB", "ODOO_USERNAME", "ODOO_PASSWORD", "ODOO_API_KEY", "ODOO_HOST"],
+        "env_prefix": ["ODOO_"]
+      }
+    },
+    "nextcloud": {
+      "kind": "service",
+      "stand_in": { "id": "nextcloud", "product": "Nextcloud Server", "licence": "AGPL-3.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["webdav"],
+        "pypi": ["nc-py-api", "webdavclient3"],
+        "images": ["nextcloud"],
+        "env": ["NEXTCLOUD_URL", "NEXTCLOUD_HOST", "NEXTCLOUD_USERNAME", "NEXTCLOUD_PASSWORD", "NEXTCLOUD_APP_PASSWORD"],
+        "env_prefix": ["NEXTCLOUD_"]
+      }
+    },
+    "keycloak": {
+      "kind": "service",
+      "stand_in": { "id": "keycloak", "product": "Keycloak", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["@keycloak/keycloak-admin-client"],
+        "pypi": ["python-keycloak"],
+        "images": ["quay.io/keycloak/keycloak", "keycloak/keycloak", "bitnami/keycloak"],
+        "env": ["KEYCLOAK_URL", "KEYCLOAK_REALM", "KEYCLOAK_CLIENT_ID", "KEYCLOAK_ADMIN_PASSWORD"],
+        "env_prefix": ["KEYCLOAK_"]
+      }
+    },
+    "vault": {
+      "kind": "service",
+      "stand_in": { "id": "openbao", "product": "OpenBao (API-compatible fork of Vault)", "licence": "MPL-2.0", "fidelity": "faithful", "cleared": true, "note": "Vault itself is BSL 1.1" },
+      "signals": {
+        "npm": ["node-vault"],
+        "pypi": ["hvac"],
+        "go": ["github.com/hashicorp/vault/api", "github.com/openbao/openbao/api"],
+        "images": ["hashicorp/vault", "vault", "openbao/openbao", "quay.io/openbao/openbao"],
+        "env": ["VAULT_ADDR", "VAULT_TOKEN", "VAULT_NAMESPACE", "BAO_ADDR"],
+        "env_prefix": ["VAULT_", "BAO_"]
+      }
+    },
+    "jenkins": {
+      "kind": "service",
+      "stand_in": { "id": "jenkins", "product": "Jenkins", "licence": "MIT", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "npm": ["jenkins"],
+        "pypi": ["python-jenkins", "api4jenkins", "jenkinsapi"],
+        "images": ["jenkins/jenkins"],
+        "env": ["JENKINS_URL", "JENKINS_API_TOKEN", "JENKINS_USER", "JENKINS_USERNAME", "JENKINS_TOKEN"],
+        "env_prefix": ["JENKINS_"]
+      }
+    },
+    "airflow": {
+      "kind": "service",
+      "stand_in": { "id": "airflow", "product": "Apache Airflow", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "pypi": ["apache-airflow-client", "apache-airflow"],
+        "images": ["apache/airflow"],
+        "env": ["AIRFLOW_URL", "AIRFLOW_HOST", "AIRFLOW_BASE_URL", "AIRFLOW_API_URL", "AIRFLOW_USERNAME", "AIRFLOW_PASSWORD"],
+        "env_prefix": ["AIRFLOW_"]
+      }
+    },
+    "metabase": {
+      "kind": "service",
+      "stand_in": { "id": "metabase", "product": "Metabase OSS", "licence": "AGPL-3.0", "fidelity": "real", "cleared": true, "note": null },
+      "signals": {
+        "images": ["metabase/metabase"],
+        "env": ["METABASE_URL", "METABASE_API_KEY", "METABASE_USERNAME", "METABASE_PASSWORD"],
+        "env_prefix": ["METABASE_"]
+      }
+    },
+    "prometheus": {
+      "kind": "service",
+      "stand_in": { "id": "prometheus", "product": "Prometheus and Alertmanager", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": "writes are rare (silences, rules)" },
+      "signals": {
+        "pypi": ["prometheus-api-client"],
+        "images": ["prom/prometheus", "prom/alertmanager"],
+        "env": ["PROMETHEUS_URL", "PROMETHEUS_HOST", "ALERTMANAGER_URL"],
+        "env_prefix": ["PROMETHEUS_", "ALERTMANAGER_"]
+      }
+    },
+    "supabase": {
+      "kind": "service",
+      "stand_in": { "id": "supabase-local", "product": "Supabase local stack (supabase CLI)", "licence": "Apache-2.0", "fidelity": "real", "cleared": true, "note": "heavy: about ten containers; for servers that use the project API (supabase-js). The Management API is a hosted service: spec-urls.json supabase-management" },
+      "signals": {
+        "npm": ["@supabase/supabase-js", "@supabase/postgrest-js"],
+        "pypi": ["supabase", "postgrest", "supabase-py"],
+        "go": ["github.com/supabase-community/supabase-go"],
+        "hosts": ["supabase.co"],
+        "env": ["SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY"],
+        "env_prefix": []
+      }
+    },
+    "sentry": {
+      "kind": "service",
+      "stand_in": { "id": "sentry-self-hosted", "product": "Sentry self-hosted", "licence": "FSL-1.1", "fidelity": "real", "cleared": false, "note": "Functional Source License and a heavy stack: a person decides; Sentry's OpenAPI description routes it to min mode meanwhile" },
+      "signals": {
+        "hosts": ["sentry.io"],
+        "env": ["SENTRY_AUTH_TOKEN", "SENTRY_HOST", "SENTRY_ORG", "SENTRY_URL", "SENTRY_ACCESS_TOKEN"],
+        "env_prefix": []
+      }
+    },
+    "browser": {
+      "kind": "browser",
+      "not_a_store": true,
+      "stand_in": null,
+      "signals": {
+        "npm": ["playwright", "playwright-core", "puppeteer", "puppeteer-core", "selenium-webdriver", "@playwright/test", "chrome-remote-interface", "webdriverio"],
+        "pypi": ["playwright", "selenium", "pyppeteer", "browser-use"],
+        "go": ["github.com/chromedp/chromedp", "github.com/go-rod/rod", "github.com/playwright-community/playwright-go"],
+        "env": ["CHROME_PATH", "PUPPETEER_EXECUTABLE_PATH", "BROWSER_PATH"],
+        "env_prefix": ["PLAYWRIGHT_", "PUPPETEER_"]
+      }
+    },
+    "desktop": {
+      "kind": "browser",
+      "not_a_store": true,
+      "stand_in": null,
+      "signals": {
+        "npm": ["@nut-tree/nut-js", "@nut-tree-fork/nut-js", "robotjs", "applescript", "run-applescript"],
+        "pypi": ["pyautogui", "pywinauto", "pynput", "pyobjc", "applescript"],
+        "env": []
+      }
+    }
+  }
+}

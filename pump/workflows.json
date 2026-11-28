@@ -130,6 +130,22 @@
       "image_digest": null,
       "settings_state": "default"
     },
+    "meta-backend": {
+      "enabled": false,
+      "runs_untrusted": false,
+      "pin_check": "enforce",
+      "repo": "isokron-ai/tool-qa",
+      "file": "meta-backend.yml",
+      "throttle_stages": ["known_answer", "archive", "root_files", "collect:reader_limit"],
+      "ref": "main",
+      "shard_size": 50,
+      "setup_minutes": 2,
+      "minutes_per_subject": 0.4,
+      "slots_max": 1,
+      "versions": { "tool": { "meta-backend": "1.0.0", "meta-backend-maps": "1.1" }, "oracle": {}, "probe": {} },
+      "image_digest": null,
+      "settings_state": "default"
+    },
     "t0-defects": {
       "enabled": true,
       "switch": "LANE_T0_DEFECTS_ENABLED",

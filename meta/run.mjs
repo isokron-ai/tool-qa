@@ -2,7 +2,7 @@
 // Worker of the metadata lanes: one shard of subjects in, one bundle
 // directory per item out, ready for the worker kit.
 //
-//   node meta/run.mjs <meta-github|meta-registry|release-diff> <out-dir>
+//   node meta/run.mjs <meta-github|meta-registry|release-diff|meta-backend> <out-dir>
 //
 // Environment:
 //   SHARD_ID, ATTEMPT_ID, ITEMS   the dispatch inputs (docs/INTERFACES.md)
@@ -164,7 +164,7 @@ export async function runShard({
     writeFiles(bundle, files);
     const meta = {
       subject: { id: item.subject, repo: item.repo, sha: o.sha ?? null },
-      tools: [{ name: `tool-qa-${lane.name}`, version: lane.version }],
+      tools: lane.tools ? lane.tools.map((t) => ({ ...t })) : [{ name: `tool-qa-${lane.name}`, version: lane.version }],
       oracles: [],
       settings_manifest_digest: settingsDigest,
       started_at: startedAt,
@@ -182,8 +182,8 @@ export async function runShard({
 
 export async function main(argv = process.argv.slice(2), env = process.env, io = {}) {
   const write = io.write ?? ((s) => process.stdout.write(s));
-  if (argv.length !== 2 || !['meta-github', 'meta-registry', 'release-diff'].includes(argv[0])) {
-    write('usage: node meta/run.mjs <meta-github|meta-registry|release-diff> <out-dir>\n');
+  if (argv.length !== 2 || !['meta-github', 'meta-registry', 'release-diff', 'meta-backend'].includes(argv[0])) {
+    write('usage: node meta/run.mjs <meta-github|meta-registry|release-diff|meta-backend> <out-dir>\n');
     return 2;
   }
   const [laneName, out] = argv;

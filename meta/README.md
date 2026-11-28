@@ -1,15 +1,17 @@
 # meta: the metadata lanes
 
-Three worker lanes that live in this repository, because none runs any code
-from a subject: two read public metadata through public APIs, and
+Four worker lanes that live in this repository, because none runs any code
+from a subject: two read public metadata through public APIs,
 `release-diff` reads published packages and source archives as data
-([below](#release-diff)).
+([below](#release-diff)), and `meta-backend` reads source archives as text to
+classify what a server's write tools write to ([below](#meta-backend)).
 
 | Lane | Workflow | Reads |
 |---|---|---|
 | `meta-github` | `.github/workflows/meta-github.yml` | GitHub GraphQL and REST, api.scorecard.dev |
 | `meta-registry` | `.github/workflows/meta-registry.yml` | the official MCP registry, npm, PyPI, crates.io, the Go module proxy, deps.dev, the allowlisted OCI registries (manifest HEAD only) |
 | `release-diff` | `.github/workflows/release-diff.yml` | npm and PyPI artifacts, their provenance, the repository's tags and source archive |
+| `meta-backend` | `.github/workflows/meta-backend.yml` | the repository's source archive (codeload.github.com), root files (raw.githubusercontent.com) as a fallback |
 
 The pump dispatches them like any worker (`pump/workflows.json`, shard size
 100, one slot each) with `shard_id`, `attempt_id` and `items`
@@ -397,3 +399,86 @@ Measured locally on 19 subjects (our 7 that publish, 12 from the seed list):
 1 to 4 seconds for most subjects, 27 seconds for one with 64 MiB platform
 packages (skipped as too large), and up to the 6-minute budget for a
 repository of about 500 MB whose source archive is slow.
+
+## meta-backend
+
+What does a server's write tools write to, and can writecheck test it on a GitHub Actions runner? One observation per
+subject, `write_backend` (mcp-results `fields/registry.yaml`, class P-s, planned until seen), whose shape and use are
+in [docs/INTERFACES.md](../docs/INTERFACES.md), "Writecheck modes": class `local_full` (full mode), `mock_min` (min
+mode) or `none` (not testable here, never a failure), with the backend, its stand-in or the public description of its
+API, env var names, confidence and evidence. Shard size 50, one slot; off (`enabled: false`) until ingest's registry
+pin holds the field (below).
+
+### What it reads
+
+The source archive at the default branch (`codeload.github.com/<repo>/tar.gz/HEAD`; the known-answer control reads a
+pinned commit), streamed through our own tar reader (`scripts/lib/untar.mjs`) in memory; the commit comes from the
+archive's pax header and is the bundle's `subject.sha`. Each file is scanned as text the moment it is read and let go
+of (`lib/backend-scan.mjs`), so memory follows the largest file read, not the archive:
+
+| Files | What is taken |
+|---|---|
+| package manifests: `package.json`, `pyproject.toml`, `requirements*.txt`, `setup.py`, `setup.cfg`, `Pipfile`, `go.mod`, `Cargo.toml`, `pom.xml`, `build.gradle(.kts)`, `*.csproj`, `*.prisma` | dependency names (dev and test ones weigh less), the Prisma provider |
+| `docker-compose*.yml`, `compose*.yml` | service images; env names |
+| `.env.example` and its siblings (never `.env` itself) | env names, connection URL schemes; values are never kept |
+| `server.json`, an MCP bundle `manifest.json` | declared env names |
+| READMEs (two folders deep at most) | env names that configure a backend, connection URL schemes (both weigh less) |
+| OpenAPI and Swagger files (not in test, example or fixture folders; the Petstore sample is ignored) | path and version |
+| code (`.js`, `.ts`, `.py`, `.go`, `.rs`, `.java`, `.kt`, `.cs`, `.rb`, `.php` ...; at most 1 MiB a file, 48 MiB a subject) | env names read, connection URL schemes, API hosts, calls our maps name, file writes, tool names registered |
+
+Never read: `node_modules`, `vendor`, build output, lock files, virtualenvs, `.git`. Caps: 96 MiB compressed, 768 MiB
+inflated, 150,000 entries, 90 seconds for the archive, 150 seconds a subject. An archive over a cap, or one that does
+not arrive in time, is read again as root files from raw.githubusercontent.com (`ROOT_FILES`); the result says
+`basis.source: root_files` and its confidence is at most medium. With no root file either, it is a `too_large` or
+`reader_limit` skip of ours (fault tool). A repository that is not found is data (`null` with why); a rate limit or
+an outage is a retryable infra skip; a redirect we do not follow is ours (fault tool, retryable); a takedown (DMCA,
+disabled) is the subject's.
+
+### How it classifies
+
+Every backend in the two data maps has signals (dependencies per ecosystem, compose images, URL schemes, Prisma
+providers, env names and prefixes, code tokens, API hosts). Per backend a signal kind counts once, at its weight
+(`WEIGHTS`), and the score is the sum. A backend is found at score 4 with at least one strong signal (a dependency, a
+compose image, a provider, a URL scheme in code or config, a code token, an API host; an env name from code or config
+for a hosted API); weak signals alone (a dev dependency, test code, a README, an env prefix) never find one. The
+filesystem is a backend only when code writes files and a write-like tool is file-shaped (`FS_RULE`). The primary
+backend is the highest score (ties: a usable stand-in first, then a spec):
+
+| Primary backend | Class |
+|---|---|
+| stand-in with fidelity `real` or `faithful` and `cleared: true` in `data/stand-ins.json` | `local_full` |
+| else a spec in `data/spec-urls.json`, or an OpenAPI file in the repository (pinned to the commit) | `mock_min` |
+| a stand-in that is not cleared (a licence or an account a person must decide on) | `none`, `stand_in_not_cleared` |
+| a stand-in that is only `partial` or `not_faithful`, and no spec | `none`, `no_stand_in` |
+| a known hosted API with no published description (spec null), or an `api.*` host no map names with a key for it | `none`, `hosted_without_spec` |
+| a browser or desktop GUI | `none`, `not_a_store` |
+| nothing found | `none`, `no_backend_signal` |
+
+A server whose tool names (found in the code: `server.tool`, `registerTool`, `@mcp.tool`, `mcp.NewTool`, `#[tool]`,
+`@Tool`, `[McpServerTool]`, tool definition objects) are at least three and all read-like is `none`,
+`no_write_tools_seen`. Confidence: high at score 6 from two signal kinds, medium at 4, low otherwise; a generic ORM
+with no engine seen, root files, or a tie between two backends of different modes lowers it.
+
+### The data maps
+
+`data/stand-ins.json` (backend -> stand-in: product, licence, fidelity, cleared, a note) and `data/spec-urls.json`
+(service -> description URL, format, publisher, the date it was read) were seeded from the company-audit research
+note of 27 Nov 2026 (`research/writecheck-coverage-2026-11-28/RESEARCH.md`, section 2): Gitea is not a stand-in for
+GitHub (its API differs), LocalStack needs an account and a token (not cleared), MinIO's open edition is archived
+(pinned by digest), Mailpit is a send sink with no versions. Every spec URL was read on 27 Nov 2026 and is the
+vendor's own. Add a backend, a stand-in or a spec there, not in code, and bump the file's `version` together with the
+`meta-backend-maps` pin in `pump/workflows.json` (a test holds them equal): the pin goes into every run_key, so every
+subject is classified again with the new maps.
+
+### Before it is switched on
+
+Ingest refuses a field its pinned registry does not declare. `write_backend` is declared in mcp-results
+(fields/write-backend, R-RES-16); until `ingest/registry.mjs` pins a commit that holds it, the fixture run and the
+tests judge with the entry added (`backend.mjs` `PENDING_FIELD_YAML`), and the lane stays `enabled: false`.
+
+### Dry run
+
+`.github/workflows/meta-backend-dryrun.yml` classifies the frame (the seed, then discover candidates in the pump's
+order) on Actions in 12 shards and writes the counts and a sample of 20 to the job summary: on a pull request that
+changes the classifier or its maps (the seed plus 200 discovered), by hand (any number, or `all`), and weekly over
+every candidate. It records nothing; the lane does.

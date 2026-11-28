@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [meta-github, meta-registry]
+        lane: [meta-github, meta-registry, meta-backend]
         mode: [check, upload]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

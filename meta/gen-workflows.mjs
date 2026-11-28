@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 export const SLOTS = 100;
 /** Item slots per lane: the shard_size in pump/workflows.json. */
-export const LANE_SLOTS = Object.freeze({ 'meta-github': 100, 'meta-registry': 100, 'release-diff': 20 });
+export const LANE_SLOTS = Object.freeze({ 'meta-github': 100, 'meta-registry': 100, 'release-diff': 20, 'meta-backend': 50 });
 export const PINS = Object.freeze({
   checkout: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1',
   setupNode: 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0',
@@ -52,6 +52,16 @@ const ABOUT = {
     'only from registry.npmjs.org and files.pythonhosted.org, the source from codeload.github.com; both are read',
     'in memory with our own archive readers and nothing from them is installed, imported or run, so no sandbox is',
     'needed. The worker kit seals one bundle per item to the ingest key and uploads it as',
+    'result-<attempt_id>-<i>.tar.age. meta/README.md says what a bundle holds.',
+  ],
+  'meta-backend': [
+    'Loop worker (internal): the meta-backend lane. The tool-qa pump dispatches it with shard_id, attempt_id and',
+    'items (docs/INTERFACES.md, "Worker dispatch"); each item is a public GitHub repository, owner/name.',
+    'meta/run.mjs reads each repository\'s source archive from codeload.github.com (root files from',
+    'raw.githubusercontent.com when the archive is over our caps) and classifies what its write tools write to:',
+    'local_full, mock_min or none (field write_backend; docs/INTERFACES.md, "Writecheck modes"). The archive is',
+    'read in memory with our own tar reader as text; nothing from it is installed, imported or run, so no sandbox',
+    'is needed. The worker kit seals one bundle per item to the ingest key and uploads it as',
     'result-<attempt_id>-<i>.tar.age. meta/README.md says what a bundle holds.',
   ],
 };
@@ -106,6 +116,10 @@ export function workerWorkflow(lane) {
     ? ['    # Below the pump\'s lease for a shard of 20: 1.5 x (2 + 20 x 1) + 10 = 43 minutes. meta/run.mjs starts',
       '    # no subject after 22 minutes; those not started report a retryable skip. A subject starts no download',
       '    # after 6 minutes, and each download has 2.']
+    : lane === 'meta-backend'
+    ? ['    # Below the pump\'s lease for a shard of 50: 1.5 x (2 + 50 x 0.4) + 10 = 43 minutes. meta/run.mjs starts',
+      '    # no subject after 22 minutes; those not started report a retryable skip. A subject starts no request',
+      '    # after 150 seconds, and its archive has 90.']
     : ['    # Below the pump\'s lease for a shard of 100: 1.5 x (2 + 100 x 0.2) + 10 = 43 minutes. meta/run.mjs starts',
       '    # no subject after 22 minutes; those not started report a retryable skip.'];
   return [
@@ -260,7 +274,7 @@ export function fixtureWorkflow() {
     '    strategy:',
     '      fail-fast: false',
     '      matrix:',
-    '        lane: [meta-github, meta-registry]',
+    '        lane: [meta-github, meta-registry, meta-backend]',
     '        mode: [check, upload]',
     '    steps:',
     `      - uses: ${PINS.checkout}`,
@@ -352,6 +366,7 @@ export const FILES = Object.freeze({
   '.github/workflows/meta-github.yml': () => workerWorkflow('meta-github'),
   '.github/workflows/meta-registry.yml': () => workerWorkflow('meta-registry'),
   '.github/workflows/release-diff.yml': () => workerWorkflow('release-diff'),
+  '.github/workflows/meta-backend.yml': () => workerWorkflow('meta-backend'),
   '.github/workflows/meta-fixture.yml': () => fixtureWorkflow(),
 });
 

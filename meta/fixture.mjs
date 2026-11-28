@@ -19,6 +19,7 @@ import { analyzeBundle } from '../ingest/analyze.mjs';
 import { loadRegistry } from '../ingest/registry.mjs';
 import { workflowFromEnv } from '../worker-kit/contract.mjs';
 import { parseInputs } from './lib/common.mjs';
+import { withPendingField } from './backend.mjs';
 
 export const FIXTURE_SUBJECTS = Object.freeze(['isokron-ai/mcp-check', 'isokron-ai/tool-qa', 'isokron-ai/mcp-writecheck-action']);
 /** release-diff: our repositories that publish npm or PyPI packages (and two whose npm metadata names another repository). */
@@ -26,12 +27,14 @@ export const RELEASE_DIFF_SUBJECTS = Object.freeze([
   'isokron-ai/mcp-check', 'isokron-ai/mcp-write-safety-kits', 'isokron-ai/mcp-write-safety', 'isokron-ai/kronicle-lite',
   'isokron-ai/strapi-plugin-writesafe', 'isokron-ai/sea-lite', 'isokron-ai/mcp-catalog-snap', 'isokron-ai/tool-qa',
 ]);
-const LANE_RE = /^(?:meta-github|meta-registry|release-diff)$/;
+/** meta-backend: our repositories with a known backend (SQLite for the two lite servers) and two with none. */
+export const BACKEND_SUBJECTS = Object.freeze(['isokron-ai/kronicle-lite', 'isokron-ai/sea-lite', 'isokron-ai/mcp-check', 'isokron-ai/tool-qa']);
+const LANE_RE = /^(?:meta-github|meta-registry|release-diff|meta-backend)$/;
 
 export function fixtureInputs(lane, env = process.env, mode = 'check') {
   const run = /^\d+$/.test(env.GITHUB_RUN_ID ?? '') ? env.GITHUB_RUN_ID : '0';
   const attempt = /^\d+$/.test(env.GITHUB_RUN_ATTEMPT ?? '') ? env.GITHUB_RUN_ATTEMPT : '1';
-  const items = (lane === 'release-diff' ? RELEASE_DIFF_SUBJECTS : FIXTURE_SUBJECTS).map((subject, i) => ({
+  const items = (lane === 'release-diff' ? RELEASE_DIFF_SUBJECTS : lane === 'meta-backend' ? BACKEND_SUBJECTS : FIXTURE_SUBJECTS).map((subject, i) => ({
     subject,
     run_key: createHash('sha256').update(`${lane}\n${subject}\n${run}`).digest('hex'),
     fence: i + 1,
@@ -42,7 +45,8 @@ export function fixtureInputs(lane, env = process.env, mode = 'check') {
 export async function judge({ lane, bundleDir, outDir, env = process.env, registry, write = (s) => process.stdout.write(s) }) {
   const input = parseInputs({ shardId: 'judge', attemptId: env.ATTEMPT_ID, items: env.ITEMS });
   const wf = workflowFromEnv(env);
-  const reg = registry ?? await loadRegistry();
+  // meta-backend's field is declared in mcp-results but not yet at ingest's pin: judged with it added (backend.mjs).
+  const reg = registry ?? (lane === 'meta-backend' ? withPendingField(await loadRegistry()) : await loadRegistry());
   let ok = true;
   let lastApi = null;
   for (const item of input.items) {
@@ -73,6 +77,10 @@ export async function judge({ lane, bundleDir, outDir, env = process.env, regist
       for (const a of val('release_artifacts')) write(`  artifact ${a.ecosystem}:${a.package}@${a.version} ${a.artifact}: ${a.outcome}; linked_by ${a.linked_by}; provenance ${a.provenance?.verified ? 'verified' : a.provenance?.why}; tag ${a.tag ? `${a.tag.name} (${a.tag.match})` : 'none'}; basis ${a.basis?.kind ?? 'none'}\n`);
       for (const x of val('release_diff_summary')) write(`  summary ${x.package}@${x.version} ${x.artifact}: ${x.files} files, ${x.identical} identical, explained ${JSON.stringify(x.explained)}, unexplained ${x.unexplained_absent} absent / ${x.unexplained_differs} differing\n`);
       for (const f of val('release_diff_findings')) write(`  finding ${f.package}@${f.version} ${f.artifact ?? ''} ${f.kind} (${f.level})${f.path ? ` ${f.path}` : ''}\n`);
+    }
+    if (lane === 'meta-backend') {
+      const wbv = obs.find((r) => r.field === 'write_backend')?.value;
+      if (wbv) write(`  write_backend ${wbv.class}${wbv.reason ? ` (${wbv.reason})` : ''}; backend ${wbv.backend?.id ?? 'none'}; stand_in ${wbv.stand_in?.id ?? '-'}; spec ${wbv.spec_url ?? '-'}; confidence ${wbv.confidence}; tools ${wbv.write_tools.write_like}/${wbv.write_tools.names_seen}; evidence ${wbv.evidence.slice(0, 6).map((e) => `${e.signal}:${e.backend ?? ''}:${e.detail}`).join(' | ')}\n`);
     }
     if (v.outcome !== 'accepted') {
       ok = false;
