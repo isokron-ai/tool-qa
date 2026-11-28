@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "description": "The discover lane (pump/discover.mjs, LANE_DISCOVER_ENABLED). Candidates from .github/workflows/discover.yml become subjects of source discover-v1 at tier `tier`, at most `daily_cap` a rolling 24 hours, so the frame grows in controlled steps. Each pass walks at most `max_walk` candidates from its cursor and looks up at most `max_queries` x 100 new names with GraphQL. Forks are left out; a repository id a subject already holds adds no subject.",
+  "source": "discover-v1",
+  "tier": 3,
+  "daily_cap": 100,
+  "max_queries": 1,
+  "max_walk": 5000
+}
