@@ -1,4 +1,4 @@
-// Leads in the state store (schema v11, StateDb.noteLeads) and their rules
+// Leads in the state store (schema v12, StateDb.noteLeads) and their rules
 // (state/leads.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -42,17 +42,17 @@ export function accept(db, { subject = 'acme/a', workflow = 'scan-static', runId
 const seed = (db, ids, tier = 1) => { for (const id of ids) db.setSubjectVersion({ id, kind: 'repo', source: 'test', tier, sha: 'a'.repeat(40), now: T0 - 10 * DAY }); };
 const one = (db, fp) => db.listLeads().find((l) => l.fingerprint === fp);
 
-test('R-LEAD-02: the v11 migration of a v10 state keeps every row and the due list; it adds empty leads tables', () => {
+test('R-LEAD-02: the v12 migration of a v11 state keeps every row and the due list; it adds empty leads tables', () => {
   const db = openState(':memory:');
   seed(db, ['acme/a', 'acme/b']);
   const wf = { 'scan-static': { enabled: true, repo: 'o/r', file: 'f.yml', ref: 'main', versions: { tool: { 'mcp-check': '1' } }, image_digest: null, settings_state: 'default' } };
   for (const d of dueFromState(db, { tiers, workflows: wf, now: T0 })) accept(db, { subject: d.subject, failures: null });
   const dueBefore = dueFromState(db, { tiers, workflows: wf, now: T0 + 40 * DAY }).map((d) => [d.subject, d.reasons, d.priority]);
   const results = db.raw.prepare('SELECT COUNT(*) AS n FROM results').get().n;
-  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 10');
-  assert.equal(db.schemaVersion(), 10);
+  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 11');
+  assert.equal(db.schemaVersion(), 11);
   assert.equal(db.migrate(), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 11);
+  assert.equal(SCHEMA_VERSION, 12);
   assert.equal(db.raw.prepare('SELECT COUNT(*) AS n FROM results').get().n, results);
   assert.deepEqual(dueFromState(db, { tiers, workflows: wf, now: T0 + 40 * DAY }).map((d) => [d.subject, d.reasons, d.priority]), dueBefore);
   assert.deepEqual(db.listLeads(), []);

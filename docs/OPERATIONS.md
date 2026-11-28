@@ -835,6 +835,114 @@ but no tool for it is shipped, so if v8 has run for long, prefer fixing
 forward (or switching the lookups off with `LANE_SUBJECT_IDS_ENABLED=false`)
 to a restore.
 
+## Discover: the frame grows from the feeds (design audit A2)
+
+Until this, every subject came from the hand-drawn seed (997 repositories,
+`source = seed-v1`, about 1.4% of the registry). History already captured the
+registry (H1) and the npm, PyPI, crates.io and Go feeds (H2), but nothing
+turned those rows into subjects. Two steps do now:
+
+1. **`discover.yml`** (daily 05:41 UTC, and by hand). `discover/run.mjs` reads
+   the newest full registry capture and the newest package capture and maps
+   their rows to GitHub repositories:
+   - registry rows: the latest active version, `repository.url` plus
+     `subfolder`, and a purl per package;
+   - crates rows: `repository`;
+   - Go module paths: `github.com/<owner>/<name>[/<folder>]`;
+   - npm and PyPI names the registry does not already list: one GET each to
+     `registry.npmjs.org/<name>/latest` or `pypi.org/pypi/<name>/json`, at
+     most 400 a run, 150 ms apart, with an identifying User-Agent.
+
+   It writes one candidate per repository, with every (subfolder, purl, feed)
+   key, to the artifact `discover-<run id>` (`candidates.json.gz`,
+   `manifest.json` with input sha256s and counts; kept 7 days). Candidates
+   are ordered by class, then by the sha256 of the name: 0 registry-listed
+   with a package, 1 package feeds only, 2 registry-listed without a package.
+   Class 2 servers are only ever read from source, never contacted
+   (decision 7). On 27 Nov this was 37,990 candidates (21,078 / 3,150 /
+   13,762).
+2. **The pump** (`pump/discover.mjs`, at the start of a run after the id
+   pass). It reads the newest successful `discover.yml` run on main and walks
+   its candidates from a cursor (kv `pump.discover`). Only the current name
+   of an active subject counts as known, and its keys go to that subject. A
+   match on a frozen subject key, or on a retired, merged or gone subject, is
+   looked up like any unknown name, because a renamed repository's old name
+   may now belong to a new one (R-DISC-08). Each key is checked again in the
+   pump, and a malformed one is dropped: a subfolder with control characters,
+   spaces or backslashes, an unknown feed, a bad purl, or more than 50 keys
+   (R-DISC-09). A fork that was left out is remembered in kv
+   `pump.discover.excluded` and not looked up again (R-DISC-10). Unknown names are
+   looked up by GraphQL (100 a query, `discover.json` `max_queries`, the
+   pump's `graphql` budget):
+   - not found: skipped, nothing recorded against anyone;
+   - a fork: left out;
+   - a repository id a subject already holds: no new subject, the keys go to
+     the holder (dedupe by repository id);
+   - otherwise: a new subject with key and name as GitHub spells it,
+     `source = discover-v1`, tier `discover.json` `tier` (T3), bound to its id
+     at once.
+
+**Controlled steps.** At most `discover.json` `daily_cap` (100) new subjects in
+any rolling 24 hours. With no room, the artifact is not even read. Each new
+subject is due once as `first_sight` on every enabled lane.
+
+**Keys and frame version.** State schema v11 adds `discovery_keys` (subject,
+repo_id, subfolder, purl, feeds, first and last seen). A monorepo stays one
+subject, and its servers' folders and packages are kept beside it. kv
+`frame` holds the frame version (bumped whenever subjects are added), the
+active subjects per source, and the artifact they came from. Event
+`frame_grew`.
+
+**Switch.** `LANE_DISCOVER_ENABLED`, for both the workflow and the pump step:
+only the exact value `true`. Off, the workflow ends green with a notice and
+the pump writes `off` to kv `pump.discover`.
+
+**Dry run.** `discover/run.mjs --no-network` on downloaded captures, then
+`node scripts/discover-dry-run.mjs --state <decrypted copy> --candidates <file>`
+runs one pass on a copy of the state with the real GraphQL API and pushes
+nothing.
+
+**The v11 migration** adds one table and changes no row. It runs in the first
+pump run with this code. Code from before v11 refuses a v11 state, so going
+back means restoring the snapshot taken before the merge (see "State
+snapshots").
+
+## Backfill: free slots never sit idle (design audit A1)
+
+The due list says what must run. On 27 Nov it was empty on 18 of 30 hours
+while slots stood free, because every result was younger than its tier's max
+age (T3: 30 days). With the filler on, a tick that has free worker slots
+after the due list gives them to the frame's oldest results
+(`pump/backfill.mjs`, reason `backfill`).
+
+**What is eligible.** An active subject on an enabled lane, not paused and
+not held by the breaker, whose tier cell is `always` (a `sample` cell is not
+the frame). It needs an accepted result at least
+`pump/tiers.json` `backfill_min_age_hours` old (T0 6 h, T1 12 h, T2 24 h,
+T3 48 h, T4 96 h). Not a `skips_only` result inside its wait, not a run_key
+that is parked, in a retry backoff, held for a late judgment or in flight,
+and not on the due list already. A pair with no result is due as
+`first_sight` and needs no filler. A re-run that ingest refuses restarts the
+floor, and once a run_key has `max_rejections` (3) counted refusals since its
+result the filler leaves it alone (R-FILL-07). `rejectedRunKeys` does not park
+a run_key that still has a result, so the filler parks it itself.
+
+**Order and room.** Priority is the tier weight plus the result's age in days
+(at most `priority.age_max`), minus 1000, so backfill ranks below every due
+pair in every lane. The filler first tops up a lane's last partial due shard,
+then opens new shards, best candidate first, only into slots the due list
+does not need, and within each lane's `slots_max`. It always leaves
+`backfill_reserve_slots` (1) free slots alone, so due work that comes up on
+the next tick (a T0 push, a T1 release) never waits a whole lease (R-FILL-08). The tick log line says
+`backfill N`, and kv `pump.last_tick` holds `backfill`.
+
+**Switch.** `LANE_BACKFILL_ENABLED`: only the exact value `true` turns it on.
+Off, a tick is exactly what it was before.
+
+**Dry run.** `node scripts/backfill-dry-run.mjs --state <decrypted copy> --slots 5`
+prints the due list, the free slots and what the filler would add, by lane
+and tier. It is read-only and makes no network call.
+
 ## The commit read against the commit filed (R-SHA-01)
 
 A run_key names the subject's commit (its `sha`, written by the head poll,

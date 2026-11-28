@@ -56,7 +56,7 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
   const note = { at: at(), mode, filed: 0, closed: 0, reopened: 0, adopted: 0, refiled: 0, errors: 0, writes: 0 };
   const done = new Map();
   try {
-    if (mode === 'off' || db.schemaVersion() < 11) {
+    if (mode === 'off' || db.schemaVersion() < 12) {
       db.setKv(LEADS_LAST_KEY, { ...note, off: true }, { now: now() });
       return note;
     }

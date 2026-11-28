@@ -163,6 +163,11 @@ test('R-LEAD-26: dry-run and recheck write the plan to the job summary and touch
       assert.equal(db.listLeads().filter((l) => l.issue_number != null || l.filing_started_at).length, 0);
       assert.equal(db.getKv(LEADS_LAST_KEY).mode, mode);
     }
+    // A state from before the leads tables (schema v11): noted as off, nothing read.
+    const v11 = openState(':memory:');
+    v11.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 11');
+    assert.equal((await step(v11, { mode: 'on', mintToken: async () => assert.fail('no token') })).mode, 'on');
+    assert.equal(v11.getKv(LEADS_LAST_KEY).off, true);
     const off = reproduced(1);
     const note = await step(off, { mode: 'off', summaryFile: join(dir, 'off') });
     assert.equal(note.mode, 'off');

@@ -33,7 +33,7 @@ const SEP = '\u0000';
  * @returns {{pairs: Map<string, string>, waiting: number, given_up: number}}
  */
 export function recheckPairs(db, { max = RECHECK_MAX_DUE } = {}) {
-  if (db.schemaVersion() < 11) return { pairs: new Map(), waiting: 0, given_up: 0 };
+  if (db.schemaVersion() < 12) return { pairs: new Map(), waiting: 0, given_up: 0 };
   // `sent`: dispatches of the pair since the sighting asked for the re-check. Any result folded in moves the lead on
   // (reproduced, moved, or an attempt counted), so dispatches that are still open, failed, lapsed or were rejected
   // are what this counts: a re-check whose worker never answers is not sent again after RECHECK_MAX_ATTEMPTS of them.
