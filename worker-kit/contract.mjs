@@ -73,7 +73,40 @@ export const SKIP_REASONS = Object.freeze([
   //   tool_error            our reader, grader or bundle builder failed
   'unsupported_language', 'unsupported_layout', 'reader_limit', 'no_tools_found',
   'too_large', 'tool_error',
+  // Our own stand-ins and what they could not do (R-COV-49). Each is our
+  // limit or our choice, never the subject's: none may say "subject".
+  //   mock_incomplete                 the mock or stand-in lacks an endpoint,
+  //                                   a verb or a response the stage needed
+  //   stand_in_mismatch               the stand-in answers differently from the
+  //                                   real backend, so the result would mislead
+  //   declaration_missing             the subject needs a declaration (backend,
+  //                                   target, start command) we do not have yet
+  //   target_not_standin              the tool the stage names is not the
+  //                                   stand-in's own (policy), or our tool
+  //                                   could not tell (tool)
+  //   backend_semantics_not_exercised the stage ran, but the backend behaviour
+  //                                   the check is about was not reached
+  //   not_testable_backend            a hosted, desktop or credentials-only
+  //                                   backend we cannot stand in (policy)
+  'mock_incomplete', 'stand_in_mismatch', 'declaration_missing', 'target_not_standin',
+  'backend_semantics_not_exercised', 'not_testable_backend',
 ]);
+
+/**
+ * A skip may carry `code`: a short snake_case string that says more than its
+ * reason, kept in the loop state and counted by coverage (R-COV-49). It is
+ * data from a worker, so it is bounded: ingest refuses a bundle whose skip has
+ * a code outside this pattern, and the fault is ours (a worker of ours made it).
+ */
+export const SKIP_CODE_PATTERN = '^[a-z][a-z0-9_]{1,47}$';
+export const SKIP_CODE_RE = new RegExp(SKIP_CODE_PATTERN);
+/**
+ * start_requires_credentials may declare fault "tool" only when its code says
+ * the start ran against our own mock or stand-in (start_against_mock_failed,
+ * start_against_stand_in_failed): a token checked against our mock that fails
+ * is our fault, not the server's.
+ */
+export const START_AGAINST_CODE_RE = /^start_against_[a-z0-9_]+$/;
 
 /**
  * Who a skip is down to (R-COV-01). A skip may say it with `fault`:
@@ -104,7 +137,7 @@ export const SKIP_FAULTS = Object.freeze(Object.fromEntries(Object.entries({
   unsupported_transport: ['tool', ['tool', 'subject']],
   build_failed_upstream: ['subject', ['subject', 'tool', 'infra']],
   install_failed_registry: [UNKNOWN_FAULT, ['subject', 'tool', 'infra']],
-  start_requires_credentials: ['subject', ['subject']],
+  start_requires_credentials: ['subject', ['subject', 'tool']],
   no_local_backend: ['subject', ['subject', 'tool']],
   heavy_backend: ['policy', ['policy']],
   timeout_start: [UNKNOWN_FAULT, ['subject', 'tool', 'infra']],
@@ -122,7 +155,31 @@ export const SKIP_FAULTS = Object.freeze(Object.fromEntries(Object.entries({
   no_tools_found: ['tool', ['tool', 'subject']],
   too_large: ['tool', ['tool']],
   tool_error: ['tool', ['tool']],
+  mock_incomplete: ['tool', ['tool']],
+  stand_in_mismatch: ['tool', ['tool']],
+  declaration_missing: ['tool', ['tool']],
+  target_not_standin: ['policy', ['policy', 'tool']],
+  backend_semantics_not_exercised: ['tool', ['tool']],
+  not_testable_backend: ['policy', ['policy', 'tool']],
 }).map(([reason, [def, allowed]]) => [reason, Object.freeze({ default: def, allowed: Object.freeze(allowed) })])));
+
+/**
+ * The codes of a bundle's skips, each with the fault of its skip: a list of
+ * {fault, code}, one per distinct pair, in skip order. Skips with no code add
+ * nothing. Coverage counts them (state/coverage.mjs).
+ */
+export function skipCodes(skips = []) {
+  const seen = new Set();
+  const out = [];
+  for (const s of skips) {
+    if (typeof s?.code !== 'string' || !SKIP_CODE_RE.test(s.code)) continue;
+    const fault = skipFault(s);
+    if (seen.has(`${fault}:${s.code}`)) continue;
+    seen.add(`${fault}:${s.code}`);
+    out.push({ fault, code: s.code });
+  }
+  return out;
+}
 
 /** The fault ingest records for one skip: the declared one, else the reason's default. */
 export function skipFault(skip) {
@@ -363,9 +420,16 @@ export function validateManifest(manifest) {
     if (s.evidence !== undefined && !listed.has(s.evidence)) {
       errors.push({ path: `$.skips[${i}].evidence`, message: `${s.evidence} is not listed in files` });
     }
+    if (s.code !== undefined && !SKIP_CODE_RE.test(s.code)) {
+      errors.push({ path: `$.skips[${i}].code`, message: `${JSON.stringify(s.code)} is not a skip code (${SKIP_CODE_PATTERN}); a worker of ours made it, so the fault is ours (tool)` });
+    }
     // A declared fault must be one the reason allows (R-COV-01).
     if (s.fault !== undefined && !SKIP_FAULTS[s.reason].allowed.includes(s.fault)) {
       errors.push({ path: `$.skips[${i}].fault`, message: `${s.fault} is not a fault ${s.reason} may have (${SKIP_FAULTS[s.reason].allowed.join(', ')})` });
+    }
+    // start_requires_credentials is the subject's, unless our own mock or stand-in refused the start.
+    if (s.reason === 'start_requires_credentials' && s.fault === 'tool' && !START_AGAINST_CODE_RE.test(s.code ?? '')) {
+      errors.push({ path: `$.skips[${i}].fault`, message: 'start_requires_credentials may say tool only with a code start_against_* (the start ran against our own mock or stand-in)' });
     }
   });
   return { ok: errors.length === 0, errors };

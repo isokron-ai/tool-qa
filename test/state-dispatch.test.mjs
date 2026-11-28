@@ -337,3 +337,18 @@ test('R-COV-02: migration from version 6 keeps results and adds fault, coverage 
   assert.deepEqual([r.outcome, r.fault, r.coverage, r.assessed_at], ['accepted', null, null, null]);
   db.close();
 });
+
+test('R-COV-49: recordResult keeps the skip codes of an accepted result as JSON, and NULL when there are none', () => {
+  const db = fresh();
+  const [item] = dispatch(db);
+  db.markDispatched('att-1', { runId: 1, now: T0 });
+  const codes = [{ fault: 'tool', code: 'go_install_not_supported' }];
+  const r = db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item.fence, outcome: 'accepted', verdict: 'accepted', fault: 'tool', coverage: 'unassessed_tool', skipCodes: codes, now: T0 + MIN });
+  assert.equal(r.accepted, true);
+  assert.deepEqual(JSON.parse(db.getResult(KEY_A).skip_codes), codes);
+  const db2 = fresh();
+  const [item2] = dispatch(db2);
+  db2.markDispatched('att-1', { runId: 1, now: T0 });
+  db2.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item2.fence, outcome: 'accepted', verdict: 'accepted', fault: 'tool', coverage: 'unassessed_tool', skipCodes: [], now: T0 + MIN });
+  assert.equal(db2.getResult(KEY_A).skip_codes, null);
+});

@@ -182,7 +182,7 @@ test('R-ORD-08: the v9 migration of a v8 state keeps every row and changes no pr
   for (const d of due) accept(db, d.subject, d.workflow, null, T0 + 1000);
   const before = db.raw.prepare('SELECT COUNT(*) AS n FROM results').get().n;
   const dueBefore = dueFromState(db, { tiers, workflows: wf, now: T0 + 40 * DAY }).map((d) => [d.subject, d.reasons, d.priority]);
-  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; DROP TABLE discovery_keys; DROP TABLE events; DROP TABLE oracle_facts; DROP TABLE oracle_disagreements; PRAGMA user_version = 8');
+  db.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; DROP TABLE discovery_keys; DROP TABLE events; DROP TABLE oracle_facts; DROP TABLE oracle_disagreements; ALTER TABLE results DROP COLUMN skip_codes; PRAGMA user_version = 8');
   const v8 = db;
   assert.equal(v8.schemaVersion(), 8);
   assert.deepEqual(dueFromState(v8, { tiers, workflows: wf, now: T0 + 40 * DAY }).map((d) => [d.subject, d.reasons, d.priority]), dueBefore, 'a v8 state is read as before');
