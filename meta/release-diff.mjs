@@ -41,7 +41,7 @@ import { readZipLenient } from '../scripts/lib/unzip.mjs';
 import { safeArchivePath } from '../scripts/lib/untar.mjs';
 
 export const LANE = 'release-diff';
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 
 const NPM = 'https://registry.npmjs.org';
 const PYPI = 'https://pypi.org';
@@ -54,6 +54,8 @@ export const ALLOWED_HOSTS = Object.freeze([
 export const LIMITS = Object.freeze({
   packagesPerEcosystem: 3,
   commitsPerSubject: 4,
+  // Pairs of commits whose source trees are compared for a tag that names another commit than the build (two archives each).
+  treeChecksPerSubject: 2,
   downloadTimeoutMs: 120_000,
   // No network call starts once a subject has used this much time.
   subjectBudgetMs: 360_000,
@@ -444,7 +446,7 @@ const MANIFEST_NAMES = new Set(['package.json', 'pyproject.toml', 'setup.py', 's
  * to 2 MiB feeds the source index (what strong indicators the source itself
  * has); bytes are kept only for files whose name an artifact also has.
  */
-export async function readSourceTree(http, repo, commit, wantNames, { clock = () => Date.now() } = {}) {
+export async function readSourceTree(http, repo, commit, wantNames, { clock = () => Date.now(), fingerprint = false } = {}) {
   const t0 = clock();
   const res = await http.request(`https://codeload.github.com/${repo}/tar.gz/${commit}`, { redirect: 'manual', timeoutMs: LIMITS.downloadTimeoutMs, retries: 0 });
   if (res.status !== 200) {
@@ -490,7 +492,71 @@ export async function readSourceTree(http, repo, commit, wantNames, { clock = ()
     index,
     archive_commit: t.global_comment && SHA_RE.test(t.global_comment) ? t.global_comment : null,
     bytes: t.compressed_bytes,
+    ...(fingerprint ? { fingerprint: treeFingerprint(s.files, stripLinks(t.links, s.top), stripLinks(t.others, s.top)) } : {}),
   };
+}
+
+/**
+ * A digest of what a source archive holds: every path with its executable bit and content hash, links with their
+ * targets, other entries by type. Equal digests mean equal trees (R-RD-22). Anything the archive leaves out or rewrites
+ * (export-ignore, export-subst) can only make two equal trees look different, never the reverse.
+ */
+export function treeFingerprint(files, links = [], others = []) {
+  const lines = [];
+  for (const [p, f] of files) lines.push(`f\0${p}\0${(f.mode & 0o111) !== 0 ? 'x' : '-'}\0${f.sha256}`);
+  for (const l of links) lines.push(`l\0${l.path}\0${l.type}\0${l.target ?? ''}`);
+  for (const o of others) lines.push(`o\0${o.path}\0${o.type}`);
+  return sha256(Buffer.from(lines.sort().join('\n')));
+}
+
+/**
+ * Is the source tree of two commits the same? A tag that was rebased or re-created after the build names another commit
+ * with the same content; that is not the tag moving to other code. true / false, or null when we could not tell (a
+ * problem, a limit, an archive that is not the commit asked for): null never lowers a finding and never adds blame.
+ */
+export async function treesIdentical(http, repo, a, b, { clock = () => Date.now() } = {}) {
+  const prints = [];
+  for (const commit of [a, b]) {
+    let t;
+    try {
+      t = await readSourceTree(http, repo, commit, new Set(), { clock, fingerprint: true });
+    } catch {
+      return { identical: null, why: 'source_not_read' };
+    }
+    if (t.status !== 'ok') return { identical: null, why: `source_${t.status}` };
+    if (t.archive_commit && t.archive_commit !== commit) return { identical: null, why: 'archive_commit_mismatch' };
+    prints.push(t.fingerprint);
+  }
+  return { identical: prints[0] === prints[1], why: null };
+}
+
+/**
+ * A tag that names another commit than the one built, with the same source tree, is a rebase, not a moved tag (R-RD-22).
+ * `checks` are {finding, tag, provenance}. At most LIMITS.treeChecksPerSubject pairs of commits are compared (two archives
+ * each, one at a time), never past the subject's budget; a pair we did not or could not check keeps its level and says
+ * tree_identical null. A finding whose trees are identical drops to low.
+ */
+export async function settleTreeChecks(http, repo, checks, { overBudget = () => false, clock = () => Date.now() } = {}) {
+  const pairs = new Map();
+  for (const c of checks) {
+    const key = `${c.tag}\0${c.provenance}`;
+    if (!pairs.has(key)) pairs.set(key, { tag: c.tag, provenance: c.provenance, items: [] });
+    pairs.get(key).items.push(c.finding);
+  }
+  let checked = 0;
+  for (const pair of pairs.values()) {
+    if (checked >= LIMITS.treeChecksPerSubject || overBudget()) {
+      for (const f of pair.items) f.tree_identical = null;
+      continue;
+    }
+    checked++;
+    const r = await treesIdentical(http, repo, pair.tag, pair.provenance, { clock });
+    for (const f of pair.items) {
+      f.tree_identical = r.identical;
+      if (r.why) f.tree_check = r.why;
+      if (r.identical === true && f.level !== 'low') Object.assign(f, { level_before_tree_check: f.level, level: 'low' });
+    }
+  }
 }
 
 // ---------------------------------------------------------------- one subject
@@ -545,6 +611,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   const artifacts = [];
   const summaries = [];
   const findings = [];
+  const treeChecks = [];
   const held = [];
   let heldDropped = 0;
   // A package linked to the subject only by what its own author wrote (the repository field, project URLs)
@@ -553,7 +620,7 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   // A changed executable file stays at medium even then: most npm packages have no provenance, so the repository
   // field is often the only link there is, and a real tamper must not drop to low (R-RD-17).
   const capFinding = (f, j) => (trustedLink(j.linkedBy) || !['high', 'medium'].includes(f.level)
-    ? f : { ...f, level: f.kind === 'content_differs' && f.executable ? 'medium' : 'low', level_capped_from: f.level, linked_by: j.linkedBy });
+    ? f : { ...f, level: f.kind === 'content_differs' && (f.executable || f.code_extension) ? 'medium' : 'low', level_capped_from: f.level, linked_by: j.linkedBy });
 
   // Packages.
   let servers = new Map();
@@ -645,7 +712,9 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
       // Built from this very tag, yet the tag now names another commit: the tag moved after the build.
       const ref = j.provenance.ref ?? '';
       const refKind = ref === `refs/tags/${j.tag.name}` ? 'this_tag' : ref.startsWith('refs/tags/') ? 'other_tag' : ref.startsWith('refs/heads/') ? 'branch' : 'unknown';
-      findings.push(capFinding({ ...at, kind: 'tag_commit_differs_from_provenance', tag: j.tag.name, provenance_ref: refKind, level: refKind === 'this_tag' ? 'high' : 'medium' }, j));
+      const finding = capFinding({ ...at, kind: 'tag_commit_differs_from_provenance', tag: j.tag.name, provenance_ref: refKind, level: refKind === 'this_tag' ? 'high' : 'medium' }, j);
+      findings.push(finding);
+      treeChecks.push({ finding, tag: j.tag.commit, provenance: prov });
     }
     // Releases are often cut from a commit after the one npm recorded (a version-bump commit, a squash): an attention item.
     if (j.tag && j.gitHead && j.tag.commit !== j.gitHead && (strong || confirmedWeak)) findings.push(capFinding({ ...at, kind: 'tag_commit_differs_from_git_head', tag: j.tag.name, level: 'low' }, j));
@@ -758,6 +827,8 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
       j.read = null;
     }
   }
+
+  await settleTreeChecks(http, sourceRepo, treeChecks, { overBudget, clock });
 
   for (const j of jobs) {
     artifacts.push({
