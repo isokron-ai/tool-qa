@@ -132,7 +132,7 @@ test('R-CTL-04: the shipped lanes are well formed, off in every tier but T0, and
   assert.equal(c.workflows['t0-fuzz'].file, 'fuzz-calls.yml');
   assert.equal(c.workflows['t0-fuzz'].runs_untrusted, false, 'seeded servers and tiny-tracker built with --ignore-scripts: our own code');
   assert.deepEqual(Object.keys(c.workflows['t0-self'].control_subjects), ['isokron-ai/mcp-writecheck-action.selftest', 'isokron-ai/mcp-writecheck-action.dogfood-tiny-tracker']);
-  assert.deepEqual(Object.keys(c.workflows['t0-dogfood'].control_subjects).map((x) => x.split('.').pop()).sort(), ['dogfood-grafana', 'dogfood-kronicle-lite', 'dogfood-kubernetes', 'dogfood-payload', 'dogfood-sea-lite', 'dogfood-writesafe']);
+  assert.deepEqual(Object.keys(c.workflows['t0-dogfood'].control_subjects).map((x) => x.split('.').pop()).sort(), ['dogfood-grafana', 'dogfood-kronicle-lite', 'dogfood-payload', 'dogfood-sea-lite', 'dogfood-writesafe']);
   assert.equal(controlTarget(c.workflows['t0-dogfood'], 'isokron-ai/mcp-writecheck-action.dogfood-grafana').file, 'dogfood-grafana.yml');
   assert.equal(controlTarget(c.workflows['t0-self'], 'isokron-ai/kronicle-lite'), null);
 });
@@ -143,8 +143,9 @@ test('R-CTL-11: the workers that run third-party code are in the untrusted lane,
   assert.match(c.workflows['t0-dogfood'].sandbox_sha, /^[0-9a-f]{40}$/);
   assert.equal(c.workflows['t0-self'].runs_untrusted, false);
   assert.equal(c.workflows['t0-defects'].runs_untrusted, false);
-  // kronicle-lite and sea-lite install npm trees, writesafe starts Strapi, grafana, kubernetes and payload build upstream code.
-  for (const n of ['kronicle-lite', 'sea-lite', 'writesafe', 'grafana', 'kubernetes', 'payload']) assert.ok(c.workflows['t0-dogfood'].control_subjects[`isokron-ai/mcp-writecheck-action.dogfood-${n}`], n);
+  // kronicle-lite and sea-lite install npm trees, writesafe starts Strapi, grafana and payload build upstream code (all in the
+  // sandbox since wca#80). kubernetes is in no lane: kind keeps it outside the sandbox and it builds no bundle (R-CTL-18).
+  for (const n of ['kronicle-lite', 'sea-lite', 'writesafe', 'grafana', 'payload']) assert.ok(c.workflows['t0-dogfood'].control_subjects[`isokron-ai/mcp-writecheck-action.dogfood-${n}`], n);
   for (const n of ['kronicle-lite', 'sea-lite', 'writesafe', 'grafana', 'kubernetes', 'payload']) assert.equal(c.workflows['t0-self'].control_subjects[`isokron-ai/mcp-writecheck-action.dogfood-${n}`], undefined, `${n} is not in the trusted lane`);
 });
 

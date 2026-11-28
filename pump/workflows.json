@@ -186,7 +186,6 @@
         "isokron-ai/mcp-writecheck-action.dogfood-sea-lite": { "file": "dogfood-sea-lite.yml" },
         "isokron-ai/mcp-writecheck-action.dogfood-writesafe": { "file": "dogfood-writesafe.yml" },
         "isokron-ai/mcp-writecheck-action.dogfood-grafana": { "file": "dogfood-grafana.yml" },
-        "isokron-ai/mcp-writecheck-action.dogfood-kubernetes": { "file": "dogfood-kubernetes.yml" },
         "isokron-ai/mcp-writecheck-action.dogfood-payload": { "file": "dogfood-payload.yml" }
       },
       "shard_size": 1,
