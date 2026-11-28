@@ -24,13 +24,14 @@ test('a probe is killed when the tests fail, survives when they pass, is stale w
   try {
     const file = join(dir, 'x.mjs');
     writeFileSync(file, 'export const on = true;\n');
-    const p = { id: 'p', file, old: 'true', new: 'false', test: 'unused' };
-    assert.equal(runProbe(p, { run: () => ({ status: 1, stdout: '✖ R-X-01: it failed (1ms)\n' }) }).outcome, 'killed');
-    assert.equal(runProbe(p, { run: () => ({ status: 0, stdout: '' }) }).outcome, 'survived');
+    const p = { id: 'p', file: 'x.mjs', old: 'true', new: 'false', test: 'unused' };
+    const o = { root: dir };
+    assert.equal(runProbe(p, { ...o, run: () => ({ status: 1, stdout: '✖ R-X-01: it failed (1ms)\n' }) }).outcome, 'killed');
+    assert.equal(runProbe(p, { ...o, run: () => ({ status: 0, stdout: '' }) }).outcome, 'survived');
     assert.equal(readFileSync(file, 'utf8'), 'export const on = true;\n', 'put back');
-    assert.equal(runProbe({ ...p, old: 'nowhere' }, { run: () => assert.fail('not run') }).outcome, 'stale');
+    assert.equal(runProbe({ ...p, old: 'nowhere' }, { ...o, run: () => assert.fail('not run') }).outcome, 'stale');
     let seen = null;
-    runProbe(p, { run: () => { seen = readFileSync(file, 'utf8'); return { status: 1, stdout: '' }; } });
+    runProbe(p, { ...o, run: () => { seen = readFileSync(file, 'utf8'); return { status: 1, stdout: '' }; } });
     assert.equal(seen, 'export const on = false;\n', 'the tests ran against the mutated file');
   } finally {
     rmSync(dir, { recursive: true, force: true });
