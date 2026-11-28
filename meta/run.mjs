@@ -108,7 +108,12 @@ export async function runShard({
 
   // Controls first: a lane that fails them reports nothing.
   const known = await knownAnswerControl(lane, { http, token, budget, ...(knownAnswerSpec ? { spec: knownAnswerSpec } : {}) });
-  if (!known.unavailable && known.control.observed !== known.control.expected) throw new ControlFailure(`the known-answer control gave ${known.control.observed}`);
+  if (!known.unavailable && known.control.observed !== known.control.expected) {
+    // The control reads our own repositories only, so what it saw is public and says why it failed.
+    let why = '';
+    try { const o = JSON.parse(known.files['controls/known-answer.json']); why = `: mismatches ${JSON.stringify(o.mismatches)}; observed ${JSON.stringify(o.observed).slice(0, 1500)}`; } catch { /* nothing to add */ }
+    throw new ControlFailure(`the known-answer control gave ${known.control.observed}${why}`);
+  }
   const firstForgery = await forgeryControl(lane, { marker: marker() });
   if (firstForgery.control.observed !== firstForgery.control.expected) throw new ControlFailure(`the forgery control gave ${firstForgery.control.observed}`);
   log(`controls: known-answer ${known.unavailable ? `unavailable (${known.unavailable})` : known.control.observed}, forgery ${firstForgery.control.observed}`);

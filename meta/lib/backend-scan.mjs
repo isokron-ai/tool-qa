@@ -343,7 +343,8 @@ export const FILE_WORDS = new Set(['file', 'files', 'dir', 'dirs', 'directory', 
 
 /** Static tool names: registration calls and decorators in the common SDKs. */
 const TOOL_RES = Object.freeze([
-  /\.(?:tool|registerTool|addTool|add_tool|register_tool)\(\s*['"`]([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]/g,
+  // `server.registerTool('x'`, or a bound `registerTool(\n  'x'` (the name may be on the next line).
+  /(?:\.|\b)(?:tool|registerTool|addTool|add_tool|register_tool)\(\s*['"`]([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]/g,
   /@[\w.]{0,40}tool(?:\(([^)\n]{0,300})\))?[ \t]*\r?\n(?:[ \t]*@[^\n]{0,200}\r?\n){0,3}[ \t]*(?:async[ \t]+)?def[ \t]+([A-Za-z_]\w{0,63})/g,
   /\bTool\(\s*name\s*=\s*['"]([A-Za-z][A-Za-z0-9_.-]{0,63})['"]/g,
   /\bmcp\.NewTool\(\s*"([A-Za-z][A-Za-z0-9_.-]{0,63})"/g,
