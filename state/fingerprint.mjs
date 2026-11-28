@@ -50,7 +50,7 @@ export const AMBIGUOUS = new Set(['no_runnable_artifact', 'install_failed_regist
 export const ENUMS = Object.freeze({
   // Our workers' stage codes (worker-kit/README.md); a stage not listed is <other>.
   stage: ['static', 'live', 'scan', 'build', 'install', 'start', 'probe', 'meta', 'registry', 'differential', 'conformance', 'bridge', 'trace',
-    'resolve', 'list', 'init', 'plan', 'catalog', 'full', 'source', 'npm', 'pypi', 'crates', 'go', 'oci', 'sandbox', 'fuzz', 'collect'],
+    'resolve', 'list', 'init', 'plan', 'catalog', 'full', 'source', 'npm', 'pypi', 'crates', 'go', 'oci', 'sandbox', 'fuzz', 'collect', 'worker'],
   from: ['catalog', 'source', 'committed', 'snapshots', 'live', 'registry'],
   fidelity: ['exact', 'derived', 'literal', 'names'],
   via: ['github', 'git', 'api', 'archive', 'tarball', 'zip', 'local'],
@@ -59,7 +59,8 @@ export const ENUMS = Object.freeze({
   // scan-static SKIPS); anything else (a graded result's free text) is <other>.
   detail: CODES.details,
 });
-export const CLASSES = Object.freeze([...SKIP_REASONS]);
+// control_miss: a T0 control lane's control did not hold (a control_failed rejection; longitudinal/checkin.mjs).
+export const CLASSES = Object.freeze([...SKIP_REASONS, 'control_miss']);
 
 /**
  * Our tools and the third-party tools our workers name in a manifest (never
@@ -67,10 +68,10 @@ export const CLASSES = Object.freeze([...SKIP_REASONS]);
  * `isokron-ai/` are taken off. Anything else is <other>.
  */
 /** The tools in OUR_TOOLS that are our own code (the rest are third-party tools our workers run). */
-export const OWN_TOOLS = Object.freeze(['mcp-check', 'mcp-surface-corpus', 'mcp-surface-corpus-sandbox', 'mcp-writecheck', 'mcp-writecheck-action', 'mcp-catalog-snap',
+export const OWN_TOOLS = Object.freeze(['t0-control', 'mcp-check', 'mcp-surface-corpus', 'mcp-surface-corpus-sandbox', 'mcp-writecheck', 'mcp-writecheck-action', 'mcp-catalog-snap',
   'tool-qa', 'tool-qa-meta-github', 'tool-qa-meta-registry', 'tool-qa-release-diff', 'fuzz']);
 export const OUR_TOOLS = Object.freeze([
-  'mcp-check', 'mcp-surface-corpus', 'mcp-surface-corpus-sandbox', 'mcp-writecheck', 'mcp-writecheck-action', 'mcp-catalog-snap',
+  't0-control', 'mcp-check', 'mcp-surface-corpus', 'mcp-surface-corpus-sandbox', 'mcp-writecheck', 'mcp-writecheck-action', 'mcp-catalog-snap',
   'tool-qa', 'tool-qa-meta-github', 'tool-qa-meta-registry', 'tool-qa-release-diff', 'fuzz', 'gvisor',
   'conformance', 'inspector', 'sdk-typescript', 'client-typescript', 'sdk-python', 'sdk-go',
 ]);
@@ -160,6 +161,15 @@ export const toolTags = (tools) => (Array.isArray(tools) ? tools.map((t) => `${t
  */
 export function failuresOf(item, config, { langOf = () => null } = {}) {
   const want = new Set(config.faults);
+  // A control lane's miss (a control_failed rejection): a tool-side failure of our own tool, whatever the subject.
+  if (item.control_miss) {
+    if (!want.has('tool')) return [];
+    return [{
+      cls: 'control_miss', stage: 'worker', partial: false, idiom: '-', layout: '-', fault: 'tool',
+      signature: 'class=control_miss;fault=tool;retryable=false', tool: 't0-control@1',
+      lane: /^[A-Za-z0-9._-]{1,80}$/.test(item.lane ?? '') ? item.lane : '<other>',
+    }];
+  }
   // Every result in the bundle is read, not only the first.
   const results = [...item.results.values()].filter((r) => r && typeof r.status === 'string');
   const out = [];

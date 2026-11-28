@@ -11,8 +11,8 @@ const workflows = JSON.parse(readFileSync(new URL('../workflows.json', import.me
 
 test('R-WD-01: workflows.json marks every lane: live-probe, writecheck, build-probe and scan-deep run third-party code; scan-static, meta-* and release-diff do not', () => {
   for (const [name, wf] of Object.entries(workflows)) assert.equal(typeof wf.runs_untrusted, 'boolean', `${name} says runs_untrusted`);
-  assert.deepEqual(untrustedWorkflows(workflows), ['build-probe', 'live-probe', 'scan-deep', 'writecheck']);
-  assert.deepEqual(Object.keys(allowedWorkflows(workflows, { tripped: true })).sort(), ['meta-github', 'meta-registry', 'release-diff', 'scan-static']);
+  assert.deepEqual(untrustedWorkflows(workflows), ['build-probe', 'live-probe', 'scan-deep', 't0-dogfood', 'writecheck']);
+  assert.deepEqual(Object.keys(allowedWorkflows(workflows, { tripped: true })).sort(), ['meta-github', 'meta-registry', 'release-diff', 'scan-static', 't0-defects', 't0-fuzz', 't0-self']);
   assert.equal(allowedWorkflows(workflows, { tripped: false }), workflows);
   assert.equal(runsUntrusted({}), true, 'unsaid is untrusted');
   assert.equal(runsUntrusted({ runs_untrusted: 'false' }), true, 'only the boolean false is trusted');
@@ -119,10 +119,11 @@ test('R-WD-02: one isEnabled everywhere: only enabled === true dispatches; loadC
   assert.throws(() => loadConfig({ workflowsPath: f }), /pump\/workflows\.json: a: enabled must be true or false/);
 });
 
-test('R-WD-04: the trusted set is pinned: exactly scan-static, meta-github, meta-registry and release-diff say runs_untrusted false', () => {
+test('R-WD-04: the trusted set is pinned: exactly scan-static, meta-github, meta-registry, release-diff, t0-defects, t0-fuzz and t0-self say runs_untrusted false', () => {
   const trusted = Object.entries(workflows).filter(([, wf]) => wf.runs_untrusted === false).map(([n]) => n).sort();
   // release-diff reads package archives and source archives as data with our own readers; nothing from them runs.
-  assert.deepEqual(trusted, ['meta-github', 'meta-registry', 'release-diff', 'scan-static'], 'changing a lane to trusted needs this test changed, and review');
+  // t0-defects (tiny-tracker defect matrix), t0-self (selftest, dogfood-tiny-tracker) and t0-fuzz (seeded protocol-fault servers and tiny-tracker, tools/call fuzz) run only our own code, installed with --ignore-scripts, in jobs with no secrets, one item per dispatch. The six dogfood workers that install npm trees with scripts, start Strapi or build upstream servers are t0-dogfood, which is untrusted (sandbox breaker gated).
+  assert.deepEqual(trusted, ['meta-github', 'meta-registry', 'release-diff', 'scan-static', 't0-defects', 't0-fuzz', 't0-self'], 'changing a lane to trusted needs this test changed, and review');
   for (const n of untrustedWorkflows(workflows)) assert.ok('sandbox_sha' in workflows[n], `${n} names the sandbox commit it pins (null until it does)`);
 });
 

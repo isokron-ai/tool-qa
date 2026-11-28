@@ -49,6 +49,7 @@ import { appTokenMinter } from '../pump/app-token.mjs';
 import { ApiBudget } from '../pump/budgets.mjs';
 import { createClient, scrub } from '../pump/github.mjs';
 import { judgeConformance, pinMismatches, readConformance as readConformanceStatus, untrustedWorkflows, verifyRun } from '../pump/breaker.mjs';
+import { applyControlSwitches } from '../pump/controls.mjs';
 import { loadConfig } from '../pump/due.mjs';
 import { LOOP_WORKFLOWS, evaluate } from './checks.mjs';
 import { applyHealth } from './health.mjs';
@@ -169,6 +170,7 @@ export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {
         'state.size': db.getKv('state.size') ?? null,
         'live.last_upload': db.getKv('live.last_upload') ?? null,
         'retention.seal': db.getKv('retention.seal') ?? null,
+        't0.lanes': db.getKv('t0.lanes') ?? null,
       },
       lanes: readLaneData(db, now, { cfg, tiers }),
       // The four coverage numbers per lane (state/coverage.mjs); null when the config or state cannot answer.
@@ -242,7 +244,8 @@ export async function runWatchdog({
   let wfs = {};
   let configError = null;
   try {
-    wfs = workerWorkflows ?? loadWorkerConfig();
+    // A control lane whose repository variable is not "true" is not enabled (pump/controls.mjs), so no lane check waits for it.
+    wfs = applyControlSwitches(workerWorkflows ?? loadWorkerConfig(), env);
   } catch (err) {
     configError = scrub(String(err?.message ?? err), secrets).slice(0, 300);
   }

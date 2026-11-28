@@ -35,12 +35,16 @@
 
 import { NIGHTLY, runsUntrusted } from '../pump/breaker.mjs';
 import { isEnabled, maxAgeDays } from '../pump/due.mjs';
+import { isControlLane } from '../pump/controls.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 export const LANE_THRESHOLDS = Object.freeze({
   freshAmberMs: 6 * HOUR,
   freshRedMs: 24 * HOUR,
+  // A control lane (pump/controls.mjs) runs once a day: amber over 36 hours, red over 72.
+  controlFreshAmberMs: 36 * HOUR,
+  controlFreshRedMs: 72 * HOUR,
   tickFreshMs: 30 * MIN,
   idleAmberMs: 3 * HOUR,
   idleRedMs: 12 * HOUR,
@@ -142,15 +146,18 @@ export function laneChecks({ now, slots, pumpOn, cfg, data, tick, breakerTripped
     const id = `lane-fresh:${lane}`;
     if (!running) { items.push({ id, status: 'off', summary: 'the pump is off' }); continue; }
     if (!lanes.includes(lane)) { items.push({ id, status: 'off', summary: 'held by the open sandbox breaker' }); continue; }
+    const control = isControlLane(cfg[lane]);
+    const amberMs = control ? T.controlFreshAmberMs : T.freshAmberMs;
+    const redMs = control ? T.controlFreshRedMs : T.freshRedMs;
     const n = data.newest?.[lane];
     const age = n ? ago(now, n.at) : Infinity;
-    if (n && age <= T.freshAmberMs) items.push({ id, status: 'green', summary: `newest accepted result ${hours(age)} ago (${n.n} results)`, at: n.at });
+    if (n && age <= amberMs) items.push({ id, status: 'green', summary: `newest accepted result ${hours(age)} ago (${n.n} results)`, at: n.at });
     else if (!n) {
       const first = data.oldestDispatch?.[lane];
       const waited = first ? ago(now, first) : 0;
-      items.push({ id, status: waited > T.freshRedMs ? 'red' : 'amber', summary: first ? `no accepted result yet; the first dispatch was ${hours(waited)} ago` : 'no accepted result yet and nothing dispatched' });
+      items.push({ id, status: waited > redMs ? 'red' : 'amber', summary: first ? `no accepted result yet; the first dispatch was ${hours(waited)} ago` : 'no accepted result yet and nothing dispatched' });
     } else {
-      items.push({ id, status: age > T.freshRedMs ? 'red' : 'amber', summary: `no accepted result for ${hours(age)} (newest ${n.at}; due now: ${due ?? 'unknown'})`, at: n.at });
+      items.push({ id, status: age > redMs ? 'red' : 'amber', summary: `no accepted result for ${hours(age)} (newest ${n.at}; due now: ${due ?? 'unknown'})`, at: n.at });
     }
   }
 

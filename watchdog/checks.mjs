@@ -58,6 +58,8 @@
 //                        keep_gaps) has its ingest-keepgap-<run>-<attempt> artifact
 //                        (keep/health.mjs markerCheck): red when the marker is missing
 //                        an hour after the seal, amber when it cannot be matched.
+//   t0:<lane>            the T0 control lanes t0-defects and t0-self (watchdog/t0-lanes.mjs):
+//                        amber when no result for 36 hours, red when a seeded defect was missed.
 //   state-size           the state database's size, rows and last prune pass
 //                        as the pump recorded them (kv state.size), the asset
 //                        it was pulled from, and the snapshot release's total
@@ -72,6 +74,7 @@ import { identityCheck } from './identity.mjs';
 import { headsCheck } from './heads.mjs';
 import { selftestCheck } from './selftest.mjs';
 import { externalCheck, laneChecks } from './lanes.mjs';
+import { t0LaneChecks } from './t0-lanes.mjs';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -265,6 +268,7 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, runs = {}, artifa
     checks.push(liveSnapshotCheck({ now, on: liveSwitch === 'true', last: state.kv?.['live.last_upload'] ?? null }));
     const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
     const hd = headsCheck({ now, heads: state.kv?.['pump.heads'] }); if (hd) checks.push(hd); // head poll (watchdog/heads.mjs)
+    checks.push(...t0LaneChecks({ now, kv: state.kv?.['t0.lanes'] ?? null })); // T0 control lanes (watchdog/t0-lanes.mjs)
   }
 
   // latest loop run per workflow

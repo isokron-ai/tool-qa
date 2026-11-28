@@ -100,6 +100,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
+import { controlProblems } from './controls.mjs';
+
 const DAY_MS = 86_400_000;
 const SEP = '\u0000';
 
@@ -312,6 +314,9 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
     for (const name of names) {
       const wf = workflows[name];
       if (!isEnabled(wf)) continue;
+      // A control lane is due only for its own control subjects, and a control
+      // subject only for the lane that lists it (pump/controls.mjs).
+      if (wf.control_subjects ? !Object.hasOwn(wf.control_subjects, s.id) : s.kind === 'control') continue;
       const cell = cells[name];
       if (!cell || cell.mode === 'never') continue;
       const pk = pairKey(s.id, name);
@@ -373,7 +378,7 @@ export function computeDue({ now, subjects, workflows, tiers, lastResults, resul
 /** Read computeDue() inputs from the state store. */
 export function loadDueInputs(db, { now, tiers, workflows, hooks }) {
   const subjects = db.listSubjects().filter((s) => s.retired_at == null && s.gone_at == null && s.alias_of == null).map((s) => ({
-    id: s.id, name: s.name ?? s.id, repo_id: s.repo_id ?? null, tier: s.tier, sha: s.sha, artifact_digest: s.artifact_digest, changed_at: s.changed_at,
+    id: s.id, kind: s.kind, name: s.name ?? s.id, repo_id: s.repo_id ?? null, tier: s.tier, sha: s.sha, artifact_digest: s.artifact_digest, changed_at: s.changed_at,
   }));
   const lastResults = new Map();
   const resultKeys = new Set();
@@ -441,6 +446,7 @@ export function workflowProblems(workflows) {
     if (wf.sha_check === 'enforce' && wf.send_sha !== true) p.push(`${name}: sha_check "enforce" needs send_sha true (its worker must be sent the commit and read exactly it)`);
     if (wf.runs_untrusted !== false && !(wf.sandbox_sha === null || /^[0-9a-f]{40}$/.test(String(wf.sandbox_sha)))) p.push(`${name}: sandbox_sha must be a full commit SHA or null`);
   }
+  p.push(...controlProblems(workflows));
   return p;
 }
 
