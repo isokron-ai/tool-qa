@@ -2,8 +2,8 @@
 // dated, versioned frame. docs/METHODOLOGY.md says how each is computed.
 //
 // computeCoverage(db, { tiers, workflows }) reads only: subjects, results and
-// kv, and, for a lane with writecheck modes, write_backends (and run_keys, only
-// with resultModes: the mode each result was filed under; the live snapshot never asks). It writes nothing. recordTruth() is the one writer (kv coverage.truth,
+// kv, and, with `modes: true` for a lane with writecheck modes, write_backends and
+// run_keys (the mode each result was filed under); the live snapshot never asks. It writes nothing. recordTruth() is the one writer (kv coverage.truth,
 // a human-fed judgment per result) and recordCoverageDay() the daily history
 // (kv coverage.history), both called by their own jobs, never by the reader.
 //
@@ -100,10 +100,10 @@ function modeOfRunKey(raw, runKey) {
   }
 }
 
-export function computeCoverage(db, { tiers, workflows, skipLanes = [], rules = RULES, resultModes = false }) {
+export function computeCoverage(db, { tiers, workflows, skipLanes = [], rules = RULES, modes: withModes = false }) {
   const raw = rawOf(db);
-  const anyModes = Object.values(workflows ?? {}).some((wf) => wf?.modes?.list);
-  const backends = anyModes ? backendsOf(raw) : null;
+  // write_backends and run_keys are read only when the per-mode block is asked for; the live snapshot never asks.
+  const backends = withModes && Object.values(workflows ?? {}).some((wf) => wf?.modes?.list) ? backendsOf(raw) : null;
   const subjects = raw.prepare('SELECT id, tier, first_seen FROM subjects WHERE retired_at IS NULL AND gone_at IS NULL AND alias_of IS NULL ORDER BY id').all();
   const frame = frameOf(raw, subjects);
   const latest = latestResults(raw);
@@ -114,35 +114,33 @@ export function computeCoverage(db, { tiers, workflows, skipLanes = [], rules = 
   for (const id of laneIds) {
     const L = { id, on: workflows[id]?.enabled === true, frame: 0, excluded: 0, eligible: 0, reached: 0, assessed: 0, judged: 0, correct: 0, incorrect: 0,
       unassessed: { not_reached: 0, tool: 0, infra: 0, unsupported: 0, legacy: 0 }, tiers: {}, t012: { eligible: 0, correct: 0 } };
-    // A lane with writecheck modes counts against the subjects the meta-backend lane classified as testable
-    // (local_full, mock_min), per mode; `none` is "not testable" (hosted backend without a spec, no write tools ...)
-    // and an unclassified subject is not yet known: neither is in a denominator, neither is a failure (R-WB-11).
-    const modeList = workflows[id]?.modes?.list ? Object.keys(workflows[id].modes.list).filter((m) => MODE_CLASS[m]) : [];
-    const byBackend = rules.notTestableLeavesDenominator && modeList.length > 0 && backends !== null && backends.size > 0;
-    if (modeList.length > 0) {
+    // A lane with writecheck modes (asked for with `modes: true`: the health issue and the watchdog) gets a block per
+    // mode whose denominator is the subjects the meta-backend lane classified for it (local_full for full, mock_min for
+    // min). `none` ("not testable here": a hosted backend without a spec, no write tools ...) and subjects not yet
+    // classified are counted beside it, never in a mode's denominator and never as failures. The lane's own numbers
+    // above stay those of the whole frame, so nothing drops out of them unseen and history stays comparable (R-WB-12).
+    const modeList = withModes && workflows[id]?.modes?.list ? Object.keys(workflows[id].modes.list).filter((m) => MODE_CLASS[m]) : [];
+    if (modeList.length > 0 && backends !== null) {
       L.not_testable = { total: 0, reasons: {} };
       L.unclassified = 0;
-      L.modes = Object.fromEntries(modeList.map((m) => [m, { class: MODE_CLASS[m], frame: 0, reached: 0, reached_in_mode: resultModes ? 0 : null, assessed: 0, assessed_in_mode: resultModes ? 0 : null }]));
-      L.by_backend = byBackend;
+      L.modes = Object.fromEntries(modeList.map((m) => [m, { class: MODE_CLASS[m], frame: 0, reached: 0, reached_in_mode: 0, assessed: 0, assessed_in_mode: 0 }]));
     }
     for (const s of subjects) {
       if (NEVER(tiers?.tiers?.[`T${s.tier}`]?.[id])) continue;
       const r = latest.get(`${s.id}\u0000${id}`);
-      if (modeList.length > 0 && backends !== null) {
+      if (L.modes) {
         const b = backends.get(s.id);
         if (!b) L.unclassified++;
         else if (b.class === 'none') { L.not_testable.total++; L.not_testable.reasons[b.reason ?? 'unknown'] = (L.not_testable.reasons[b.reason ?? 'unknown'] ?? 0) + 1; }
-        else {
-          const mode = modeList.find((m) => MODE_CLASS[m] === b.class);
-          const M = mode ? L.modes[mode] : null;
-          if (M) {
-            M.frame++;
-            const inMode = r && resultModes ? modeOfRunKey(raw, r.run_key) === mode : false;
-            if (r) { M.reached++; if (inMode) M.reached_in_mode++; }
-            if (r?.coverage === 'assessed') { M.assessed++; if (inMode) M.assessed_in_mode++; }
-          }
+        for (const mode of modeList) {
+          // The rule's mutation check counts every subject in every mode: what the per-mode denominator must not be.
+          if (rules.notTestableLeavesDenominator && b?.class !== MODE_CLASS[mode]) continue;
+          const M = L.modes[mode];
+          M.frame++;
+          const inMode = r ? modeOfRunKey(raw, r.run_key) === mode : false;
+          if (r) { M.reached++; if (inMode) M.reached_in_mode++; }
+          if (r?.coverage === 'assessed') { M.assessed++; if (inMode) M.assessed_in_mode++; }
         }
-        if (byBackend && (!b || b.class === 'none')) continue;
       }
       const T = (L.tiers[s.tier] ??= { frame: 0, excluded: 0, assessed: 0, judged: 0, correct: 0, incorrect: 0 });
       L.frame++; T.frame++;
@@ -181,10 +179,9 @@ export function computeCoverage(db, { tiers, workflows, skipLanes = [], rules = 
       tiers: Object.fromEntries(Object.entries(L.tiers).sort(([a], [b]) => a - b).map(([t, v]) => [`T${t}`, v])),
       t012: { eligible: L.t012.eligible, correct: L.t012.correct, value: measurable ? ratio(L.t012.correct, L.t012.eligible) : null },
       ...(L.modes ? {
-        modes: Object.fromEntries(Object.entries(L.modes).map(([m, v]) => [m, { ...v, assessment: v.assessed_in_mode === null ? null : ratio(v.assessed_in_mode, v.frame) }])),
+        modes: Object.fromEntries(Object.entries(L.modes).map(([m, v]) => [m, { ...v, assessment: ratio(v.assessed_in_mode, v.frame) }])),
         not_testable: L.not_testable,
         unclassified: L.unclassified,
-        by_backend: L.by_backend,
       } : {}),
     };
   });
@@ -236,10 +233,10 @@ export function renderCoverageMarkdown(c) {
   const moded = c.lanes.filter((L) => L.modes);
   if (moded.length) {
     out.push('', '| Lane | Mode | Classified for it | Reached | Assessed in the mode | Assessment |', '|---|---|---|---|---|---|');
-    for (const L of moded) for (const [m, v] of Object.entries(L.modes)) out.push(`| ${L.id} | ${m} (${v.class}) | ${v.frame} | ${v.reached} | ${v.assessed_in_mode ?? 'not read'} | ${pct(v.assessment)} |`);
+    for (const L of moded) for (const [m, v] of Object.entries(L.modes)) out.push(`| ${L.id} | ${m} (${v.class}) | ${v.frame} | ${v.reached} | ${v.assessed_in_mode} | ${pct(v.assessment)} |`);
     for (const L of moded) {
       const reasons = Object.entries(L.not_testable.reasons).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
-      out.push('', `${L.id}: ${L.not_testable.total} servers are not testable here (hosted backend without a spec, no write tools, and the like: ${reasons}), never counted as failures; ${L.unclassified} are not classified yet.${L.by_backend ? ' The lane\'s denominator above is the classified, testable servers.' : ' The lane\'s denominator above is still the whole frame (no classification yet).'}`);
+      out.push('', `${L.id}: ${L.not_testable.total} servers are not testable here (hosted backend without a spec, no write tools, and the like: ${reasons}), never counted as failures; ${L.unclassified} are not classified yet. Each mode's denominator is the servers classified for it; the lane's numbers above are the whole frame's.`);
     }
   }
   const m = c.milestones;

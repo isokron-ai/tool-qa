@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 
 import { openState, SCHEMA_VERSION } from '../state/db.mjs';
 import { backendFacts, backendFactsFromFiles, MAX_ENV_NAMES } from '../state/backends.mjs';
-import { applyModeSwitches, modeFor, modeInputs, modeProblems, modeSettings, modesOn, shardKey } from '../pump/modes.mjs';
+import { applyModeSwitches, modeFor, modeInputs, modeProblems, modeSettings, modesOn, shardKey, specUrlAllowed } from '../pump/modes.mjs';
 import { computeDue, loadDueInputs, workflowProblems } from '../pump/due.mjs';
 import { planShards, runTick } from '../pump/tick.mjs';
 import { computeCoverage, renderCoverageMarkdown, RULES } from '../state/coverage.mjs';
@@ -93,9 +93,9 @@ test('R-WB-11: with the modes on, local_full goes to full and mock_min to min un
   const by = Object.fromEntries(due.map((d) => [d.subject, d]));
   assert.equal(by['o/pg'].mode.mode, 'full');
   assert.equal(by['o/pg'].mode.stand_in, 'postgres');
-  assert.equal(by['o/pg'].fields.settings_state, 'default+mode=full+backend=postgres');
+  assert.equal(by['o/pg'].fields.settings_state, 'default+mode=full+backend=postgres+via=postgres');
   assert.equal(by['o/gh'].mode.mode, 'min');
-  assert.equal(by['o/gh'].fields.settings_state, 'default+mode=min+backend=github');
+  assert.match(by['o/gh'].fields.settings_state, /^default\+mode=min\+backend=github\+via=[0-9a-f]{12}$/);
   assert.equal(by['o/no'].mode, undefined);
   assert.equal(by['o/no'].fields.settings_state, 'default');
   assert.equal(by['o/un'].mode, undefined);
@@ -153,41 +153,34 @@ function coverageWorld() {
   return db;
 }
 
-test('R-WB-12: writecheck\'s denominator is the servers classified local_full or mock_min, per mode; none is counted apart as not testable, never as a failure', () => {
+test('R-WB-12: per mode, writecheck\'s denominator is the servers classified for it; none is counted apart as not testable, never as a failure; the lane\'s own numbers stay the whole frame\'s', () => {
   const db = coverageWorld();
   const workflows = { writecheck: { ...shipped.writecheck, enabled: true } };
-  const c = computeCoverage(db, { tiers, workflows, resultModes: true });
+  const c = computeCoverage(db, { tiers, workflows, modes: true });
   const L = c.lanes.find((l) => l.id === 'writecheck');
-  assert.equal(L.by_backend, true);
-  assert.equal(L.frame, 2, 'o/pg and o/gh only');
-  assert.equal(L.eligible, 2);
-  assert.equal(L.assessed, 2);
+  assert.equal(L.frame, 5, 'the lane\'s numbers are unchanged: nothing drops out unseen');
   assert.deepEqual(L.not_testable, { total: 2, reasons: { hosted_without_spec: 1, no_write_tools_seen: 1 } });
   assert.equal(L.unclassified, 1);
   assert.deepEqual([L.modes.full.frame, L.modes.full.assessed_in_mode, L.modes.full.assessment], [1, 1, 1]);
   assert.deepEqual([L.modes.min.frame, L.modes.min.assessed, L.modes.min.assessed_in_mode, L.modes.min.assessment], [1, 1, 0, 0], 'a default-mode result is not a min-mode one');
   const md = renderCoverageMarkdown(c).join('\n');
   assert.match(md, /2 servers are not testable here[\s\S]*never counted as failures; 1 are not classified yet/);
-  // Without resultModes (the live snapshot) run_keys are not read, and the in-mode counts say so.
-  const live = computeCoverage(db, { tiers, workflows }).lanes.find((l) => l.id === 'writecheck');
-  assert.equal(live.modes.full.assessed_in_mode, null);
-  // A lane with no modes is counted as before, and reads no write_backends.
-  const before = computeCoverage(db, { tiers, workflows: { writecheck: { enabled: true } } }).lanes.find((l) => l.id === 'writecheck');
-  assert.equal(before.frame, 5);
-  assert.equal(before.modes, undefined);
+  // Not asked for (the live snapshot, the daily history): no block, and neither write_backends nor run_keys is read.
+  const plain = computeCoverage(db, { tiers, workflows }).lanes.find((l) => l.id === 'writecheck');
+  assert.equal(plain.modes, undefined);
+  assert.deepEqual([plain.frame, plain.eligible, plain.assessed], [L.frame, L.eligible, L.assessed]);
+  const seen = [];
+  const spy = { prepare: (sql) => { seen.push(sql); return db.raw.prepare(sql); } };
+  computeCoverage(spy, { tiers, workflows });
+  assert.ok(!seen.some((q) => /write_backends|run_keys/.test(q)), seen.join('\n'));
 });
 
-test('R-WB-12: mutation check: with notTestableLeavesDenominator off, none and unclassified servers come back into the denominator (and the test above would fail)', () => {
+test('R-WB-12: mutation check: with notTestableLeavesDenominator off, none and unclassified servers come into every mode\'s denominator (and the test above would fail)', () => {
   const db = coverageWorld();
   const workflows = { writecheck: { ...shipped.writecheck, enabled: true } };
-  const off = computeCoverage(db, { tiers, workflows, rules: { ...RULES, notTestableLeavesDenominator: false } }).lanes.find((l) => l.id === 'writecheck');
-  assert.equal(off.frame, 5);
-  assert.equal(off.by_backend, false);
-  assert.notEqual(off.frame, 2);
-  // With no classification at all, the denominator is still the whole frame: nothing drops out unseen.
-  const empty = world({ 'o/a': null, 'o/b': null });
-  const e = computeCoverage(empty, { tiers, workflows }).lanes.find((l) => l.id === 'writecheck');
-  assert.deepEqual([e.frame, e.by_backend, e.unclassified], [2, false, 2]);
+  const off = computeCoverage(db, { tiers, workflows, modes: true, rules: { ...RULES, notTestableLeavesDenominator: false } }).lanes.find((l) => l.id === 'writecheck');
+  assert.equal(off.modes.full.frame, 5);
+  assert.notEqual(off.modes.full.frame, 1);
 });
 
 // ---------------------------------------------------------------- the watchdog
@@ -210,4 +203,17 @@ test('R-WB-13: the watchdog goes amber when meta-backend has classified nothing 
   assert.equal(run(NOW, data, { ...cfgOn, 'meta-backend': { ...cfgOn['meta-backend'], enabled: false } }).status, 'off');
   assert.equal(item(laneChecks({ now: NOW, slots: 3, pumpOn: true, cfg: { writecheck: shipped.writecheck }, data, tick: null })), undefined, 'no lane, no item');
   assert.notEqual(run(NOW + 30 * 24 * HOUR).status, 'red', 'an unclassified server is untested, not failed');
+});
+
+test('R-WB-17: a min-mode spec URL must be the vendor map\'s own or the subject\'s file at a full commit; runtime env names never reach a worker', () => {
+  assert.equal(specUrlAllowed(GH.spec_url, 'o/gh'), true);
+  assert.equal(specUrlAllowed('https://evil.example/openapi.json', 'o/gh'), false);
+  assert.equal(specUrlAllowed(`https://raw.githubusercontent.com/o/gh/${'a'.repeat(40)}/api/openapi.yaml`, 'o/gh'), true);
+  assert.equal(specUrlAllowed(`https://raw.githubusercontent.com/someone/else/${'a'.repeat(40)}/api/openapi.yaml`, 'o/gh'), false, 'another repository\'s file');
+  assert.equal(specUrlAllowed('https://raw.githubusercontent.com/o/gh/main/api/openapi.yaml', 'o/gh'), false, 'a moving branch');
+  const wfs = applyModeSwitches({ writecheck: writecheck() }, ON);
+  assert.equal(modeFor(wfs.writecheck, backendFacts({ ...GH, spec_url: 'https://evil.example/openapi.json' }), 'o/gh'), null);
+  const f = backendFacts({ ...PG, env_names: ['DATABASE_URL', 'LD_PRELOAD', 'NODE_OPTIONS', 'PATH', 'BASH_ENV', 'RUNNER_TEMP'] });
+  assert.deepEqual(f.env_names, ['DATABASE_URL']);
+  assert.deepEqual(modeFor(wfs.writecheck, { ...f, env_names: ['DATABASE_URL', 'LD_PRELOAD'] }, 'o/pg').env_names, ['DATABASE_URL']);
 });

@@ -27,6 +27,11 @@
 // worker gets the mode inputs of INTERFACES.md: mode, backend, backend_kind,
 // stand_in, spec_url, spec_format, env_names (aligned with items).
 
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+import { keepEnvName } from '../meta/lib/backend-scan.mjs';
+
 export const MODE_NAMES = Object.freeze(['full', 'min']);
 export const MODE_CLASS = Object.freeze({ full: 'local_full', min: 'mock_min' });
 const SWITCH_RE = /^LANE_[A-Z0-9_]+_ENABLED$/;
@@ -34,6 +39,26 @@ const ID_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const SPEC_URL_RE = /^https:\/\/[a-z0-9.-]+\/[^\s?#@]*$/i;
 const ENV_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 export const MAX_ENV_PER_ITEM = 20;
+const FULL_SHA_RE = /^[0-9a-f]{40}$/;
+
+/** The vendor descriptions in meta/data/spec-urls.json: the only spec URLs a min-mode shard may name, besides a subject's own pinned file. */
+export const SPEC_URLS = Object.freeze(new Set(Object.values(JSON.parse(readFileSync(new URL('../meta/data/spec-urls.json', import.meta.url), 'utf8')).services ?? {})
+  .map((s) => s?.spec?.url).filter((u) => typeof u === 'string')));
+
+/**
+ * Whether a spec URL may go to a worker (R-WB-17): https, no query, and either exactly one of the vendor map's URLs or
+ * the subject's own file at a full commit on raw.githubusercontent.com (`/<owner>/<name>/<40 hex>/...`). Anything
+ * else is refused, and the subject goes as before.
+ */
+export function specUrlAllowed(url, subjectName) {
+  if (typeof url !== 'string' || url.length > 512 || !SPEC_URL_RE.test(url)) return false;
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (SPEC_URLS.has(url)) return true;
+  if (u.hostname !== 'raw.githubusercontent.com') return false;
+  const [, owner, name, sha, ...rest] = u.pathname.split('/');
+  return typeof subjectName === 'string' && `${owner}/${name}`.toLowerCase() === subjectName.toLowerCase() && FULL_SHA_RE.test(sha ?? '') && rest.length > 0;
+}
 
 /** Problems with the `modes` of every lane (empty when fine). */
 export function modeProblems(workflows) {
@@ -81,13 +106,13 @@ export const modesOn = (wf) => Boolean(wf?.active_modes && Object.keys(wf.active
  * The mode a subject goes in on this lane: { mode, backend, backend_kind, stand_in, spec_url, spec_format, env_names }
  * or null (no mode on, no facts, a class no active mode takes, or facts the mode cannot run with).
  */
-export function modeFor(wf, facts) {
+export function modeFor(wf, facts, subjectName = null) {
   if (!modesOn(wf) || !facts) return null;
   for (const [mode, def] of Object.entries(wf.active_modes)) {
     if (facts.class !== def.class) continue;
     if (typeof facts.backend !== 'string' || !ID_RE.test(facts.backend)) return null;
     if (mode === 'full' && !(typeof facts.stand_in === 'string' && ID_RE.test(facts.stand_in))) return null;
-    if (mode === 'min' && !(typeof facts.spec_url === 'string' && facts.spec_url.length <= 512 && SPEC_URL_RE.test(facts.spec_url))) return null;
+    if (mode === 'min' && !specUrlAllowed(facts.spec_url, subjectName)) return null;
     return {
       mode,
       backend: facts.backend,
@@ -95,7 +120,7 @@ export function modeFor(wf, facts) {
       stand_in: mode === 'full' ? facts.stand_in : '',
       spec_url: mode === 'min' ? facts.spec_url : '',
       spec_format: mode === 'min' && typeof facts.spec_format === 'string' ? facts.spec_format : '',
-      env_names: (Array.isArray(facts.env_names) ? facts.env_names : []).filter((n) => typeof n === 'string' && ENV_RE.test(n)).slice(0, MAX_ENV_PER_ITEM),
+      env_names: (Array.isArray(facts.env_names) ? facts.env_names : []).filter((n) => typeof n === 'string' && ENV_RE.test(n) && keepEnvName(n)).slice(0, MAX_ENV_PER_ITEM),
     };
   }
   return null;
@@ -104,9 +129,14 @@ export function modeFor(wf, facts) {
 /** Whether a subject with no mode is dispatched on this lane at all. */
 export const unmatchedSkipped = (wf) => modesOn(wf) && wf.modes?.unmatched === 'skip';
 
-/** The settings_state a mode files its run_keys under. */
+/**
+ * The settings_state a mode files its run_keys under: the mode, the backend, and what it runs against (the stand-in
+ * id, or the first 12 hex of the spec URL's sha256), so a new stand-in or spec for the same backend is due again.
+ */
 export function modeSettings(wf, m) {
-  return m ? `${wf?.settings_state ?? 'default'}+mode=${m.mode}+backend=${m.backend}` : wf?.settings_state;
+  if (!m) return wf?.settings_state;
+  const via = m.mode === 'full' ? m.stand_in : createHash('sha256').update(m.spec_url).digest('hex').slice(0, 12);
+  return `${wf?.settings_state ?? 'default'}+mode=${m.mode}+backend=${m.backend}+via=${via}`;
 }
 
 /** The key that keeps a shard homogeneous: mode, backend, and the stand-in or spec URL. */

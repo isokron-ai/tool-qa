@@ -144,7 +144,7 @@ export function readLanes(env) {
 export function readCoverage(db, config) {
   try {
     const cfg = config ?? loadConfig();
-    return computeCoverage(db, { tiers: cfg.tiers, workflows: cfg.workflows, skipLanes: [...NOT_BUILT_LANES], resultModes: true });
+    return computeCoverage(db, { tiers: cfg.tiers, workflows: cfg.workflows, skipLanes: [...NOT_BUILT_LANES], modes: true });
   } catch {
     return null;
   }

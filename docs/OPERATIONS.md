@@ -2248,7 +2248,7 @@ modes"):
 
 Turn a mode on only once the writecheck worker (mcp-writecheck-action `corpus.yml`) declares the mode inputs: GitHub
 refuses a dispatch with an input the workflow does not declare, and the pump would then skip the lane for the tick.
-Turning a mode on moves the run_keys of the subjects in it (their settings_state gains `+mode=...+backend=...`), so
+Turning a mode on moves the run_keys of the subjects in it (their settings_state gains `+mode=...+backend=...+via=...`), so
 they are due again; turning it off moves them back. With every mode off nothing is sent that is not sent today.
 
 The health issue shows writecheck's coverage per mode (the classified, testable servers), the servers that are not

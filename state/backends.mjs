@@ -4,6 +4,8 @@
 // read by the pump's writecheck mode routing (pump/modes.mjs) and by coverage
 // (state/coverage.mjs). Pure helpers; no state access here.
 
+import { keepEnvName } from '../meta/lib/backend-scan.mjs';
+
 export const BACKEND_LANE = 'meta-backend';
 export const BACKEND_FIELD = 'write_backend';
 export const CLASSES = Object.freeze(['local_full', 'mock_min', 'none']);
@@ -26,7 +28,8 @@ export function backendFacts(value) {
   if (!value || typeof value !== 'object' || !CLASSES.includes(value.class)) return null;
   const id = (x) => (typeof x === 'string' && ID_RE.test(x) ? x : null);
   const envIn = [...(Array.isArray(value.base_url_env) ? value.base_url_env : []), ...(Array.isArray(value.env_names) ? value.env_names : [])];
-  const env = [...new Set(envIn.filter((n) => typeof n === 'string' && ENV_RE.test(n)))].slice(0, MAX_ENV_NAMES);
+  // Never a name the runtime, the shell or the runner owns (meta/lib/backend-scan.mjs ENV_DENY_RE, R-WB-15).
+  const env = [...new Set(envIn.filter((n) => typeof n === 'string' && ENV_RE.test(n) && keepEnvName(n)))].slice(0, MAX_ENV_NAMES);
   const spec = typeof value.spec_url === 'string' && value.spec_url.length <= 512 && SPEC_URL_RE.test(value.spec_url) ? value.spec_url : null;
   return {
     class: value.class,

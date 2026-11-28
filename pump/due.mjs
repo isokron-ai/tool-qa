@@ -243,7 +243,7 @@ export function runKeyFields(subject, workflowName, wf) {
  * skip true: the lane has modes on with unmatched "skip" and this subject has none.
  */
 export function pairFields(subject, workflowName, wf, backends) {
-  const mode = modeFor(wf, backends?.get?.(subject.id) ?? null);
+  const mode = modeFor(wf, backends?.get?.(subject.id) ?? null, subject.name ?? subject.id);
   if (!mode && unmatchedSkipped(wf)) return { skip: true, mode: null, fields: null };
   return { skip: false, mode, fields: runKeyFields(subject, workflowName, mode ? { ...wf, settings_state: modeSettings(wf, mode) } : wf) };
 }
