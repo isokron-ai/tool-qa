@@ -71,6 +71,8 @@
 //   LANE_STATE_PRUNE_ENABLED   anything but unset, empty or "true" stops pruning
 //   LANE_SUBJECT_IDS_ENABLED   anything but unset, empty or "true" stops the
 //                      subject id lookups (pump/identity.mjs)
+//   LANE_DISCOVER_ENABLED   only the exact value "true" turns discover.yml
+//                      candidates into subjects (pump/discover.mjs)
 //   LANE_BACKFILL_ENABLED   only the exact value "true" gives worker slots
 //                      the due list leaves free to the frame's oldest results
 //                      (pump/backfill.mjs)
@@ -109,6 +111,7 @@ import { computeBudget, reapExpired } from './slots.mjs';
 import { applyControlSwitches, recordControlLanes, syncControlSubjects } from './controls.mjs';
 import { SEED_FILE, syncSeedSubjects } from './subjects.mjs';
 import { IDENTITY_KV_KEY, identityEnabled, refreshIdentities } from './identity.mjs';
+import { applyDiscovery, DISCOVER_KV_KEY, discoverEnabled, fetchCandidates } from './discover.mjs';
 import { HEADS_KV_KEY, headsEnabled, refreshHeads } from './heads.mjs';
 import { planShards, runTick } from './tick.mjs';
 import { backfillEnabled } from './backfill.mjs';
@@ -128,6 +131,8 @@ export const FINAL_REQUEST_TIMEOUT_MS = 30_000;
 export const REGISTRY_DELTA_CHECK_MS = 5 * 60_000;
 export const REGISTRY_DELTA_WINDOW_MS = 60_000;
 export const REGISTRY_DELTA_KEY = 'pump.registry_delta';
+// The discover pass (pump/discover.mjs) gets this long at the start of a run.
+export const DISCOVER_WINDOW_MS = 90_000;
 export const BUDGET_KEY = 'pump.api_budget';
 export const BREAKER_KEY = 'pump.breaker';
 export const CONFORMANCE_KEY = 'pump.conformance';
@@ -154,6 +159,9 @@ const isSetupError = (err) => err instanceof IngestSetupError || err?.name === '
  * for the defaults, null for none, or options for refreshIdentities()
  * (batch, maxQueries, retryMs). They use GITHUB_TOKEN through the run's API
  * budget and never hold the run.
+ * discover: the discover pass (pump/discover.mjs): undefined for the real
+ * one, null for none, or {getCandidates, config} for tests. Only with
+ * LANE_DISCOVER_ENABLED exactly "true".
  * heads: the head poll at start-up (pump/heads.mjs): undefined for the
  * defaults, null for none, or options for refreshHeads() (batch, maxQueries,
  * reserve). Only with LANE_HEADS_ENABLED exactly "true"; GITHUB_TOKEN through
@@ -178,6 +186,7 @@ export async function runPump({
   stateFile = DEFAULT_STATE,
   seedFile = SEED_FILE,
   identity,
+  discover,
   heads,
   config,
   pull = pullState,
@@ -553,6 +562,26 @@ export async function runPump({
     } else if (heads !== null) {
       // The watchdog shows the item off, not the last pass's colour.
       db.setKv(HEADS_KV_KEY, { ...(db.getKv(HEADS_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
+    }
+    // The discover lane (pump/discover.mjs, A2): candidates from discover.yml
+    // become subjects, deduped by repository id, forks left out, at most
+    // discover.json daily_cap a day. Its own short window; never holds the run.
+    if (discover !== null && discoverEnabled(env) && repo) {
+      try {
+        const until = Math.min(deadline, now() + DISCOVER_WINDOW_MS);
+        const gql = stateToken ? createClient({ token: stateToken, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => until, onRetry: retryHook('github_api') }) : null;
+        const getCandidates = discover?.getCandidates ?? (async () => {
+          const { token } = await lazyMint({ repositories: [repo.split('/')[1]], permissions: { actions: 'read' } });
+          const client = createClient({ token, fetch, apiUrl, budget: bud, now, sleep, log: say, retryUntil: () => until, requestTimeoutMs: 20_000, onRetry: retryHook('github_api') });
+          return fetchCandidates({ client, fetch, repo });
+        });
+        const d = await applyDiscovery(db, { client: gql, getCandidates, now, log: say, ...(discover?.config ? { config: discover.config } : {}) });
+        say(`pump: discover: ${d.summary}`);
+      } catch (err) {
+        say(`pump: discover failed (continuing): ${scrub(err?.message ?? String(err), secrets)}`);
+      }
+    } else if (discover !== null) {
+      db.setKv(DISCOVER_KV_KEY, { ...(db.getKv(DISCOVER_KV_KEY) ?? {}), off: true, at: new Date(now()).toISOString() }, { now: now() });
     }
     // Registry delta capture (pump/registry-delta.mjs): GitHub's */15 cron for it
     // fires hours late, so the pump dispatches it when the newest capture is
