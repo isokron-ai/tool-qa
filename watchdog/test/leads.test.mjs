@@ -60,3 +60,12 @@ test('R-LEAD-35: pump.yml gives the pump step LANE_LEADS_ENABLED and watchdog.ym
   const read = (f) => readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), 'utf8');
   for (const f of ['pump.yml', 'watchdog.yml']) assert.match(read(f), /\n\s+LANE_LEADS_ENABLED: \$\{\{ vars\.LANE_LEADS_ENABLED \}\}\n/, f);
 });
+
+test('R-LEAD-45: a lead the store could not fold in the last day turns the leads item amber, with its error; an older one does not', () => {
+  const ff = { count: 2, last_at: iso(T0 - HOUR), last_error: 'NOT NULL constraint failed: leads.class' };
+  const a = leadsCheck({ now: T0, mode: 'on', last: last(), foldFailures: ff });
+  assert.deepEqual([a.status, /could not be folded/.test(a.summary), /NOT NULL/.test(a.summary)], ['amber', true, true]);
+  assert.equal(leadsCheck({ now: T0 + 2 * T.foldFailureMs, mode: 'on', last: last({ at: iso(T0 + 2 * T.foldFailureMs) }), foldFailures: ff }).status, 'green');
+  const state = { openSlots: [], openDispatches: [], kv: { 'leads.last': last(), 'leads.fold_failures': ff } };
+  assert.equal(evaluate({ now: T0, slots: 3, leadsMode: 'on', state }).checks.find((c) => c.id === 'leads').status, 'amber', 'read through evaluate');
+});

@@ -172,6 +172,7 @@ export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {
         'retention.seal': db.getKv('retention.seal') ?? null,
         'leads.last': db.getKv('leads.last') ?? null,
         'leads.recheck': db.getKv('leads.recheck') ?? null,
+        'leads.fold_failures': db.getKv('leads.fold_failures') ?? null,
       },
       lanes: readLaneData(db, now, { cfg, tiers }),
       // The four coverage numbers per lane (state/coverage.mjs); null when the config or state cannot answer.

@@ -269,7 +269,7 @@ export function evaluate({ now, slots, lanes = {}, liveSwitch, leadsMode = 'off'
     checks.push(liveSnapshotCheck({ now, on: liveSwitch === 'true', last: state.kv?.['live.last_upload'] ?? null }));
     const ids = identityCheck(state.kv?.['pump.identity']); if (ids) checks.push(ids); // subject ids (watchdog/identity.mjs)
     const hd = headsCheck({ now, heads: state.kv?.['pump.heads'] }); if (hd) checks.push(hd); // head poll (watchdog/heads.mjs)
-    checks.push(leadsCheck({ now, mode: leadsMode, last: state.kv?.['leads.last'] ?? null, recheck: state.kv?.['leads.recheck'] ?? null })); // the lead pipeline (watchdog/leads.mjs)
+    checks.push(leadsCheck({ now, mode: leadsMode, last: state.kv?.['leads.last'] ?? null, recheck: state.kv?.['leads.recheck'] ?? null, foldFailures: state.kv?.['leads.fold_failures'] ?? null })); // the lead pipeline (watchdog/leads.mjs)
   }
 
   // latest loop run per workflow
