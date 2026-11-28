@@ -39,7 +39,8 @@ export const kindOf = (l) => {
   const partial = /;partial=([a-z_]+)/.exec(l.signature)?.[1];
   const detail = /(?:^|;)detail=([a-z_]+)(?:;|$)/.exec(l.signature)?.[1];
   const own = detail && detail !== l.class && DETAIL_CLASS[detail] !== l.class; // scan-static's detail word only restates its class
-  return `${l.class}${partial ? `:${partial}` : ''}${own ? `/${detail}` : ''}`;
+  const construct = /(?:^|;)construct=([a-z_<>]+)(?:;|$)/.exec(l.signature)?.[1];
+  return `${l.class}${partial ? `:${partial}` : ''}${own ? `/${detail}` : ''}${construct ? ` (${construct})` : ''}`;
 };
 
 /** Tier and count of the subjects that carry a lead now: {byTier: {T1: 2}, weight, current}. */

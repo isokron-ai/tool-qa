@@ -142,13 +142,13 @@ function initOnce(files, spec, cliMain) {
   }
 }
 
-export async function runWritecheckInit(lead, files, spec, { cliMain, cliCommit, actionDir, actionCommit }) {
+export async function runWritecheckInit(lead, files, spec, { cliMain, cliCommit, actionDir, actionCommit }, { controlFiles: ctl = controlFiles } = {}) {
   const S = await import(pathToFileURL(join(actionDir, 'loop', 'skips.mjs')).href);
-  // The control first: our echo server must start, or no verdict of this harness counts.
-  const control = initOnce(controlFiles(spec), { ...spec, dir: '.' }, cliMain);
+  // The control first: the start-window template without its delay must pass init, or no verdict of this harness counts.
+  const control = initOnce(ctl(spec), { ...spec, dir: '.' }, cliMain);
   const controlRan = control.step && S.stagesRan([control.step]).init === true;
   const controlDetail = { install: control.install.steps, init: control.step, log_tail: tail(control.log || control.install.log) };
-  if (!controlRan) return { verdict: 'error', error: 'the control (our echo fixture) did not start under writecheck init, so this harness says nothing', observed: [], detail: { control: controlDetail } };
+  if (!controlRan) return { verdict: 'error', error: 'the control (the start-window template without its delay) did not pass writecheck init, so this harness says nothing', observed: [], detail: { control: controlDetail } };
   const root = writeFixture(files);
   try {
     const dir = join(root, ...spec.dir.split('/').filter((s) => s !== '.'));

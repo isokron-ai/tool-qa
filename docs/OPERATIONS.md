@@ -71,6 +71,7 @@ Every loop workflow runs the guard first (`scripts/guard.mjs --job <job>`), so `
 | `offsite-backup.yml`, `keep-forever.yml` | `LANE_OFFSITE_ENABLED`, `LANE_KEEP_FOREVER_ENABLED` | no |
 | `ledger.yml`, `perf-baselines.yml` | `LANE_LEDGER_ENABLED`, `LANE_PERF_ENABLED` | no |
 | `publish-results.yml` | `LANE_PUBLISH_RESULTS_ENABLED`, and `RESULTS_PUBLISH_ENABLED` must be exactly `true` | no |
+| `lead-repro.yml` (manual, and dispatched by the pump's lead step) | none: read-only, our own fixtures and tools only | no |
 
 The worker lanes that run third-party code or scan servers live in their own repositories and
 read variables there, not here: `LOOP_ENABLED`, `LOOP_PAUSE_UNTIL` and the lane switch in
@@ -2175,8 +2176,16 @@ the encrypted state; an issue holds the shape only.
    instead need 3 days of sightings; a flaky lead (gone and back on one server)
    needs 10% or more of its results over 14 days.
 4. Filed (`true`): an issue `[lead <fingerprint>] ...` with label `loop-lead`,
-   at most 5 new per repository per UTC day and 30 open, the leads whose fix
-   unlocks most first, at most 20 issue writes per pump run. An issue gives the
+   at most `LEADS_CAP_NEW_PER_REPO_DAY` new per repository per UTC day (default
+   30, never over 50) and `LEADS_CAP_OPEN_PER_REPO` open (default 150, never
+   over 300), the leads whose fix unlocks most first, at most `LEADS_MAX_WRITES`
+   issue writes per pump run (default 60, never over 100) inside 6 minutes. A
+   value that is not a whole number is the default; a larger one is clamped,
+   and the pump's log says so. The issues API budget spaces writes 2 s apart,
+   at most 20 a minute and 240 an hour (inside GitHub's limits for content
+   creation); a 403 or 429 stops every write of that run. Before a lead is
+   filed its repro is checked (below): a lead whose check is still running
+   waits and takes no mark. An issue gives the
    number of servers that carry the lead, a tier breakdown only from 5 servers
    up, and no priority, so no single server can be picked out. Leads are marked
    and the state saved before an issue is made; a lead marked but with no issue
@@ -2201,6 +2210,21 @@ component and signature), `not_reproduced`, `not_reproducible_synthetically`
 or `error`, in the job summary and the artifact `lead-repro-<repro key>`.
 Read-only, no secrets. On a pull request that changes it, it runs the issues
 in `leads/repro-cases.json`.
+
+The pump's lead step (`leads/repro-gate.mjs`) uses it before filing: a
+verdict is about a repro key (the template, how it is run, the lane's pins,
+the lead's class and signature) and is kept in kv `leads.repro`. With none
+there it reads the artifact `lead-repro-<key>` of a run on main of tool-qa
+itself (a pull request's or a fork's never counts), else dispatches
+`lead-repro.yml` with the lead's shape (the `lead` input, shapes only); at
+most 10 lookups and 3 dispatches a run, sent again after 45 minutes, at most
+3 times. A lead waits at most 3 hours; then its issue says the check did not
+finish. An issue shows a fixture only with `reproduced`; otherwise it says
+"Synthetic repro: not confirmed (our template did not trigger it); evidence
+is the real-server re-check below." Open issues of ours are edited by the App
+when their verdict changes (kv `leads.bodies`). When scan-static gives the
+reader's construct kinds (mcp-check R-RD-45), a reader-limit fingerprint
+carries `construct=<kind>` and the template writes that construct.
 
 **Rolling it out.** `dry-run` for a few pump runs and read the job summaries;
 then `recheck` for a day (a few extra worker runs); then `true`. Before `true`,

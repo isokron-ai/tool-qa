@@ -43,7 +43,7 @@ jobs:
           package-manager-cache: false
       - name: Run the probes
         env:
-          PROBES: ${{ inputs.probes || 'test/mutations/leads-share.json' }}
+          PROBES: ${{ inputs.probes || 'test/mutations/leads-share.json test/mutations/lead-repro.json' }}
         run: |
           set -euo pipefail
           for f in $PROBES; do

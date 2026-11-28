@@ -186,6 +186,98 @@ async fn main() -> anyhow::Result<()> {
   start: 'cargo run',
   ecosystem: null,
 };
+/**
+ * The construct kinds mcp-check's reader names for a part it could not read (mcp-check src/inputs/unreadable-kind.cjs,
+ * R-RD-45), as scan-static gives them (registration_provenance.unreadable_kinds) and our fingerprint carries them
+ * (`construct=<kind>`, state/fingerprint.mjs). The construct templates below write the varying value that way.
+ */
+export const CONSTRUCTS = Object.freeze(['call', 'imported', 'identifier', 'member', 'template_expr', 'concat', 'conditional', 'spread', 'function', 'nested', 'too_deep', 'other']);
+/** Which part of the tool a partial kind is about. */
+const PART_OF = { unresolved_names: 'name', unreadable_descriptions: 'description', unreadable_annotations: 'annotations', unreadable_input_schemas: 'schema' };
+
+/**
+ * A value of ours (`lit`, source text) written as `kind`: { expr, pre, imports, files, key } or null when there is no
+ * way to write this value as that construct. `pre`: lines above the registration; `files`: more files of the fixture;
+ * `key`: the whole config entry, for kinds that replace the `key: value` line itself (a getter, a spread).
+ */
+function tsConstruct(kind, lit, part) {
+  const str = lit.startsWith('"');
+  const helper = 'function pick<T>(value: T): T {\n  return value;\n}';
+  switch (kind) {
+    case 'call': return { expr: `pick(${lit})`, pre: [helper] };
+    case 'member': return { expr: 'VALUES.value', pre: [helper, `const VALUES = pick({ value: ${lit} });`] };
+    case 'imported': return { expr: 'VALUE', imports: ['import { VALUE } from "@fixture/values";'], files: { 'src/values.ts': `${part === 'schema' ? 'import { z } from "zod";\n\n' : ''}export const VALUE = ${lit};\n`, 'tsconfig.json': '{\n  "compilerOptions": {\n    "baseUrl": ".",\n    "paths": { "@fixture/*": ["src/*"] }\n  }\n}\n' } };
+    case 'identifier': return { expr: 'value', pre: [`let value = ${lit};`, `value = ${lit};`] };
+    case 'template_expr': return str ? { expr: `\`\${PREFIX}${lit.slice(1, -1)}\``, pre: ['const PREFIX = process.env.LEAD_FIXTURE_PREFIX ?? "";'] } : null;
+    case 'concat': return str ? { expr: `PREFIX + ${lit}`, pre: ['const PREFIX = process.env.LEAD_FIXTURE_PREFIX ?? "";'] } : null;
+    case 'conditional': return { expr: `process.env.LEAD_FIXTURE_FLAG ? ${lit} : ${lit}` };
+    case 'spread': return part === 'name' ? null : part === 'schema' ? { expr: `{ ...pick(${lit}) }`, pre: [helper] } : null;
+    case 'function': return part === 'description' ? { key: `get description() {\n    return ${lit};\n  },` } : null;
+    default: return null;
+  }
+}
+function pyConstruct(kind, lit) {
+  const str = lit.startsWith('"');
+  const helper = 'def pick(value):\n    return value';
+  switch (kind) {
+    case 'call': return { expr: `pick(${lit})`, pre: [helper] };
+    case 'member': return { expr: 'VALUES["value"]', pre: [helper, `VALUES = pick({"value": ${lit}})`] };
+    case 'imported': return { expr: 'VALUE', imports: ['from lead_fixture_values import VALUE'] };
+    case 'identifier': return { expr: 'value', pre: [`for value in (${lit},):\n    pass`] };
+    case 'template_expr': return str ? { expr: `f"{PREFIX}${lit.slice(1, -1)}"`, imports: ['import os'], pre: ['PREFIX = os.environ.get("LEAD_FIXTURE_PREFIX", "")'] } : null;
+    case 'concat': return str ? { expr: `PREFIX + ${lit}`, imports: ['import os'], pre: ['PREFIX = os.environ.get("LEAD_FIXTURE_PREFIX", "")'] } : null;
+    case 'conditional': return { expr: `${lit} if os.environ.get("LEAD_FIXTURE_FLAG") else ${lit}`, imports: ['import os'] };
+    default: return null;
+  }
+}
+const uniq = (a) => [...new Set(a)];
+
+/** The TypeScript fixture with one part written as the construct the reader could not read, or null (no such template). */
+function tsConstructFixture(part, kind) {
+  const lits = { name: '"echo"', description: '"Echo the text back."', annotations: 'true', schema: '{ text: z.string() }' };
+  const c = tsConstruct(kind, lits[part], part);
+  if (!c) return null;
+  const v = (p) => (p === part && c.expr ? c.expr : lits[p]);
+  const descLine = part === 'description' && c.key ? `  ${c.key}` : `  description: ${v('description')},`;
+  const src = `import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+${(c.imports ?? []).map((x) => `${x}\n`).join('')}
+const server = new McpServer({ name: "lead-fixture", version: "0.0.1" });
+${uniq(c.pre ?? []).map((x) => `${x}\n`).join('')}
+server.registerTool(${v('name')}, {
+${descLine}
+  inputSchema: ${v('schema')},
+  annotations: { readOnlyHint: ${v('annotations')} },
+}, async ({ text }) => ({ content: [{ type: "text", text }] }));
+
+await server.connect(new StdioServerTransport());
+`;
+  return { file: src, files: c.files ?? {} };
+}
+function pyConstructFixture(part, kind) {
+  if (part === 'schema') return null; // the Python SDK reads the schema from the signature: no value to write another way
+  const lits = { name: '"echo"', description: '"Echo the text back."', annotations: 'True' };
+  const c = pyConstruct(kind, lits[part]);
+  if (!c) return null;
+  const v = (p) => (p === part ? c.expr : lits[p]);
+  const imports = uniq(['from mcp.server.fastmcp import FastMCP', 'from mcp.types import ToolAnnotations', ...(c.imports ?? [])]).sort((a, b) => (a.startsWith('import') === b.startsWith('import') ? a.localeCompare(b) : a.startsWith('import') ? -1 : 1));
+  const src = `${imports.join('\n')}
+
+mcp = FastMCP("lead-fixture")
+${uniq(c.pre ?? []).map((x) => `${x}\n`).join('')}
+
+@mcp.tool(name=${v('name')}, description=${v('description')}, annotations=ToolAnnotations(readOnlyHint=${v('annotations')}))
+def echo(text: str) -> str:
+    return text
+
+
+if __name__ == "__main__":
+    mcp.run()
+`;
+  return { file: src, files: {} };
+}
+
 export const TEMPLATES = Object.freeze({ python: PY, ts: TS, go: GO, rust: RS });
 const LANG_NAME = { ts: 'TypeScript', python: 'Python', go: 'Go', rust: 'Rust' };
 
@@ -208,7 +300,8 @@ export function languageOf(idiom) {
 /** What the fixture varies, from the lead's class and partial kind. */
 function variantOf(lead) {
   const partial = /;partial=([a-z_]+)/.exec(lead.signature ?? '')?.[1] ?? null;
-  const o = { nameConst: false, descConst: false, schemaModel: false, annConst: false, helper: false, slow: false };
+  const construct = /;construct=([a-z_]+)/.exec(lead.signature ?? '')?.[1] ?? null;
+  const o = { nameConst: false, descConst: false, schemaModel: false, annConst: false, helper: false, slow: false, construct: CONSTRUCTS.includes(construct) ? construct : null, part: PART_OF[partial] ?? null };
   if (partial === 'unresolved_names') o.nameConst = true;
   else if (partial === 'unreadable_descriptions') o.descConst = true;
   else if (partial === 'unreadable_input_schemas') o.schemaModel = true;
@@ -274,8 +367,17 @@ export function reproSpec(lead) {
   const dirs = multi ? ['servers/a', 'servers/b'] : ['.'];
   for (const d of dirs) {
     const p = (f) => (d === '.' ? f : `${d}/${f}`);
-    files.set(p(t.file), o.slow ? t.slow() : t.base(o));
-    for (const [f, v] of Object.entries(t.extra(o))) files.set(p(f), v);
+    // A lead that names the construct the reader could not read (R-LEAD-58) gets a fixture written that way, when we
+    // have a template for that construct; else the part is a constant of the file, as before.
+    const cf = o.construct && o.part && lane === 'scan-static' ? (key === 'ts' ? tsConstructFixture(o.part, o.construct) : key === 'python' ? pyConstructFixture(o.part, o.construct) : null) : null;
+    if (cf) {
+      files.set(p(t.file), cf.file);
+      for (const [f, v] of Object.entries(cf.files)) files.set(p(f), v);
+      o.constructTemplate = true;
+    } else {
+      files.set(p(t.file), o.slow ? t.slow() : t.base(o));
+      for (const [f, v] of Object.entries(t.extra(o))) files.set(p(f), v);
+    }
     if (lane === 'live-probe' || lane === 'writecheck' || lane === 'release-diff') for (const [f, v] of Object.entries(t.pkg)) files.set(p(f), v);
   }
   const sj = /server_json:(0|1|many)/.exec(lead.layout ?? '')?.[1] ?? null;
@@ -352,7 +454,7 @@ export function syntheticRepro(lead, { verdict = null } = {}) {
   const saw = `\`${lead.class}${partial ? `:${partial}` : ''}\` at component \`${lead.component}\` (signature \`${lead.signature}\`)`;
   const runRef = Number.isSafeInteger(verdict.run_id) ? `tool-qa lead-repro run ${verdict.run_id}` : 'tool-qa lead-repro';
   L.push(`Confirmed: ${runRef} ran this fixture with ${verdict.tool ? `\`${verdict.tool}\`` : 'the lane\'s pinned tool'} and saw the same class and signature (repro key \`${verdict.key ?? '-'}\`).`, '');
-  L.push(`Written from our own ${LANG_NAME[spec.key]} template for the idiom \`${lead.idiom}\` and layout \`${lead.layout}\`; no third-party code.${o.nameConst || o.descConst || o.schemaModel || o.annConst || o.helper ? ' The part that varies for this class is marked by the constant or helper the reader has to follow.' : ''}${o.slow ? ` It does ${START_UP_SECONDS} s of start-up work before it answers, and registers a read and an update tool so that writecheck init has something to draft from once it does.` : ''}`, '');
+  L.push(`Written from our own ${LANG_NAME[spec.key]} template for the idiom \`${lead.idiom}\` and layout \`${lead.layout}\`; no third-party code.${o.nameConst || o.descConst || o.schemaModel || o.annConst || o.helper ? ' The part that varies for this class is marked by the constant or helper the reader has to follow.' : ''}${o.construct ? (o.constructTemplate ? ` The ${o.part} is written as a \`${o.construct}\`, the construct the reader named.` : ` The reader named the construct \`${o.construct}\`, which no template of ours writes yet: the part is a constant here.`) : ''}${o.slow ? ` It does ${START_UP_SECONDS} s of start-up work before it answers, and registers a read and an update tool so that writecheck init has something to draft from once it does.` : ''}`, '');
   for (const [f, v] of spec.files) L.push(`\`${f}\``, '', `\`\`\`${fenceLang(f)}`, v.trimEnd(), '```', '');
   if (spec.release) {
     const r = spec.release;

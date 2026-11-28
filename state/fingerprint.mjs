@@ -210,18 +210,34 @@ export function failuresOf(item, config, { langOf = () => null } = {}) {
     if (r.status === 'graded' && want.has('tool')) {
       const partials = [];
       const l = r.list ?? {};
-      if (l.unresolved_names > 0) partials.push('unresolved_names');
-      if (l.registration_not_seen > 0) partials.push('registration_not_seen');
-      if (l.tools_left_out > 0) partials.push('tools_left_out');
-      for (const k of ['input_schemas', 'descriptions', 'annotations']) if (l.unreadable?.[k] > 0) partials.push(`unreadable_${k}`);
-      if (l.listing_truncated === true || r.listing?.truncated === true) partials.push('listing_truncated');
-      if (r.listing?.budget_hit === true) partials.push('budget_hit');
-      for (const p of partials) out.push({ ...common(r, 'reader_limit', 'static', 'tool', [`partial=${p}`]), partial: true });
+      // The construct kinds the reader names for a partial part (mcp-check R-RD-45, registration_provenance.unreadable_kinds):
+      // one failure per kind, `construct=<kind>`, so a fix for one construct is one issue. A result without them is as before.
+      const kinds = (field) => constructsOf(l.unreadable_kinds?.[field]);
+      if (l.unresolved_names > 0) partials.push(['unresolved_names', kinds('names')]);
+      if (l.registration_not_seen > 0) partials.push(['registration_not_seen', []]);
+      if (l.tools_left_out > 0) partials.push(['tools_left_out', []]);
+      for (const k of ['input_schemas', 'descriptions', 'annotations']) if (l.unreadable?.[k] > 0) partials.push([`unreadable_${k}`, kinds(k)]);
+      if (l.listing_truncated === true || r.listing?.truncated === true) partials.push(['listing_truncated', []]);
+      if (r.listing?.budget_hit === true) partials.push(['budget_hit', []]);
+      for (const [p, ks] of partials) {
+        if (!ks.length) out.push({ ...common(r, 'reader_limit', 'static', 'tool', [`partial=${p}`]), partial: true });
+        for (const k of ks) out.push({ ...common(r, 'reader_limit', 'static', 'tool', [`partial=${p}`, `construct=${k}`]), partial: true });
+      }
     }
   }
   // Tool names and versions are ours (toolTags), never name-redacted (R-CHECKIN-15); the lane is our workflow name (R-CHECKIN-14).
   const tool = item.tools.length ? item.tools.join(',') : 'unknown';
   return out.map((f) => ({ ...f, tool: /^[a-z0-9@._,+<>-]{1,400}$/.test(tool) ? tool : '<other>', lane: /^[A-Za-z0-9._-]{1,80}$/.test(item.lane ?? '') ? item.lane : '<other>' }));
+}
+
+/** mcp-check's construct kinds (src/inputs/unreadable-kind.cjs UNREADABLE_KINDS, R-RD-45): a closed list; any other word is <other>. */
+export const CONSTRUCT_KINDS = Object.freeze(['call', 'imported', 'identifier', 'member', 'template_expr', 'concat', 'conditional', 'spread', 'function', 'nested', 'too_deep', 'other']);
+/** The kinds a count map names (whole positive counts only), sorted, each from CONSTRUCT_KINDS or <other>; at most 12. */
+export function constructsOf(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return [];
+  const out = new Set();
+  for (const [k, n] of Object.entries(v)) if (Number.isInteger(n) && n > 0) out.add(CONSTRUCT_KINDS.includes(k) ? k : '<other>');
+  return [...out].sort().slice(0, 12);
 }
 
 const idOf = (parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 12);

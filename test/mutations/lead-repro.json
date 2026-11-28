@@ -1,0 +1,106 @@
+[
+  {
+    "id": "R1 the fixture is shown without a reproduced verdict",
+    "file": "leads/repro.mjs",
+    "old": "  if (!verdict || verdict.verdict !== 'reproduced') {",
+    "new": "  if (false) {",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-54"
+  },
+  {
+    "id": "R2 an artifact of a pull request run counts",
+    "file": "leads/repro-gate.mjs",
+    "old": "  if (run.head_branch !== 'main') return false;",
+    "new": "",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-56"
+  },
+  {
+    "id": "R3 an artifact of a fork's run counts",
+    "file": "leads/repro-gate.mjs",
+    "old": "  if (run.repository_id == null || run.head_repository_id !== run.repository_id) return false;",
+    "new": "",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-56"
+  },
+  {
+    "id": "R4 a lead whose check is running is filed anyway",
+    "file": "leads/step.mjs",
+    "old": "        if (r?.state === 'pending') {",
+    "new": "        if (false) {",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-56"
+  },
+  {
+    "id": "R5 no back-off on 403 or 429",
+    "file": "leads/step.mjs",
+    "old": "        if (err?.name === 'BudgetExceededError' || status === 403 || status === 429) {",
+    "new": "        if (false) {",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-56"
+  },
+  {
+    "id": "R6 the cap bound is not applied",
+    "file": "state/leads.mjs",
+    "old": "    if (n > max) {",
+    "new": "    if (false) {",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-57"
+  },
+  {
+    "id": "R7 the caps ignore the variables",
+    "file": "leads/step.mjs",
+    "old": "  const caps = capsFrom(env);",
+    "new": "  const caps = capsFrom({});",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-57"
+  },
+  {
+    "id": "R8 the writecheck control is ignored",
+    "file": "leads/repro-run.mjs",
+    "old": "  if (!controlRan) return",
+    "new": "  if (false) return",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-55"
+  },
+  {
+    "id": "R9 the construct kinds are dropped from the fingerprint",
+    "file": "state/fingerprint.mjs",
+    "old": "      const kinds = (field) => constructsOf(l.unreadable_kinds?.[field]);",
+    "new": "      const kinds = () => [];",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-58"
+  },
+  {
+    "id": "R10 a verdict matches on class alone",
+    "file": "leads/repro-run.mjs",
+    "old": "f.class === lead.class && f.component === lead.component && f.signature === lead.signature",
+    "new": "f.class === lead.class",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-55"
+  },
+  {
+    "id": "R11 the artifact lookups are not bounded",
+    "file": "leads/repro-gate.mjs",
+    "old": "lookups < MAX_LOOKUPS && await net()",
+    "new": "await net()",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-56"
+  },
+  {
+    "id": "R12 an edit is sent every run",
+    "file": "leads/step.mjs",
+    "old": "        if (bodies[e.lead.fingerprint] === want) continue;",
+    "new": "",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-56"
+  },
+  {
+    "id": "R13 the release template has no over-the-cap entry",
+    "file": "leads/repro-run.mjs",
+    "old": "  const big = (top, where) => (r.over_cap && r.over_cap.where === where ?",
+    "new": "  const big = (top, where) => (false ?",
+    "test": "test/lead-repro.test.mjs",
+    "pattern": "R-LEAD-55"
+  }
+]
