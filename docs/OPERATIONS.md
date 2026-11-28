@@ -2160,7 +2160,13 @@ the encrypted state; an issue holds the shape only.
 1. Seen: the lead opens (`open`) and names one (subject, lane) to re-check.
 2. Re-check (`recheck`, `true`): the due list makes that pair due again
    (`lead_reverify`), a new worker run on a fresh runner. At most 20 due at
-   once; a pair whose re-checks never come back is given up after 3.
+   once; a pair whose re-checks never come back is given up after 3. While a
+   re-check is due, `LEADS_RECHECK_SLOTS` worker slots (repository variable; a
+   whole number, default 1, `0` turns the share off) are kept for it: the next
+   free slot goes to the re-check before any frame work, and a reserved
+   re-check may run over its lane's `slots_max` by that share. With no re-check
+   due the frame has every slot. A lane paused on `pin_mismatch` gets no
+   re-check and holds no slot.
 3. Reproduced: the re-run shows it again, from another worker run. Infra leads
    instead need 3 days of sightings; a flaky lead (gone and back on one server)
    needs 10% or more of its results over 14 days.
