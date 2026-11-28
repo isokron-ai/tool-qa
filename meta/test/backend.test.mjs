@@ -289,7 +289,8 @@ const http = (fetch) => createHttp({ fetch, cache: createCache(), retries: 0, sl
 
 const KRONICLE = {
   'package.json': pkg({ 'better-sqlite3': '^12.6.0', '@modelcontextprotocol/server': '^2.4.0', zod: '^4' }),
-  'src/server.ts': "server.registerTool('put_document', {}, f);\nserver.registerTool('get_document', {}, f);\nprocess.env.KRONICLE_DB_PATH;\n",
+  // As kronicle-lite registers them: a bound registerTool with the name on the next line.
+  'src/server.ts': "const registerTool = server.registerTool.bind(server);\nregisterTool(\n    'put_document',\n    {}, f);\nregisterTool(\n    'get_system_state', {}, f);\nprocess.env.KRONICLE_DB_PATH;\n",
 };
 
 test('R-WB-06: collectSubject reads the archive at HEAD (or the pin), reports its commit, and asks nothing of any other host', async () => {
