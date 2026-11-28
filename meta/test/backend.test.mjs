@@ -446,6 +446,9 @@ test('R-WB-14: hostile configuration costs bounded time: blank-line compose and 
     classify({ [p]: t });
     assert.ok(Date.now() - t0 < 3000, `${p}: ${Date.now() - t0} ms`);
   }
+  // Configuration is read in its first 256 KiB only: what comes after is not seen.
+  const late = classify({ '.env.example': `${'#'.repeat(300 * 1024)}\nLATE_DB_URL=postgres://h/d\n`, '.env.sample': 'EARLY_DB_URL=x\n' });
+  assert.ok(late.env_names.includes('EARLY_DB_URL') && !late.env_names.includes('LATE_DB_URL'));
 });
 
 test('R-WB-15: env names the runtime, the shell or the runner own are never kept or sent, whatever a repository reads', () => {
