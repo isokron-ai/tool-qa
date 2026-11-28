@@ -25,6 +25,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { BudgetExceededError } from './budgets.mjs';
+import { controlTarget } from './controls.mjs';
 import { workerInputs } from './dispatch.mjs';
 import { computeDue, loadDueInputs, NO_HOOKS } from './due.mjs';
 import { backfillCandidates, backfillFor, reserveSlots } from './backfill.mjs';
@@ -222,6 +223,9 @@ export async function runTick({
       labelWarned.add(shard.workflow);
       log(`${shard.workflow}: pin_check is "label" and ${wf.repo} ${wf.ref} is at ${workflowSha.slice(0, 12)}, not the pinned ${own.name} ${own.pin}: its results are filed under the pin but run the branch head (R-PIN-01)`);
     }
+    // A control lane's subject names its own worker file and fixed inputs (pump/controls.mjs).
+    const control = controlTarget(wf, shard.items[0].subject);
+    const workflowFile = control?.file ?? wf.file;
     const attemptId = String(newId());
     const shardId = `${shard.workflow}-${attemptId.replace(/[^A-Za-z0-9]/g, '').slice(0, 12)}`;
     const ttlMs = leaseTtlMs(wf, shard.items.length);
@@ -243,7 +247,7 @@ export async function runTick({
     }
     try {
       db.createDispatch({
-        attemptId, shardId, workflow: shard.workflow, repo: wf.repo, workflowFile: wf.file, ref: wf.ref,
+        attemptId, shardId, workflow: shard.workflow, repo: wf.repo, workflowFile, ref: wf.ref,
         expires: t + ttlMs, items: leased, workflowSha, now: t,
       });
     } catch (err) {
@@ -252,7 +256,7 @@ export async function runTick({
       for (const r of reserved) db.failDispatch(r.attemptId, { error: 'not sent: the tick failed before sending', withdrawn: true, now: now() });
       throw err;
     }
-    reserved.push({ shard, wf, attemptId, shardId, leased, workflowSha, toolSha, runner: shard.runner ?? null });
+    reserved.push({ shard, wf, attemptId, shardId, leased, workflowSha, toolSha, control, workflowFile, runner: shard.runner ?? null });
   }
   if (reserved.length === 0) return summary;
 
@@ -285,7 +289,7 @@ export async function runTick({
   // and slot freed, so the work is due again on the next tick.
   const skip = new Set();
   for (let i = 0; i < reserved.length; i++) {
-    const { shard, wf, attemptId, shardId, leased, workflowSha, toolSha, runner } = reserved[i];
+    const { shard, wf, attemptId, shardId, leased, workflowSha, toolSha, control, workflowFile, runner } = reserved[i];
     if (skip.has(shard.workflow)) {
       withdraw([reserved[i]], `an earlier ${shard.workflow} dispatch failed this tick`);
       continue;
@@ -305,12 +309,12 @@ export async function runTick({
           log(`${wf.repo} ${wf.ref} moved to ${fresh} since this tick began; ${shardId} expects that commit`);
         }
       }
-      const inputs = workerInputs({ shardId, attemptId, items: leased, toolSha, sendSha: wf.send_sha === true, runner });
-      const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile: wf.file, ref: wf.ref, inputs, shardId });
+      const inputs = workerInputs({ shardId, attemptId, items: leased, toolSha, sendSha: wf.send_sha === true, style: wf.dispatch_style ?? null, extra: control?.inputs ?? null, runner });
+      const out = await dispatcher.dispatch({ repo: wf.repo, workflowFile, ref: wf.ref, inputs, shardId });
       // The expected commit was recorded at creation; markDispatched keeps it.
       db.markDispatched(attemptId, { runId: out?.runId ?? null, runUrl: out?.runUrl ?? null, correlatedBy: out?.correlatedBy ?? null, now: now() });
       summary.dispatched += 1;
-      log(`dispatched ${shardId}: ${leased.length} item(s) to ${wf.repo} ${wf.file}${out?.runId ? `, run ${out.runId}` : ', run not matched yet'}`);
+      log(`dispatched ${shardId}: ${leased.length} item(s) to ${wf.repo} ${workflowFile}${out?.runId ? `, run ${out.runId}` : ', run not matched yet'}`);
     } catch (err) {
       const message = String(err?.message ?? err);
       summary.failed += 1;

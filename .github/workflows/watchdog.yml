@@ -53,6 +53,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           LOOP_SLOTS: ${{ vars.LOOP_SLOTS }}
           LANE_PUMP_ENABLED: ${{ vars.LANE_PUMP_ENABLED }}
+          # The T0 control lanes (pump/controls.mjs): off unless exactly "true"; an off lane is not an enabled lane to the lane checks.
+          LANE_T0_DEFECTS_ENABLED: ${{ vars.LANE_T0_DEFECTS_ENABLED }}
+          LANE_T0_SELF_ENABLED: ${{ vars.LANE_T0_SELF_ENABLED }}
+          LANE_T0_DOGFOOD_ENABLED: ${{ vars.LANE_T0_DOGFOOD_ENABLED }}
+          LANE_T0_FUZZ_ENABLED: ${{ vars.LANE_T0_FUZZ_ENABLED }}
           LANE_WATCHDOG_ENABLED: ${{ vars.LANE_WATCHDOG_ENABLED }}
           LANE_HISTORY_REGISTRY_ENABLED: ${{ vars.LANE_HISTORY_REGISTRY_ENABLED }}
           LANE_HISTORY_PACKAGES_ENABLED: ${{ vars.LANE_HISTORY_PACKAGES_ENABLED }}
