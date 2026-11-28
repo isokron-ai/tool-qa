@@ -8,7 +8,7 @@ import {
   MANIFEST_SCHEMA_VERSION, SKIP_REASONS, CONTROL_KINDS, SUPPORTED_KEYWORDS,
   loadSchema, validateAgainstSchema, validateManifest, isBundlePath, sha256Hex,
   workflowFromEnv, collectFiles, buildManifest, artifactName, legacyArtifactName,
-  FAULT_SIDES, UNKNOWN_FAULT, SKIP_FAULTS, COVERAGE_STATES, skipFault, resultFault,
+  FAULT_SIDES, UNKNOWN_FAULT, SKIP_FAULTS, SKIP_CODE_PATTERN, skipCodes, COVERAGE_STATES, skipFault, resultFault,
 } from '../contract.mjs';
 
 const SHA40 = 'a'.repeat(40);
@@ -329,4 +329,61 @@ test('R-COV-01: skipFault and resultFault: declared first, then the fixed map; o
     assert.equal(c, 'unassessed_tool', reason);
   }
   assert.deepEqual([...COVERAGE_STATES], ['assessed', 'unassessed_tool', 'unassessed_unknown', 'unassessed_infra', 'subject', 'excluded']);
+});
+
+// ---- R-COV-49: skip codes and the stand-in reasons ----
+
+const STAND_IN_REASONS = ['mock_incomplete', 'stand_in_mismatch', 'declaration_missing', 'target_not_standin', 'backend_semantics_not_exercised', 'not_testable_backend'];
+
+test('R-COV-49: walking SKIP_REASONS, the six stand-in reasons allow tool and never subject', () => {
+  for (const reason of SKIP_REASONS) assert.ok(SKIP_FAULTS[reason], reason);
+  for (const reason of STAND_IN_REASONS) {
+    assert.ok(SKIP_REASONS.includes(reason), reason);
+    const f = SKIP_FAULTS[reason];
+    assert.ok(f.allowed.includes('tool'), `${reason} allows tool`);
+    assert.ok(!f.allowed.includes('subject'), `${reason} must never allow subject`);
+    assert.notEqual(f.default, 'subject', reason);
+    assert.equal(validateManifest(validManifest({ skips: [{ stage: 's', reason, fault: 'subject' }] })).ok, false, reason);
+    assert.equal(validateManifest(validManifest({ skips: [{ stage: 's', reason, fault: 'tool' }] })).ok, true, reason);
+  }
+  assert.equal(SKIP_FAULTS.not_testable_backend.default, 'policy');
+  assert.equal(SKIP_FAULTS.target_not_standin.default, 'policy');
+  assert.equal(skipFault({ reason: 'mock_incomplete' }), 'tool');
+  // our limit beside a policy skip still wins
+  assert.equal(resultFault([{ reason: 'not_testable_backend' }, { reason: 'mock_incomplete' }]).coverage, 'unassessed_tool');
+  assert.equal(resultFault([{ reason: 'not_testable_backend' }]).coverage, 'excluded');
+});
+
+test('R-COV-49: a skip code is optional, bounded to the pattern, and a bad one makes the manifest invalid', () => {
+  const ok = (code) => validateManifest(validManifest({ skips: [{ stage: 's', reason: 'no_runnable_artifact', fault: 'tool', code }] })).ok;
+  assert.equal(validateManifest(validManifest({ skips: [{ stage: 's', reason: 'no_runnable_artifact', fault: 'tool' }] })).ok, true, 'optional');
+  assert.equal(ok('go_install_not_supported'), true);
+  assert.equal(ok('ab'), true);
+  assert.equal(ok('a'.repeat(48)), true);
+  for (const bad of ['a', 'a'.repeat(49), 'Go_install', '1abc', 'has space', 'has-dash', 'a/b', '', 'x\ny', 7, null]) assert.equal(ok(bad), false, JSON.stringify(bad));
+  assert.equal(loadSchema().properties.skips.items.properties.code.pattern, SKIP_CODE_PATTERN);
+  assert.ok(!loadSchema().properties.skips.items.required.includes('code'));
+});
+
+test('R-COV-49: start_requires_credentials may say tool only when its code says the start ran against our own mock or stand-in', () => {
+  const m = (extra) => validateManifest(validManifest({ skips: [{ stage: 'start', reason: 'start_requires_credentials', ...extra }] }));
+  assert.equal(m({ fault: 'subject' }).ok, true);
+  assert.equal(m({}).ok, true);
+  assert.equal(m({ fault: 'tool', code: 'start_against_mock_failed' }).ok, true);
+  assert.equal(m({ fault: 'tool', code: 'start_against_stand_in_failed' }).ok, true);
+  assert.equal(m({ fault: 'tool' }).ok, false, 'tool needs the code');
+  assert.equal(m({ fault: 'tool', code: 'needs_token' }).ok, false);
+  assert.equal(m({ fault: 'infra', code: 'start_against_mock_failed' }).ok, false);
+  assert.equal(skipFault({ reason: 'start_requires_credentials' }), 'subject', 'the default is still the subject');
+});
+
+test('R-COV-49: skipCodes lists each distinct (fault, code) pair of a bundle, skips without a usable code add nothing', () => {
+  assert.deepEqual(skipCodes([]), []);
+  assert.deepEqual(skipCodes([
+    { reason: 'no_runnable_artifact', fault: 'tool', code: 'go_install_not_supported' },
+    { reason: 'no_runnable_artifact', fault: 'tool', code: 'go_install_not_supported' },
+    { reason: 'not_testable_backend', code: 'hosted_saas' },
+    { reason: 'tool_error' },
+    { reason: 'tool_error', code: 'Bad Code' },
+  ]), [{ fault: 'tool', code: 'go_install_not_supported' }, { fault: 'policy', code: 'hosted_saas' }]);
 });
