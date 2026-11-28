@@ -524,19 +524,26 @@ export class FakeGitHub {
     // issues
     if (method === 'GET' && rest === '/issues') {
       const label = query.get('labels');
-      const list = r.issues.filter((i) => i.state === (query.get('state') ?? 'open') && (!label || i.labels.some((l) => l.name === label)));
+      const want = query.get('state') ?? 'open';
+      const list = r.issues.filter((i) => (want === 'all' || i.state === want) && (!label || i.labels.some((l) => l.name === label)));
       return { body: list.map((i) => ({ ...i })) };
     }
     if (method === 'POST' && rest === '/issues') {
       const n = r.issues.length + 1;
-      const issue = { number: n, node_id: `I_${n}`, title: req.json.title, body: req.json.body, state: 'open', labels: (req.json.labels ?? []).map((name) => ({ name })) };
+      // Every token in the sim is the loop's App's (pump and watchdog), so its issues are the App bot's.
+      const issue = { number: n, node_id: `I_${n}`, title: req.json.title, body: req.json.body, state: 'open', labels: (req.json.labels ?? []).map((name) => ({ name })), user: { login: 'isokron-tool-qa[bot]', type: 'Bot' } };
       r.issues.push(issue);
       return { status: 201, body: { ...issue } };
+    }
+    if (method === 'GET' && (m = /^\/issues\/(\d+)$/.exec(rest))) {
+      const issue = r.issues.find((i) => i.number === Number(m[1]));
+      return issue ? { body: { ...issue } } : notFound();
     }
     if (method === 'PATCH' && (m = /^\/issues\/(\d+)$/.exec(rest))) {
       const issue = r.issues.find((i) => i.number === Number(m[1]));
       if (!issue) return notFound();
       if (req.json?.body !== undefined) issue.body = req.json.body;
+      if (req.json?.state === 'open' || req.json?.state === 'closed') issue.state = req.json.state;
       return { body: { ...issue } };
     }
     if (method === 'POST' && (m = /^\/issues\/(\d+)\/comments$/.exec(rest))) {

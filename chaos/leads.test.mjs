@@ -114,3 +114,23 @@ test('R-LEAD-20: the sim still calls two accepted results of one run_key from ov
     await sim.close();
   }
 });
+
+test('R-LEAD-29: chaos: with LANE_LEADS_ENABLED=true a reproduced lead gets exactly one issue on our repository, even when the pump dies right after creating it', CHAOS, async () => {
+  await withSim({ vars: { LANE_LEADS_ENABLED: 'true' } }, async (sim) => {
+    const ours = sim.gh.addRepo('isokron-ai/mcp-check', { workflows: [] });
+    sim.worker = () => ({ item: (it) => (it.subject.endsWith('-0') ? { meta: { skips: SKIPS } } : {}) });
+    const kill = sim.killWhen({ name: 'right after the issue is created', when: (c) => c.method === 'POST' && c.path === '/repos/isokron-ai/mcp-check/issues' });
+    startPump(sim);
+    await sim.runFor(4 * HOUR);
+    assert.equal(kill.hits, 1, 'the pump died right after creating the issue');
+    const s = sim.readLive();
+    assert.equal(s.leads.length, 1);
+    const [lead] = s.leads;
+    assert.equal(ours.issues.length, 1, `one issue, never a second: ${ours.issues.map((i) => i.title).join(' | ')}`);
+    assert.equal(lead.status, 'filed');
+    assert.equal(lead.issue_number, ours.issues[0].number, 'the next run adopted the issue it had made');
+    assert.ok(ours.issues[0].title.startsWith(`[lead ${lead.fingerprint}]`));
+    assert.ok(!/chaos-org|server-0/.test(`${ours.issues[0].title}\n${ours.issues[0].body}`), 'the issue names no server');
+    assertRecovered(sim, INJECTED);
+  });
+});

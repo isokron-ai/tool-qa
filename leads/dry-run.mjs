@@ -32,6 +32,8 @@ import { leadFailures, seedLanguageOf } from '../state/fingerprint.mjs';
 import { filingDecision, flakeStats, shapeOf } from '../state/leads.mjs';
 import { resultFault } from '../worker-kit/contract.mjs';
 import { recheckPairs, RECHECK_MAX_DUE } from './recheck.mjs';
+import { issueFor, kindOf, planFilings, renderPlan } from './plan.mjs';
+import { loadSeed } from '../longitudinal/checkin.mjs';
 
 export const SOURCE = 'tool-qa leads/dry-run.mjs';
 
@@ -87,7 +89,7 @@ export function renderText(rows, { read, now }) {
   L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const r of rows) {
     const s = r.shape;
-    const kind = s.class + (/;partial=([a-z_]+)/.exec(s.signature)?.[1] ? `:${/;partial=([a-z_]+)/.exec(s.signature)[1]}` : '');
+    const kind = kindOf(s);
     L.push(`| \`${s.fingerprint}\` | ${s.repo.replace('isokron-ai/', '')} | ${s.lane} | ${s.component} | ${kind} | ${s.fault} | ${s.idiom} | ${s.layout} | ${s.status} | ${r.current} | ${s.sightings} | ${s.reproduced_at ? 'yes' : 'no'} | ${r.flake_rate} | ${r.decision.file ? `file: ${r.decision.reason}` : r.decision.reason} |`);
   }
   return `${L.join('\n')}\n`;
@@ -135,6 +137,16 @@ export async function main(argv = process.argv.slice(2), { write = (s) => proces
     // What the pump would re-dispatch now with LANE_LEADS_ENABLED=recheck (leads/recheck.mjs); counts only, the pairs name subjects.
     const rc = recheckPairs(db);
     write(`\nre-checks the pump would send now: ${rc.pairs.size} (at most ${RECHECK_MAX_DUE} at once), leads waiting for one: ${rc.waiting}\n`);
+    // The filing plan the pump would carry out on its first run with LANE_LEADS_ENABLED=true (caps applied), and the
+    // issue text of the top lead: shapes only.
+    const seed = loadSeed(fileURLToPath(new URL('../history/seed-v1.json', import.meta.url)));
+    const tierWeights = JSON.parse(readFileSync(new URL('../pump/tiers.json', import.meta.url), 'utf8')).weights;
+    const plan = planFilings(db, { now: at, tierWeights, tierOf: (s) => seed.get(String(s).toLowerCase())?.tier ?? 'T4' });
+    write(`\n${renderPlan(plan, { now: at, mode: 'dry-run' })}`);
+    if (plan.file[0]) {
+      const top = issueFor(plan.file[0], { now: at });
+      write(`\n### Would-be issue on ${plan.file[0].lead.repo}: ${top.title}\n\n${top.body}\n`);
+    }
     if (o['out-json']) {
       try {
         writeOut(o['out-json'], `${JSON.stringify({ source: SOURCE, generated_at: at, read: read.stats, folded, refused, leads: rows }, null, 2)}\n`);

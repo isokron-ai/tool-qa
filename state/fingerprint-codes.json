@@ -11,6 +11,7 @@
     "bundle_unavailable",
     "bundle_unowned",
     "bundle_unreadable",
+    "commit_moved",
     "disk_low",
     "entry_ambiguous",
     "entry_unresolved",
