@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import { CALLS } from './lib/faults.mjs';
 import { HOUR, Sim, WORKFLOW } from './lib/sim.mjs';
-import { assertRecovered, CHAOS, startPump, withSim } from './lib/harness.mjs';
+import { assertRecovered, CHAOS, healthOf, startPump, withSim } from './lib/harness.mjs';
 
 const call = (name) => (c) => CALLS[name]({ method: c.method, path: c.path, host: c.url.origin, query: c.url.searchParams });
 const SKIPS = [{ stage: 'static', reason: 'no_tools_found', fault: 'tool' }];
@@ -132,5 +132,23 @@ test('R-LEAD-29: chaos: with LANE_LEADS_ENABLED=true a reproduced lead gets exac
     assert.ok(ours.issues[0].title.startsWith(`[lead ${lead.fingerprint}]`));
     assert.ok(!/chaos-org|server-0/.test(`${ours.issues[0].title}\n${ours.issues[0].body}`), 'the issue names no server');
     assertRecovered(sim, INJECTED);
+  });
+});
+
+test('R-LEAD-34: chaos: the health issue shows the lead pipeline green while the pump runs it, and amber once the pump stops running it while the switch is on', CHAOS, async () => {
+  await withSim({ vars: { LANE_LEADS_ENABLED: 'dry-run' } }, async (sim) => {
+    sim.worker = () => ({ item: (it) => (it.subject.endsWith('-0') ? { meta: { skips: SKIPS } } : {}) });
+    startPump(sim);
+    await sim.runFor(HOUR);
+    assert.equal(healthOf(sim, 'leads'), 'green');
+    // The pump step loses the variable (a pump.yml that no longer passes it): the lead step writes nothing useful.
+    sim.pumpEnvDrop.add('LANE_LEADS_ENABLED');
+    await sim.runFor(HOUR);
+    assert.equal(healthOf(sim, 'leads'), 'amber');
+    // Passed again: green again, and the loop ends clean.
+    sim.pumpEnvDrop.delete('LANE_LEADS_ENABLED');
+    await sim.runFor(HOUR);
+    assert.equal(healthOf(sim, 'leads'), 'green');
+    assertRecovered(sim);
   });
 });

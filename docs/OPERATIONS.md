@@ -1377,6 +1377,7 @@ person. off: switched off on purpose.
 | `state-snapshot` | No snapshot run has confirmed the live state is captured for 3 hours, there is no snapshot yet, or the manifest cannot be read (amber); more than 6 hours (red). Measured from `current_at` in the manifest, so an idle loop stays green while snapshot runs go on. | Open the `state-snapshot` runs. If none ran, dispatch it (`gh workflow run state-snapshot.yml`) and check the stand-in scheduler. See "State snapshots". |
 | `state-size` | The state database (or the asset it was pulled from) is over 256 MiB, the `state-snapshots` release holds over 2 GB, the last prune pass failed or gave up its archive, or a pump run finished without recording a size (amber); the database is over 768 MiB or the snapshots over 6 GB (red). The details show the database and asset size, the main row counts, the last prune result and the snapshot total. | A failed or given-up pass needs nothing if the next one succeeds; otherwise read the pump log's `prune:` lines. If the size keeps growing, check that pruning is on (`LANE_STATE_PRUNE_ENABLED`) and that `ingest-state-archive-*` artifacts are uploaded. Red: act before it reaches 1 GiB (see "State pruning and size"). |
 | `live-snapshot` | The live loop view snapshot (kv `live.last_upload`). `off` unless `LANE_LIVE_SNAPSHOT_ENABLED` is exactly `true`. Amber: the last good upload is over 20 minutes old (or none yet); red: over 40 minutes, no good upload at all 40 minutes after the first attempt (a missing credential shows here), the builder cannot run (`error: build`), or a scan block has not been followed by a good upload. | Read the pump log's `live:` lines (they name the scan rule and path, never the text). Red from the scan: find what leaked into the snapshot and fix the builder; nothing is published meanwhile. Otherwise check the R2 credentials and the bucket. To stop: "Live loop view snapshot". |
+| `leads` | The lead pipeline ("Leads" below; kv `leads.last` and `leads.recheck`). `off` unless `LANE_LEADS_ENABLED` is `dry-run`, `recheck` or `true`. Amber: the pump's lead step has written nothing for 2 hours, ran as off while the watchdog sees the switch on, or its last run had errors; or the queue grows without bound (over 500 open leads waiting for an issue, the open count rising on every hourly sample of a day by 100 or more, over 200 leads waiting for a re-check, over 50 re-checks given up), or a lead could not be folded into the state in the last day (kv `leads.fold_failures`; its result was kept). Never red. | Read the pump log's `leads:` lines and the pump job summary ("Leads"). Errors: usually an App token refused for a repository (installation, below) or GitHub; the next run tries again. Growth: look at the plan in the job summary; raise nothing by hand, fix the top leads. |
 | `subject-ids` | The pump's last subject id pass (kv `pump.identity`) stopped on a mass of NOT_FOUND answers, or more than 5 and more than 20% of the active subjects are marked gone (red); any subject is in id conflict (amber). Green shows the not-found, conflict and merged counts; absent before the first pass. | Red on NOT_FOUND: check the pump job's `GITHUB_TOKEN` (nothing was marked gone; it retries hourly). Red on gone: read `subject_events` for `not_found`. Amber: read the `id_conflict` events and decide by hand (see "Subject ids"). |
 | `offsite-backup` | The off-site backup to R2: no good run for 12 hours, not configured yet, near the cost cap, or a run stopped early (amber); no good run for 24 hours, over the cost cap, or a verification failure (red). | Open the newest `offsite-backup` run's summary. See "Off-site backup". |
 | `keep-forever` | The keep-forever copy on the `keep-forever` release ("Data retention"): no good run for 12 hours, the last run failed, or an artifact has waited over 30 days to be copied (amber); no good run for 24 hours, or an artifact has waited over 60 days (red: GitHub deletes it at 90). Off: `LANE_KEEP_FOREVER_ENABLED` is not `true`. | Open the newest `keep-forever` run's summary. Dispatch it if no run is recent (`gh workflow run keep-forever.yml --repo isokron-ai/tool-qa`) and check the stand-in scheduler. |
@@ -2131,6 +2132,70 @@ loses no work.
 
 A refusal pauses the lane for an hour (above, "The pump"); pin refusals are
 not counted towards parking, so a fixed pin or worker loses no work.
+
+## Leads
+
+The lead pipeline turns what the loop catches about **our own tools** into bug
+reports on our repositories (DESIGN-v3 section 7, "Leads -> issues on our
+repos"). It is off by default.
+
+| What | Where |
+|---|---|
+| Switch | repository variable `LANE_LEADS_ENABLED`, passed to the pump and watchdog steps. Unset, empty or anything else is **off**: nothing is kept, nothing is sent. |
+| `dry-run` | Ingest keeps each accepted result's leads in the state; each pump run writes the filing plan to its **job summary** ("Leads"). No re-dispatch, no issue. |
+| `recheck` | `dry-run`, and the pump re-dispatches leads to re-check them. Still no issue. |
+| `true` | All of it: re-checks, and issues filed, closed and reopened on our repositories. |
+| Code | `state/fingerprint.mjs` (fingerprints, shared with the check-in), `state/leads.mjs` (rules), `StateDb.noteLeads` (state schema v12), `leads/recheck.mjs`, `leads/plan.mjs`, `leads/repro.mjs`, `leads/step.mjs`, `watchdog/leads.mjs`. |
+| Routing | `leads/routing.json`: by lane and component, else by lane, else `isokron-ai/tool-qa`; only the five listed repositories. |
+
+**What a lead is.** A fingerprint of a tool-side failure: our tool, component
+(stage), oracle (lane), class, SDK idiom, layout and a normalised signature
+(with the worker's fine cause, such as live-probe's `start_dependency_drift`),
+without tool versions. One lead per fingerprint, one issue per lead. Faults
+`tool` and `unknown` make leads; so does `infra` (filed only after 3 days);
+`subject` and `policy` never do. Where a lead was seen (subject names) stays in
+the encrypted state; an issue holds the shape only.
+
+**Lifecycle.**
+1. Seen: the lead opens (`open`) and names one (subject, lane) to re-check.
+2. Re-check (`recheck`, `true`): the due list makes that pair due again
+   (`lead_reverify`), a new worker run on a fresh runner. At most 20 due at
+   once; a pair whose re-checks never come back is given up after 3.
+3. Reproduced: the re-run shows it again, from another worker run. Infra leads
+   instead need 3 days of sightings; a flaky lead (gone and back on one server)
+   needs 10% or more of its results over 14 days.
+4. Filed (`true`): an issue `[lead <fingerprint>] ...` with label `loop-lead`,
+   at most 5 new per repository per UTC day and 30 open, the leads whose fix
+   unlocks most first, at most 20 issue writes per pump run. An issue gives the
+   number of servers that carry the lead, a tier breakdown only from 5 servers
+   up, and no priority, so no single server can be picked out. Leads are marked
+   and the state saved before an issue is made; a lead marked but with no issue
+   number is looked up on the next run and adopted only if our App opened it
+   and its body holds the lead's marker. A lead whose fields fail the shape
+   guard is held and takes no daily slot.
+5. Closed: 3 clean re-checks (assessed results without it) and no server
+   carrying it close the lead and its issue, with a comment. It reopens (the
+   same issue) if it comes back. The issue is read first: one a person closed
+   or reopened, or one our App did not open, is left as it is.
+
+**Rolling it out.** `dry-run` for a few pump runs and read the job summaries;
+then `recheck` for a day (a few extra worker runs); then `true`. Before `true`,
+check the App's repository access (below). To stop: unset the variable (or set
+it to `false`); open issues stay as they are, and the next pump run writes
+nothing but its note.
+
+**The App.** Filing uses the loop's GitHub App with a token per repository
+narrowed to `issues: write`. The App has `issues: write`; its installation
+must also include every repository in `leads/routing.json` (`mcp-check`,
+`mcp-writecheck-action`, `mcp-surface-corpus`, `tool-qa`, `mcp-catalog-snap`).
+A repository it cannot mint for is counted in `leads.last.errors` (the
+watchdog's `leads` item turns amber) and nothing is filed there.
+
+**Locally.** `node leads/dry-run.mjs --archive ~/isokron-archive/tool-qa`
+replays the Mac archive through the same code, decrypting in memory, and
+prints the leads, the re-checks the pump would send and the filing plan with
+the top issue's text (shapes only). `--out-json <file>` adds where each lead
+was seen (subject names; written 0600, never inside the archive).
 
 ## Live loop view snapshot
 

@@ -28,6 +28,9 @@ import { issueFor, MARKER, planFilings, renderPlan, titleTag } from './plan.mjs'
 export const LEADS_LAST_KEY = 'leads.last';
 /** Issue writes (create, close, reopen, comment) per pump run at most. */
 export const MAX_WRITES = 20;
+/** kv leads.last keeps a sample of the open queue at most this often, and this many. */
+export const HISTORY_EVERY_MS = 3_600_000;
+export const HISTORY_MAX = 30;
 /** The login GitHub shows for issues our App files (its slug plus [bot]); LEADS_BOT_LOGIN overrides it. */
 export const DEFAULT_BOT_LOGIN = 'isokron-tool-qa[bot]';
 /** Pages of 100 issues looked through to adopt a filing that was not confirmed. */
@@ -201,6 +204,11 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
     log(`leads: the lead step failed (continuing): ${err?.message ?? err}`);
   }
   try {
+    // The open queue over time, for the watchdog's growth check (watchdog/leads.mjs): a sample an hour at most, the last 30.
+    const prev = db.getKv(LEADS_LAST_KEY);
+    const hist = Array.isArray(prev?.history) ? prev.history.filter((h) => Array.isArray(h) && Number.isFinite(Date.parse(h[0]))) : [];
+    if (!note.off && Number.isFinite(note.open) && (hist.length === 0 || Date.parse(note.at) - Date.parse(hist.at(-1)[0]) >= HISTORY_EVERY_MS)) hist.push([note.at, note.open]);
+    note.history = hist.slice(-HISTORY_MAX);
     db.setKv(LEADS_LAST_KEY, note, { now: now() });
   } catch { /* the note is only for the watchdog */ }
   if (note.filed || note.closed || note.reopened || note.errors) log(`leads: filed ${note.filed}, closed ${note.closed}, reopened ${note.reopened}, errors ${note.errors} (${mode})`);

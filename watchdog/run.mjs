@@ -60,6 +60,7 @@ import { externalWorkflows, readExternalWorkflows, readLaneData } from './lanes.
 import { keepCheck, readKeepStatus } from '../keep/health.mjs';
 import { createReleaseClient } from '../snapshot/github.mjs';
 import { readSnapshotManifest } from '../snapshot/health.mjs';
+import { leadsMode } from '../state/leads.mjs';
 
 const EXPECTED_FILE = new URL('./expected-workflows.json', import.meta.url);
 
@@ -171,6 +172,9 @@ export function readState(file, now = Date.now(), { cfg = {}, tiers = null } = {
         'live.last_upload': db.getKv('live.last_upload') ?? null,
         'retention.seal': db.getKv('retention.seal') ?? null,
         't0.lanes': db.getKv('t0.lanes') ?? null,
+        'leads.last': db.getKv('leads.last') ?? null,
+        'leads.recheck': db.getKv('leads.recheck') ?? null,
+        'leads.fold_failures': db.getKv('leads.fold_failures') ?? null,
       },
       lanes: readLaneData(db, now, { cfg, tiers }),
       // The four coverage numbers per lane (state/coverage.mjs); null when the config or state cannot answer.
@@ -353,7 +357,7 @@ export async function runWatchdog({
   }
 
   const { slots } = parseSlots(env.LOOP_SLOTS);
-  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, runs, artifacts, state, workflows, expected, breaker, snapshot, selftest, laneHealth: { cfg: wfs, data: state?.lanes ?? null, coverage: state?.coverage ?? null, external } });
+  const { checks, actions } = evaluate({ now: now(), slots, lanes: readLanes(env), liveSwitch: env.LANE_LIVE_SNAPSHOT_ENABLED, leadsMode: leadsMode(env), runs, artifacts, state, workflows, expected, breaker, snapshot, selftest, laneHealth: { cfg: wfs, data: state?.lanes ?? null, coverage: state?.coverage ?? null, external } });
   if (configError) checks.push({ id: 'config', status: 'red', summary: `the pump cannot load its config, so it dispatches nothing: ${configError}` });
   if (stateError) {
     const c = checks.find((x) => x.id === 'state');

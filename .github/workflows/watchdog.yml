@@ -66,6 +66,8 @@ jobs:
           LANE_OFFSITE_ENABLED: ${{ vars.LANE_OFFSITE_ENABLED }}
           LANE_KEEP_FOREVER_ENABLED: ${{ vars.LANE_KEEP_FOREVER_ENABLED }}
           LANE_LIVE_SNAPSHOT_ENABLED: ${{ vars.LANE_LIVE_SNAPSHOT_ENABLED }}
+          # The lead pipeline's switch, for the leads check (watchdog/leads.mjs).
+          LANE_LEADS_ENABLED: ${{ vars.LANE_LEADS_ENABLED }}
           APP_ID: ${{ vars.APP_ID }}
           APP_INSTALLATION_ID: ${{ vars.APP_INSTALLATION_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
