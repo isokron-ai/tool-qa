@@ -156,19 +156,20 @@ A trusted, static lane in this repository (`meta/backend.mjs`, workflow `meta-ba
 meta-registry and release-diff: nothing from a subject is installed, built or run). It reads the subject's
 source archive from codeload.github.com as data (package manifests, compose files, `.env.example` and its
 siblings, `server.json`, READMEs, OpenAPI files, code text) and emits one observation per subject,
-`write_backend` (mcp-results `fields/registry.yaml`, class P-s, planned until seen):
+`write_backend` (mcp-results `fields/registry.yaml`, class P-s, planned until seen; R-RES-18):
 
 | Key | What |
 |---|---|
 | `class` | `local_full` (the backend runs inside a GitHub Actions job: the engine itself, or a stand-in listed as faithful and cleared in `meta/data/stand-ins.json`), `mock_min` (a hosted API with a published machine-readable description in `meta/data/spec-urls.json`, or an OpenAPI file in the repository), or `none` |
 | `mode` | `full`, `min` or `none`: the writecheck mode the class maps to (`local_full` -> `full`, `mock_min` -> `min`) |
-| `reason` | for `none` only: `no_backend_signal`, `hosted_without_spec`, `stand_in_not_cleared`, `no_stand_in`, `not_a_store`, `no_write_tools_seen`; otherwise null |
-| `backend` | the primary backend: `{ id, kind }`, `id` a key of one of the two maps (`postgres`, `redis`, `github`, `slack` ...), `kind` one of `sql`, `kv`, `document`, `search`, `graph`, `vector`, `queue`, `object_store`, `mail`, `filesystem`, `git`, `cluster`, `service`, `hosted_api` |
+| `reason` | for `none` only: `no_backend_signal`, `hosted_without_spec`, `stand_in_not_cleared`, `no_stand_in`, `not_a_store`, `no_write_tools_seen` (the state adds `not_found` for a repository that is gone); otherwise null |
+| `backend` | the primary backend: `{ id, kind }`, `id` a key of one of the two maps (`postgres`, `redis`, `github`, `slack` ...) or `repo-openapi` (the repository's own description file, at a full commit), `kind` one of `sql`, `kv`, `document`, `search`, `graph`, `vector`, `queue`, `object_store`, `mail`, `filesystem`, `git`, `cluster`, `service`, `hosted_api`, `browser` |
 | `backends` | every backend seen: `{ id, kind, score, signals, role }`, role `primary`, `secondary` or `candidate` |
 | `stand_in` | for `local_full`: `{ id, product, fidelity }` from the stand-in map (fidelity `real` or `faithful`); else null |
 | `spec_url`, `spec_format` | for `mock_min`: the description's https URL and its format (`openapi3`, `swagger2`, `google_discovery`, `smithy`, `graphql_sdl`, `graphql_introspection`); else null |
 | `env_names`, `base_url_env` | environment variable **names** the server reads (never values), sorted, at most 40; `base_url_env` the subset that points it at a host (`*_URL`, `*_URI`, `*_HOST`, `*_ENDPOINT`, `*_BASE_URL`, `*_ADDR`) |
 | `confidence` | `high`, `medium` or `low` |
+| `routable` | `true` only for `local_full` or `mock_min` at high or medium confidence whose write tools name the backend's objects: the pump routes only these. A low one keeps its class for the record, and is dispatched as today |
 | `evidence` | `{ signal, backend, path, detail }`, at most 40: `dependency`, `dev_dependency`, `compose_image`, `prisma_provider`, `url_scheme`, `code_token`, `host_literal`, `env_name`, `openapi_file`, `fs_write`, `tool_names` |
 | `write_tools` | `{ names_seen, write_like, sample }`: tool names found statically in the code, and how many look like writes |
 | `basis` | `{ source: archive | root_files, commit, files_read, code_files_read, truncated }` and the versions of the two maps |
@@ -200,7 +201,7 @@ a shard carries, all strings:
 | `stand_in` | `full` only (empty for `min`) | the stand-in id from `meta/data/stand-ins.json`, such as `postgres`, `redis`, `minio`, `mailpit`: `^[a-z0-9][a-z0-9_.-]{0,63}$` |
 | `spec_url` | `min` only (empty for `full`) | the API description's URL: https, no user, password or query, at most 512 characters; exactly one of `meta/data/spec-urls.json`'s, or the subject's own file at a full commit on raw.githubusercontent.com (`/<owner>/<name>/<40 hex>/...`) |
 | `spec_format` | `min` only (empty for `full`) | the format (table above) |
-| `env_names` | always | JSON, a list aligned with `items` (same length, same order): for each item the list of env var names its server reads, each `^[A-Z][A-Z0-9_]{0,63}$`, at most 20 per item, the `base_url_env` names first; never a name the runtime, the shell or the runner owns (`PATH`, `HOME`, `LD_*`, `NODE_*`, `PYTHON*`, `RUNNER_*`, `ACTIONS_*` ...: meta/lib/backend-scan.mjs `ENV_DENY_RE`). `[]` for an item with none |
+| `env_names` | always | JSON, a list aligned with `items` (same length, same order): for each item the list of env var names its server reads, each `^[A-Z][A-Z0-9_]{0,63}$`, at most 20 per item, the `base_url_env` names first. The lane leaves out names that belong to the shell, the language runtimes and their option variables, the CI runner, the GitHub CLI and the container engine, credential agents, trust stores and git's own settings (meta/lib/backend-scan.mjs `ENV_DENY_RE`), and the pump filters again at dispatch; a worker should still treat the list as a request, not as permission. `[]` for an item with none |
 
 GitHub allows 25 inputs on a `workflow_dispatch`; a mode shard uses 11 (`runner` is never sent to writecheck).
 The inputs are public in the worker's run page like the rest: they hold backend and stand-in ids, a public spec
@@ -215,6 +216,10 @@ URL and env var names read from public repositories, never a value, a token or a
   input.
 - Set only the env names it was given, to values that point at the stand-in or the mock inside the sandbox
   (connection strings, base URLs, dummy tokens); never a real credential; egress stays denied.
+- Scope: the env names go only into the environment of the server's own child process in the sandbox. Never into
+  `$GITHUB_ENV`, `$GITHUB_PATH`, a job's or a step's `env:`, the shell that runs the worker, or the environment of
+  the worker's own tools (mcp-writecheck, the stand-in, the mock, the worker kit). A name the worker does not
+  recognise as a server setting is dropped, not set.
 - Report the mode it ran in every bundle: `results/writecheck.json` `mode`, and the harness basis on every
   requirement record (`basis: stand-in-product` for a real or faithful stand-in, `capture-sink` or
   `stateful-mock` for min). Backend-semantic requirements (UPD-1/2, CONC-1/2/3, TGT-1/3, RES-1, ATOM-2) are
