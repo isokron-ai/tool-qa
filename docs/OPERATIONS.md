@@ -2236,7 +2236,7 @@ are built by [`pump/controls.mjs`](../pump/controls.mjs) and shipped switched of
 |---|---|---|---|
 | `t0-defects` | `isokron-ai/mcp-write-safety` `defect-matrix.yml` with `defects=all`: every correct build and every distinct defect of the tiny-tracker 0.4.0 list (each defect judged on its single-defect builds: reproduced and detected, or documented as not detected) | `isokron-ai/mcp-write-safety.defect-matrix` | trusted: our code, `--ignore-scripts` |
 | `t0-self` | `isokron-ai/mcp-writecheck-action` `selftest.yml` and `dogfood-tiny-tracker.yml` | `isokron-ai/mcp-writecheck-action.<selftest or dogfood-tiny-tracker>` | trusted: our code, `--ignore-scripts` |
-| `t0-dogfood` | the six other dogfood workers: kronicle-lite, sea-lite, writesafe, grafana, kubernetes, payload | `isokron-ai/mcp-writecheck-action.dogfood-<name>` | untrusted (`runs_untrusted` true with a `sandbox_sha`): they run third-party code (npm install scripts, Strapi, upstream builds, kind, pnpm) |
+| `t0-dogfood` | the five sandboxed dogfood workers: kronicle-lite, sea-lite, writesafe, grafana, payload (kubernetes is in no lane: see below) | `isokron-ai/mcp-writecheck-action.dogfood-<name>` | untrusted (`runs_untrusted` true with a `sandbox_sha`): they run third-party code (npm install scripts, Strapi, upstream builds, kind, pnpm) |
 
 **Switches.** A control lane is dispatched only while its repository variable is exactly `true` (unset, empty or anything
 else is off; unlike the other lane switches the default is off): `LANE_T0_DEFECTS_ENABLED`, `LANE_T0_SELF_ENABLED`,
@@ -2246,9 +2246,14 @@ The worker repositories also have their own kill switch, `LOOP_ENABLED` (the wor
 `gh workflow enable` commands (the PR that added the lane lists them); then
 `gh variable set LANE_T0_DEFECTS_ENABLED --body true -R isokron-ai/tool-qa` (or the lane's own variable).
 
-**Do not turn on `LANE_T0_DOGFOOD_ENABLED` yet.** The lane is untrusted in its settings, so the sandbox breaker gates it, but
-its six workers do not run inside the sandbox: they run third-party code on the plain runner. Until each worker runs the
-server inside the sandbox (a follow-up item), leave the variable unset.
+**The t0-dogfood workers run in the sandbox (since wca#80, 28 Nov 2026).** Each runs its third-party install, build and
+run steps inside mcp-surface-corpus's sandbox at its `SANDBOX_REF`, after the reusable sandbox-conformance job and the
+sandbox-guard action, and the lane's `sandbox_sha` is that same commit (78a7834), so the sandbox breaker gates the sandbox
+the workers run. `pump/test/t0-workers.test.mjs` reads every subject's worker file at the lane's ref: it must have a
+t0-manifest job and pin the lane's `sandbox_sha` (R-CTL-17, R-CTL-18). Bump the lane's `sandbox_sha` and the workers'
+`SANDBOX_REF` together. `dogfood-kubernetes.yml` is not in any lane: kind needs privileged Docker, which the sandbox cannot
+give, so it still runs third-party code on the plain runner and builds no result bundle. Switching
+`LANE_T0_DOGFOOD_ENABLED` on is the owner's call.
 
 **How it runs.** Each control subject stands for one worker file with fixed inputs (`control_subjects` in
 `pump/workflows.json`). A control subject is due only for its own lane and a control lane only for its own subjects.

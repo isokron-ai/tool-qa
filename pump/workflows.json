@@ -175,7 +175,7 @@
       "enabled": true,
       "switch": "LANE_T0_DOGFOOD_ENABLED",
       "runs_untrusted": true,
-      "sandbox_sha": "11974fbb75a8c276214c887a079d6ad6df374124",
+      "sandbox_sha": "78a7834cf028507b03e90e266b87bebeacfccd51",
       "pin_check": "label",
       "repo": "isokron-ai/mcp-writecheck-action",
       "file": "dogfood-kronicle-lite.yml",
@@ -186,7 +186,6 @@
         "isokron-ai/mcp-writecheck-action.dogfood-sea-lite": { "file": "dogfood-sea-lite.yml" },
         "isokron-ai/mcp-writecheck-action.dogfood-writesafe": { "file": "dogfood-writesafe.yml" },
         "isokron-ai/mcp-writecheck-action.dogfood-grafana": { "file": "dogfood-grafana.yml" },
-        "isokron-ai/mcp-writecheck-action.dogfood-kubernetes": { "file": "dogfood-kubernetes.yml" },
         "isokron-ai/mcp-writecheck-action.dogfood-payload": { "file": "dogfood-payload.yml" }
       },
       "shard_size": 1,
