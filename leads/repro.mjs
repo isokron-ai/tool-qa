@@ -261,6 +261,18 @@ export function reproSpec(lead) {
   return { key, runner, synthesizable: true, why: null, files: [...files], dir: multi ? 'servers/a' : '.', start: runner === 'writecheck-init' ? t.start : null, release, partial, o };
 }
 
+/**
+ * The control of a start runner: our plain echo template in the lead's language, with its package metadata. It must
+ * start (writecheck init exits 0) before any verdict of that runner counts: a harness that cannot start a good server
+ * would make every start class look reproduced.
+ */
+export function controlFiles(spec) {
+  const t = TEMPLATES[spec.key];
+  if (!t) return [];
+  const o = { nameConst: false, descConst: false, schemaModel: false, annConst: false, helper: false, slow: false };
+  return [[t.file, t.base(o)], ...Object.entries(t.pkg)];
+}
+
 /** The pinned versions a runner's verdict depends on, from pump/workflows.json (the lane's versions.tool). */
 export function pinsFor(lane, workflows) {
   const tool = workflows?.[lane]?.versions?.tool;

@@ -15,19 +15,38 @@
 // is created. A lead marked but with no issue number on a later run is looked
 // up among the repository's lead issues (label loop-lead, title tag
 // `[lead <fingerprint>]`) and adopted when found, else filed again. At most
-// MAX_WRITES issue writes per run; the issues API family has its own budget
-// (pump/budgets.mjs). Never throws: a failure is logged and counted in kv
-// leads.last, and the next run tries again.
+// maxWrites issue writes per run (LEADS_MAX_WRITES, default 60, never over 100;
+// state/leads.mjs capsFrom), inside STEP_BUDGET_MS; the issues API family has
+// its own budget (pump/budgets.mjs: spaced, and held on a secondary rate limit).
+// A rate-limit refusal (403 or 429) or a spent budget stops the writes of this
+// run; the next run goes on.
+//
+// An issue shows a synthetic repro only once lead-repro reproduced it
+// (leads/repro-gate.mjs, R-LEAD-54): a lead whose check is still running waits;
+// the open issues of ours whose repro verdict changed are edited to say so.
+//
+// Never throws: a failure is logged and counted in kv leads.last, and the next
+// run tries again.
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 import { createClient } from '../pump/github.mjs';
-import { filesLeads } from '../state/leads.mjs';
+import { capsFrom, filesLeads, MAX_WRITES_PER_RUN } from '../state/leads.mjs';
 import { issueFor, MARKER, planFilings, renderPlan, titleTag } from './plan.mjs';
+import { REPRO_REPO, reproVerdicts } from './repro-gate.mjs';
+import { TEMPLATE_VERSION } from './repro.mjs';
 
 export const LEADS_LAST_KEY = 'leads.last';
-/** Issue writes (create, close, reopen, comment) per pump run at most. */
-export const MAX_WRITES = 20;
+/** Issue writes (create, close, reopen, comment, edit) per pump run at most, unless LEADS_MAX_WRITES says otherwise. */
+export const MAX_WRITES = MAX_WRITES_PER_RUN;
+/** The issue writes of one run stop this long after the lead step starts, so the pump's run stays bounded. */
+export const STEP_BUDGET_MS = 6 * 60_000;
+/** kv: what each open issue of ours was last written with (body format, repro key and verdict), by fingerprint. */
+export const BODIES_KEY = 'leads.bodies';
+/** Bumped when the issue body's layout changes: every open issue of ours is brought up to it once. */
+export const BODY_VERSION = 2;
+/** Issue bodies brought up to date per run at most (each one read and one edit). */
+export const MAX_REFRESH = 10;
 /** kv leads.last keeps a sample of the open queue at most this often, and this many. */
 export const HISTORY_EVERY_MS = 3_600_000;
 export const HISTORY_MAX = 30;
@@ -51,16 +70,21 @@ const repoName = (repo) => String(repo).split('/')[1];
  * @param {object} [o.client]  options for pump/github.mjs createClient (fetch, apiUrl, budget, sleep, retryUntil)
  * @returns {Promise<object>} what kv leads.last holds
  */
-export async function leadStep({ db, mode, tierWeights, now, log = () => {}, mintToken, save, summaryFile, client: clientOpts = {}, maxWrites = MAX_WRITES, botLogin = process.env.LEADS_BOT_LOGIN || DEFAULT_BOT_LOGIN }) {
+export async function leadStep({ db, mode, tierWeights, now, log = () => {}, mintToken, save, summaryFile, client: clientOpts = {}, env = process.env, maxWrites, botLogin = process.env.LEADS_BOT_LOGIN || DEFAULT_BOT_LOGIN, workflows = loadWorkflows(), fetch: fetchImpl = clientOpts.fetch ?? globalThis.fetch, stepBudgetMs = STEP_BUDGET_MS, reproGate = reproVerdicts }) {
   const at = () => new Date(now()).toISOString();
-  const note = { at: at(), mode, filed: 0, closed: 0, reopened: 0, adopted: 0, refiled: 0, errors: 0, writes: 0 };
+  const caps = capsFrom(env);
+  const writeCap = Number.isSafeInteger(maxWrites) ? maxWrites : caps.maxWrites;
+  const note = { at: at(), mode, filed: 0, closed: 0, reopened: 0, adopted: 0, refiled: 0, refreshed: 0, repro_waiting: 0, errors: 0, writes: 0, caps: { new_per_day: caps.capNew, open: caps.capOpen, writes: writeCap } };
+  for (const n of caps.notes) log(`leads: ${n}`);
   const done = new Map();
+  const stopAt = now() + stepBudgetMs;
   try {
     if (mode === 'off' || db.schemaVersion() < 12) {
       db.setKv(LEADS_LAST_KEY, { ...note, off: true }, { now: now() });
       return note;
     }
-    let plan = planFilings(db, { now: at(), tierWeights });
+    const capArgs = { capNew: caps.capNew, capOpen: caps.capOpen };
+    let plan = planFilings(db, { now: at(), tierWeights, ...capArgs });
     Object.assign(note, counts(db), { planned: plan.file.length, capped: plan.capped.length, held: plan.held.length });
     note.held_by = plan.held.reduce((m, e) => { const r = e.decision?.reason ?? 'held'; m[r] = (m[r] ?? 0) + 1; return m; }, {});
 
@@ -74,8 +98,19 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
         }
         return clients.get(repo);
       };
+      // A rate-limit refusal or a spent budget stops every write of this run (R-LEAD-56): the next run goes on.
+      const stopped = () => note.backed_off === true || now() >= stopAt;
+      const backOff = (err) => {
+        const status = Number(err?.status);
+        if (err?.name === 'BudgetExceededError' || status === 403 || status === 429) {
+          if (!note.backed_off) log(`leads: stopping the issue writes of this run (${err?.name === 'BudgetExceededError' ? 'the issues budget is spent' : `HTTP ${status}`}); the next run goes on`);
+          note.backed_off = true;
+          return true;
+        }
+        return false;
+      };
       const write = async (fn) => {
-        if (note.writes >= maxWrites) return null;
+        if (note.writes >= writeCap || stopped()) return null;
         note.writes += 1;
         return fn();
       };
@@ -103,14 +138,16 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
           }
         } catch (err) {
           note.errors += 1;
+          backOff(err);
           log(`leads: could not confirm the filing of ${e.lead.fingerprint} on ${e.lead.repo}: ${err?.message ?? err}`);
         }
       }
-      if (plan.indoubt.length) plan = planFilings(db, { now: at(), tierWeights });
+      if (plan.indoubt.length) plan = planFilings(db, { now: at(), tierWeights, ...capArgs });
 
       // 2. Issues whose lead closed (3 clean re-checks) or came back.
       for (const [list, state, verb] of [[plan.close, 'closed', 'closed'], [plan.reopen, 'open', 'reopened']]) {
         for (const e of list) {
+          if (stopped()) break;
           try {
             const gh = await clientFor(e.lead.repo);
             const text = state === 'closed'
@@ -128,7 +165,7 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
             // A person's "not planned" close stands: the lead coming back does not reopen it (R-LEAD-46).
             if (state === 'open' && cur.state_reason === 'not_planned') { synced('closed', 'closed as not planned by a person'); continue; }
             // Both writes (state, then the comment) count against the cap, and go only together (R-LEAD-44).
-            if (note.writes + 2 > maxWrites) break;
+            if (note.writes + 2 > writeCap) break;
             note.writes += 2;
             // The state first: a failed comment never makes the next run comment again.
             await gh.request('PATCH', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}`, { body: { state, ...(state === 'closed' ? { state_reason: 'completed' } : {}) } });
@@ -142,18 +179,68 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
             done.set(e.lead.fingerprint, `${verb} #${e.lead.issue_number}`);
           } catch (err) {
             note.errors += 1;
+            backOff(err);
             log(`leads: could not set issue #${e.lead.issue_number} on ${e.lead.repo} ${state}: ${err?.message ?? err}`);
           }
         }
       }
 
-      // 3. New issues, within the caps: marked and saved first, then created.
+      // The repro verdicts of the leads to file and of the open issues of ours (R-LEAD-54): read back, or asked for.
+      // A token for tool-qa with actions: write (read the artifacts, dispatch lead-repro), minted only when needed.
+      const getClient = async () => createClient({ token: (await mintToken({ repositories: [repoName(REPRO_REPO)], permissions: { actions: 'write' } })).token, ...clientOpts });
+      const refresh = plan.refresh.filter((e) => e.lead.repo && Number.isSafeInteger(e.lead.issue_number));
+      let verdicts = new Map();
+      try {
+        verdicts = await reproGate({ db, leads: [...plan.file, ...refresh].map((e) => e.lead), workflows, now: now(), getClient, fetch: fetchImpl, log, note });
+      } catch (err) {
+        note.errors += 1;
+        log(`leads: the lead-repro check failed (continuing; leads wait for it): ${err?.message ?? err}`);
+        verdicts = new Map([...plan.file, ...refresh].map((e) => [e.lead.fingerprint, { state: 'pending', key: null, verdict: null }]));
+      }
+      const reproOf = (e) => verdicts.get(e.lead.fingerprint) ?? null;
+      const runnerOf = (e) => workflows?.[e.lead.lane]?.recheck_runner ?? null;
+
+      // 2b. Open issues of ours whose repro verdict (or body layout) changed since they were written: edited by our App.
+      const bodies = (() => { try { const v = db.getKv(BODIES_KEY); return v && typeof v === 'object' ? v : {}; } catch { return {}; } })();
+      const stamp = (r) => `${BODY_VERSION}:${TEMPLATE_VERSION}:${r?.key ?? '-'}:${r?.state === 'ready' ? r.verdict?.verdict : r?.state ?? '-'}`;
+      let refreshed = 0;
+      for (const e of refresh) {
+        if (refreshed >= MAX_REFRESH || stopped()) break;
+        const r = reproOf(e);
+        if (!r || r.state === 'pending') continue;
+        const want = stamp(r);
+        if (bodies[e.lead.fingerprint] === want) continue;
+        try {
+          const gh = await clientFor(e.lead.repo);
+          const cur = (await gh.request('GET', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}`)).data ?? {};
+          // Only an open issue our App opened, with this lead's marker: anything else is left alone.
+          if (!ours(cur) || cur.state !== 'open' || typeof cur.body !== 'string' || !cur.body.includes(MARKER(e.lead.fingerprint))) { bodies[e.lead.fingerprint] = want; continue; }
+          const body = issueFor(e, { now: at(), repro: r, recheckRunner: runnerOf(e) }).body;
+          if (cur.body !== body) {
+            const res = await write(() => gh.request('PATCH', `/repos/${e.lead.repo}/issues/${e.lead.issue_number}`, { body: { body } }));
+            if (!res) break;
+            refreshed += 1;
+            note.refreshed += 1;
+            done.set(e.lead.fingerprint, `edited #${e.lead.issue_number}`);
+          }
+          bodies[e.lead.fingerprint] = want;
+        } catch (err) {
+          note.errors += 1;
+          if (backOff(err)) break;
+          log(`leads: could not bring issue #${e.lead.issue_number} on ${e.lead.repo} up to date: ${err?.message ?? err}`);
+        }
+      }
+
+      // 3. New issues, within the caps: marked and saved first, then created. A lead whose repro check is still
+      // running waits for it (it keeps its place; nothing is marked).
       const issues = [];
       for (const e of plan.file) {
-        if (issues.length + note.writes >= maxWrites) break;
+        if (issues.length + note.writes >= writeCap) break;
+        const r = reproOf(e);
+        if (r?.state === 'pending') { note.repro_waiting += 1; done.set(e.lead.fingerprint, 'waiting for lead-repro'); continue; }
         // Held leads never get here: planFilings runs the shape guard before handing out room (R-LEAD-42).
-        const issue = issueFor(e, { now: at() });
-        issues.push({ e, issue });
+        const issue = issueFor(e, { now: at(), repro: r, recheckRunner: runnerOf(e) });
+        issues.push({ e, issue, stamp: stamp(r) });
       }
       if (issues.length) {
         db.tx(() => {
@@ -163,7 +250,8 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
         if (!saved) {
           log('leads: the state could not be saved before filing; nothing filed this run (the marks are looked up next run)');
         } else {
-          for (const { e, issue } of issues) {
+          for (const { e, issue, stamp: st } of issues) {
+            if (stopped()) break;
             try {
               const gh = await clientFor(e.lead.repo);
               const res = await write(async () => {
@@ -183,13 +271,22 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
               db.tx(() => db.raw.prepare("UPDATE leads SET status = 'filed', issue_number = ?, issue_state = 'open', filed_at = ?, filing_started_at = NULL, updated_at = ? WHERE fingerprint = ?")
                 .run(number, at(), at(), e.lead.fingerprint));
               note.filed += 1;
+              bodies[e.lead.fingerprint] = st;
               done.set(e.lead.fingerprint, `filed #${number}`);
             } catch (err) {
               note.errors += 1;
               log(`leads: could not file ${e.lead.fingerprint} on ${e.lead.repo}: ${err?.message ?? err}`);
+              if (backOff(err)) break;
             }
           }
         }
+      }
+      try {
+        // Only the fingerprints of open issues of ours are kept.
+        const keep = new Set(db.listLeads().filter((l) => l.issue_number != null).map((l) => l.fingerprint));
+        db.setKv(BODIES_KEY, Object.fromEntries(Object.entries(bodies).filter(([fp]) => keep.has(fp))), { now: now() });
+      } catch (err) {
+        log(`leads: could not keep what the issues were written with: ${err?.message ?? err}`);
       }
       Object.assign(note, counts(db));
     }
@@ -219,9 +316,15 @@ export async function leadStep({ db, mode, tierWeights, now, log = () => {}, min
     const rc = (() => { try { return db.getKv('leads.recheck'); } catch { return null; } })();
     log(`leads: ${mode}: ${note.open ?? 0} open, ${note.filed_total ?? 0} filed, ${note.closed_total ?? 0} closed; this run: ${note.planned ?? 0} to file, `
       + `${note.capped ?? 0} over the caps, ${note.held ?? 0} held${held ? ` (${held})` : ''}; filed ${note.filed}, closed ${note.closed}, reopened ${note.reopened}, `
-      + `adopted ${note.adopted}, errors ${note.errors}, writes ${note.writes}${rc ? `; re-checks due ${rc.due ?? 0}, waiting ${rc.waiting ?? 0}, given up ${rc.given_up ?? 0}` : ''}`);
+      + `adopted ${note.adopted}, edited ${note.refreshed}, waiting for lead-repro ${note.repro_waiting}, errors ${note.errors}, writes ${note.writes}/${note.caps.writes}${note.backed_off ? ' (backed off)' : ''}`
+      + `${rc ? `; re-checks due ${rc.due ?? 0}, waiting ${rc.waiting ?? 0}, given up ${rc.given_up ?? 0}` : ''}`);
   }
   return note;
+}
+
+/** pump/workflows.json's workflows (the lanes' pins and re-check runners), or {} when it cannot be read. */
+export function loadWorkflows(file = new URL('../pump/workflows.json', import.meta.url)) {
+  try { return JSON.parse(readFileSync(file, 'utf8')).workflows ?? {}; } catch { return {}; }
 }
 
 /** Lead counts by status, and the open ones nobody has filed (the queue). */

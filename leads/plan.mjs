@@ -6,11 +6,13 @@
 // Order: the leads whose fix unlocks most, as the check-in ranks them:
 //   priority = severity[class] * (partial_multiplier if a partial reader limit) * sum of tier weights of the subjects that carry it now
 // (severity and partial_multiplier are longitudinal/checkin.mjs DEFAULT_CONFIG,
-// tier weights pump/tiers.json). Caps per repository: CAP_NEW_PER_REPO_PER_DAY
-// new issues per UTC day, and never more than CAP_OPEN_PER_REPO open.
+// tier weights pump/tiers.json). Caps per repository: capNew new issues per UTC
+// day, and never more than capOpen open (state/leads.mjs capsFrom: repository
+// variables, bounded in code).
 //
 // An issue holds the lead's shape only (state/leads.mjs SHAPE_COLUMNS), our
-// tool and its versions, counts, and a synthetic repro (leads/repro.mjs): never
+// tool and its versions, counts, the loop's evidence, and a synthetic repro only
+// when lead-repro reproduced it (leads/repro.mjs, leads/repro-gate.mjs): never
 // a subject name, a run id, a payload or third-party code; a tier breakdown
 // only with TIER_MIN_CARRIERS carriers or more, and never the priority.
 // assertShapeOnly() checks every field of the lead before it gets a filing slot.
@@ -58,7 +60,8 @@ function carriers(db, fp, tierOf, tierWeights) {
 /**
  * @param {import('../state/db.mjs').StateDb} db
  * @param {{now: string, tierWeights: object, tierOf?: (subject: string) => string, config?: object}} o
- * @returns {{file: object[], held: object[], capped: object[], close: object[], reopen: object[], indoubt: object[], caps: object}}
+ * @returns {{file: object[], held: object[], capped: object[], close: object[], reopen: object[], indoubt: object[], refresh: object[], caps: object}}
+ *   refresh: the open issues of ours whose lead is filed and needs no state change (their body may be brought up to date)
  *   each entry {lead (shape), priority, carriers, decision, flake}
  */
 export function planFilings(db, { now, tierWeights, tierOf = null, config = DEFAULT_CONFIG, capNew = CAP_NEW_PER_REPO_PER_DAY, capOpen = CAP_OPEN_PER_REPO, subjects = null } = {}) {
@@ -77,7 +80,7 @@ export function planFilings(db, { now, tierWeights, tierOf = null, config = DEFA
     }
     return caps[repo];
   };
-  const out = { file: [], held: [], capped: [], close: [], reopen: [], indoubt: [], caps };
+  const out = { file: [], held: [], capped: [], close: [], reopen: [], indoubt: [], refresh: [], caps };
   const entries = [];
   for (const l of leads) {
     const c = carriers(db, l.fingerprint, tiers, tierWeights);
@@ -89,6 +92,7 @@ export function planFilings(db, { now, tierWeights, tierOf = null, config = DEFA
       continue;
     }
     if (l.issue_number == null && l.filing_started_at) { out.indoubt.push(e); continue; }
+    if (l.issue_number != null && l.status === 'filed' && l.issue_state === 'open') { out.refresh.push(e); continue; }
     const d = filingDecision(l, { pairs, now });
     if (!d) continue;
     e.decision = d;
@@ -112,8 +116,17 @@ export function planFilings(db, { now, tierWeights, tierOf = null, config = DEFA
   return out;
 }
 
-/** The issue for a lead (an entry of planFilings()): title, body and labels. Shapes only. */
-export function issueFor(e, { now }) {
+/** Why a lead with no filing decision (an issue already filed) was filed, from its own columns. */
+const reasonOf = (e) => e.decision?.reason ?? (e.lead.fault === 'infra' ? 'infra_3_days' : e.lead.reproduced_at ? 'reproduced' : e.flake?.flaky ? 'flake_rate' : null);
+
+/**
+ * The issue for a lead (an entry of planFilings()): title, body and labels. Shapes only.
+ * @param {object} e
+ * @param {{now: string, repro?: {state: string, key: string|null, verdict: object|null}|null, recheckRunner?: string|null}} o
+ *   repro: leads/repro-gate.mjs reproVerdicts() for this lead; the fixture is shown only when it says reproduced
+ *   recheckRunner: the runner label the lane's re-checks go to (pump/workflows.json recheck_runner), if any
+ */
+export function issueFor(e, { now, repro = null, recheckRunner = null }) {
   const l = e.lead;
   const kind = kindOf(l);
   const versions = (Array.isArray(l.versions) ? l.versions : JSON.parse(l.versions ?? '[]')).join(', ') || 'none recorded';
@@ -126,7 +139,18 @@ export function issueFor(e, { now }) {
     reproduced: 'A re-run of the same server and lane, in another worker run on a fresh runner, showed it again',
     flake_rate: `It comes and goes on the same server: ${Math.round(e.flake.rate * 100)}% of ${e.flake.total} results over 14 days carried it`,
     infra_3_days: `A passing-condition (infra) failure that has gone on for ${INFRA_MIN_DAYS} days or more`,
-  }[e.decision?.reason] ?? 'It met the filing rules';
+  }[reasonOf(e)] ?? 'It met the filing rules';
+  const day = (t) => (typeof t === 'string' ? t.slice(0, 10) : null);
+  const evidence = [
+    `**Counts.** ${e.carriers.current} server${e.carriers.current === 1 ? ' carries' : 's carry'} it on ${e.carriers.current === 1 ? 'its' : 'their'} latest result${tiers}; seen ${l.sightings} times from ${l.first_seen.slice(0, 10)} to ${l.last_seen.slice(0, 10)}${l.reopened ? `; reopened ${l.reopened} time${l.reopened === 1 ? '' : 's'}` : ''}.`,
+    '',
+    `**Why it is filed.** ${why}.`,
+    '',
+    `- **Re-check on a fresh runner.** ${l.reproduced_at ? `Reproduced ${day(l.reproduced_at)} by another worker run of the same server and lane${recheckRunner ? `, on a \`${recheckRunner}\` runner` : ''}.` : 'Not reproduced by a re-run (filed on the rule above).'}`,
+    ...(e.flake?.total ? [`- **Last 14 days.** ${e.flake.hits} of ${e.flake.total} results of the servers that carried it showed it${e.flake.flaky ? ' (it went away and came back on one server)' : ''}.`] : []),
+    `- **Clean re-checks.** ${l.clean_rechecks ?? 0} so far; ${CLEAN_RECHECKS_TO_CLOSE} close it once no server carries it.`,
+    `- **Tool versions seen.** ${versions}.`,
+  ];
   const title = `${titleTag(l.fingerprint)} ${kind} in ${l.lane} ${l.component} (${l.idiom}${l.layout && l.layout !== 'unknown' ? `, ${l.layout}` : ''})`;
   const body = [
     MARKER(l.fingerprint),
@@ -143,17 +167,17 @@ export function issueFor(e, { now }) {
     `| Layout | \`${l.layout}\` |`,
     `| Signature | \`${l.signature}\` |`,
     '',
-    `**Counts.** ${e.carriers.current} server${e.carriers.current === 1 ? ' carries' : 's carry'} it on ${e.carriers.current === 1 ? 'its' : 'their'} latest result${tiers}; seen ${l.sightings} times from ${l.first_seen.slice(0, 10)} to ${l.last_seen.slice(0, 10)}${l.reopened ? `; reopened ${l.reopened} time${l.reopened === 1 ? '' : 's'}` : ''}.`,
+    '### Evidence (real servers)',
     '',
-    `**Why it is filed.** ${why}.`,
+    ...evidence,
     '',
     '### Synthetic repro',
     '',
-    syntheticRepro(l),
+    syntheticRepro(l, { verdict: repro?.state === 'ready' ? repro.verdict : null }),
     '',
     '### Closing',
     '',
-    `The loop closes this issue by itself after ${CLEAN_RECHECKS_TO_CLOSE} clean re-checks (assessed results without this fingerprint) once no server carries it, and reopens it if it comes back. Filed ${now.slice(0, 10)}.`,
+    `The loop closes this issue by itself after ${CLEAN_RECHECKS_TO_CLOSE} clean re-checks (assessed results without this fingerprint) once no server carries it, and reopens it if it comes back. Filed ${(day(l.filed_at) ?? now.slice(0, 10))}.`,
     '',
     `Filed by the [IsoKron](${SITE}) tool-qa loop.`,
   ].join('\n');

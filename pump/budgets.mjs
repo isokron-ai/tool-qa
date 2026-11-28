@@ -30,7 +30,9 @@ export const DEFAULT_FAMILIES = Object.freeze({
   actions: Object.freeze({ perHour: 400, perMinute: 60 }),
   artifacts: Object.freeze({ perHour: 1200, perMinute: 60 }),
   contents: Object.freeze({ perHour: 150, perMinute: 30 }),
-  issues: Object.freeze({ perHour: 60, perMinute: 10, reserve: 10, minIntervalMs: 1000 }),
+  // Issue writes by our App stay well inside GitHub's secondary limits for content creation (80 a minute, 500 an hour,
+  // mutating calls spaced): at most 20 a minute, 2 s apart, 240 an hour across the pump's runs (R-LEAD-56).
+  issues: Object.freeze({ perHour: 240, perMinute: 20, reserve: 10, minIntervalMs: 2000 }),
   graphql: Object.freeze({ perHour: 30, perMinute: 5, resource: 'graphql' }),
   search: Object.freeze({ perHour: 120, perMinute: 6, resource: 'search' }),
   auth: Object.freeze({ perHour: 60, perMinute: 10 }),

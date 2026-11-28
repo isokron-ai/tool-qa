@@ -22,7 +22,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { itemFromBundle, leadFailures } from '../state/fingerprint.mjs';
-import { langPart } from './repro.mjs';
+import { controlFiles, langPart } from './repro.mjs';
 
 /** The placeholder repository the fixtures are served as (mcp-check's own fixture fetch serves this name). */
 export const FIXTURE_REPO = 'isokron-fixture/known-answer';
@@ -107,8 +107,38 @@ export function startCommand(dir) {
   return null;
 }
 
+const tail = (t, n = 3000) => String(t ?? '').slice(-n);
+
+/** writecheck init against one fixture folder: { install, step, log }. */
+function initOnce(files, spec, cliMain) {
+  const root = writeFixture(files);
+  try {
+    const dir = join(root, ...spec.dir.split('/').filter((s) => s !== '.'));
+    const install = { ok: true, steps: [], log: '' };
+    if (existsSync(join(dir, 'package.json'))) {
+      const r = spawnSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: dir, encoding: 'utf8', timeout: 300_000 });
+      install.steps.push({ name: 'npm install', exit: r.status, timed_out: r.error?.code === 'ETIMEDOUT' });
+      install.log = tail(`${r.stdout ?? ''}\n${r.stderr ?? ''}`);
+      if (r.status !== 0) install.ok = false;
+    }
+    const cmd = startCommand(dir);
+    if (!cmd) return { install, step: null, log: '', error: 'no start command for this fixture (no src/index.ts or server.py)' };
+    if (!install.ok) return { install, step: null, log: '' };
+    const t0 = Date.now();
+    const r = spawnSync(process.execPath, [cliMain, 'init', '--out', join(root, 'init-draft.yaml'), '--', ...cmd], { cwd: dir, encoding: 'utf8', timeout: WRITECHECK_STEP_MS, env: { ...process.env, NO_COLOR: '1' } });
+    return { install, step: { step: 'init', exit: r.status, timed_out: r.error?.code === 'ETIMEDOUT', ms: Date.now() - t0 }, log: `${r.stdout ?? ''}\n${r.stderr ?? ''}`.slice(-64 * 1024) };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 export async function runWritecheckInit(lead, files, spec, { cliMain, cliCommit, actionDir, actionCommit }) {
   const S = await import(pathToFileURL(join(actionDir, 'loop', 'skips.mjs')).href);
+  // The control first: our echo server must start, or no verdict of this harness counts.
+  const control = initOnce(controlFiles(spec), { ...spec, dir: '.' }, cliMain);
+  const controlRan = control.step && S.stagesRan([control.step]).init === true;
+  const controlDetail = { install: control.install.steps, init: control.step, log_tail: tail(control.log || control.install.log) };
+  if (!controlRan) return { verdict: 'error', error: 'the control (our echo fixture) did not start under writecheck init, so this harness says nothing', observed: [], detail: { control: controlDetail } };
   const root = writeFixture(files);
   try {
     const dir = join(root, ...spec.dir.split('/').filter((s) => s !== '.'));
@@ -136,7 +166,7 @@ export async function runWritecheckInit(lead, files, spec, { cliMain, cliCommit,
       results: new Map(), scan: null,
     };
     const observed = leadFailures(item, { langOf: langOfLead(lead) }) ?? [];
-    return { ...verdictOf(lead, observed), observed: shapeList(observed), detail: { install: install.steps, init: steps[0] ?? null, stage_detail: notes.stage_detail ?? null } };
+    return { ...verdictOf(lead, observed), observed: shapeList(observed), detail: { install: install.steps, init: steps[0] ?? null, stage_detail: notes.stage_detail ?? null, log_tail: tail(serverLog), control: controlDetail } };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

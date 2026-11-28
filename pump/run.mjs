@@ -724,7 +724,7 @@ export async function runPump({
     // issues on our repositories. Not after a failed push (the state may not be the one on the release); never throws.
     if (!pushFailed) {
       await leadStep({
-        db, mode: leadsMode(env), tierWeights: cfg.tiers?.weights ?? {}, now, log: say, mintToken: lazyMint,
+        db, mode: leadsMode(env), env, tierWeights: cfg.tiers?.weights ?? {}, now, log: say, mintToken: lazyMint,
         save: (why) => save(why), summaryFile: env.GITHUB_STEP_SUMMARY || undefined,
         client: { fetch, apiUrl, budget: bud, sleep, now, retryUntil: () => Math.max(deadline, now() + 60_000), onRetry: retryHook('github_api') },
       });

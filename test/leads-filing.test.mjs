@@ -54,23 +54,27 @@ const NOW = new Date(T0 + 2 * HOUR).toISOString();
 
 test('R-LEAD-24: at most 5 new issues per repository per day and 30 open, the leads that unlock most first', () => {
   const db = reproduced(8);
-  const plan = planFilings(db, { now: NOW, tierWeights });
-  assert.equal(plan.file.length, CAP_NEW_PER_REPO_PER_DAY);
-  assert.equal(plan.capped.length, 8 - CAP_NEW_PER_REPO_PER_DAY);
+  const five = { capNew: 5, capOpen: 30 };
+  const plan = planFilings(db, { now: NOW, tierWeights, ...five });
+  assert.equal(plan.file.length, 5);
+  assert.equal(plan.capped.length, 8 - 5);
   assert.deepEqual(plan.file.map((e) => e.carriers.current), [8, 7, 6, 5, 4], 'most carried first');
   // Filed today count against the day; the next day there is room again.
   for (const e of plan.file) db.raw.prepare("UPDATE leads SET status = 'filed', issue_number = 1, issue_state = 'open', filed_at = ? WHERE fingerprint = ?").run(NOW, e.lead.fingerprint);
-  assert.equal(planFilings(db, { now: NOW, tierWeights }).file.length, 0);
-  assert.equal(planFilings(db, { now: new Date(T0 + DAY + 2 * HOUR).toISOString(), tierWeights }).file.length, 3);
+  assert.equal(planFilings(db, { now: NOW, tierWeights, ...five }).file.length, 0);
+  assert.equal(planFilings(db, { now: new Date(T0 + DAY + 2 * HOUR).toISOString(), tierWeights, ...five }).file.length, 3);
   // Open issues cap: with 30 open there is no room, whatever the day.
   const many = reproduced(2);
-  for (let i = 0; i < CAP_OPEN_PER_REPO; i++) {
+  for (let i = 0; i < 30; i++) {
     many.raw.prepare(`INSERT INTO leads (fingerprint, repo, tool, lane, component, oracle, class, idiom, layout, signature, fault, status, first_seen, last_seen, issue_number, issue_state, filed_at, updated_at)
       VALUES (?, 'isokron-ai/mcp-check', 'mcp-check', 'scan-static', 'static', 'scan-static', 'tool_error', 'x', 'y', 'z', 'tool', 'filed', ?, ?, ?, 'open', '2026-01-01T00:00:00Z', ?)`).run(`open${i}`, NOW, NOW, 100 + i, NOW);
   }
-  const p2 = planFilings(many, { now: NOW, tierWeights });
+  const p2 = planFilings(many, { now: NOW, tierWeights, ...five });
   assert.deepEqual([p2.file.length, p2.capped.length], [0, 2]);
-  assert.equal(p2.caps['isokron-ai/mcp-check'].open, CAP_OPEN_PER_REPO);
+  assert.equal(p2.caps['isokron-ai/mcp-check'].open, 30);
+  // The defaults are 30 new a day and 150 open (R-LEAD-57).
+  assert.deepEqual([CAP_NEW_PER_REPO_PER_DAY, CAP_OPEN_PER_REPO], [30, 150]);
+  assert.equal(planFilings(reproduced(8), { now: NOW, tierWeights }).file.length, 8);
 });
 
 test('R-LEAD-25: an issue holds the shape only: title tag and marker, our tool, counts and a synthetic repro; no subject name, run id or third-party text', () => {
@@ -145,7 +149,8 @@ const minter = () => {
   const asked = [];
   return { asked, mint: async (args) => { asked.push(args); return { token: `tok-${asked.length}` }; } };
 };
-const step = (db, over = {}) => leadStep({ db, mode: 'on', tierWeights, now: () => Date.parse(NOW), ...over });
+// The repro gate is stubbed (no verdicts: every issue says its repro was not checked) unless a test brings its own.
+const step = (db, over = {}) => leadStep({ db, mode: 'on', tierWeights, now: () => Date.parse(NOW), env: {}, reproGate: async () => new Map(), ...over });
 
 test('R-LEAD-26: dry-run and recheck write the plan to the job summary and touch no issue; off writes nothing but its note', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'leads-'));
@@ -340,11 +345,11 @@ test('R-LEAD-41: adoption takes only our App\'s issue with the lead\'s marker: a
 test('R-LEAD-42: the shape guard runs before the daily room is handed out, field by field: a held lead takes no slot, and a subject named like a public SDK repository holds no lead', () => {
   const db = reproduced(7, { over: (i) => (i === 6 ? { signature: 'class=tool_error;detail=-;error=widgetfail;list_error=-;http=-;fault=tool;retryable=false' } : {}) });
   db.setSubjectVersion({ id: 'modelcontextprotocol/go-sdk', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 });
-  const plan = planFilings(db, { now: NOW, tierWeights });
-  assert.equal(plan.file.length, CAP_NEW_PER_REPO_PER_DAY, 'the held lead (the most carried) did not take a slot');
+  const plan = planFilings(db, { now: NOW, tierWeights, capNew: 5, capOpen: 30 });
+  assert.equal(plan.file.length, 5, 'the held lead (the most carried) did not take a slot');
   assert.ok(plan.held.some((e) => e.decision.reason === 'not_shape_only' && e.carriers.current === 7));
   const go = { ...plan.file[0], lead: { ...plan.file[0].lead, idiom: 'source/derived/go' } };
-  assert.match(issueFor(go, { now: NOW }).body, /modelcontextprotocol\/go-sdk/, 'the Go template names the SDK');
+  assert.match(issueFor(go, { now: NOW, repro: { state: 'ready', key: 'k', verdict: { verdict: 'reproduced' } } }).body, /modelcontextprotocol\/go-sdk/, 'the Go template names the SDK');
   assert.doesNotThrow(() => assertShapeOnly(go.lead, { subjects: ['modelcontextprotocol/go-sdk'] }), 'template text is ours: not checked');
 });
 
