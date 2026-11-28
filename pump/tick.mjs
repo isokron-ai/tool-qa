@@ -1,7 +1,9 @@
 // One pump tick.
 //
 //   1. Reap: close dispatches and slot rows whose lease expired.
-//   2. If there are worker slots: compute the due list from state, cut it into
+//   2. If there are worker slots: compute the due list from state (plus, with
+//      the backfill switch on, the frame's oldest results for slots it leaves
+//      free: pump/backfill.mjs), cut it into
 //      shards per workflow (shard_size each, at most slots_max open per
 //      workflow), highest priority first.
 //   3. For each shard, while a slot is free: take the slot, take a lease per
@@ -24,7 +26,8 @@ import { randomUUID } from 'node:crypto';
 
 import { BudgetExceededError } from './budgets.mjs';
 import { workerInputs } from './dispatch.mjs';
-import { dueFromState, NO_HOOKS } from './due.mjs';
+import { computeDue, loadDueInputs, NO_HOOKS } from './due.mjs';
+import { backfillCandidates, backfillFor, reserveSlots } from './backfill.mjs';
 import { pinCheckMode, selfPin } from './pins.mjs';
 import { acquireDispatchSlot, leaseTtlMs, occupancy, reapExpired } from './slots.mjs';
 
@@ -92,13 +95,15 @@ function stopReason(err) {
  *   deadline: no new shard is started at or after this time (ms).
  *   holdRunKeys: optional Set of run_keys not to dispatch this tick (the pump
  *   holds work whose expired dispatch ingest has not looked at yet; R-CHAOS-02).
+ *   backfill: true to give free slots the due list leaves to the frame's
+ *   oldest results (pump/backfill.mjs; LANE_BACKFILL_ENABLED).
  *   beforeSend: optional async () => boolean, called once after the tick's
  *   dispatches are recorded as pending and before any is sent; the pump saves
  *   the state there. false (or a throw) withdraws them all unsent.
  */
 export async function runTick({
   db, now = Date.now, config, workerSlots, dispatcher, log = () => {}, newId = randomUUID, hooks = NO_HOOKS, deadline, beforeSend,
-  holdRunKeys = null,
+  holdRunKeys = null, backfill = false,
 }) {
   const t0 = now();
   const reaped = reapExpired(db, { now: t0 });
@@ -122,14 +127,26 @@ export async function runTick({
   summary.paused = [...paused];
   if (!(workerSlots > 0)) return summary;
 
-  const due = dueFromState(db, { now: t0, tiers: config.tiers, workflows: config.workflows, hooks })
-    .filter((d) => !paused.has(d.workflow) && !holdRunKeys?.has(d.run_key));
+  const inputs = loadDueInputs(db, { now: t0, tiers: config.tiers, workflows: config.workflows, hooks });
+  const due = computeDue(inputs).filter((d) => !paused.has(d.workflow) && !holdRunKeys?.has(d.run_key));
   summary.due = due.length;
-  if (due.length === 0) return summary;
 
+  const occ = occupancy(db, { now: t0 });
   const openByWorkflow = new Map();
-  for (const d of occupancy(db, { now: t0 }).dispatches) openByWorkflow.set(d.workflow, (openByWorkflow.get(d.workflow) ?? 0) + 1);
-  const shards = planShards(due, config.workflows, { openByWorkflow });
+  for (const d of occ.dispatches) openByWorkflow.set(d.workflow, (openByWorkflow.get(d.workflow) ?? 0) + 1);
+  // The backfill filler (pump/backfill.mjs, A1): free slots the due list
+  // leaves are given to the frame's oldest results, ranked below all due work.
+  let fill = [];
+  if (backfill) {
+    const lanes = Object.fromEntries(Object.entries(config.workflows).filter(([name]) => !paused.has(name)));
+    const since = typeof db.attemptsSinceResult === 'function' ? db.attemptsSinceResult() : new Map();
+    const candidates = backfillCandidates({ ...inputs, workflows: lanes }, { exclude: new Set(due.map((d) => `${d.subject}\u0000${d.workflow}`)), holdRunKeys, since });
+    fill = backfillFor({ candidates, due, workflows: lanes, freeSlots: workerSlots - occ.slots, openByWorkflow, reserve: reserveSlots(config.tiers) });
+    summary.backfill = fill.length;
+  }
+  if (due.length === 0 && fill.length === 0) return summary;
+
+  const shards = planShards([...due, ...fill], config.workflows, { openByWorkflow });
   summary.planned = shards.length;
 
   // 1. Reserve: for each shard, while a slot is free, take the slot and the

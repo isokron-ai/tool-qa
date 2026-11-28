@@ -1,0 +1,91 @@
+name: discover
+
+# Candidate subjects from the history feeds (design audit A2): the newest
+# full registry capture (history-registry, H1) and package capture
+# (history-packages, H2) mapped to GitHub repositories by discover/run.mjs.
+# The pump turns them into subjects (pump/discover.mjs). Public data only;
+# no token beyond reading this repository's own artifacts. Off unless
+# LANE_DISCOVER_ENABLED is exactly "true".
+
+on:
+  schedule:
+    - cron: '41 5 * * *' # after the 03:17 registry full and the 04:07 package captures
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: discover
+  cancel-in-progress: false
+
+jobs:
+  candidates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read # download the newest history-registry and history-packages artifacts
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Kill switch
+        id: guard
+        env:
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_PAUSE_UNTIL: ${{ vars.LOOP_PAUSE_UNTIL }}
+          LANE_DISCOVER_ENABLED: ${{ vars.LANE_DISCOVER_ENABLED }}
+        run: |
+          if [ "${LANE_DISCOVER_ENABLED}" != "true" ]; then
+            echo "discover: LANE_DISCOVER_ENABLED is not \"true\"; nothing to do."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node scripts/guard.mjs --job discover --no-slots
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          node-version: '22'
+      - name: Unit tests
+        if: steps.guard.outputs.proceed == 'true'
+        run: node --test 'discover/test/*.test.mjs'
+      - name: Fetch the newest captures
+        id: inputs
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p .in/registry .in/packages
+          # The newest successful full registry capture (run name ends in " full").
+          id=$(gh run list -R "${REPO}" -w history-registry -s success -L 100 --json databaseId,displayTitle -q '[.[] | select(.displayTitle | endswith(" full"))][0].databaseId')
+          if [ -z "${id}" ]; then echo "::error title=discover::No successful full registry capture in the last 100 history-registry runs"; exit 1; fi
+          gh run download "${id}" -R "${REPO}" -D .in/registry
+          reg=$(find .in/registry -name 'registry-full-*.ndjson.gz' | sort | tail -n 1)
+          if [ -z "${reg}" ]; then echo "::error title=discover::Run ${id} has no registry-full file"; exit 1; fi
+          echo "registry=${reg}" >> "$GITHUB_OUTPUT"
+          echo "registry capture from run ${id}: ${reg##*/}"
+          pid=$(gh run list -R "${REPO}" -w history-packages -s success -L 5 --json databaseId -q '.[0].databaseId')
+          if [ -n "${pid}" ] && gh run download "${pid}" -R "${REPO}" -n "history-packages-${pid}" -D .in/packages; then
+            echo "packages=.in/packages" >> "$GITHUB_OUTPUT"
+            echo "package capture from run ${pid}"
+          else
+            echo "::warning title=discover::No package capture found; candidates come from the registry only."
+          fi
+      - name: Candidates
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          REGISTRY: ${{ steps.inputs.outputs.registry }}
+          PACKAGES: ${{ steps.inputs.outputs.packages }}
+        run: |
+          args=(--registry "${REGISTRY}" --out out/discover --lookups 400)
+          if [ -n "${PACKAGES}" ]; then args+=(--packages "${PACKAGES}"); fi
+          node discover/run.mjs "${args[@]}"
+      - name: Upload
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: discover-${{ github.run_id }}
+          path: out/discover/
+          retention-days: 7
+          if-no-files-found: error
