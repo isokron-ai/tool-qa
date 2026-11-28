@@ -15,6 +15,7 @@ import { unpackBundle } from '../../worker-kit/bundle.mjs';
 import { readTar } from '../../worker-kit/tar.mjs';
 import { AgeError, ageDecrypt, ageEncrypt } from '../age.mjs';
 import { createCollector, IngestSetupError, SEAL_KEY } from '../collect.mjs';
+import { shapeOf } from '../../state/leads.mjs';
 import { parseRegistry } from '../registry.mjs';
 import {
   artifactEntry, defaultFiles, defaultRun, fakeDecrypt, fakeEncrypt, makeBundle, REGISTRY_TEXT, RUN_ID, RUN_KEY, WORKER_REPO, WORKFLOW_SHA,
@@ -1266,4 +1267,28 @@ test('R-PIN-01: in the pump, a result refused for its version pins pauses its la
   assert.equal(good.report.pins.verified.length, 1);
   assert.deepEqual(good.db.pausedWorkflows({ now: T0 + 6 * MIN }), []);
   good.db.close();
+});
+
+test('R-LEAD-11: ingest keeps a result\'s leads in the state only while LANE_LEADS_ENABLED is on; the lead holds no subject name', async () => {
+  const skips = [{ stage: 'static', reason: 'no_tools_found', fault: 'tool' }];
+  for (const [env, want] of [[{}, 0], [{ LANE_LEADS_ENABLED: 'false' }, 0], [{ LANE_LEADS_ENABLED: 'dry-run' }, 1], [{ LANE_LEADS_ENABLED: 'true' }, 1]]) {
+    const { db, fence } = setup();
+    db.setSubjectVersion({ id: 'repo:1', kind: 'repo', source: 'test', tier: 1, sha: 'a'.repeat(40), now: T0 });
+    const api = worker({ bundle: makeBundle({ identity: { fence }, meta: { skips } }) });
+    const h = harness({ api, env });
+    try {
+      const s = await h.collect(db);
+      assert.deepEqual(s.outcomes, { accepted: 1 }, JSON.stringify(env));
+      const leads = db.listLeads();
+      assert.equal(leads.length, want, JSON.stringify(env));
+      if (want) {
+        assert.deepEqual([leads[0].class, leads[0].fault, leads[0].tool, leads[0].lane, leads[0].status], ['no_tools_found', 'tool', 'mcp-check', 'qa', 'open']);
+        assert.equal(leads[0].first_run_id, RUN_ID, 'the worker run is the dispatch\'s');
+        assert.deepEqual(db.leadSubjects(leads[0].fingerprint).map((p) => p.subject), ['repo:1'], 'where it was seen is kept in the state');
+        assert.ok(!JSON.stringify(leads.map(shapeOf)).includes('repo:1'), 'the public shape of a lead names no subject');
+      }
+    } finally {
+      h.cleanup();
+    }
+  }
 });

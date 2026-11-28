@@ -76,6 +76,9 @@
 //   LANE_BACKFILL_ENABLED   only the exact value "true" gives worker slots
 //                      the due list leaves free to the frame's oldest results
 //                      (pump/backfill.mjs)
+//   LANE_LEADS_ENABLED   the lead pipeline (state/leads.mjs): off unless "dry-run",
+//                      "recheck" or "true"; ingest keeps each accepted result's
+//                      leads in the state (StateDb.noteLeads)
 //   LANE_HEADS_ENABLED   only the exact value "true" runs the head poll
 //                      (pump/heads.mjs): new default-branch heads and releases
 //                      move subjects' sha and changed_at

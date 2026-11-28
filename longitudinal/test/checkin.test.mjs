@@ -128,8 +128,8 @@ test('R-CHECKIN-06: probes: reasons, stages and languages outside the known list
     mk('acme/acme-widget-mcp', 1, { skips: [{ stage: 'acme-widget-private', reason: 'acme-widget-private', fault: 'tool' }] }),
     // a fragment of the name inside an error name, and a list error
     mk('acme/acme-widget-mcp-b', 2, { result: { status: 'error', detail: 'no_tools', error_name: 'AcmeWidgetFault', list_error: 'widgetmcpBroke' } }),
-    // a short name is not enough to redact a word like ValidationError
-    mk('ab/va', 3, { result: { status: 'error', error_name: 'ValidationError' } }),
+    // an error name is kept only when it is ours or a JavaScript built-in (R-LEAD-37), whatever the subject names
+    mk('ab/va', 3, { result: { status: 'error', error_name: 'TypeError' } }),
     // non-ASCII: the folded name Uni-tool is in UniTool
     mk('Ünï-owner/Ünï-tool', 4, { result: { status: 'error', error_name: 'UniTool' } }),
     // another item's name in this item's error
@@ -142,7 +142,7 @@ test('R-CHECKIN-06: probes: reasons, stages and languages outside the known list
   assert.equal(sigs['acme/acme-widget-mcp#2001'].component, '<other>');
   assert.equal(sigs['acme/acme-widget-mcp#2001'].class, '<other>');
   assert.match(sigs['acme/acme-widget-mcp-b#2002'].signature, /error=<other>;list_error=<other>/);
-  assert.match(sigs['ab/va#2003'].signature, /error=validationerror/);
+  assert.match(sigs['ab/va#2003'].signature, /error=typeerror/);
   assert.match(sigs['Ünï-owner/Ünï-tool#2004'].signature, /error=<other>/);
   assert.match(sigs['plain/other-xyzw#2005'].signature, /error=<other>/);
   assert.match(sigs['plain/other-xyzw#2005'].idiom, /^<other>\/<other>\/<other>$/);

@@ -1,0 +1,24 @@
+{
+  "description": "Which of our repositories a lead's issue goes to (state/leads.mjs repoFor). components[lane][component] first, then lanes[lane], then default. Only repositories in repos can be named; the GitHub App must be installed on each with issues: write (docs/OPERATIONS.md, \"Leads\"). live-probe's install and start stages run in the mcp-surface-corpus sandbox and driver; its resolve, list and probe stages are mcp-check's.",
+  "repos": ["isokron-ai/mcp-check", "isokron-ai/mcp-writecheck-action", "isokron-ai/mcp-surface-corpus", "isokron-ai/tool-qa", "isokron-ai/mcp-catalog-snap"],
+  "default": "isokron-ai/tool-qa",
+  "lanes": {
+    "scan-static": "isokron-ai/mcp-check",
+    "live-probe": "isokron-ai/mcp-check",
+    "scan-deep": "isokron-ai/mcp-check",
+    "build-probe": "isokron-ai/mcp-check",
+    "writecheck": "isokron-ai/mcp-writecheck-action",
+    "meta-github": "isokron-ai/tool-qa",
+    "meta-registry": "isokron-ai/tool-qa",
+    "release-diff": "isokron-ai/tool-qa"
+  },
+  "components": {
+    "live-probe": {
+      "install": "isokron-ai/mcp-surface-corpus",
+      "start": "isokron-ai/mcp-surface-corpus",
+      "sandbox": "isokron-ai/mcp-surface-corpus",
+      "bridge": "isokron-ai/mcp-surface-corpus",
+      "trace": "isokron-ai/mcp-surface-corpus"
+    }
+  }
+}

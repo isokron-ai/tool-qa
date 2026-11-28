@@ -85,6 +85,7 @@ import { normalizeAttempt, openLedger } from './ledger.mjs';
 import { maskText, scanText } from './redact.mjs';
 import { loadRegistry } from './registry.mjs';
 import { oracleFactsFromFiles } from '../state/oracle.mjs';
+import { itemFromBundle, leadFailures } from '../state/fingerprint.mjs';
 import { lanePinModes, laneShaModes } from '../pump/pins.mjs';
 
 export const REPORT_SCHEMA_VERSION = 1;
@@ -202,6 +203,7 @@ export async function openAttempt(input, deps) {
     throttleStages = laneThrottleStages(),
     pinModes = lanePinModesFile(),
     shaModes = laneShaModesFile(),
+    leads = null,
   } = deps;
   const { repo, runId, attemptId } = checkInput(input);
 
@@ -321,6 +323,9 @@ export async function openAttempt(input, deps) {
         // What the oracle lanes said, for the subject's disagreement record
         // (loop upgrade #7); it never changes the fault side or coverage.
         ...(outcome === 'accepted' && files ? (() => { const oracle = oracleFactsFromFiles(row.workflow_name, files); return oracle ? { oracle } : {}; })() : {}),
+        // The bundle's leads (state/fingerprint.mjs), only while the lead pipeline is on (LANE_LEADS_ENABLED).
+        // null (unreadable) passes nothing: the result is then not folded into any lead, never counted as clean.
+        ...(outcome === 'accepted' && files && leads ? (() => { const failures = bundleLeads(manifestBytes, files, item, row.workflow_name, leads); return failures ? { failures } : {}; })() : {}),
       };
       const answer = (await ledger.recordResult(wantedRecord)) ?? { accepted: wantedRecord.accepted, reason };
       const recorded = { accepted: answer.accepted === true, reason: typeof answer.reason === 'string' ? answer.reason : null };
@@ -521,6 +526,21 @@ export async function openAttempt(input, deps) {
   return { done: null, attempt: row, items: pending.slice(), judge };
 }
 
+/**
+ * The leads of an accepted bundle (state/fingerprint.mjs leadFailures), never
+ * throwing: null when the manifest or the bundle cannot be read here (not
+ * folded at all), [] when it carries none.
+ * leads: {langOf?} the seed's repository language per subject.
+ */
+export function bundleLeads(manifestBytes, files, item, lane, leads) {
+  try {
+    const manifest = JSON.parse(Buffer.from(manifestBytes).toString('utf8'));
+    return leadFailures(itemFromBundle({ manifest, files, subject: item.subject, lane }), { ...(leads.langOf ? { langOf: leads.langOf } : {}) });
+  } catch {
+    return null;
+  }
+}
+
 function errorText(err) {
   return `${err?.name ?? 'Error'}: ${err?.message ?? err}`;
 }
@@ -558,6 +578,8 @@ function checkRun(run, row, seen) {
  * @param {Record<string, string[]>} [deps.throttleStages]  lane -> throttle_stages (default: pump/workflows.json)
  * @param {Record<string, string>} [deps.pinModes]  lane -> pin_check mode, label or enforce (default: pump/workflows.json)
  * @param {Record<string, string>} [deps.shaModes]  lane -> sha_check mode, label or enforce (default: pump/workflows.json; R-SHA-01)
+ * @param {{langOf?: Function}|null} [deps.leads]  set while the lead pipeline is on: each accepted
+ *   result's leads go to recordResult as `failures` (bundleLeads)
  * @returns {Promise<{outcome: string, reason: string|null, recorded: boolean, accepted: boolean,
  *   report: object|null, outputs: Map<string, Buffer>, items: object[]}>}
  *   outcome and reason are the items' own when they all agree; otherwise outcome
