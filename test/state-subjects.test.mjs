@@ -18,6 +18,7 @@ const ok = (id, name, createdAt) => ({ status: 'ok', node: node(id, name, create
 /** Take a state built by this code back to exactly what schema v7 had. */
 function downgradeToV7(db) {
   db.raw.exec(`
+    DROP TABLE write_backends;
     DROP TABLE lead_subjects;
     DROP TABLE leads;
     DROP TABLE discovery_keys;
