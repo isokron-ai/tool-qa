@@ -373,7 +373,10 @@ test('the v10 migration of a real-shaped v9 state keeps every row and the due li
 
     assert.equal(v9.migrate(), SCHEMA_VERSION);
     assert.equal(SCHEMA_VERSION, 13);
-    assert.deepEqual(dump(v9.raw), before, 'no row of any older table changed');
+    // The v13 column is new on every row of results and NULL; nothing else in an older table changed.
+    const after = dump(v9.raw);
+    after.results = after.results.map(({ skip_codes: codes, ...row }) => { assert.equal(codes, null); return row; });
+    assert.deepEqual(after, before, 'no row of any older table changed');
     assert.deepEqual(due(v9), dueBefore);
     assert.equal(v9.raw.prepare('SELECT COUNT(*) AS n FROM events').get().n, 0, 'no events are made up for the past');
     assert.equal(v9.raw.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');

@@ -869,11 +869,12 @@ test('R-COV-49: a skip code is carried to the ledger with its fault; a code outs
   assert.deepEqual(ledger.records[0].skipCodes, [{ fault: 'tool', code: 'go_install_not_supported' }]);
   assert.deepEqual(json(r.outputs.get('accepted/att-1/0/ingest.json')).bundle.skip_codes, [{ fault: 'tool', code: 'go_install_not_supported' }]);
   // No code: the record keeps its old shape.
-  const plain = await run({ bundle: makeBundle({ meta: { skips: [{ ...skip, code: undefined }] } }) });
+  const { code: _omit, ...uncoded } = skip;
+  const plain = await run({ bundle: makeBundle({ meta: { skips: [uncoded] } }) });
   assert.equal(plain.ledger.records[0].skipCodes, undefined);
   assert.equal(json(plain.r.outputs.get('accepted/att-1/0/ingest.json')).bundle.skip_codes, undefined);
   // A bad code is refused.
-  const bad = await run({ bundle: makeBundle({ meta: { skips: [{ ...skip, code: 'Not A Code!' }] } }) });
+  const bad = await run({ bundle: makeBundle({ mutateManifest: (m) => { m.skips = [{ ...skip, code: 'Not A Code!' }]; } }) });
   assert.equal(bad.r.outcome, 'rejected');
   assert.equal(bad.r.reason, 'manifest_invalid');
 });

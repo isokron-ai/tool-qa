@@ -57,7 +57,7 @@ test('R-SUBJ-01: the v8 migration of a live-shaped v7 state keeps every row, nam
     const dueBefore = moments.map((now) => dueView(dueFromState(v7, { now, ...built.config })));
     const keysBefore = v7.raw.prepare('SELECT run_key FROM results ORDER BY run_key').all().map((r) => r.run_key);
 
-    assert.equal(v7.migrate(), 12);
+    assert.equal(v7.migrate(), 13);
     assert.equal(SCHEMA_VERSION, 13);
     assert.deepEqual(counts(v7.raw), before, 'no row lost or added');
     assert.equal(v7.raw.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
