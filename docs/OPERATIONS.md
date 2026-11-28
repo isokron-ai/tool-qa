@@ -2303,7 +2303,8 @@ exactly once) or `baseline_failed`. The job summary has the table; the
 `mutation-probe-results` artifact the JSON. The run fails unless every probe was
 killed. A `test` that is a plain `.mjs`/`.js` path runs as `node --test <file>`
 (with `pattern` as the test-name pattern); anything else runs as a shell command.
-Read-only token, no secrets, no `pull_request_target`.
+Read-only token, no secrets, no `pull_request_target`. Call it once per workflow run: the result
+artifacts are named per run, so two calls in one run would mix their results.
 
 ```text
 # here, a probes file under test/mutations/ (also runs on pull requests that change one)
