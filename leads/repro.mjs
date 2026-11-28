@@ -22,6 +22,47 @@ export const START_UP_SECONDS = 60;
 /** The size the over-the-cap entry of the release template declares: more than release-diff's 4 GiB source and 512 MiB artifact caps. */
 export const DECLARED_BYTES = 5 * 1024 ** 3;
 
+/**
+ * A read and an update tool on one noun (get_note, update_note): what writecheck init needs to draft a manifest.
+ * The start-window templates and the start runners' control register these, so the only thing that can stop init on
+ * the start-window template is its start-up time.
+ */
+const PY_PAIR = (noqa) => `from mcp.server.fastmcp import FastMCP${noqa}
+
+mcp = FastMCP("lead-fixture")
+NOTES: dict[str, str] = {}
+
+
+@mcp.tool()
+def get_note(id: str) -> str:
+    """Read a note."""
+    return NOTES.get(id, "")
+
+
+@mcp.tool()
+def update_note(id: str, text: str) -> str:
+    """Update a note."""
+    NOTES[id] = text
+    return text
+
+
+if __name__ == "__main__":
+    mcp.run()
+`;
+const TS_PAIR = (load) => `${load}
+const server = new McpServer({ name: "lead-fixture", version: "0.0.1" });
+const notes = new Map<string, string>();
+server.registerTool("get_note", {
+  description: "Read a note.",
+  inputSchema: { id: z.string() },
+}, async ({ id }) => ({ content: [{ type: "text", text: notes.get(id) ?? "" }] }));
+server.registerTool("update_note", {
+  description: "Update a note.",
+  inputSchema: { id: z.string(), text: z.string() },
+}, async ({ id, text }) => { notes.set(id, text); return { content: [{ type: "text", text }] }; });
+await server.connect(new StdioServerTransport());
+`;
+
 const PY = {
   base: (o) => `from mcp.server.fastmcp import FastMCP
 
@@ -42,20 +83,8 @@ if __name__ == "__main__":
 START_UP_SECONDS = ${START_UP_SECONDS}
 time.sleep(START_UP_SECONDS)
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
-
-mcp = FastMCP("lead-fixture")
-
-
-@mcp.tool()
-def echo(text: str) -> str:
-    """Echo the text back."""
-    return text
-
-
-if __name__ == "__main__":
-    mcp.run()
-`,
+${PY_PAIR('  # noqa: E402')}`,
+  control: () => PY_PAIR(''),
   file: 'server.py',
   extra: (o) => (o.schemaModel ? { 'models.py': 'from pydantic import BaseModel\n\n\nclass EchoInput(BaseModel):\n    text: str\n' } : {}),
   pkg: { 'pyproject.toml': '[project]\nname = "lead-fixture"\nversion = "0.0.1"\ndependencies = ["mcp"]\n\n[project.scripts]\nlead-fixture = "server:mcp.run"\n' },
@@ -82,17 +111,12 @@ await server.connect(new StdioServerTransport());
 const START_UP_MS = ${START_UP_SECONDS}_000;
 await sleep(START_UP_MS);
 
-const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+${TS_PAIR(`const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
 const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
-const { z } = await import("zod");
-
-const server = new McpServer({ name: "lead-fixture", version: "0.0.1" });
-server.registerTool("echo", {
-  description: "Echo the text back.",
-  inputSchema: { text: z.string() },
-}, async ({ text }) => ({ content: [{ type: "text", text }] }));
-await server.connect(new StdioServerTransport());
-`,
+const { z } = await import("zod");`)}`,
+  control: () => TS_PAIR(`import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";`),
   file: 'src/index.ts',
   extra: () => ({}),
   pkg: { 'package.json': '{\n  "name": "lead-fixture",\n  "version": "0.0.1",\n  "type": "module",\n  "bin": { "lead-fixture": "dist/index.js" },\n  "dependencies": { "@modelcontextprotocol/sdk": "^1", "zod": "^3" }\n}\n' },
@@ -262,15 +286,16 @@ export function reproSpec(lead) {
 }
 
 /**
- * The control of a start runner: our plain echo template in the lead's language, with its package metadata. It must
- * start (writecheck init exits 0) before any verdict of that runner counts: a harness that cannot start a good server
- * would make every start class look reproduced.
+ * The control of a start runner: the start-window template without its start-up delay (a read and an update tool),
+ * with its package metadata. It must pass writecheck init (exit 0) before any verdict of that runner counts: a
+ * harness that cannot start a good server, or a fixture init cannot draft from, would make every start class look
+ * reproduced (the first lead-repro run showed it: a plain echo server ends init with exit 4, "no pair of read and
+ * update tools", which the lane counts as timeout_start).
  */
 export function controlFiles(spec) {
   const t = TEMPLATES[spec.key];
-  if (!t) return [];
-  const o = { nameConst: false, descConst: false, schemaModel: false, annConst: false, helper: false, slow: false };
-  return [[t.file, t.base(o)], ...Object.entries(t.pkg)];
+  if (!t || !t.control) return [];
+  return [[t.file, t.control()], ...Object.entries(t.pkg)];
 }
 
 /** The pinned versions a runner's verdict depends on, from pump/workflows.json (the lane's versions.tool). */
@@ -327,7 +352,7 @@ export function syntheticRepro(lead, { verdict = null } = {}) {
   const saw = `\`${lead.class}${partial ? `:${partial}` : ''}\` at component \`${lead.component}\` (signature \`${lead.signature}\`)`;
   const runRef = Number.isSafeInteger(verdict.run_id) ? `tool-qa lead-repro run ${verdict.run_id}` : 'tool-qa lead-repro';
   L.push(`Confirmed: ${runRef} ran this fixture with ${verdict.tool ? `\`${verdict.tool}\`` : 'the lane\'s pinned tool'} and saw the same class and signature (repro key \`${verdict.key ?? '-'}\`).`, '');
-  L.push(`Written from our own ${LANG_NAME[spec.key]} template for the idiom \`${lead.idiom}\` and layout \`${lead.layout}\`; no third-party code.${o.nameConst || o.descConst || o.schemaModel || o.annConst || o.helper ? ' The part that varies for this class is marked by the constant or helper the reader has to follow.' : ''}${o.slow ? ` It does ${START_UP_SECONDS} s of start-up work before it answers.` : ''}`, '');
+  L.push(`Written from our own ${LANG_NAME[spec.key]} template for the idiom \`${lead.idiom}\` and layout \`${lead.layout}\`; no third-party code.${o.nameConst || o.descConst || o.schemaModel || o.annConst || o.helper ? ' The part that varies for this class is marked by the constant or helper the reader has to follow.' : ''}${o.slow ? ` It does ${START_UP_SECONDS} s of start-up work before it answers, and registers a read and an update tool so that writecheck init has something to draft from once it does.` : ''}`, '');
   for (const [f, v] of spec.files) L.push(`\`${f}\``, '', `\`\`\`${fenceLang(f)}`, v.trimEnd(), '```', '');
   if (spec.release) {
     const r = spec.release;

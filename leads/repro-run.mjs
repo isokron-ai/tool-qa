@@ -100,11 +100,20 @@ export async function runScanStatic(lead, files, { mcpCheckDir, mcpCheckCommit }
 
 const which = (cmd) => { const r = spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }); return r.status === 0 ? r.stdout.trim() : null; };
 
-/** The start command for a fixture folder: our templates' own (src/index.ts or server.py). */
+/** The start command for a fixture folder: our templates' own (src/index.ts, or server.py in its own virtualenv). */
 export function startCommand(dir) {
   if (existsSync(join(dir, 'src', 'index.ts'))) return [process.execPath, '--experimental-strip-types', 'src/index.ts'];
-  if (existsSync(join(dir, 'server.py'))) return [which('python3') ?? 'python3', 'server.py'];
+  if (existsSync(join(dir, 'server.py'))) return [existsSync(join(dir, '.venv', 'bin', 'python')) ? join(dir, '.venv', 'bin', 'python') : which('python3') ?? 'python3', 'server.py'];
   return null;
+}
+
+/** A Python fixture's dependency (the SDK) in a virtualenv of its own folder. */
+function installPython(dir, install) {
+  const py = which('python3') ?? 'python3';
+  const v = spawnSync(py, ['-m', 'venv', '.venv'], { cwd: dir, encoding: 'utf8', timeout: 120_000 });
+  const p = v.status === 0 ? spawnSync(join(dir, '.venv', 'bin', 'pip'), ['install', '--quiet', '--disable-pip-version-check', 'mcp'], { cwd: dir, encoding: 'utf8', timeout: 300_000 }) : v;
+  install.steps.push({ name: 'pip install mcp', exit: p.status, timed_out: p.error?.code === 'ETIMEDOUT' });
+  if (p.status !== 0) install.ok = false;
 }
 
 const tail = (t, n = 3000) => String(t ?? '').slice(-n);
@@ -121,6 +130,7 @@ function initOnce(files, spec, cliMain) {
       install.log = tail(`${r.stdout ?? ''}\n${r.stderr ?? ''}`);
       if (r.status !== 0) install.ok = false;
     }
+    if (existsSync(join(dir, 'pyproject.toml'))) installPython(dir, install);
     const cmd = startCommand(dir);
     if (!cmd) return { install, step: null, log: '', error: 'no start command for this fixture (no src/index.ts or server.py)' };
     if (!install.ok) return { install, step: null, log: '' };
@@ -149,6 +159,7 @@ export async function runWritecheckInit(lead, files, spec, { cliMain, cliCommit,
       install.steps.push({ name: 'npm install', exit: r.status, timed_out: r.error?.code === 'ETIMEDOUT' });
       if (r.status !== 0) install.ok = false;
     }
+    if (existsSync(join(dir, 'pyproject.toml'))) installPython(dir, install);
     const cmd = startCommand(dir);
     if (!cmd) return { verdict: 'error', error: 'no start command for this fixture (no src/index.ts or server.py)', observed: [] };
     const t0 = Date.now();
