@@ -41,7 +41,7 @@ import { readZipLenient } from '../scripts/lib/unzip.mjs';
 import { safeArchivePath } from '../scripts/lib/untar.mjs';
 
 export const LANE = 'release-diff';
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 const NPM = 'https://registry.npmjs.org';
 const PYPI = 'https://pypi.org';
@@ -61,8 +61,12 @@ export const LIMITS = Object.freeze({
   subjectBudgetMs: 360_000,
   // All the comparisons of one subject together may compute this long (the loops run on one thread).
   computeBudgetMs: 90_000,
-  artifact: { maxCompressedBytes: 64 * 1024 ** 2, maxInflatedBytes: 256 * 1024 ** 2, maxEntries: 20_000, maxKeptEntryBytes: 16 * 1024 ** 2, maxKeptTotalBytes: 256 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
-  source: { maxCompressedBytes: 128 * 1024 ** 2, maxInflatedBytes: 1024 ** 3, maxEntries: 100_000, maxKeptEntryBytes: 2 * 1024 ** 2, maxKeptTotalBytes: 256 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
+  // artifact: held in memory whole (compressed bytes, then every inflated entry), one artifact at a time: so compressed + inflated
+  // is the lane's memory ceiling for it (R-RD-23: at most 1 GiB; a GitHub runner has 7 GB).
+  artifact: { maxCompressedBytes: 128 * 1024 ** 2, maxInflatedBytes: 512 * 1024 ** 2, maxEntries: 50_000, maxKeptEntryBytes: 16 * 1024 ** 2, maxKeptTotalBytes: 512 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
+  // source: streamed, only files an artifact also has are kept (maxKeptTotalBytes): memory does not follow these three numbers, time
+  // does (downloadTimeoutMs ends a slow read as reader_limit, not as a verdict about the repository).
+  source: { maxCompressedBytes: 512 * 1024 ** 2, maxInflatedBytes: 4 * 1024 ** 3, maxEntries: 300_000, maxKeptEntryBytes: 2 * 1024 ** 2, maxKeptTotalBytes: 256 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
 });
 
 export const SETTINGS = Object.freeze({

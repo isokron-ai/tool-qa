@@ -271,11 +271,19 @@ hard links, devices and FIFOs are recorded and never followed or read. Caps:
 
 | | artifact | source archive |
 |---|---|---|
-| compressed | 64 MiB | 128 MiB |
-| inflated (every byte gunzip gives counts, kept or not) | 256 MiB | 1 GiB |
-| entries | 20,000 | 100,000 |
+| compressed | 128 MiB | 512 MiB |
+| inflated (every byte gunzip gives counts, kept or not) | 512 MiB | 4 GiB |
+| entries | 50,000 | 300,000 |
 | one kept file | 16 MiB | 2 MiB |
 | time | 2 minutes a download | 2 minutes |
+
+The artifact is held in memory whole, one at a time, so its compressed plus inflated caps (640 MiB) are the lane's
+memory ceiling, below 1 GiB on a 7 GB runner. A source archive is streamed and only files an artifact also has are
+kept, so its caps bound time and disk-free work, not memory; a slow read ends at the time limit as `reader_limit`. The
+caps were raised on 27 Nov 2026 (R-RD-23) after nine subjects (large native, ML or monorepo packages) ended as
+`too_large`; an archive still over a cap stays a `too_large` skip of ours (fault tool, never a finding about the
+package), and streaming the zip central directory by range request was not chosen because it would skip the registry's
+digest check, which needs every byte.
 
 A subject starts no network call after 6 minutes (downloads are not retried), and reads at most four source
 commits.

@@ -10,7 +10,7 @@ import { createCache, createHttp, forbiddenKind } from '../lib/http.mjs';
 import { movedTo, readGitRefs } from '../lib/gitrefs.mjs';
 import { compareArtifact, ComputeBudget, indexByBase, MAX_HELD, onlyVersionLines } from '../lib/diff.mjs';
 import { createSourceIndex } from '../lib/indicators.mjs';
-import { collectSubject, pep440Key, resolveTag, settleTreeChecks, treesIdentical } from '../release-diff.mjs';
+import { collectSubject, LIMITS, pep440Key, readArtifact, resolveTag, settleTreeChecks, treesIdentical } from '../release-diff.mjs';
 import { pinnedRegistry } from './helpers.mjs';
 
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
@@ -490,4 +490,16 @@ test('R-RD-22: a tag that names another commit than the provenance, with the sam
   const late = mk();
   await settleTreeChecks(http(f), 'acme/tool', [{ finding: late, tag: D, provenance: C }], { overBudget: () => true });
   assert.deepEqual([late.level, late.tree_identical], ['high', null], 'past the subject budget nothing is read');
+});
+
+test('R-RD-23: the archive caps hold large real packages (more than the old 20,000 entries is read) and stay bounded (memory ceiling of an artifact at most 1 GiB, one entry kept at most 16 MiB, an entry count past the cap is still a too_large limit of ours)', async () => {
+  const a = LIMITS.artifact;
+  assert.ok(a.maxCompressedBytes + a.maxInflatedBytes <= 1024 ** 3, 'an artifact is held in memory whole: compressed + inflated stays under 1 GiB');
+  assert.ok(a.maxKeptTotalBytes <= a.maxInflatedBytes && a.maxKeptEntryBytes <= 16 * 1024 ** 2);
+  assert.ok(LIMITS.source.maxKeptTotalBytes <= 256 * 1024 ** 2 && LIMITS.source.maxKeptEntryBytes <= 2 * 1024 ** 2, 'the source stream keeps little');
+  assert.ok(a.maxEntries >= 50_000 && LIMITS.source.maxEntries >= 300_000);
+  const many = (n) => makeTgz(Array.from({ length: n }, (_, i) => ({ name: `package/f/${i}.txt`, data: 'x', mode: 0o644 })));
+  const ok = await readArtifact(many(25_000), 'npm_tarball');
+  assert.equal(ok.files.size, 25_000, 'more than the old 20,000-entry cap');
+  await assert.rejects(readArtifact(many(a.maxEntries + 1), 'npm_tarball'), (e) => e.name === 'ArchiveLimit');
 });
