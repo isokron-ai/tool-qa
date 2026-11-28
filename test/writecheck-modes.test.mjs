@@ -21,8 +21,8 @@ const NOW = Date.parse('2026-11-28T12:00:00Z');
 const HOUR = 3_600_000;
 const ON = { LANE_WRITECHECK_FULL_ENABLED: 'true', LANE_WRITECHECK_MIN_ENABLED: 'true' };
 
-const PG = { class: 'local_full', backend: { id: 'postgres', kind: 'sql' }, stand_in: { id: 'postgres', product: 'PostgreSQL', fidelity: 'real' }, spec_url: null, spec_format: null, env_names: ['DATABASE_URL', 'PORT'], base_url_env: ['DATABASE_URL'], confidence: 'high', reason: null };
-const GH = { class: 'mock_min', backend: { id: 'github', kind: 'hosted_api' }, stand_in: null, spec_url: 'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json', spec_format: 'openapi3', env_names: ['GITHUB_TOKEN'], base_url_env: [], confidence: 'high', reason: null };
+const PG = { class: 'local_full', backend: { id: 'postgres', kind: 'sql' }, stand_in: { id: 'postgres', product: 'PostgreSQL', fidelity: 'real' }, spec_url: null, spec_format: null, env_names: ['DATABASE_URL', 'PORT'], base_url_env: ['DATABASE_URL'], confidence: 'high', routable: true, reason: null };
+const GH = { class: 'mock_min', backend: { id: 'github', kind: 'hosted_api' }, stand_in: null, spec_url: 'https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json', spec_format: 'openapi3', env_names: ['GITHUB_TOKEN'], base_url_env: [], confidence: 'high', routable: true, reason: null };
 const NONE = { class: 'none', reason: 'hosted_without_spec', backend: { id: 'telegram', kind: 'hosted_api' }, stand_in: null, spec_url: null, env_names: [], base_url_env: [], confidence: 'medium' };
 
 /** writecheck as shipped, trimmed to what the due list needs, with only this lane. */
@@ -216,4 +216,23 @@ test('R-WB-17: a min-mode spec URL must be the vendor map\'s own or the subject\
   const f = backendFacts({ ...PG, env_names: ['DATABASE_URL', 'LD_PRELOAD', 'NODE_OPTIONS', 'PATH', 'BASH_ENV', 'RUNNER_TEMP'] });
   assert.deepEqual(f.env_names, ['DATABASE_URL']);
   assert.deepEqual(modeFor(wfs.writecheck, { ...f, env_names: ['DATABASE_URL', 'LD_PRELOAD'] }, 'o/pg').env_names, ['DATABASE_URL']);
+});
+
+test('R-WB-25: only a routable classification is routed; a repository that is gone gets a not_found row, so it is not unclassified for ever', () => {
+  const wfs = applyModeSwitches({ writecheck: writecheck() }, ON);
+  assert.ok(modeFor(wfs.writecheck, backendFacts(PG), 'o/pg'));
+  assert.equal(modeFor(wfs.writecheck, backendFacts({ ...PG, routable: false }), 'o/pg'), null, 'the lane said no');
+  assert.equal(modeFor(wfs.writecheck, backendFacts({ ...PG, confidence: 'low' }), 'o/pg'), null, 'low confidence');
+  assert.equal(backendFacts({ ...PG, confidence: 'low', routable: true }).routable, false);
+  const files = new Map([['observations/meta-backend.ndjson', Buffer.from(`${JSON.stringify({ field: 'write_backend', value: null, why: 'the repository was not found, or is empty' })}\n`)]]);
+  const f = backendFactsFromFiles('meta-backend', files);
+  assert.deepEqual([f.class, f.reason, f.routable], ['none', 'not_found', false]);
+  const db = world({ 'o/gone': null, 'o/pg': PG });
+  db.noteWriteBackend('o/gone', 'rk-gone', f, { now: NOW, observedAt: NOW });
+  const rows = Object.fromEntries(db.listWriteBackends().map((r) => [r.subject, r]));
+  assert.deepEqual([rows['o/gone'].reason, rows['o/gone'].routable, rows['o/pg'].routable], ['not_found', false, true]);
+  const data = readLaneData(db, NOW, { cfg: cfgOn, tiers });
+  assert.equal(data.backends.unclassified, 0);
+  const odd = new Map([['observations/meta-backend.ndjson', Buffer.from(`${JSON.stringify({ field: 'write_backend', value: null, why: 'the source archive could not be read' })}\n`)]]);
+  assert.equal(backendFactsFromFiles('meta-backend', odd), null, 'a passing problem changes nothing');
 });

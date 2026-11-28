@@ -70,5 +70,21 @@
     "new": "const backends = Object.values(workflows ?? {}).some((wf) => wf?.modes?.list) ? backendsOf(raw) : null;",
     "test": "test/writecheck-modes.test.mjs",
     "pattern": "R-WB-12"
+  },
+  {
+    "id": "WM10 an unroutable classification is routed",
+    "file": "pump/modes.mjs",
+    "old": "if (!modesOn(wf) || !facts || facts.routable !== true) return null;",
+    "new": "if (!modesOn(wf) || !facts) return null;",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-25"
+  },
+  {
+    "id": "WM11 a gone repository stays unclassified",
+    "file": "state/backends.mjs",
+    "old": "if (r.value === null && typeof r.why === 'string' && /not found|took the repository down/i.test(r.why)) return NOT_FOUND_FACTS;",
+    "new": "",
+    "test": "test/writecheck-modes.test.mjs",
+    "pattern": "R-WB-25"
   }
 ]

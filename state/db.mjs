@@ -1508,21 +1508,21 @@ export class StateDb {
     const prior = this.raw.prepare('SELECT observed_at FROM write_backends WHERE subject = ?').get(subject);
     if (prior && toMs(prior.observed_at) > toMs(at)) return false;
     this.raw.prepare(`
-      INSERT INTO write_backends (subject, run_key, class, mode, reason, backend, backend_kind, stand_in, spec_url, spec_format, confidence, env_names, observed_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO write_backends (subject, run_key, class, mode, reason, backend, backend_kind, stand_in, spec_url, spec_format, confidence, routable, env_names, observed_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (subject) DO UPDATE SET run_key = excluded.run_key, class = excluded.class, mode = excluded.mode, reason = excluded.reason,
         backend = excluded.backend, backend_kind = excluded.backend_kind, stand_in = excluded.stand_in, spec_url = excluded.spec_url,
-        spec_format = excluded.spec_format, confidence = excluded.confidence, env_names = excluded.env_names,
+        spec_format = excluded.spec_format, confidence = excluded.confidence, routable = excluded.routable, env_names = excluded.env_names,
         observed_at = excluded.observed_at, updated_at = excluded.updated_at
     `).run(subject, runKey, facts.class, facts.mode, facts.reason ?? null, facts.backend ?? null, facts.backend_kind ?? null, facts.stand_in ?? null,
-      facts.spec_url ?? null, facts.spec_format ?? null, facts.confidence ?? null, JSON.stringify(Array.isArray(facts.env_names) ? facts.env_names : []), at, iso(now));
+      facts.spec_url ?? null, facts.spec_format ?? null, facts.confidence ?? null, facts.routable === true ? 1 : 0, JSON.stringify(Array.isArray(facts.env_names) ? facts.env_names : []), at, iso(now));
     return true;
   }
 
   /** Every subject's write_backend facts, env_names parsed; [] before schema 14. */
   listWriteBackends() {
     if (this.schemaVersion() < 14) return [];
-    return this.raw.prepare('SELECT * FROM write_backends ORDER BY subject').all().map((r) => ({ ...plain(r), env_names: JSON.parse(r.env_names) }));
+    return this.raw.prepare('SELECT * FROM write_backends ORDER BY subject').all().map((r) => ({ ...plain(r), routable: r.routable === 1, env_names: JSON.parse(r.env_names) }));
   }
 
   /** The stored disagreement rows, parsed. `status` filters (default: all). */

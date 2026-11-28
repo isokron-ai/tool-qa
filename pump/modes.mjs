@@ -21,7 +21,8 @@
 // changes: no new input is sent and no run_key moves.
 //
 // A pair in a mode files its results under its own run_key: settings_state
-// becomes `<settings_state>+mode=<mode>+backend=<id>`, so a class change makes
+// becomes `<settings_state>+mode=<mode>+backend=<id>+via=<stand-in id, or the
+// first 12 hex of the spec URL's sha256>`, so a change of class, stand-in or spec makes
 // the pair due again and a mode result is never read as a default one. Shards
 // are homogeneous (one mode, one backend, one stand-in or spec URL), and the
 // worker gets the mode inputs of INTERFACES.md: mode, backend, backend_kind,
@@ -107,7 +108,8 @@ export const modesOn = (wf) => Boolean(wf?.active_modes && Object.keys(wf.active
  * or null (no mode on, no facts, a class no active mode takes, or facts the mode cannot run with).
  */
 export function modeFor(wf, facts, subjectName = null) {
-  if (!modesOn(wf) || !facts) return null;
+  // Only a routable classification (routable true: not low confidence, write tools that name the backend's objects).
+  if (!modesOn(wf) || !facts || facts.routable !== true) return null;
   for (const [mode, def] of Object.entries(wf.active_modes)) {
     if (facts.class !== def.class) continue;
     if (typeof facts.backend !== 'string' || !ID_RE.test(facts.backend)) return null;

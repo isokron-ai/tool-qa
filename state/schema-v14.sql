@@ -12,6 +12,9 @@
 --   reason     for none: no_backend_signal | hosted_without_spec | stand_in_not_cleared
 --              | no_stand_in | not_a_store | no_write_tools_seen; NULL otherwise
 --   backend, backend_kind, stand_in, spec_url, spec_format   the routing facts
+--   routable   1 only for a testable class above low confidence whose write tools name the backend's objects:
+--              the pump routes only these (R-WB-22)
+--   reason     not_found too, for a repository the lane found gone (so it is not unclassified for ever)
 --   env_names  JSON list of env var names (never values), base-URL knobs first, at most 20
 --   observed_at  when the worker run that read it completed
 -- Nothing here is a result's fault or coverage: `none` means "not testable here".
@@ -27,6 +30,7 @@ CREATE TABLE write_backends (
   spec_url     TEXT,
   spec_format  TEXT,
   confidence   TEXT,
+  routable     INTEGER NOT NULL DEFAULT 0 CHECK (routable IN (0, 1)),
   env_names    TEXT NOT NULL DEFAULT '[]',
   observed_at  TEXT NOT NULL,
   updated_at   TEXT NOT NULL

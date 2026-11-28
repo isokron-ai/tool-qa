@@ -41,9 +41,14 @@ export function backendFacts(value) {
     spec_url: value.class === 'mock_min' ? spec : null,
     spec_format: value.class === 'mock_min' && typeof value.spec_format === 'string' && FORMAT_RE.test(value.spec_format) ? value.spec_format : null,
     confidence: ['high', 'medium', 'low'].includes(value.confidence) ? value.confidence : null,
+    // routable needs the lane's own yes, a testable class and a confidence above low (R-WB-22).
+    routable: value.routable === true && (value.class === 'local_full' || value.class === 'mock_min') && value.confidence !== 'low' && ['high', 'medium'].includes(value.confidence),
     env_names: env,
   };
 }
+
+/** The facts kept for a repository the lane found gone (not found, empty, or taken down): none, not_found, never routed. */
+export const NOT_FOUND_FACTS = Object.freeze({ class: 'none', mode: 'none', reason: 'not_found', backend: null, backend_kind: null, stand_in: null, spec_url: null, spec_format: null, confidence: null, routable: false, env_names: [] });
 
 /** The facts in an accepted bundle's files (Map path -> Buffer), or null: not the lane, no record, no value. */
 export function backendFactsFromFiles(lane, files) {
@@ -54,7 +59,10 @@ export function backendFactsFromFiles(lane, files) {
     for (const line of raw.toString('utf8').split('\n')) {
       if (!line.trim()) continue;
       const r = JSON.parse(line);
-      if (r?.field === BACKEND_FIELD) return backendFacts(r.value);
+      if (r?.field !== BACKEND_FIELD) continue;
+      // A repository that is gone gets a row too, so it does not wait as unclassified for ever.
+      if (r.value === null && typeof r.why === 'string' && /not found|took the repository down/i.test(r.why)) return NOT_FOUND_FACTS;
+      return backendFacts(r.value);
     }
     return null;
   } catch {
