@@ -142,7 +142,7 @@
       "setup_minutes": 2,
       "minutes_per_subject": 0.4,
       "slots_max": 1,
-      "versions": { "tool": { "meta-backend": "1.0.0", "meta-backend-maps": "1.1" }, "oracle": {}, "probe": {} },
+      "versions": { "tool": { "meta-backend": "1.1.0", "meta-backend-maps": "2.2" }, "oracle": {}, "probe": {} },
       "image_digest": null,
       "settings_state": "default"
     },

@@ -74,12 +74,68 @@ export const MAX_CONFIG_CHARS = 256 * 1024;
 export const MAX_README_CHARS = 512 * 1024;
 
 const ENV_NAME_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
+/** Requirements files of development tools: requirements-dev.txt, requirements_test.in, requirements-docs.txt, dev.in, foo-dev.in. */
+export const DEV_REQUIREMENTS_RE = /^(?:requirements[-_.](?:dev|devel|develop|development|test|tests|testing|docs?|lint|ci|build|typing|bench)\b[\w.-]*|[\w.-]*-?dev\.in)$/i;
+/**
+ * Model provider SDKs that live inside a cloud vendor's SDK family (R-WB-21): a server that calls Bedrock or Vertex AI
+ * for its model does not write to AWS or Google. When one is seen, the generic cloud backends lose the signals that
+ * come only from the generic SDK.
+ */
+export const LLM_SDKS = new Set(['@aws-sdk/client-bedrock-runtime', '@aws-sdk/client-bedrock', '@aws-sdk/client-bedrock-agent-runtime', '@aws-sdk/client-bedrock-agent',
+  '@langchain/aws', 'langchain-aws', '@ai-sdk/amazon-bedrock', '@ai-sdk/google-vertex', '@ai-sdk/google', '@google-cloud/vertexai', 'google-cloud-aiplatform', 'vertexai',
+  '@google/genai', '@google/generative-ai', 'google-genai', 'google-generativeai', 'langchain-google-vertexai', 'langchain-google-genai', 'anthropic-bedrock', 'litellm']);
+const LLM_CODE_RE = /bedrock-runtime|BedrockRuntimeClient|ChatBedrock|BedrockChat|invoke_model|InvokeModelCommand|ConverseCommand|vertexai\.init|GenerativeModel\(|aiplatform\.init/;
+/** The signals that come only from a generic cloud SDK (not a service of it). */
+const GENERIC_CLOUD_DETAILS = new Set(['boto3', 'botocore', 'aioboto3', 'aws-sdk', 'aws-config', 'github.com/aws/aws-sdk-go-v2', 'github.com/aws/aws-sdk-go',
+  'googleapis', 'google-auth-library', 'google-api-python-client', 'google-auth-oauthlib', 'google.golang.org/api', 'www.googleapis.com', 'oauth2.googleapis.com',
+  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_PROFILE', 'AWS_SESSION_TOKEN', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']);
+const GENERIC_CLOUD_BACKENDS = new Set(['aws', 'google-workspace']);
+
+/**
+ * Words a write tool uses for the objects of a kind of store (R-WB-22, plausibility): a write tool that names none of
+ * them, and none of the backend's own `objects` (stand-ins.json, spec-urls.json), probably writes somewhere else, so
+ * the class stays but its confidence drops to low and it is not routed.
+ */
+const DATA_WORDS = ['data', 'dataset', 'item', 'items', 'entry', 'entries', 'record', 'records', 'row', 'rows', 'memory', 'memories', 'note', 'notes', 'task', 'tasks', 'todo', 'todos',
+  'entity', 'entities', 'document', 'documents', 'doc', 'docs', 'knowledge', 'case', 'cases', 'log', 'logs', 'event', 'events', 'remember', 'forget', 'store', 'save', 'record',
+  'ingest', 'index', 'upsert', 'insert', 'append', 'persist', 'observation', 'observations', 'fact', 'facts', 'list', 'lists', 'bookmark', 'bookmarks', 'session', 'sessions'];
+export const KIND_WORDS = Object.freeze({
+  sql: [...DATA_WORDS, 'table', 'tables', 'query', 'queries', 'sql', 'database', 'databases', 'db', 'schema', 'column', 'columns', 'execute', 'exec', 'statement', 'migration', 'migrate'],
+  kv: [...DATA_WORDS, 'key', 'keys', 'cache', 'value', 'values', 'hash', 'queue', 'stream', 'set'],
+  document: [...DATA_WORDS, 'collection', 'collections', 'query', 'database', 'db'],
+  search: [...DATA_WORDS, 'index', 'indices', 'indexes', 'search'],
+  graph: [...DATA_WORDS, 'node', 'nodes', 'edge', 'edges', 'relation', 'relations', 'relationship', 'relationships', 'graph', 'cypher', 'query'],
+  vector: [...DATA_WORDS, 'vector', 'vectors', 'embedding', 'embeddings', 'collection', 'collections', 'point', 'points', 'chunk', 'chunks'],
+  queue: ['message', 'messages', 'topic', 'topics', 'queue', 'queues', 'event', 'events', 'publish', 'produce', 'send'],
+  object_store: ['object', 'objects', 'file', 'files', 'bucket', 'buckets', 'blob', 'blobs', 'upload', 'key', 'keys', 'folder', 'folders'],
+  mail: ['email', 'emails', 'mail', 'message', 'messages', 'draft', 'drafts', 'send', 'reply', 'forward', 'folder', 'flag'],
+  git: ['commit', 'commits', 'branch', 'branches', 'file', 'files', 'repo', 'repository', 'tag', 'tags', 'merge', 'stash', 'checkout', 'push', 'rebase', 'reset', 'add'],
+  cluster: ['pod', 'pods', 'deployment', 'deployments', 'service', 'services', 'namespace', 'namespaces', 'resource', 'resources', 'container', 'containers', 'manifest', 'apply', 'scale', 'node', 'nodes', 'job', 'jobs', 'image', 'images', 'volume', 'volumes'],
+  filesystem: [],
+  browser: [],
+});
 /**
  * Env names never kept or sent (R-WB-15): the runtime's, the shell's, the CI runner's and the loader's own. A worker
  * that sets every listed name to point at a stand-in must never be told to set one of these; a server that reads
  * PATH or HOME says nothing about its backend.
  */
-export const ENV_DENY_RE = /^(?:PATH|HOME|USER|USERNAME|LOGNAME|SHELL|PWD|OLDPWD|TERM|LANG|LANGUAGE|TZ|IFS|PS[1-4]|BASH_ENV|ENV|CDPATH|TMPDIR|TMP|TEMP|HOSTNAME|DEBUG|NODE_ENV|CI|LC_[A-Z_]+|LD_[A-Z0-9_]+|DYLD_[A-Z0-9_]+|NODE_[A-Z0-9_]+|NPM_[A-Z0-9_]+|YARN_[A-Z0-9_]+|PNPM_[A-Z0-9_]+|PYTHON[A-Z0-9_]*|PIP_[A-Z0-9_]+|VIRTUAL_ENV|CONDA_[A-Z0-9_]+|UV_[A-Z0-9_]+|GITHUB_(?:ACTIONS|ACTOR|ENV|EVENT_[A-Z_]+|OUTPUT|PATH|REF[A-Z_]*|REPOSITORY[A-Z_]*|RUN_[A-Z_]+|SHA|STEP_SUMMARY|WORKFLOW[A-Z_]*|WORKSPACE|JOB)|RUNNER_[A-Z0-9_]+|ACTIONS_[A-Z0-9_]+|XDG_[A-Z0-9_]+|SSL_CERT_[A-Z_]+|NODE_EXTRA_CA_CERTS|HTTPS?_PROXY|NO_PROXY|ALL_PROXY|GIT_(?:DIR|WORK_TREE|SSH|SSH_COMMAND|ASKPASS|EXEC_PATH|CONFIG[A-Z0-9_]*|TERMINAL_PROMPT|TRACE[A-Z0-9_]*|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|PROXY_COMMAND|TEMPLATE_DIR|NAMESPACE|CEILING_DIRECTORIES|ALLOW_PROTOCOL|PAGER|EDITOR)|JAVA_HOME|GOPATH|GOROOT|GOFLAGS|CARGO_[A-Z0-9_]+|RUST[A-Z0-9_]*)$/;
+export const ENV_DENY_RE = new RegExp(`^(?:${[
+  // the shell, the session and the terminal
+  'PATH', 'HOME', 'USER', 'USERNAME', 'LOGNAME', 'SHELL', 'PWD', 'OLDPWD', 'TERM', 'LANG', 'LANGUAGE', 'TZ', 'IFS', 'PS[1-4]', 'BASH_ENV', 'ENV', 'CDPATH',
+  'TMPDIR', 'TMP', 'TEMP', 'HOSTNAME', 'DEBUG', 'CI', 'EDITOR', 'VISUAL', 'PAGER', 'LC_[A-Z0-9_]+', 'XDG_[A-Z0-9_]+',
+  // loaders and language runtimes, and the option variables they read
+  'LD_[A-Z0-9_]+', 'DYLD_[A-Z0-9_]+', 'NODE_[A-Z0-9_]+', 'NPM_[A-Z0-9_]+', 'YARN_[A-Z0-9_]+', 'PNPM_[A-Z0-9_]+', 'COREPACK_[A-Z0-9_]+', 'BUN_[A-Z0-9_]+', 'DENO_[A-Z0-9_]+',
+  'PYTHON[A-Z0-9_]*', 'PIP_[A-Z0-9_]+', 'VIRTUAL_ENV', 'CONDA_[A-Z0-9_]+', 'UV_[A-Z0-9_]+', 'PERL5OPT', 'PERL5LIB', 'PERLLIB', 'RUBYOPT', 'RUBYLIB', 'GEM_[A-Z0-9_]+', 'BUNDLE_[A-Z0-9_]+',
+  'GO(?:PATH|ROOT|FLAGS|PROXY|PRIVATE|NOPROXY|NOSUMDB|SUMDB|INSECURE|OS|ARCH|ENV|TOOLCHAIN|CACHE|MODCACHE|BIN|EXPERIMENT|DEBUG|GC|MAXPROCS|AMD64|ARM|WORK|TMPDIR)', 'CGO_[A-Z0-9_]+',
+  'DOTNET_[A-Z0-9_]+', 'NUGET_[A-Z0-9_]+', 'MSBUILD[A-Z0-9_]*', 'COMPLUS_[A-Z0-9_]+', 'CORECLR_[A-Z0-9_]+',
+  'JAVA_HOME', 'JAVA_OPTS', 'JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', 'MAVEN_[A-Z0-9_]+', 'M2_HOME', 'GRADLE_[A-Z0-9_]+', 'CARGO_[A-Z0-9_]+', 'RUST[A-Z0-9_]*',
+  // the CI runner, the GitHub CLI and the container engine
+  'GITHUB_[A-Z0-9_]+', 'GH_[A-Z0-9_]+', 'RUNNER_[A-Z0-9_]+', 'ACTIONS_[A-Z0-9_]+', 'AGENT_TOOLSDIRECTORY', 'DOCKER_[A-Z0-9_]+',
+  // credentials agents, trust stores and proxies
+  'SSH_(?:ASKPASS[A-Z0-9_]*|AUTH_SOCK|AGENT_PID)', 'SSL_CERT_[A-Z_]+', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'HTTPS?_PROXY', 'NO_PROXY', 'ALL_PROXY',
+  // git's own variables, its hooks and its TLS settings
+  'GIT_(?:DIR|WORK_TREE|SSH|SSH_COMMAND|ASKPASS|EXEC_PATH|CONFIG[A-Z0-9_]*|TERMINAL_PROMPT|TRACE[A-Z0-9_]*|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|PROXY_COMMAND|TEMPLATE_DIR|NAMESPACE|CEILING_DIRECTORIES|ALLOW_PROTOCOL|PAGER|EDITOR|SEQUENCE_EDITOR|SSL_[A-Z0-9_]+|HTTP_[A-Z0-9_]+|[A-Z0-9_]*HOOK[A-Z0-9_]*)',
+].join('|')})$`);
 /** An env name we keep: name-shaped and not one of ENV_DENY_RE. */
 export const keepEnvName = (n) => typeof n === 'string' && ENV_NAME_RE.test(n) && !ENV_DENY_RE.test(n);
 /** An env name that holds a hosted service's credential. */
@@ -91,7 +147,13 @@ const README_ENV_RE = /(?:_URL|_URI|_HOST|_ENDPOINT|_TOKEN|_KEY|_SECRET|_PASSWOR
 /** Folders whose code says little about the server's own backend. */
 /** Folders whose OpenAPI files are samples, not the server's (a spec/ folder is kept: it often holds the API's). */
 export const SAMPLE_PATH_RE = /(?:^|\/)(?:tests?|__tests__|e2e|fixtures?|examples?|samples?|demo|testdata|mocks?|__mocks__)\//i;
-export const TEST_PATH_RE = /(?:^|\/)(?:tests?|__tests__|spec|specs|e2e|fixtures?|examples?|samples?|demo|benchmarks?|testdata|mocks?|__mocks__|docs?)\//i;
+export const TEST_PATH_RE = /(?:^|\/)(?:tests?|__tests__|spec|specs|e2e|fixtures?|examples?|samples?|demo|bench|benchmarks?|testdata|mocks?|__mocks__|docs?|scripts?|\.github|\.claude|\.vscode|integrations?|deployment|deploy|infra|terraform|ci)\//i;
+/**
+ * Release, update-check and self-update code: it calls a forge or a registry to look for new versions, which says
+ * nothing about where the server's write tools write (the GitHub API plus GITHUB_TOKEN in tooling is not GitHub as a
+ * backend). Read like test code: it weighs less.
+ */
+export const TOOLING_FILE_RE = /(?:^|\/)(?:[^/]*[-_.])?(?:release|update[-_]?check|version[-_]?check|self[-_]?update|updater|upgrade[-_]?check)(?:[-_.][^/]*)?\.[A-Za-z0-9]{1,6}$/i;
 /** Folders never read. */
 export const SKIP_PATH_RE = /(?:^|\/)(?:node_modules|vendor|dist|build|out|\.next|target|\.venv|venv|site-packages|__pycache__|third_party|coverage|\.git|bower_components|\.yarn|\.pnpm-store)\//;
 
@@ -107,7 +169,7 @@ export function manifestKind(path) {
   const base = path.slice(path.lastIndexOf('/') + 1);
   if (base === 'package.json') return 'npm';
   if (base === 'pyproject.toml') return 'pyproject';
-  if (/^requirements[\w.-]*\.(?:txt|in)$/i.test(base)) return 'requirements';
+  if (/^requirements[\w.-]*\.(?:txt|in)$/i.test(base) || /^[\w.-]*-?dev\.in$/i.test(base)) return 'requirements';
   if (base === 'setup.py') return 'setup_py';
   if (base === 'setup.cfg') return 'setup_cfg';
   if (base === 'Pipfile') return 'pipfile';
@@ -146,7 +208,8 @@ export function fileRole(path) {
 export function mergeMaps(standIns, specUrls) {
   const table = new Map();
   const add = (id, part) => {
-    const cur = table.get(id) ?? { id, kind: null, stand_in: null, spec: null, not_a_store: false, signals: Object.fromEntries(SIGNAL_KEYS.map((k) => [k, []])) };
+    const cur = table.get(id) ?? { id, kind: null, stand_in: null, spec: null, not_a_store: false, objects: [], signals: Object.fromEntries(SIGNAL_KEYS.map((k) => [k, []])) };
+    for (const o of Array.isArray(part.objects) ? part.objects : []) if (!cur.objects.includes(o)) cur.objects.push(o);
     if (part.kind && !cur.kind) cur.kind = part.kind;
     if (part.stand_in !== undefined && part.stand_in !== null) cur.stand_in = part.stand_in;
     if (part.spec) cur.spec = part.spec;
@@ -155,7 +218,7 @@ export function mergeMaps(standIns, specUrls) {
     table.set(id, cur);
   };
   for (const [id, b] of Object.entries(standIns?.backends ?? {})) add(id, b);
-  for (const [id, s] of Object.entries(specUrls?.services ?? {})) add(id, { kind: 'hosted_api', spec: s.spec ?? null, signals: s.signals });
+  for (const [id, s] of Object.entries(specUrls?.services ?? {})) add(id, { kind: 'hosted_api', spec: s.spec ?? null, signals: s.signals, objects: s.objects });
   return table;
 }
 
@@ -275,7 +338,7 @@ export function manifestDeps(kind, text) {
   }
   if (kind === 'gradle') {
     for (const line of text.split(/\r?\n/)) {
-      const m = /\b(\w+)\s*\(?\s*['"]([A-Za-z0-9._-]{1,200}):([A-Za-z0-9._-]{1,200})(?::[^'"]{0,100})?['"]/.exec(line);
+      const m = /\b(\w+)[ \t]*(?:\([ \t]*)?['"]([A-Za-z0-9._-]{1,200}):([A-Za-z0-9._-]{1,200})(?::[^'"]{0,100})?['"]/.exec(line);
       if (m) add(`${m[2]}:${m[3]}`, /^test/i.test(m[1]));
     }
     return out;
@@ -297,7 +360,9 @@ function tomlDeps(kind, text) {
   const prodTables = kind === 'cargo' ? /^(?:dependencies|workspace\.dependencies|target\..+\.dependencies|build-dependencies)$/ : kind === 'pipfile' ? /^packages$/ : /^tool\.poetry\.dependencies$/;
   const devTables = kind === 'cargo' ? /^(?:dev-dependencies|target\..+\.dev-dependencies)$/ : kind === 'pipfile' ? /^dev-packages$/ : /^(?:tool\.poetry\.(?:dev-dependencies|group\.[^.]+\.dependencies)|dependency-groups)$/;
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/\s+#.*$/, '');
+    // A comment starts at a # after a blank: indexOf-like, never a regex that rescans a run of blanks (R-WB-14).
+    const hash = raw.search(/(?:^|[ \t])#/);
+    const line = hash < 0 ? raw : raw.slice(0, hash);
     if (arrayKey) {
       for (const q of line.matchAll(/["']([^"']{1,300})["']/g)) { const n = reqName(q[1]); if (n) out.push({ name: n, dev: arrayDev }); }
       if (line.replace(/["'][^"']*["']/g, '').includes(']')) arrayKey = null;
@@ -402,7 +467,7 @@ export function writeLike(name) {
 
 // ---------------------------------------------------------------- analyzer
 
-const isTestPath = (p) => TEST_PATH_RE.test(`/${p}`);
+const isTestPath = (p) => TEST_PATH_RE.test(`/${p}`) || TOOLING_FILE_RE.test(p);
 
 /** Kinds that are never a backend a server writes data to (a browser or a desktop GUI). */
 const notAStore = (b) => b?.not_a_store === true;
@@ -414,6 +479,7 @@ export function createAnalyzer({ table, index }) {
   const fsTokens = new Set();
   const specs = []; // {path, version, petstore}
   const unknownApiHosts = new Set(); // api.* hosts in code that no map names (counted, never kept: upstream text)
+  let llmSdk = false; // a model provider SDK of a cloud vendor (LLM_SDKS) is in use
   let filesRead = 0;
   let codeFilesRead = 0;
   let serverJsonRemote = false;
@@ -489,7 +555,12 @@ export function createAnalyzer({ table, index }) {
         return;
       }
       const eco = { npm: 'npm', pyproject: 'pypi', requirements: 'pypi', setup_py: 'pypi', setup_cfg: 'pypi', pipfile: 'pypi', gomod: 'go', cargo: 'cargo', pom: 'maven', gradle: 'maven', csproj: 'nuget' }[mk];
-      for (const d of manifestDeps(mk, text)) noteDep(eco, d.name, d.dev || test, path);
+      // requirements-dev.txt, requirements-test.in, dev.in and the like list development tools, not the server's (R-WB-21).
+      const devFile = mk === 'requirements' && DEV_REQUIREMENTS_RE.test(path.slice(path.lastIndexOf('/') + 1));
+      for (const d of manifestDeps(mk, text)) {
+        noteDep(eco, d.name, d.dev || test || devFile, path);
+        if (LLM_SDKS.has(eco === 'pypi' ? normPy(d.name) : d.name.toLowerCase())) llmSdk = true;
+      }
       return;
     }
     if (role === 'compose') {
@@ -498,7 +569,7 @@ export function createAnalyzer({ table, index }) {
           if (img === entry || (entry.includes('/') && img.endsWith(`/${entry}`))) for (const id of ids) hit(id, 'compose_image', test ? WEIGHTS.dev_dependency : WEIGHTS.compose_image, path, entry);
         }
       }
-      for (const m of text.matchAll(/^[ \t]*-?[ \t]*([A-Z][A-Z0-9_]{1,63})[ \t]*[:=]/gm)) noteEnv(m[1], 'config', path);
+      for (const m of text.matchAll(/^[ \t]*(?:-[ \t]*)?([A-Z][A-Z0-9_]{1,63})[ \t]*[:=]/gm)) noteEnv(m[1], 'config', path);
       noteSchemes(text, path, WEIGHTS.url_scheme);
       return;
     }
@@ -528,8 +599,8 @@ export function createAnalyzer({ table, index }) {
     }
     if (role === 'maybe_spec') {
       const head = text.slice(0, 4096);
-      const m = /["']?(openapi|swagger)["']?\s*:\s*["']?(3\.[0-9.]{1,6}|2\.0)/.exec(head);
-      if (!m || (!SPEC_NAME_RE.test(path) && !/^\s*[{]?\s*["']?(?:openapi|swagger)["']?\s*:/m.test(head))) return;
+      const m = /["']?(openapi|swagger)["']?[ \t]*:[ \t]*["']?(3\.[0-9.]{1,6}|2\.0)/.exec(head);
+      if (!m || (!SPEC_NAME_RE.test(path) && !/^[ \t]*\{?[ \t]*["']?(?:openapi|swagger)["']?[ \t]*:/m.test(head))) return;
       if (SAMPLE_PATH_RE.test(`/${path}`)) return;
       // The Swagger sample (Petstore) ships with generic OpenAPI-to-MCP tools; it is not the server's backend.
       const petstore = /petstore/i.test(text.slice(0, 8192));
@@ -568,6 +639,7 @@ export function createAnalyzer({ table, index }) {
         if (!known && !test && /^api\./.test(host) && !/(?:^|\.)(?:localhost|example\.(?:com|org|net)|github\.com|githubusercontent\.com)$/.test(host)) unknownApiHosts.add(host);
       }
       if (!test) for (const [id, re] of FS_TOKENS) if (re.test(text)) fsTokens.add(id);
+      if (!test && !llmSdk && LLM_CODE_RE.test(text)) llmSdk = true;
       if (!test && tools.size < MAX_TOOL_NAMES) {
         for (const re of TOOL_RES) {
           re.lastIndex = 0;
@@ -602,12 +674,24 @@ export function createAnalyzer({ table, index }) {
       for (const [k, v] of kinds) { score += v.weight; signals.push(k); }
       scored.push({ id, b, score, signals: signals.sort(), kinds });
     }
+    // A model provider SDK of a cloud vendor (Bedrock, Vertex AI): the generic cloud backend loses what only the generic
+    // SDK gave it, so a server that calls a model through boto3 is not an AWS server (R-WB-21).
+    if (llmSdk) {
+      for (let i = scored.length - 1; i >= 0; i--) {
+        const s = scored[i];
+        if (GENERIC_CLOUD_BACKENDS.has(s.id) && [...s.kinds.values()].every((v) => v.evidence.every((e) => GENERIC_CLOUD_DETAILS.has(e.detail)))) scored.splice(i, 1);
+      }
+    }
     const routeRank = (b) => (usableStandIn(b) ? 0 : b.spec ? 1 : 2);
-    // A backend the repository declares (a dependency, a compose image, a Prisma provider) or calls by name (a code
-    // token, an API host) ranks above one it only mentions (a URL scheme, an env name): a secret scanner's
-    // `postgres://` pattern does not make a SQLite server a Postgres one (R-WB-18).
-    const anchored = (s) => s.signals.some((k) => ANCHOR_SIGNALS.has(k));
-    scored.sort((x, y) => (anchored(y) - anchored(x)) || y.score - x.score || routeRank(x.b) - routeRank(y.b) || (x.id < y.id ? -1 : 1));
+    // How the repository holds a backend (R-WB-18, R-WB-21): 2 declared in a manifest or called by name in code (a
+    // dependency, a Prisma provider, a code token, an API host, its tools); 1 only a compose service image; 0 only
+    // mentioned (a URL scheme, an env name). A higher level ranks first: a secret scanner's `postgres://` does not make
+    // a SQLite server a Postgres one, and a cache or token store in compose (Redis next to a hosted API) does not
+    // outrank the API the tools call.
+    const levelOf = (s) => (s.signals.some((k) => k === 'dependency' || k === 'prisma_provider' || k === 'code_token' || k === 'host_literal' || k === 'tool_names') ? 2 : s.signals.includes('compose_image') ? 1 : 0);
+    const hostedAnchored = scored.some((s) => s.b.kind === 'hosted_api' && s.score >= FOUND_SCORE && levelOf(s) === 2);
+    const level = (s) => (hostedAnchored && s.b.kind === 'kv' ? Math.min(levelOf(s), 1) : levelOf(s));
+    scored.sort((x, y) => (level(y) - level(x)) || y.score - x.score || routeRank(x.b) - routeRank(y.b) || (x.id < y.id ? -1 : 1));
     // The generic SQL entry stands aside when a specific engine is found.
     const specificSql = scored.some((s) => s.id !== 'sql' && s.b.kind === 'sql' && s.score >= FOUND_SCORE);
     const strong = (s) => s.signals.some((k) => STRONG_SIGNALS.has(k) || (k === 'env_name' && s.b.kind === 'hosted_api'));
@@ -645,6 +729,7 @@ export function createAnalyzer({ table, index }) {
     let specUrl = null;
     let specFormat = null;
     let conf;
+    let routable = true;
     const confOf = (s) => (s.score >= HIGH_SCORE && s.signals.length >= 2 ? 'high' : s.score >= FOUND_SCORE ? 'medium' : 'low');
     if (toolList.length >= MIN_TOOLS_FOR_READ_ONLY && writeTools.length === 0) {
       cls = 'none';
@@ -667,13 +752,24 @@ export function createAnalyzer({ table, index }) {
       if (notAStore(b)) { cls = 'none'; reason = 'not_a_store'; }
       else if (usableStandIn(b)) { cls = 'local_full'; standIn = { id: b.stand_in.id, product: b.stand_in.product, fidelity: b.stand_in.fidelity }; }
       else if (b.spec) { cls = 'mock_min'; specUrl = b.spec.url; specFormat = b.spec.format; }
-      else if (repoSpecUrl) { cls = 'mock_min'; specUrl = repoSpecUrl; specFormat = repoSpecFormat; conf = 'low'; }
       else {
         cls = 'none';
         reason = b.stand_in && b.stand_in.cleared === false && (b.stand_in.fidelity === 'real' || b.stand_in.fidelity === 'faithful') ? 'stand_in_not_cleared'
           : b.kind === 'hosted_api' || !b.stand_in ? 'hosted_without_spec' : 'no_stand_in';
       }
       if (primary.id === 'sql' && conf === 'high') conf = 'medium';
+      // R-WB-22: the write tools must plausibly touch the backend: a write tool naming its objects (KIND_WORDS, the
+      // map's `objects`). With none, or no tool names found at all, the class stays, at low confidence, unrouted.
+      if (cls === 'local_full' || cls === 'mock_min') {
+        const words = new Set([...(b.kind === 'filesystem' ? FILE_WORDS : KIND_WORDS[b.kind] ?? []), ...(b.objects ?? []), ...toolWords(primary.id)]);
+        const anyWrite = (b.kind === 'hosted_api' || b.kind === 'service') && (b.objects ?? []).length === 0;
+        const related = writeTools.some((t) => anyWrite || toolWords(t).some((w) => words.has(w)));
+        if (!related) {
+          conf = 'low';
+          routable = false;
+          if (evidence.length < MAX_EVIDENCE) evidence.push({ signal: 'tool_names', backend: primary.id, path: null, detail: toolList.length === 0 ? 'no tool names found: not routed' : 'no write tool names the backend\'s objects: not routed' });
+        }
+      }
       // Two backends with the same score and different modes: we cannot tell which the write tools use.
       const rival = found[1];
       const modeOfB = (x) => (notAStore(x) ? 'none' : usableStandIn(x) ? 'full' : x.spec ? 'min' : 'none');
@@ -692,6 +788,8 @@ export function createAnalyzer({ table, index }) {
       env_names: envOut,
       base_url_env: baseUrlEnv.slice(0, MAX_ENV_NAMES),
       confidence: conf,
+      // Whether writecheck's modes may take it (pump/modes.mjs): a testable class, not low confidence, plausible tools.
+      routable: (cls === 'local_full' || cls === 'mock_min') && routable && conf !== 'low',
       evidence,
       write_tools: { names_seen: toolList.length, write_like: writeTools.length, sample: [...writeTools.slice(0, MAX_TOOL_SAMPLE / 2), ...toolList.filter((t) => !writeLike(t)).slice(0, MAX_TOOL_SAMPLE / 2)] },
       basis: {
@@ -743,6 +841,7 @@ export function mapProblems(standIns, specUrls) {
   }
   for (const [id, s] of Object.entries(specUrls?.services ?? {})) {
     const w = `spec-urls.json ${id}`;
+    if (s?.objects !== undefined && (!Array.isArray(s.objects) || s.objects.some((o) => typeof o !== 'string' || !/^[a-z][a-z0-9]{0,30}$/.test(o)))) p.push(`${w}: objects must be a list of lower-case words`);
     if (!ID_RE.test(id)) p.push(`${w}: id must match ${ID_RE}`);
     if (typeof s?.name !== 'string' || !s.name) p.push(`${w}: name`);
     checkSignals(w, s?.signals);
@@ -752,6 +851,13 @@ export function mapProblems(standIns, specUrls) {
       continue;
     }
     if (!s?.spec || !HTTPS_RE.test(String(s.spec.url)) || String(s.spec.url).length > 512) p.push(`${w}: spec.url must be an https URL of at most 512 characters, with no port, user, password, query or fragment`);
+    // A description file, not a page about one (R-WB-23): never a repository page or a directory of APIs; the path ends
+    // in .json, .yaml, .yml or .graphql, or the entry says the URL itself serves the description (`endpoint: true`).
+    else {
+      const u = new URL(s.spec.url);
+      if (u.hostname === 'github.com' || u.hostname === 'gitlab.com' || /\/discovery\/v1\/apis\/?$/.test(u.pathname)) p.push(`${w}: spec.url is a page or a directory, not one API's description`);
+      else if (!/\.(?:json|ya?ml|graphql)$/i.test(u.pathname) && s.spec.endpoint !== true) p.push(`${w}: spec.url does not end in a description file (.json, .yaml, .yml, .graphql); set spec.endpoint true only for a URL that serves one`);
+    }
     if (!SPEC_FORMATS.includes(s?.spec?.format)) p.push(`${w}: spec.format must be one of ${SPEC_FORMATS.join(', ')}`);
     if (s?.spec?.publisher !== 'vendor') p.push(`${w}: spec.publisher must be vendor (only the service's own description counts)`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s?.spec?.checked))) p.push(`${w}: spec.checked must be a date`);
