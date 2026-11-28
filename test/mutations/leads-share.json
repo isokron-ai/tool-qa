@@ -1,0 +1,69 @@
+[
+  {
+    "id": "M1 recheckSlots line deleted",
+    "file": "pump/run.mjs",
+    "old": "        recheckSlots: rechecksLeads(leadsMode(env)) ? recheckSlotsFrom(env, slots) : 0,\n",
+    "new": "",
+    "test": "pump/test/run.test.mjs",
+    "pattern": "R-LEAD-51"
+  },
+  {
+    "id": "M1b recheckSlots constant 1",
+    "file": "pump/run.mjs",
+    "old": "recheckSlots: rechecksLeads(leadsMode(env)) ? recheckSlotsFrom(env, slots) : 0,",
+    "new": "recheckSlots: 1,",
+    "test": "pump/test/run.test.mjs",
+    "pattern": "R-LEAD-51"
+  },
+  {
+    "id": "M1c recheckSlots constant 0",
+    "file": "pump/run.mjs",
+    "old": "recheckSlots: rechecksLeads(leadsMode(env)) ? recheckSlotsFrom(env, slots) : 0,",
+    "new": "recheckSlots: 0,",
+    "test": "pump/test/run.test.mjs",
+    "pattern": "R-LEAD-51"
+  },
+  {
+    "id": "M1d recheckSlotsFrom replaced by 1",
+    "file": "pump/run.mjs",
+    "old": "? recheckSlotsFrom(env, slots) : 0,",
+    "new": "? 1 : 0,",
+    "test": "pump/test/run.test.mjs",
+    "pattern": "R-LEAD-51"
+  },
+  {
+    "id": "M2 share one too many",
+    "file": "pump/tick.mjs",
+    "old": "const share = shards.filter((x) => x.recheck).slice(0, recheckSlots);",
+    "new": "const share = shards.filter((x) => x.recheck).slice(0, recheckSlots + 1);",
+    "test": "pump/test/leads-recheck.test.mjs"
+  },
+  {
+    "id": "M3 re-checks always split",
+    "file": "pump/tick.mjs",
+    "old": "  const separate = recheckSlots > 0;",
+    "new": "  const separate = true;",
+    "test": "pump/test/leads-recheck.test.mjs"
+  },
+  {
+    "id": "M4 over-cap re-checks outside the share sent",
+    "file": "pump/tick.mjs",
+    "old": "  return [...share, ...shards.filter((x) => !x.reserved && !x.overCap)];",
+    "new": "  return [...share, ...shards.filter((x) => !x.reserved)];",
+    "test": "pump/test/leads-recheck.test.mjs"
+  },
+  {
+    "id": "R-LEAD-50 frame first",
+    "file": "pump/tick.mjs",
+    "old": "  return [...share, ...shards.filter((x) => !x.reserved && !x.overCap)];",
+    "new": "  return shards.filter((x) => !x.overCap);",
+    "test": "pump/test/leads-recheck.test.mjs"
+  },
+  {
+    "id": "R-LEAD-50 paused lane re-checked",
+    "file": "pump/tick.mjs",
+    "old": "const due = computeDue(inputs).filter((d) => !paused.has(d.workflow) && !holdRunKeys?.has(d.run_key));",
+    "new": "const due = computeDue(inputs).filter((d) => !holdRunKeys?.has(d.run_key));",
+    "test": "pump/test/leads-recheck.test.mjs"
+  }
+]

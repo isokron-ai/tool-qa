@@ -147,6 +147,36 @@ test('R-PIN-01: tool-qa\'s own lanes are enforced, and what their bundles report
   assert.match(meta, /tools: \[\{ name: `tool-qa-\$\{lane\.name\}`, version: lane\.version \}\]/, 'meta/run.mjs still reports tool-qa-<lane> at its version');
 });
 
+test('R-PIN-03: live-probe\'s pins are ones its worker can prove: the fuzz stage at the mcp-check pin, the sandbox at sandbox_sha', () => {
+  // mcp-check corpus/live-probe.mjs toolsRan(): the bundle reports @isokron/mcp-check at the commit that ran (tool_sha,
+  // the lane's own pin), the fuzz stage at that same commit, and isokron-ai/mcp-surface-corpus at the sandbox commit.
+  // A fuzz pin left behind when the mcp-check pin moved made every result pin_mismatch (28 Nov, live-probe-842475c16925).
+  const lp = shipped['live-probe'];
+  const own = selfPin(lp);
+  assert.ok(own, 'live-probe pins a commit of mcp-check');
+  const ran = own.pin.padEnd(40, '0');
+  const tools = [
+    { name: '@isokron/mcp-check', version: ran },
+    { name: 'isokron-ai/mcp-surface-corpus', version: lp.sandbox_sha },
+    { name: 'fuzz', version: ran },
+  ];
+  const d = pinDecision({ mode: pinCheckMode(lp), expected: expectedPins(lp.versions), tools });
+  assert.equal(d.reason, null, `live-probe: ${JSON.stringify(d.problems)}`);
+  assert.equal(lp.versions.probe.fuzz, own.pin, 'the fuzz pin moves with the mcp-check pin');
+  // The same commit is named twice on every lane that runs third-party code: the probe pin the worker reports and
+  // the sandbox_sha the breaker compares with the nightly. They move together.
+  for (const [name, wf] of Object.entries(shipped)) {
+    const probe = wf.versions?.probe?.['mcp-surface-corpus'];
+    if (probe === undefined) continue;
+    assert.match(String(wf.sandbox_sha), /^[0-9a-f]{40}$/, `${name}: a probe mcp-surface-corpus pin needs a sandbox_sha`);
+    assert.ok(wf.sandbox_sha.startsWith(probe), `${name}: probe mcp-surface-corpus ${probe} is not sandbox_sha ${wf.sandbox_sha}`);
+  }
+  // Fails closed: a fuzz pin the worker does not run is refused as the tool side's fault, never the subject's.
+  const stale = pinDecision({ mode: 'enforce', expected: { tool: lp.versions.tool, probe: { ...lp.versions.probe, fuzz: 'bece344' } }, tools });
+  assert.equal(stale.reason, 'pin_mismatch');
+  assert.deepEqual(stale.problems.map((p) => [p.fault, p.kind, p.key, p.expected, p.got]), [['tool', 'probe', 'fuzz', 'bece344', ran]]);
+});
+
 // ---- the pump ----
 
 test('R-PIN-01: workerInputs sends tool_sha only when given, and only a full commit', () => {

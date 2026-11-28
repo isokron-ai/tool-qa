@@ -17,7 +17,7 @@
 import { Worker } from 'node:worker_threads';
 
 import {
-  MANIFEST_NAME, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, resultFault, sha256Hex, validateManifest,
+  MANIFEST_NAME, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, resultFault, skipCodes, sha256Hex, validateManifest,
 } from '../worker-kit/contract.mjs';
 import { readTar, TarError } from '../worker-kit/tar.mjs';
 import { pinDecision } from '../pump/pins.mjs';
@@ -158,6 +158,8 @@ export function analyzeBundle(plaintext, ctx) {
     coverage: rf.coverage,
     skip_faults: rf.faults,
     declared_faults: manifest.skips.filter((sk) => sk.fault !== undefined).length,
+    // The skips' codes with their fault (R-COV-49); absent when no skip has one, so older reports keep their shape.
+    ...(skipCodes(manifest.skips).length > 0 ? { skip_codes: skipCodes(manifest.skips) } : {}),
   };
   // Every stage that did not run may succeed later (R-ING-16).
   const retryable = manifest.skips.length > 0 && retryableSkips === manifest.skips.length;

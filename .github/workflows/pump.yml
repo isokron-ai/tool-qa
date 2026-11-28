@@ -107,6 +107,8 @@ jobs:
           LANE_T0_FUZZ_ENABLED: ${{ vars.LANE_T0_FUZZ_ENABLED }}
           # The lead pipeline (state/leads.mjs): off unless the variable is "dry-run", "recheck" or "true".
           LANE_LEADS_ENABLED: ${{ vars.LANE_LEADS_ENABLED }}
+          # Worker slots kept for lead re-checks while one is due (pump/tick.mjs planShards): a whole number, default 1, 0 off.
+          LEADS_RECHECK_SLOTS: ${{ vars.LEADS_RECHECK_SLOTS }}
           # Shown by the live view's publish gate node (config.switches).
           RESULTS_PUBLISH_ENABLED: ${{ vars.RESULTS_PUBLISH_ENABLED }}
           LIVE_R2_ACCESS_KEY_ID: ${{ secrets.LIVE_R2_ACCESS_KEY_ID }}

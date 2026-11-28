@@ -165,7 +165,7 @@ test('R-LEAD-26: dry-run and recheck write the plan to the job summary and touch
     }
     // A state from before the leads tables (schema v11): noted as off, nothing read.
     const v11 = openState(':memory:');
-    v11.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; PRAGMA user_version = 11');
+    v11.raw.exec('DROP TABLE lead_subjects; DROP TABLE leads; ALTER TABLE results DROP COLUMN skip_codes; PRAGMA user_version = 11');
     assert.equal((await step(v11, { mode: 'on', mintToken: async () => assert.fail('no token') })).mode, 'on');
     assert.equal(v11.getKv(LEADS_LAST_KEY).off, true);
     const off = reproduced(1);
@@ -424,4 +424,26 @@ test('R-LEAD-46: a person\'s "not planned" close stands: a lead that comes back 
   issues[0].state_reason = 'completed';
   db.raw.prepare('UPDATE leads SET needs_sync = 1 WHERE fingerprint = ?').run(l.fingerprint);
   assert.equal((await step(db, { mintToken: minter().mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} } })).reopened, 1);
+});
+
+test('R-LEAD-49: every run with the pipeline on logs one status line (counts and our reason codes only), even with nothing to file; off logs nothing', async () => {
+  for (const mode of ['dry-run', 'recheck', 'on']) {
+    const db = reproduced(2);
+    // One lead still waits for its re-check.
+    db.raw.prepare('UPDATE leads SET reproduced_at = NULL WHERE fingerprint = (SELECT MIN(fingerprint) FROM leads)').run();
+    db.setKv('leads.recheck', { at: NOW, mode, due: 1, waiting: 1, given_up: 0 }, { now: NOW });
+    const lines = [];
+    const { api } = issuesApi();
+    await step(db, { mode, log: (l) => lines.push(l), mintToken: minter().mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} } });
+    const status = lines.filter((l) => l.startsWith(`leads: ${mode}: `));
+    assert.equal(status.length, 1, `${mode}: ${lines.join(' | ')}`);
+    assert.match(status[0], /2 open|1 open/);
+    assert.match(status[0], /held \(recheck_pending 1\)/);
+    assert.match(status[0], /re-checks due 1, waiting 1, given up 0/);
+    assert.ok(!/acme|server-/.test(status[0]), 'no subject name');
+  }
+  const off = reproduced(1);
+  const lines = [];
+  await step(off, { mode: 'off', log: (l) => lines.push(l) });
+  assert.deepEqual(lines, []);
 });

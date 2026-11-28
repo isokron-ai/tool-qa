@@ -39,7 +39,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { deriveDisagreements, foldDisagreement, ORACLE_BUDGET_DAYS, ORACLE_BUDGET_MAX, ORACLE_MAX_UNCHANGED, ORACLE_LANES } from './oracle.mjs';
 import { CLEAN_RECHECKS_TO_CLOSE, mergeVersions, needsSync, pushLog, RECHECK_MAX_ATTEMPTS, repoFor, STALE_PAIR_DAYS } from './leads.mjs';
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 export const MAX_SLOTS = 15;
 /** How long an accepted id conflict waits for its lookup (R-SUBJ-17). */
 export const ACCEPT_TTL_MS = 48 * 3_600_000;
@@ -61,6 +61,7 @@ const MIGRATIONS = [
   { version: 10, sql: () => readFileSync(new URL('./schema-v10.sql', import.meta.url), 'utf8') },
   { version: 11, sql: () => readFileSync(new URL('./schema-v11.sql', import.meta.url), 'utf8') },
   { version: 12, sql: () => readFileSync(new URL('./schema-v12.sql', import.meta.url), 'utf8') },
+  { version: 13, sql: () => readFileSync(new URL('./schema-v13.sql', import.meta.url), 'utf8') },
 ];
 
 /** Thrown by withFence() when the caller's fence is not the current live lease. */
@@ -1112,6 +1113,8 @@ export class StateDb {
    *   fault, coverage: the result's fault side and coverage state
    *   (worker-kit/contract.mjs resultFault, R-COV-02); stored on the results
    *   row, NULL when not given. coverage 'assessed' also sets assessed_at.
+   *   skipCodes: the bundle's skip codes, a list of {fault, code} (worker-kit
+   *   skipCodes, R-COV-49), stored as JSON; NULL when no skip has a code.
    *   oracle: the accepted bundle's oracle facts (state/oracle.mjs
    *   oracleFacts), folded into the subject's disagreement by noteOracle().
    *   It never changes fault or coverage.
@@ -1120,7 +1123,7 @@ export class StateDb {
    *   pipeline is off, so nothing is kept. An empty list is a result with none.
    * @returns {{accepted: boolean, reason: string|null, id: number, duplicate?: true}}
    */
-  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, oracle = null, failures = null, subjectSha = null, completedAt = null, now } = {}) {
+  recordResult({ run_key: runKey, attempt_id: attemptId, fence, outcome = null, verdict, accepted, reason = null, digest = null, resultOutcome = null, fault = null, coverage = null, skipCodes = null, oracle = null, failures = null, subjectSha = null, completedAt = null, now } = {}) {
     if (verdict === undefined && typeof accepted === 'boolean') verdict = accepted ? 'accepted' : 'rejected';
     if (verdict !== 'accepted' && verdict !== 'rejected') {
       throw new TypeError('recordResult needs verdict "accepted" or "rejected" (or accepted: true|false)');
@@ -1184,16 +1187,16 @@ export class StateDb {
           const assessed = coverage === 'assessed' ? t : null;
           this.raw.prepare(`
             INSERT INTO results (run_key, subject, workflow, attempt_id, fence, outcome, digest, accepted_at, measured_at, skips_streak,
-              fault, coverage, assessed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              fault, coverage, assessed_at, skip_codes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (run_key) DO UPDATE SET attempt_id = excluded.attempt_id, fence = excluded.fence,
               outcome = excluded.outcome, digest = excluded.digest, accepted_at = excluded.accepted_at,
               measured_at = CASE WHEN excluded.outcome IS 'skips_only' THEN results.measured_at ELSE excluded.accepted_at END,
               skips_streak = CASE WHEN excluded.outcome IS 'skips_only' THEN results.skips_streak + 1 ELSE 0 END,
-              fault = excluded.fault, coverage = excluded.coverage,
+              fault = excluded.fault, coverage = excluded.coverage, skip_codes = excluded.skip_codes,
               assessed_at = COALESCE(excluded.assessed_at, results.assessed_at)
           `).run(runKey, item.subject, item.workflow, attemptId, fence, final, digest, t, skipsOnly ? null : t, skipsOnly ? 1 : 0,
-            fault, coverage, assessed);
+            fault, coverage, assessed, Array.isArray(skipCodes) && skipCodes.length > 0 ? JSON.stringify(skipCodes) : null);
           if (oracle || ORACLE_LANES.includes(item.workflow)) this.noteOracle(item.subject, item.workflow, runKey, oracle, { now: t, observedAt: completedAt != null && toMs(completedAt) < toMs(now) ? completedAt : now });
           if (Array.isArray(failures)) {
             this.foldLeads(item.subject, item.workflow, runKey, failures, {

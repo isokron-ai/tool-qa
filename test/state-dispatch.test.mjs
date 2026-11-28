@@ -34,8 +34,8 @@ function dispatch(db, { attemptId = 'att-1', items = [{ runKey: KEY_A, subject: 
 
 test('schema v3 adds the dispatch ledger tables and columns', () => {
   const db = fresh();
-  assert.equal(SCHEMA_VERSION, 12);
-  assert.equal(db.schemaVersion(), 12);
+  assert.equal(SCHEMA_VERSION, 13);
+  assert.equal(db.schemaVersion(), 13);
   const tables = db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
   for (const t of ['dispatches', 'dispatch_items', 'results', 'run_keys', 'kv']) assert.ok(tables.includes(t), t);
   const cols = (t) => db.raw.prepare(`PRAGMA table_info(${t})`).all().map((r) => r.name);
@@ -336,4 +336,19 @@ test('R-COV-02: migration from version 6 keeps results and adds fault, coverage 
   const r = db.getResult('e'.repeat(64));
   assert.deepEqual([r.outcome, r.fault, r.coverage, r.assessed_at], ['accepted', null, null, null]);
   db.close();
+});
+
+test('R-COV-49: recordResult keeps the skip codes of an accepted result as JSON, and NULL when there are none', () => {
+  const db = fresh();
+  const [item] = dispatch(db);
+  db.markDispatched('att-1', { runId: 1, now: T0 });
+  const codes = [{ fault: 'tool', code: 'go_install_not_supported' }];
+  const r = db.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item.fence, outcome: 'accepted', verdict: 'accepted', fault: 'tool', coverage: 'unassessed_tool', skipCodes: codes, now: T0 + MIN });
+  assert.equal(r.accepted, true);
+  assert.deepEqual(JSON.parse(db.getResult(KEY_A).skip_codes), codes);
+  const db2 = fresh();
+  const [item2] = dispatch(db2);
+  db2.markDispatched('att-1', { runId: 1, now: T0 });
+  db2.recordResult({ run_key: KEY_A, attempt_id: 'att-1', fence: item2.fence, outcome: 'accepted', verdict: 'accepted', fault: 'tool', coverage: 'unassessed_tool', skipCodes: [], now: T0 + MIN });
+  assert.equal(db2.getResult(KEY_A).skip_codes, null);
 });
