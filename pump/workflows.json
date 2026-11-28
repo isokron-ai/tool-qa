@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Worker workflows the pump may dispatch. A workflow is dispatched only when enabled is true. versions, image_digest and settings_state go into every run_key, so changing any of them makes every subject due again for that workflow. Lease and slot expiry = 1.5 x (setup_minutes + shard_size x minutes_per_subject) + 10 minutes. slots_max caps open dispatches for the workflow. enabled and runs_untrusted must be true or false. runs_untrusted says whether the workflow runs third-party code (servers, builds); a workflow that does not say false counts as true, and none of those is dispatched while the sandbox breaker is open (pump/breaker.mjs, docs/OPERATIONS.md). sandbox_sha is the isokron-ai/mcp-surface-corpus commit such a workflow pins its sandbox at (null until it pins one); the watchdog shows amber while it differs from the commit the nightly conformance run tested. pin_check (\"label\" or \"enforce\"; R-PIN-01, pump/pins.mjs) says how the tool and probe versions are made true: ingest refuses a result whose manifest reports another version than the run_key is filed under on every lane, and on an enforce lane also one that does not prove each pinned version; on an enforce lane whose versions.tool pins a commit of the worker repository itself (the entry named after the repository), the pump sends that full commit as the tool_sha input and the worker must run it. label is for worker repositories that do not run and report their pins yet. sha_check (\"label\", the default, or \"enforce\"; R-SHA-01, pump/pins.mjs) says what ingest does when the commit a worker says it read (manifest subject.sha) is not the commit the run_key names: label records it in the report, enforce refuses the result as subject_sha_mismatch; a refusal never parks the run_key, it waits the retry backoff. send_sha (true or false, default false; R-SHA-05) sends each item its run_key's commit (items[].sha), only to a worker that reads exactly that commit; sha_check \"enforce\" needs send_sha true. The worker contract is in docs/INTERFACES.md.",
+  "description": "Worker workflows the pump may dispatch. A workflow is dispatched only when enabled is true. versions, image_digest and settings_state go into every run_key, so changing any of them makes every subject due again for that workflow. Lease and slot expiry = 1.5 x (setup_minutes + shard_size x minutes_per_subject) + 10 minutes. slots_max caps open dispatches for the workflow. enabled and runs_untrusted must be true or false. runs_untrusted says whether the workflow runs third-party code (servers, builds); a workflow that does not say false counts as true, and none of those is dispatched while the sandbox breaker is open (pump/breaker.mjs, docs/OPERATIONS.md). sandbox_sha is the isokron-ai/mcp-surface-corpus commit such a workflow pins its sandbox at (null until it pins one); the watchdog shows amber while it differs from the commit the nightly conformance run tested. pin_check (\"label\" or \"enforce\"; R-PIN-01, pump/pins.mjs) says how the tool and probe versions are made true: ingest refuses a result whose manifest reports another version than the run_key is filed under on every lane, and on an enforce lane also one that does not prove each pinned version; on an enforce lane whose versions.tool pins a commit of the worker repository itself (the entry named after the repository), the pump sends that full commit as the tool_sha input and the worker must run it. label is for worker repositories that do not run and report their pins yet. sha_check (\"label\", the default, or \"enforce\"; R-SHA-01, pump/pins.mjs) says what ingest does when the commit a worker says it read (manifest subject.sha) is not the commit the run_key names: label records it in the report, enforce refuses the result as subject_sha_mismatch; a refusal never parks the run_key, it waits the retry backoff. send_sha (true or false, default false; R-SHA-05) sends each item its run_key's commit (items[].sha), only to a worker that reads exactly that commit; sha_check \"enforce\" needs send_sha true. The worker contract is in docs/INTERFACES.md. A control lane (control_subjects, dispatch_style \"t0\", switch; pump/controls.mjs) drives T0 workers on our own fixtures and servers: it is dispatched only while the repository variable named by `switch` is exactly \"true\", takes one subject per dispatch, and a miss is a lead against our tool, never the subject's.",
   "workflows": {
     "scan-static": {
       "enabled": true,
@@ -127,6 +127,73 @@
       "minutes_per_subject": 1,
       "slots_max": 1,
       "versions": { "tool": { "release-diff": "1.1.0" }, "oracle": {}, "probe": {} },
+      "image_digest": null,
+      "settings_state": "default"
+    },
+    "t0-defects": {
+      "enabled": true,
+      "switch": "LANE_T0_DEFECTS_ENABLED",
+      "runs_untrusted": false,
+      "pin_check": "label",
+      "repo": "isokron-ai/mcp-write-safety",
+      "file": "defect-matrix.yml",
+      "ref": "main",
+      "dispatch_style": "t0",
+      "control_subjects": {
+        "isokron-ai/mcp-write-safety.defect-matrix": { "inputs": { "defects": "all" } }
+      },
+      "shard_size": 1,
+      "setup_minutes": 10,
+      "minutes_per_subject": 40,
+      "slots_max": 1,
+      "versions": { "tool": { "tool-qa-t0-defects": "1" }, "oracle": {}, "probe": {} },
+      "image_digest": null,
+      "settings_state": "default"
+    },
+    "t0-self": {
+      "enabled": true,
+      "switch": "LANE_T0_SELF_ENABLED",
+      "runs_untrusted": false,
+      "pin_check": "label",
+      "repo": "isokron-ai/mcp-writecheck-action",
+      "file": "selftest.yml",
+      "ref": "main",
+      "dispatch_style": "t0",
+      "control_subjects": {
+        "isokron-ai/mcp-writecheck-action.selftest": { "file": "selftest.yml" },
+        "isokron-ai/mcp-writecheck-action.dogfood-tiny-tracker": { "file": "dogfood-tiny-tracker.yml" }
+      },
+      "shard_size": 1,
+      "setup_minutes": 10,
+      "minutes_per_subject": 60,
+      "slots_max": 1,
+      "versions": { "tool": { "tool-qa-t0-self": "1" }, "oracle": {}, "probe": {} },
+      "image_digest": null,
+      "settings_state": "default"
+    },
+    "t0-dogfood": {
+      "enabled": true,
+      "switch": "LANE_T0_DOGFOOD_ENABLED",
+      "runs_untrusted": true,
+      "sandbox_sha": "11974fbb75a8c276214c887a079d6ad6df374124",
+      "pin_check": "label",
+      "repo": "isokron-ai/mcp-writecheck-action",
+      "file": "dogfood-kronicle-lite.yml",
+      "ref": "main",
+      "dispatch_style": "t0",
+      "control_subjects": {
+        "isokron-ai/mcp-writecheck-action.dogfood-kronicle-lite": { "file": "dogfood-kronicle-lite.yml" },
+        "isokron-ai/mcp-writecheck-action.dogfood-sea-lite": { "file": "dogfood-sea-lite.yml" },
+        "isokron-ai/mcp-writecheck-action.dogfood-writesafe": { "file": "dogfood-writesafe.yml" },
+        "isokron-ai/mcp-writecheck-action.dogfood-grafana": { "file": "dogfood-grafana.yml" },
+        "isokron-ai/mcp-writecheck-action.dogfood-kubernetes": { "file": "dogfood-kubernetes.yml" },
+        "isokron-ai/mcp-writecheck-action.dogfood-payload": { "file": "dogfood-payload.yml" }
+      },
+      "shard_size": 1,
+      "setup_minutes": 10,
+      "minutes_per_subject": 90,
+      "slots_max": 2,
+      "versions": { "tool": { "tool-qa-t0-dogfood": "1" }, "oracle": {}, "probe": {} },
       "image_digest": null,
       "settings_state": "default"
     }

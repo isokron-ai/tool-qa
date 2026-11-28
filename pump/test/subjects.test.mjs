@@ -199,7 +199,8 @@ test('R-SUB-01: the pump loads the seed at start-up, before the first tick, and 
     assert.equal(bad.ok, false);
     assert.ok(lines.some((l) => /^pump: subjects: seed not loaded, subjects left as they were: ENOENT/.test(l)), lines.join('\n'));
     db = openState(stateFile);
-    assert.equal(db.listSubjects().length, 997);
+    // (The control lanes' pseudo-subjects, kind control, are not seed subjects: pump/controls.mjs.)
+    assert.equal(db.listSubjects().filter((x) => x.kind === 'github').length, 997);
     // What the watchdog's subjects check reads (R-SUB-11).
     assert.equal(db.getKv('pump.subjects').ok, false);
     assert.match(db.getKv('pump.subjects').summary, /ENOENT/);

@@ -62,7 +62,8 @@ export const SOURCE = 'tool-qa longitudinal/checkin.mjs';
 export const DEFAULT_CONFIG = Object.freeze({
   // Severity of a failure class: how much of a subject's picture is lost.
   severity: {
-    tool_error: 5, no_tools_found: 4, unsupported_transport: 4, bridge_required: 3, no_runnable_artifact: 3,
+    // A T0 control lane's control did not hold (a seeded defect missed, a known-good build failing): our own tool's miss, the clearest lead there is.
+    control_miss: 5, tool_error: 5, no_tools_found: 4, unsupported_transport: 4, bridge_required: 3, no_runnable_artifact: 3,
     unsupported_language: 3, unsupported_layout: 3, reader_limit: 3, too_large: 2, trace_unavailable: 2,
     install_failed_registry: 2, timeout_start: 2, build_failed_upstream: 2, no_local_backend: 2, default: 2,
   },
@@ -88,6 +89,8 @@ const DETAIL_CLASS = Object.freeze({
 const AMBIGUOUS = new Set(['no_runnable_artifact', 'install_failed_registry', 'timeout_start']);
 
 const ITEM_RE = /^accepted\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/(\d{1,6})\/(.+)$/;
+/** A rejected item's report: only control_failed ones are read (a control lane's miss, a lead against our own tool). */
+const REJECTED_RE = /^rejected\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/(\d{1,6})\/ingest\.json$/;
 const WANT_RE = /^(manifest\.json|ingest\.json|results\/[A-Za-z0-9._-]+\.json|raw\/subject\/scan\.json|observations\/[A-Za-z0-9._-]+\.ndjson)$/;
 
 const parseJson = (buf) => { try { return JSON.parse(Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf)); } catch { return null; } };
@@ -95,14 +98,29 @@ const parseJson = (buf) => { try { return JSON.parse(Buffer.isBuffer(buf) ? buf.
 /** Items from tar entries (or files) laid out as accepted/<attempt>/<index>/<path>. Unreadable manifests are counted. */
 export function itemsFromEntries(entries, stats = { unreadable: 0 }) {
   const groups = new Map();
+  const misses = [];
   for (const e of entries) {
+    const rej = REJECTED_RE.exec(e.path);
+    if (rej) {
+      const rep = parseJson(e.data);
+      const subject = rep?.ledger?.subject;
+      if (rep?.reason === 'control_failed' && typeof subject === 'string' && subject.length > 0 && subject.length <= 512 && typeof rep.ingested_at === 'string') {
+        const lane = String(rep.ledger?.workflow_file ?? '').split('/').pop().replace(/\.ya?ml$/, '') || 'unknown';
+        misses.push({
+          control_miss: true, subject, version: null, sent_as: subject, lane, observed_at: rep.ingested_at, attempt_id: String(rep.attempt_id ?? rej[1]), item_index: Number(rej[2]),
+          key: `${rep.attempt_id ?? rej[1]}/${rej[2]}/control_failed`, run_id: Number.isSafeInteger(rep.input?.run_id) ? rep.input.run_id : null,
+          tools: ['t0-control@1'], skips: [], results: new Map(), scan: null, fields: new Map(),
+        });
+      }
+      continue;
+    }
     const m = ITEM_RE.exec(e.path);
     if (!m || !WANT_RE.test(m[3])) continue;
     const k = `${m[1]}/${m[2]}`;
     if (!groups.has(k)) groups.set(k, { attempt: m[1], index: Number(m[2]), files: new Map() });
     groups.get(k).files.set(m[3], e.data);
   }
-  const out = [];
+  const out = [...misses];
   for (const g of groups.values()) {
     const man = parseJson(g.files.get('manifest.json'));
     if (!man || typeof man.subject?.id !== 'string' || typeof man.finished_at !== 'string') { stats.unreadable++; continue; }
@@ -211,7 +229,7 @@ const ENUMS = Object.freeze({
   language: ['python', 'typescript', 'javascript', 'go', 'rust', 'java', 'kotlin', 'c#', 'c++', 'c', 'swift', 'php', 'ruby', 'scala', 'dart', 'elixir', 'shell', 'ts/js', 'java/kotlin', 'other'],
   detail: ['no_tools', 'multiple_servers', 'unsupported_language', 'names_only', 'too_large', 'tool_error', 'rate_limited', 'needs_credentials', 'quarantined'],
 });
-const CLASSES = [...SKIP_REASONS];
+const CLASSES = [...SKIP_REASONS, 'control_miss'];
 
 /** A free word (error name, detail, list error): only our own short codes, never a name of anything in the run. */
 function word(v, names) {
@@ -251,6 +269,15 @@ function idiomOf(result, seedLanguage) {
  */
 export function failuresOf(item, config = DEFAULT_CONFIG, { langOf = () => null, names = nameTokens([item.subject]) } = {}) {
   const want = new Set(config.faults);
+  // A control lane's miss (a control_failed rejection): a tool-side failure of our own tool, whatever the subject.
+  if (item.control_miss) {
+    if (!want.has('tool')) return [];
+    return [{
+      cls: 'control_miss', stage: 'worker', partial: false, idiom: '-', layout: '-',
+      signature: 'class=control_miss;fault=tool;retryable=false', tool: 't0-control@1',
+      lane: /^[A-Za-z0-9._-]{1,80}$/.test(item.lane ?? '') ? item.lane : '<other>',
+    }];
+  }
   // Every result in the bundle is read, not only the first.
   const results = [...item.results.values()].filter((r) => r && typeof r.status === 'string');
   const out = [];
@@ -377,7 +404,9 @@ export function analyse(items, { seed = new Map(), tierWeights, config: over = {
   for (const it of uniq) latest.set(`${it.subject}\u0000${it.lane}`, it);
 
   const disagree = oracleDisagreements(uniq);
-  const info = (subject) => ({ ...(seed.get(subject.toLowerCase()) ?? { tier: config.unseeded_tier, stars: 0, unseeded: true }), oracle: disagree.has(subject) });
+  // A control lane's pseudo-subject is ours and top tier: its miss outranks a miss on a long-tail server.
+  const controlSubjects = new Set(uniq.filter((i) => i.control_miss).map((i) => i.subject));
+  const info = (subject) => ({ ...(seed.get(subject.toLowerCase()) ?? (controlSubjects.has(subject) ? { tier: 'T0', stars: 0 } : { tier: config.unseeded_tier, stars: 0, unseeded: true })), oracle: disagree.has(subject) });
   const fps = new Map();
   let failingItems = 0;
   for (const it of uniq) {
