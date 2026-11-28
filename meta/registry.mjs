@@ -30,7 +30,7 @@ import { OCI_HOSTS, ociTarget, resolveTags } from './lib/oci.mjs';
 import { bool, githubRepoOf, int, record, skipFor, str, textDigest, time, toolErrorSkip } from './lib/common.mjs';
 
 export const LANE = 'meta-registry';
-export const VERSION = '1.3.0';
+export const VERSION = '1.3.1';
 export const MCP_REGISTRY = 'https://registry.modelcontextprotocol.io/v0.1/servers';
 const NPM = 'https://registry.npmjs.org';
 const PYPI = 'https://pypi.org';
@@ -477,7 +477,7 @@ export function goEscape(path) {
   return path.replace(/[A-Z]/g, (c) => `!${c.toLowerCase()}`);
 }
 
-export function goModFacts(modText) {
+export function goModFacts(modText, modulePath = null) {
   const lines = (typeof modText === 'string' ? modText : '').split('\n');
   const at = lines.findIndex((l) => /^\s*module\s/.test(l));
   let deprecated = at >= 0 && /\/\/\s*Deprecated:/.test(lines[at]);
@@ -487,7 +487,11 @@ export function goModFacts(modText) {
   const retracts = lines.filter((l) => /^\s*retract\b/.test(l)).length;
   const goLine = lines.find((l) => /^\s*go\s+[0-9][0-9.]{0,15}\s*$/.test(l));
   // The proxy serves a repository without a go.mod with a go.mod of one module line (a +incompatible module).
-  const synthesized = lines.filter((l) => l.trim() !== '').length === 1 && at >= 0;
+  // Exactly that form: one line, `module <path>`, no directive, no comment, no quotes, and (when the queried path is known)
+  // that path, compared without case. Anything else is a go.mod someone wrote (R-META-13).
+  const nonBlank = lines.filter((l) => l.trim() !== '');
+  const oneLine = nonBlank.length === 1 ? /^module\s+([^\s"'`\/(][^\s"'`]*)\s*$/.exec(nonBlank[0]) : null;
+  const synthesized = oneLine !== null && (modulePath === null || oneLine[1].toLowerCase() === modulePath.toLowerCase());
   return { deprecated, retract_directives: retracts, go_directive: goLine ? goLine.trim().split(/\s+/)[1] : null, go_mod_synthesized: synthesized };
 }
 
@@ -505,7 +509,7 @@ export async function goRead(http, repo) {
     });
     let modFacts = null;
     if (latest.value.version && GO_VERSION.test(latest.value.version)) {
-      const m = await http.getSummary(`${GOPROXY}/${esc}/@v/${latest.value.version}.mod`, { version: 'go-mod/1', parse: 'text', extract: (t) => goModFacts(t) });
+      const m = await http.getSummary(`${GOPROXY}/${esc}/@v/${latest.value.version}.mod`, { version: 'go-mod/1', parse: 'text', extract: (t) => goModFacts(t, mod) });
       if (answered(m)) modFacts = m.value;
     }
     return { status: 'ok', module: mod, value: { ...latest.value, versions_count: answered(list) ? list.value.versions : null, ...(modFacts ?? {}) } };

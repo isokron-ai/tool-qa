@@ -41,7 +41,7 @@ import { readZipLenient } from '../scripts/lib/unzip.mjs';
 import { safeArchivePath } from '../scripts/lib/untar.mjs';
 
 export const LANE = 'release-diff';
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 const NPM = 'https://registry.npmjs.org';
 const PYPI = 'https://pypi.org';
@@ -61,8 +61,12 @@ export const LIMITS = Object.freeze({
   subjectBudgetMs: 360_000,
   // All the comparisons of one subject together may compute this long (the loops run on one thread).
   computeBudgetMs: 90_000,
-  artifact: { maxCompressedBytes: 64 * 1024 ** 2, maxInflatedBytes: 256 * 1024 ** 2, maxEntries: 20_000, maxKeptEntryBytes: 16 * 1024 ** 2, maxKeptTotalBytes: 256 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
-  source: { maxCompressedBytes: 128 * 1024 ** 2, maxInflatedBytes: 1024 ** 3, maxEntries: 100_000, maxKeptEntryBytes: 2 * 1024 ** 2, maxKeptTotalBytes: 256 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
+  // artifact: one at a time in memory (compressed bytes, then every inflated entry; read twice per commit, never two at once): so compressed + inflated
+  // is the lane's memory ceiling for it (R-RD-23: at most 1 GiB; a GitHub runner has 7 GB).
+  artifact: { maxCompressedBytes: 128 * 1024 ** 2, maxInflatedBytes: 512 * 1024 ** 2, maxEntries: 50_000, maxKeptEntryBytes: 16 * 1024 ** 2, maxKeptTotalBytes: 512 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
+  // source: streamed, only files an artifact also has are kept (maxKeptTotalBytes): memory does not follow these three numbers, time
+  // does (downloadTimeoutMs ends a slow read as reader_limit, not as a verdict about the repository).
+  source: { maxCompressedBytes: 512 * 1024 ** 2, maxInflatedBytes: 4 * 1024 ** 3, maxEntries: 300_000, maxKeptEntryBytes: 2 * 1024 ** 2, maxKeptTotalBytes: 256 * 1024 ** 2, maxMetaBytes: 1024 ** 2 },
 });
 
 export const SETTINGS = Object.freeze({
@@ -514,9 +518,11 @@ export function treeFingerprint(files, links = [], others = []) {
  * with the same content; that is not the tag moving to other code. true / false, or null when we could not tell (a
  * problem, a limit, an archive that is not the commit asked for): null never lowers a finding and never adds blame.
  */
-export async function treesIdentical(http, repo, a, b, { clock = () => Date.now() } = {}) {
+export async function treesIdentical(http, repo, a, b, { clock = () => Date.now(), canRead = () => true } = {}) {
   const prints = [];
   for (const commit of [a, b]) {
+    // A read may take the whole download timeout: it starts only when that much of the subject's budget is left.
+    if (!canRead()) return { identical: null, why: 'subject_time_budget' };
     let t;
     try {
       t = await readSourceTree(http, repo, commit, new Set(), { clock, fingerprint: true });
@@ -536,7 +542,7 @@ export async function treesIdentical(http, repo, a, b, { clock = () => Date.now(
  * each, one at a time), never past the subject's budget; a pair we did not or could not check keeps its level and says
  * tree_identical null. A finding whose trees are identical drops to low.
  */
-export async function settleTreeChecks(http, repo, checks, { overBudget = () => false, clock = () => Date.now() } = {}) {
+export async function settleTreeChecks(http, repo, checks, { overBudget = () => false, canRead = () => !overBudget(), clock = () => Date.now() } = {}) {
   const pairs = new Map();
   for (const c of checks) {
     const key = `${c.tag}\0${c.provenance}`;
@@ -545,12 +551,12 @@ export async function settleTreeChecks(http, repo, checks, { overBudget = () => 
   }
   let checked = 0;
   for (const pair of pairs.values()) {
-    if (checked >= LIMITS.treeChecksPerSubject || overBudget()) {
+    if (checked >= LIMITS.treeChecksPerSubject || !canRead()) {
       for (const f of pair.items) f.tree_identical = null;
       continue;
     }
     checked++;
-    const r = await treesIdentical(http, repo, pair.tag, pair.provenance, { clock });
+    const r = await treesIdentical(http, repo, pair.tag, pair.provenance, { clock, canRead });
     for (const f of pair.items) {
       f.tree_identical = r.identical;
       if (r.why) f.tree_check = r.why;
@@ -593,9 +599,12 @@ export function skipOf(stage, code) {
  * per stage skips. `pins` maps "npm:<name>" / "pypi:<name>" to a version (the
  * known-answer control reads fixed releases).
  */
-export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {}, clock = () => Date.now() } = {}) {
+export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {}, clock = () => Date.now(), readArtifactFn = readArtifact } = {}) {
   const t0 = clock();
   const overBudget = () => clock() - t0 > LIMITS.subjectBudgetMs;
+  // A read of an archive (artifact or source) may take the whole download timeout, so it starts only when that much of
+  // the subject budget is left: one reserve at every read site (R-RD-23). Small JSON reads only need overBudget.
+  const canRead = () => clock() - t0 + LIMITS.downloadTimeoutMs <= LIMITS.subjectBudgetMs;
   // The budget is checked before every network call, not only before downloads.
   const http = budgetHttp(guardHttp(rawHttp), overBudget);
   let budgetSkipped = false;
@@ -738,8 +747,11 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
   for (const commit of commits.slice(0, LIMITS.commitsPerSubject)) {
     const group = jobs.filter((j) => !j.outcome && j.basis?.commit === commit);
     const names = new Set();
+    // Pass 1: read each artifact only for the names of its files (the source reader keeps bytes of those names), and
+    // let go of it before the next one. Pass 2 (below) reads each again, one at a time, and compares it at once, so
+    // at most one inflated artifact is in memory at any moment, whatever the number of jobs (R-RD-23).
     for (const j of group) {
-      if (overBudget()) { j.outcome = 'subject_time_budget'; budgetSkip(); continue; }
+      if (!canRead()) { j.outcome = 'subject_time_budget'; budgetSkip(); continue; }
       try {
         const d = await download(http, j.url, j.download);
         if (d.status !== 'ok') {
@@ -759,8 +771,9 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
         }
         j.bytes = d.buf.length;
         j.sha256 = sha256(d.buf);
+        let read;
         try {
-          j.read = await readArtifact(d.buf, j.kind, j.filename ?? '');
+          read = await readArtifactFn(d.buf, j.kind, j.filename ?? '');
         } catch (err) {
           // Our caps and our reader's limits are skips; only a damaged archive is a finding about the package.
           if (err instanceof ArchiveLimit || err instanceof ReaderLimit) throw err;
@@ -768,18 +781,20 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
           findings.push(capFinding({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, kind: 'artifact_unreadable', level: 'medium' }, j));
           continue;
         }
-        for (const p of j.read.files.keys()) names.add(p.slice(p.lastIndexOf('/') + 1));
+        for (const p of read.files.keys()) names.add(p.slice(p.lastIndexOf('/') + 1));
+        read = null; // let go of it now (an async frame keeps a dead block variable's value otherwise)
+        j.loaded = true;
       } catch (err) {
         const c = fail(j.p.ecosystem, err);
         j.outcome = c === 'too_large' || c === 'reader_limit' ? c : c === 'subject_budget' ? 'subject_time_budget' : 'not_read';
         j.why = c;
       }
     }
-    const ready = group.filter((j) => !j.outcome && j.read);
+    const ready = group.filter((j) => !j.outcome && j.loaded);
     if (ready.length === 0) continue;
     let t;
-    if (overBudget()) {
-      for (const j of ready) { j.outcome = 'subject_time_budget'; j.read = null; }
+    if (!canRead()) {
+      for (const j of ready) j.outcome = 'subject_time_budget';
       budgetSkip();
       continue;
     }
@@ -798,11 +813,31 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
         if (t.status === 'not_found') findings.push(capFinding({ package: j.p.name, version: j.version, ecosystem: j.p.ecosystem, artifact: j.kind, kind: 'source_commit_not_found', basis: j.basis.kind, level: 'medium' }, j));
       } else if (computeOut) {
         j.outcome = 'compute_budget';
+      } else if (!canRead()) {
+        j.outcome = 'subject_time_budget';
+        budgetSkip();
       } else {
+        // Pass 2: this artifact alone is read again and compared; it is let go of before the next one is read.
+        let read = null;
+        try {
+          const d = await download(http, j.url, j.download);
+          if (d.status === 'ok' && sha256(d.buf) === j.sha256) read = await readArtifactFn(d.buf, j.kind, j.filename ?? '');
+        } catch (err) {
+          const c = fail(j.p.ecosystem, err);
+          j.outcome = c === 'subject_budget' ? 'subject_time_budget' : 'not_read';
+          j.why = c;
+          continue;
+        }
+        // The same bytes read a minute ago: anything else (an outage, a changed file) is not read, never a finding.
+        if (!read) {
+          j.outcome = 'not_read'; j.why = 'reread_failed';
+          skips.push(skipOf(j.p.ecosystem, 'upstream_unavailable'));
+          continue;
+        }
         const c0 = clock();
         let r;
         try {
-          r = compareArtifact({ ecosystem: j.p.ecosystem, kind: j.kind, version: j.version, files: j.read.files, archive: j.read.archive }, t, {
+          r = compareArtifact({ ecosystem: j.p.ecosystem, kind: j.kind, version: j.version, files: read.files, archive: read.archive }, t, {
             hint: j.folder,
             expired: () => computeSpent + (clock() - c0) > LIMITS.computeBudgetMs,
           });
@@ -823,12 +858,12 @@ export async function collectSubject(rawHttp, repo, { seed = new Map(), pins = {
           heldDropped += r.held_truncated;
           j.outcome = 'compared';
         }
+        read = null;
       }
-      j.read = null;
     }
   }
 
-  await settleTreeChecks(http, sourceRepo, treeChecks, { overBudget, clock });
+  await settleTreeChecks(http, sourceRepo, treeChecks, { canRead, clock });
 
   for (const j of jobs) {
     artifacts.push({

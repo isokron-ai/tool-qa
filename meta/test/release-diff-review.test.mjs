@@ -10,7 +10,7 @@ import { createCache, createHttp, forbiddenKind } from '../lib/http.mjs';
 import { movedTo, readGitRefs } from '../lib/gitrefs.mjs';
 import { compareArtifact, ComputeBudget, indexByBase, MAX_HELD, onlyVersionLines } from '../lib/diff.mjs';
 import { createSourceIndex } from '../lib/indicators.mjs';
-import { collectSubject, pep440Key, resolveTag, settleTreeChecks, treesIdentical } from '../release-diff.mjs';
+import { collectSubject, LIMITS, pep440Key, readArtifact, resolveTag, settleTreeChecks, treesIdentical } from '../release-diff.mjs';
 import { pinnedRegistry } from './helpers.mjs';
 
 const sha256 = (b) => createHash('sha256').update(b).digest('hex');
@@ -490,4 +490,104 @@ test('R-RD-22: a tag that names another commit than the provenance, with the sam
   const late = mk();
   await settleTreeChecks(http(f), 'acme/tool', [{ finding: late, tag: D, provenance: C }], { overBudget: () => true });
   assert.deepEqual([late.level, late.tree_identical], ['high', null], 'past the subject budget nothing is read');
+});
+
+test('R-RD-23: the archive caps hold large real packages (more than the old 20,000 entries is read) and stay bounded (memory ceiling of an artifact at most 1 GiB, one entry kept at most 16 MiB, an entry count past the cap is still a too_large limit of ours)', async () => {
+  const a = LIMITS.artifact;
+  assert.ok(a.maxCompressedBytes + a.maxInflatedBytes <= 1024 ** 3, 'an artifact is held in memory whole: compressed + inflated stays under 1 GiB');
+  assert.ok(a.maxKeptTotalBytes <= a.maxInflatedBytes && a.maxKeptEntryBytes <= 16 * 1024 ** 2);
+  assert.ok(LIMITS.source.maxKeptTotalBytes <= 256 * 1024 ** 2 && LIMITS.source.maxKeptEntryBytes <= 2 * 1024 ** 2, 'the source stream keeps little');
+  assert.ok(a.maxEntries >= 50_000 && LIMITS.source.maxEntries >= 300_000);
+  const many = (n) => makeTgz(Array.from({ length: n }, (_, i) => ({ name: `package/f/${i}.txt`, data: 'x', mode: 0o644 })));
+  const ok = await readArtifact(many(25_000), 'npm_tarball');
+  assert.equal(ok.files.size, 25_000, 'more than the old 20,000-entry cap');
+  await assert.rejects(readArtifact(many(a.maxEntries + 1), 'npm_tarball'), (e) => e.name === 'ArchiveLimit');
+});
+
+/** A function that runs the garbage collector (V8's flag set at run time, no command-line option needed). */
+async function collectGarbage() {
+  const v8 = await import('node:v8');
+  const vm = await import('node:vm');
+  v8.setFlagsFromString('--expose-gc');
+  const gc = vm.runInNewContext('gc');
+  return async () => { for (let i = 0; i < 3; i++) { await new Promise((r) => setImmediate(r)); gc(); } };
+}
+
+test('R-RD-23: no inflated artifact outlives its use: when each read starts, every earlier result is garbage (nothing kept in a Map or on a job), across both passes and every artifact of a commit', async () => {
+  const gc = await collectGarbage();
+  const sdist = tgzOf('kit-1.0.0', { 'kit/__init__.py': 'x = 1\n', 'PKG-INFO': 'Name: kit\n' });
+  const wheel = makeZip([{ name: 'kit/__init__.py', data: 'x = 1\n' }, { name: 'kit-1.0.0.dist-info/METADATA', data: 'm' }]);
+  const f = mockFetch([
+    { prefix: 'https://pypi.org/pypi/kit/json', body: { info: { name: 'kit', version: '1.0.0', project_urls: { Source: 'https://github.com/acme/kit' } }, urls: [
+      { filename: 'kit-1.0.0.tar.gz', packagetype: 'sdist', size: sdist.length, digests: { sha256: sha256(sdist) }, url: 'https://files.pythonhosted.org/packages/aa/kit-1.0.0.tar.gz' },
+      { filename: 'kit-1.0.0-py3-none-any.whl', packagetype: 'bdist_wheel', size: wheel.length, digests: { sha256: sha256(wheel) }, url: 'https://files.pythonhosted.org/packages/cc/kit-1.0.0-py3-none-any.whl' },
+    ] } },
+    { prefix: 'https://files.pythonhosted.org/packages/aa/', body: sdist },
+    { prefix: 'https://files.pythonhosted.org/packages/cc/', body: wheel },
+    { method: 'POST', prefix: 'https://github.com/acme/kit.git/git-upload-pack', body: pkt([`${C} refs/tags/v1.0.0`]) },
+    { prefix: `https://codeload.github.com/acme/kit/tar.gz/${C}`, body: tgzOf(`kit-${C}`, { 'kit/__init__.py': 'x = 1\n' }) },
+  ]);
+  const refs = [];
+  const stillLive = [];
+  const readArtifactFn = async (buf, kind, filename) => {
+    await gc();
+    stillLive.push(refs.filter((r) => r.deref() !== undefined).length);
+    const r = await readArtifact(buf, kind, filename);
+    refs.push(new WeakRef(r.files));
+    return r;
+  };
+  const c = await collectSubject(http(f), 'acme/kit', { seed: KIT_SEED, readArtifactFn });
+  assert.deepEqual(c.artifacts.map((a) => a.outcome), ['compared', 'compared']);
+  assert.equal(refs.length, 4, 'two artifacts, each read twice (names, then comparison)');
+  assert.deepEqual(stillLive, [0, 0, 0, 0], 'when a read starts, no earlier result is still reachable');
+  assert.equal(f.calls.filter((x) => x.url.startsWith('https://codeload.github.com/')).length, 1, 'one source archive for the commit');
+  // The residual peak, counted: the artifact's compressed bytes and its inflated entries together, plus the kept source files
+  // (about 900 MiB: 128 + 512 + 256). The http reader's chunks + concat (2 x 128 MiB) are gone before the inflation starts.
+  const a = LIMITS.artifact;
+  const peak = a.maxCompressedBytes + a.maxInflatedBytes + LIMITS.source.maxKeptTotalBytes;
+  assert.ok(peak <= 900 * 1024 ** 2 && peak <= 1024 ** 3, `residual peak ${peak / 1024 ** 2} MiB`);
+});
+
+test('R-RD-23: every archive read (artifact download, source tree, re-download) starts only when a whole download timeout is left in the subject budget; at 250 s of 360 nothing is read and the skip is our own limit', async () => {
+  const world = () => npmWorld({ pkg: { 'package.json': PKG_JSON }, src: { 'package.json': SRC_JSON } });
+  const reads = (f) => f.calls.filter((x) => x.url.includes('/-/') || x.url.startsWith('https://codeload.github.com/')).length;
+  const tarballs = (f) => f.calls.filter((x) => x.url.includes('/-/')).length;
+  const late = 250_000;
+  assert.ok(late < LIMITS.subjectBudgetMs && late + LIMITS.downloadTimeoutMs > LIMITS.subjectBudgetMs);
+  // 1. Late before any archive: the artifact is not downloaded.
+  let f = world();
+  let c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED, clock: (() => { let n = 0; return () => (n++ === 0 ? 0 : late); })() });
+  assert.equal(reads(f), 0);
+  assert.deepEqual([c.artifacts[0].outcome, c.skips.map((x) => `${x.reason}/${x.fault}`)], ['subject_time_budget', ['reader_limit/tool']]);
+  // 2. Late after the artifact was read: no source archive is started.
+  f = world();
+  c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED, clock: () => (tarballs(f) > 0 ? late : 0) });
+  assert.deepEqual([tarballs(f), f.calls.filter((x) => x.url.startsWith('https://codeload.github.com/')).length, c.artifacts[0].outcome], [1, 0, 'subject_time_budget']);
+  // 3. Late after the source tree: the artifact is not downloaded a second time.
+  f = world();
+  c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED, clock: () => (f.calls.some((x) => x.url.startsWith('https://codeload.github.com/')) ? late : 0) });
+  assert.deepEqual([tarballs(f), c.artifacts[0].outcome], [1, 'subject_time_budget']);
+  // With time to spare the same world is compared.
+  f = world();
+  c = await collectSubject(http(f), 'acme/tool', { seed: NPM_SEED });
+  assert.deepEqual([tarballs(f), c.artifacts[0].outcome], [2, 'compared']);
+});
+
+test('R-RD-22: treesIdentical refuses an archive that is not the commit asked for (archive_commit differs: null, never a verdict), and does not start a read the subject budget cannot hold', async () => {
+  const E = 'e'.repeat(40);
+  const files = { 'package.json': PKG_JSON };
+  const withComment = (top, comment) => makeTgz(Object.entries(files).map(([n, d], i) => ({ name: `${top}/${n}`, data: d, ...(i === 0 ? { pax: { comment }, paxType: 'g' } : {}) })));
+  const f = mockFetch([
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${C}`, body: withComment(`tool-${C}`, C) },
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${D}`, body: withComment(`tool-${D}`, E) }, // says it is E
+    { prefix: `https://codeload.github.com/acme/tool/tar.gz/${E}`, body: withComment(`tool-${E}`, E) },
+  ]);
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, D), { identical: null, why: 'archive_commit_mismatch' });
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, E), { identical: true, why: null }, 'a matching archive comment is read normally');
+  const calls = f.calls.length;
+  assert.deepEqual(await treesIdentical(http(f), 'acme/tool', C, E, { canRead: () => false }), { identical: null, why: 'subject_time_budget' });
+  assert.equal(f.calls.length, calls, 'no source read starts without the budget for it');
+  let n = 0;
+  assert.equal((await treesIdentical(http(f), 'acme/tool', C, E, { canRead: () => n++ < 1 })).why, 'subject_time_budget');
+  assert.equal(f.calls.length, calls + 1, 'the second archive of a pair is not started past the budget');
 });

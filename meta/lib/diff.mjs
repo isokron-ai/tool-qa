@@ -120,13 +120,16 @@ export function indexByBase(paths) {
   return m;
 }
 
-function isExecutable(path, mode) {
-  return EXEC_EXT_RE.test(path) || (mode & 0o111) !== 0;
+function isExecutable(path, mode, data = null) {
+  return EXEC_EXT_RE.test(path) || (mode & 0o111) !== 0 || startsWithShebang(data);
 }
 
+/** A script that names its interpreter runs by itself where the archive format kept no mode bit (a wheel, a zip). */
+const startsWithShebang = (data) => Buffer.isBuffer(data) && data.length >= 2 && data[0] === 0x23 && data[1] === 0x21;
+
 /** A source-code extension and nothing that runs it by itself (no mode bit, no launcher or native extension). */
-function isCodeOnly(path, mode) {
-  return CODE_EXT_RE.test(path) && !isExecutable(path, mode);
+function isCodeOnly(path, mode, data = null) {
+  return CODE_EXT_RE.test(path) && !isExecutable(path, mode, data);
 }
 
 function isBinary(path, data) {
@@ -451,8 +454,8 @@ export function compareArtifact(a, tree, { hint = null, expired = () => false } 
     else if (reason) counts.explained[reason] = (counts.explained[reason] ?? 0) + 1;
     else if (cls === 'absent') {
       counts.unexplained_absent++;
-      const executable = isExecutable(path, f.mode);
-      const code_extension = isCodeOnly(path, f.mode);
+      const executable = isExecutable(path, f.mode, f.data);
+      const code_extension = isCodeOnly(path, f.mode, f.data);
       const binary = isBinary(path, f.data);
       findings.push({
         kind: 'unexpected_file', artifact: a.kind, path, size: f.size, sha256: f.sha256, executable, code_extension, binary,
@@ -460,8 +463,8 @@ export function compareArtifact(a, tree, { hint = null, expired = () => false } 
       });
     } else {
       counts.unexplained_differs++;
-      const executable = isExecutable(path, f.mode);
-      const code_extension = isCodeOnly(path, f.mode);
+      const executable = isExecutable(path, f.mode, f.data);
+      const code_extension = isCodeOnly(path, f.mode, f.data);
       // A source file that differs from the repository's stays high, as before: the contents moved, not only the name.
       findings.push({ kind: 'content_differs', artifact: a.kind, path, size: f.size, sha256: f.sha256, source_sha256: src.sha256, executable, code_extension, level: executable || code_extension ? 'high' : 'medium' });
     }
