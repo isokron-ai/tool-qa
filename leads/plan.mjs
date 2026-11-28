@@ -24,7 +24,10 @@ export const LABEL = 'loop-lead';
 /** The marker every lead issue's title starts with; filing looks it up by this after a crash. */
 export const titleTag = (fp) => `[lead ${fp}]`;
 export const MARKER = (fp) => `<!-- tool-qa lead ${fp} -->`;
-/** A tier breakdown is shown only with at least this many carriers: fewer, with the lane, idiom and layout, could point at one server in the public seed. */
+/**
+ * A tier is named only when at least this many carriers are in it: fewer, with the lane, idiom and layout, could point at
+ * one server in the public seed. Smaller tiers are folded into "other tiers" (R-LEAD-40).
+ */
 export const TIER_MIN_CARRIERS = 5;
 const SITE = 'https://isokron.ai/?utm_source=github&utm_medium=issue&utm_campaign=tool-qa-lead';
 
@@ -114,8 +117,11 @@ export function issueFor(e, { now }) {
   const l = e.lead;
   const kind = kindOf(l);
   const versions = (Array.isArray(l.versions) ? l.versions : JSON.parse(l.versions ?? '[]')).join(', ') || 'none recorded';
-  // Tiers only with enough carriers that no one server can be singled out (R-LEAD-40); never the priority.
-  const tiers = e.carriers.current >= TIER_MIN_CARRIERS ? ` (${Object.entries(e.carriers.byTier).map(([t, n]) => `${t}: ${n}`).join(', ')})` : '';
+  // Each tier only with enough carriers in it that no one server can be singled out; the rest as "other tiers" (R-LEAD-40).
+  // Never the priority.
+  const shown = Object.entries(e.carriers.byTier).filter(([, n]) => n >= TIER_MIN_CARRIERS);
+  const rest = Object.entries(e.carriers.byTier).filter(([, n]) => n < TIER_MIN_CARRIERS).reduce((a, [, n]) => a + n, 0);
+  const tiers = shown.length ? ` (${[...shown.map(([t, n]) => `${t}: ${n}`), ...(rest ? [`other tiers: ${rest}`] : [])].join(', ')})` : '';
   const why = {
     reproduced: 'A re-run of the same server and lane, in another worker run on a fresh runner, showed it again',
     flake_rate: `It comes and goes on the same server: ${Math.round(e.flake.rate * 100)}% of ${e.flake.total} results over 14 days carried it`,

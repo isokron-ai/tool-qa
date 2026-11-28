@@ -383,3 +383,45 @@ test('R-LEAD-44: each write guard alone holds the cap: only the leads that fit a
   assert.equal(n2.filed, 1);
   assert.ok(n2.writes <= 3);
 });
+
+test('R-LEAD-40: a tier is named only with 5 or more carriers in it; smaller tiers fold into "other tiers", so one T0 server inside a 5-carrier lead is never shown', () => {
+  const db = reproduced(1, { subjectsPer: () => 5 });
+  db.raw.prepare("UPDATE subjects SET tier = 0 WHERE id = 'acme-org/server-0-0'").run();
+  db.raw.prepare("UPDATE subjects SET tier = 4 WHERE id LIKE 'acme-org/server-0-%' AND id != 'acme-org/server-0-0'").run();
+  const [e] = planFilings(db, { now: NOW, tierWeights }).file;
+  const body = issueFor(e, { now: NOW }).body;
+  assert.match(body, /5 servers carry it on their latest result; seen/, 'no tier has 5: no breakdown at all');
+  assert.ok(!/\bT[0-4]\b/.test(body), body.match(/\*\*Counts\.\*\*.*/)?.[0]);
+  const big = reproduced(1, { subjectsPer: () => 6 });
+  big.raw.prepare("UPDATE subjects SET tier = 0 WHERE id = 'acme-org/server-0-0'").run();
+  const [e2] = planFilings(big, { now: NOW, tierWeights }).file;
+  assert.match(issueFor(e2, { now: NOW }).body, /6 servers carry it on their latest result \(T2: 5, other tiers: 1\)/);
+});
+
+test('R-LEAD-44: a close or reopen needs room for both its writes: with one write left it waits for the next run', async () => {
+  const db = reproduced(1);
+  const [l] = db.listLeads();
+  const { api, issues, comments } = issuesApi({ existing: [{ number: 1, title: `${titleTag(l.fingerprint)} x`, body: `<!-- tool-qa lead ${l.fingerprint} -->`, state: 'open', labels: [], user: { login: BOT } }] });
+  db.raw.prepare("UPDATE leads SET status = 'closed', issue_number = 1, issue_state = 'open', needs_sync = 1 WHERE fingerprint = ?").run(l.fingerprint);
+  const client = { fetch: api.fetch, apiUrl: API, sleep: async () => {} };
+  const n1 = await step(db, { mintToken: minter().mint, save: async () => true, client, maxWrites: 1 });
+  assert.deepEqual([n1.closed, issues[0].state, comments.length, db.listLeads()[0].needs_sync], [0, 'open', 0, 1]);
+  const n2 = await step(db, { mintToken: minter().mint, save: async () => true, client, maxWrites: 2 });
+  assert.deepEqual([n2.closed, issues[0].state, comments.length, n2.writes], [1, 'closed', 1, 2]);
+});
+
+test('R-LEAD-46: a person\'s "not planned" close stands: a lead that comes back does not reopen it', async () => {
+  const db = reproduced(1);
+  const [l] = db.listLeads();
+  const { api, issues, comments } = issuesApi({ existing: [{ number: 1, title: `${titleTag(l.fingerprint)} x`, body: `<!-- tool-qa lead ${l.fingerprint} -->`, state: 'closed', state_reason: 'not_planned', labels: [], user: { login: BOT } }] });
+  // We closed it (completed); a person then marked it not planned; the lead came back.
+  db.raw.prepare("UPDATE leads SET status = 'filed', issue_number = 1, issue_state = 'closed', needs_sync = 1 WHERE fingerprint = ?").run(l.fingerprint);
+  const lines = [];
+  const note = await step(db, { mintToken: minter().mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} }, log: (x) => lines.push(x) });
+  assert.deepEqual([note.reopened, issues[0].state, comments.length, db.listLeads()[0].needs_sync], [0, 'closed', 0, 0]);
+  assert.ok(lines.some((x) => /not planned/.test(x)));
+  // Closed as completed (by us), the same comeback reopens it.
+  issues[0].state_reason = 'completed';
+  db.raw.prepare('UPDATE leads SET needs_sync = 1 WHERE fingerprint = ?').run(l.fingerprint);
+  assert.equal((await step(db, { mintToken: minter().mint, save: async () => true, client: { fetch: api.fetch, apiUrl: API, sleep: async () => {} } })).reopened, 1);
+});

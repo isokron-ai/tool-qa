@@ -1460,12 +1460,14 @@ export class StateDb {
         throw err;
       }
       const t = Number.isFinite(toMs(o.now)) ? iso(o.now) : new Date().toISOString();
-      const message = cap(String(err?.message ?? err));
+      // Only the error's name goes anywhere public (the pump log, the health issue): a message can quote a value (R-LEAD-47).
+      const name = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(String(err?.name ?? '')) ? err.name : 'Error';
+      const code = /^[A-Z][A-Z0-9_]{0,63}$/.test(String(err?.code ?? '')) ? err.code : null;
       try {
         const prev = this.getKv('leads.fold_failures');
-        this.setKv('leads.fold_failures', { count: (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1, last_at: t, last_error: message }, { now: t });
+        this.setKv('leads.fold_failures', { count: (Number.isSafeInteger(prev?.count) ? prev.count : 0) + 1, last_at: t, last_error: code ? `${name} ${code}` : name }, { now: t });
       } catch { /* counted where it can be */ }
-      try { this.log(`state: a lead of ${lane} could not be folded (the result is kept): ${message}`); } catch { /* the log is only a line */ }
+      try { this.log(`state: a lead of ${lane} could not be folded (the result is kept): ${code ? `${name} ${code}` : name}`); } catch { /* the log is only a line */ }
       return null;
     }
   }

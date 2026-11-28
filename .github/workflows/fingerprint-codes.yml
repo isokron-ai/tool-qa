@@ -1,0 +1,53 @@
+name: fingerprint-codes
+
+# Keeps state/fingerprint-codes.json (the codes a lead's fingerprint may carry,
+# state/fingerprint.mjs) in step with mcp-check: daily against mcp-check's main,
+# and on every pull request that touches the list or its readers. A code
+# mcp-check declares that the file lacks would read <other> in every
+# fingerprint, so this fails until the file is refreshed with
+# `node scripts/fingerprint-codes.mjs --mcp-check <checkout>` (docs/OPERATIONS.md, "Leads").
+# Read-only: both checkouts are public and keep no credentials.
+
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  pull_request:
+    paths:
+      - 'state/fingerprint-codes.json'
+      - 'state/fingerprint.mjs'
+      - 'scripts/fingerprint-codes.mjs'
+      - '.github/workflows/fingerprint-codes.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fingerprint-codes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: fingerprint codes cover mcp-check main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out mcp-check (main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isokron-ai/mcp-check
+          ref: main
+          path: mcp-check
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Compare
+        run: node scripts/fingerprint-codes.mjs --mcp-check mcp-check --check

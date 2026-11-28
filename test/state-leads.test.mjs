@@ -248,3 +248,13 @@ test('R-LEAD-36: a lead that cannot be folded never costs its result: the fold r
   accept(db, { failures: [lead(91)], runId: 2, now: T0 + HOUR });
   assert.equal(db.listLeads().length, 1);
 });
+
+test('R-LEAD-47: a fold failure is logged and noted by its error name only: no message, which could quote a value, reaches the public pump log or the health issue', () => {
+  const db = openState(':memory:');
+  const lines = [];
+  db.log = (l) => lines.push(l);
+  accept(db, { failures: [lead(92, { class: null })], runId: 1, now: T0 });
+  const ff = db.getKv('leads.fold_failures');
+  assert.match(ff.last_error, /^[A-Za-z]+( [A-Z_]+)?$/, ff.last_error);
+  for (const text of [ff.last_error, ...lines]) assert.ok(!/NOT NULL|leads\.class|constraint/i.test(text), text);
+});
