@@ -1,0 +1,53 @@
+name: mutation-probe
+
+# Mutation probes (scripts/mutation-probe.mjs): each probe switches one
+# protection off and checks that the tests pinning it fail. Run by hand with a
+# probes file, and on pull requests that change a probes file or the runner.
+# Read-only, no secrets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      probes:
+        description: 'Probes file(s), space-separated, under test/mutations/'
+        required: false
+        default: 'test/mutations/leads-share.json'
+  pull_request:
+    paths:
+      - 'test/mutations/**'
+      - 'scripts/mutation-probe.mjs'
+      - '.github/workflows/mutation-probe.yml'
+
+permissions: {}
+
+concurrency:
+  group: mutation-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: mutation probes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Run the probes
+        env:
+          PROBES: ${{ inputs.probes || 'test/mutations/leads-share.json' }}
+        run: |
+          set -euo pipefail
+          for f in $PROBES; do
+            case "$f" in test/mutations/*.json) ;; *) echo "probes must be under test/mutations/: $f"; exit 2 ;; esac
+          done
+          # shellcheck disable=SC2086
+          node scripts/mutation-probe.mjs $PROBES
