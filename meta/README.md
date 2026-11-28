@@ -441,7 +441,10 @@ providers, env names and prefixes, code tokens, API hosts). Per backend a signal
 (`WEIGHTS`), and the score is the sum. A backend is found at score 4 with at least one strong signal (a dependency, a
 compose image, a provider, a URL scheme in code or config, a code token, an API host; an env name from code or config
 for a hosted API); weak signals alone (a dev dependency, test code, a README, an env prefix) never find one. The
-filesystem is a backend only when code writes files and a write-like tool is file-shaped (`FS_RULE`). The primary
+filesystem is a backend only when code writes files and a write-like tool is file-shaped (`FS_RULE`), and only as a
+fallback: a server that writes to a store the maps name is that store's. Env names that the runtime, the shell or the
+runner own (`PATH`, `LD_*`, `NODE_*`, `RUNNER_*` ...; `ENV_DENY_RE`) are never kept. Configuration files are read in
+their first 256 KiB, READMEs in their first 512 KiB, and no scan runs a regex from every position of a file. The primary
 backend is the highest score (ties: a usable stand-in first, then a spec):
 
 | Primary backend | Class |
