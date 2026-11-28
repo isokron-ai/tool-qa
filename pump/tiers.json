@@ -40,7 +40,8 @@
       "writecheck": { "mode": "always", "max_age_days": 1 },
       "t0-defects": { "mode": "always", "max_age_days": 1 },
       "t0-self": { "mode": "always", "max_age_days": 1 },
-      "t0-dogfood": { "mode": "always", "max_age_days": 1 }
+      "t0-dogfood": { "mode": "always", "max_age_days": 1 },
+      "t0-fuzz": { "mode": "always", "max_age_days": 1 }
     },
     "T1": {
       "scan-static": { "mode": "always", "max_age_days": 7 },
@@ -53,7 +54,8 @@
       "writecheck": { "mode": "always", "max_age_days": null },
       "t0-defects": { "mode": "never", "max_age_days": null },
       "t0-self": { "mode": "never", "max_age_days": null },
-      "t0-dogfood": { "mode": "never", "max_age_days": null }
+      "t0-dogfood": { "mode": "never", "max_age_days": null },
+      "t0-fuzz": { "mode": "never", "max_age_days": null }
     },
     "T2": {
       "scan-static": { "mode": "always", "max_age_days": 14 },
@@ -66,7 +68,8 @@
       "writecheck": { "mode": "sample", "max_age_days": null },
       "t0-defects": { "mode": "never", "max_age_days": null },
       "t0-self": { "mode": "never", "max_age_days": null },
-      "t0-dogfood": { "mode": "never", "max_age_days": null }
+      "t0-dogfood": { "mode": "never", "max_age_days": null },
+      "t0-fuzz": { "mode": "never", "max_age_days": null }
     },
     "T3": {
       "scan-static": { "mode": "always", "max_age_days": 30 },
@@ -79,7 +82,8 @@
       "writecheck": { "mode": "sample", "max_age_days": null },
       "t0-defects": { "mode": "never", "max_age_days": null },
       "t0-self": { "mode": "never", "max_age_days": null },
-      "t0-dogfood": { "mode": "never", "max_age_days": null }
+      "t0-dogfood": { "mode": "never", "max_age_days": null },
+      "t0-fuzz": { "mode": "never", "max_age_days": null }
     },
     "T4": {
       "scan-static": { "mode": "always", "max_age_days": 90 },
@@ -92,7 +96,8 @@
       "writecheck": { "mode": "never", "max_age_days": null },
       "t0-defects": { "mode": "never", "max_age_days": null },
       "t0-self": { "mode": "never", "max_age_days": null },
-      "t0-dogfood": { "mode": "never", "max_age_days": null }
+      "t0-dogfood": { "mode": "never", "max_age_days": null },
+      "t0-fuzz": { "mode": "never", "max_age_days": null }
     }
   }
 }

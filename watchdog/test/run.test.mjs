@@ -896,7 +896,7 @@ test('R-CTL-13: the watchdog applies the T0 lane switches: an untrusted control 
   assert.equal(on.status, 'red');
   assert.match(on.summary, /the pump holds t0-dogfood/);
   const yml = readFileSync(new URL('../../.github/workflows/watchdog.yml', import.meta.url), 'utf8');
-  for (const v of ['LANE_T0_DEFECTS_ENABLED', 'LANE_T0_SELF_ENABLED', 'LANE_T0_DOGFOOD_ENABLED']) assert.match(yml, new RegExp(`${v}: \\$\\{\\{ vars\\.${v} \\}\\}`));
+  for (const v of ['LANE_T0_DEFECTS_ENABLED', 'LANE_T0_SELF_ENABLED', 'LANE_T0_DOGFOOD_ENABLED', 'LANE_T0_FUZZ_ENABLED']) assert.match(yml, new RegExp(`${v}: \\$\\{\\{ vars\\.${v} \\}\\}`));
   const pump = readFileSync(new URL('../../.github/workflows/pump.yml', import.meta.url), 'utf8');
-  for (const v of ['LANE_T0_DEFECTS_ENABLED', 'LANE_T0_SELF_ENABLED', 'LANE_T0_DOGFOOD_ENABLED']) assert.match(pump, new RegExp(`${v}: \\$\\{\\{ vars\\.${v} \\}\\}`));
+  for (const v of ['LANE_T0_DEFECTS_ENABLED', 'LANE_T0_SELF_ENABLED', 'LANE_T0_DOGFOOD_ENABLED', 'LANE_T0_FUZZ_ENABLED']) assert.match(pump, new RegExp(`${v}: \\$\\{\\{ vars\\.${v} \\}\\}`));
 });

@@ -2198,3 +2198,14 @@ subject: `off` while the switch is off; `red` while any subject has a `control_f
 accepted result (also while its run_key is parked); `amber` when any subject has no accepted result for 36 hours, or its
 newest result is infrastructure-only (a `skips_only` result does not count as a result); `green` otherwise. `lane-fresh:<lane>`
 uses 36 hours amber and 72 hours red for a control lane.
+
+### `t0-fuzz`: the tools/call fuzz stage over our own fixtures
+
+A fourth control lane, shipped off (`LANE_T0_FUZZ_ENABLED`, and `LOOP_ENABLED` in isokron-ai/mcp-check for the worker). It
+dispatches `isokron-ai/mcp-check` `fuzz-calls.yml` daily; subject `isokron-ai/mcp-check.fuzz-calls`. The worker runs
+`tools/call` with inputs generated from each tool's `inputSchema` (valid, boundary, invalid, oversize) against **our own
+fixtures only**: nine seeded protocol-fault servers and the tiny-tracker correct build and its single-defect builds. It never
+runs a third-party server (`corpus/fuzz/calls/README.md` in mcp-check), and the read-only list/schema fuzz stage of live-probe
+is unchanged. Controls: `known_good` (no finding on a build that expects none) and `known_bad` (every known fault found).
+Either failing is `control_failed` (class `control_miss`), so every miss is our stage's, and the health item `t0:t0-fuzz`
+goes red. It is trusted (`runs_untrusted` false): our seeded servers and tiny-tracker built with `--ignore-scripts`.
